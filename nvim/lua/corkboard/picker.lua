@@ -77,6 +77,38 @@ function M.terminal()
   end
 end
 
+-- <C-.>: Claude Code in a tab of its own, in the project's cwd.
+function M.claude()
+  if vim.fn.executable("claude") == 0 then
+    return vim.notify("corkboard: claude is not on PATH", vim.log.levels.ERROR)
+  end
+  vim.cmd.tabnew()
+  local empty = vim.api.nvim_get_current_buf()
+  vim.cmd.terminal("claude")
+  -- :terminal replaces tabnew's empty buffer in the window but leaves it
+  -- loaded; nothing else will ever show it.
+  if empty ~= vim.api.nvim_get_current_buf() then pcall(vim.api.nvim_buf_delete, empty, {}) end
+  -- When Claude Code exits its tab goes too (deleting the buffer closes
+  -- the windows showing it), unless the tab has a terminal still running,
+  -- shown or hidden, which would go with it. A failure is reported,
+  -- since its output goes with the buffer.
+  local tab = vim.api.nvim_get_current_tabpage()
+  vim.api.nvim_create_autocmd("TermClose", {
+    buffer = vim.api.nvim_get_current_buf(),
+    once = true,
+    callback = function(args)
+      local status = vim.v.event.status
+      vim.schedule(function()
+        if vim.api.nvim_tabpage_is_valid(tab) and terminal_alive(vim.t[tab].corkboard_terminal) then return end
+        if status ~= 0 then
+          vim.notify("corkboard: claude exited with status " .. status, vim.log.levels.WARN)
+        end
+        pcall(vim.api.nvim_buf_delete, args.buf, { force = true })
+      end)
+    end,
+  })
+end
+
 -- The tool picker (<C-Space>): things to open, run in the window the picker
 -- was opened from.
 local tools = {
@@ -127,38 +159,8 @@ local tools = {
   },
   {
     text = "Claude Code",
-    hint = "",
-    run = function()
-      if vim.fn.executable("claude") == 0 then
-        return vim.notify("corkboard: claude is not on PATH", vim.log.levels.ERROR)
-      end
-      -- A tab of its own, in the project's cwd.
-      vim.cmd.tabnew()
-      local empty = vim.api.nvim_get_current_buf()
-      vim.cmd.terminal("claude")
-      -- :terminal replaces tabnew's empty buffer in the window but leaves it
-      -- loaded; nothing else will ever show it.
-      if empty ~= vim.api.nvim_get_current_buf() then pcall(vim.api.nvim_buf_delete, empty, {}) end
-      -- When Claude Code exits its tab goes too (deleting the buffer closes
-      -- the windows showing it), unless the tab has a terminal still running,
-      -- shown or hidden, which would go with it. A failure is reported,
-      -- since its output goes with the buffer.
-      local tab = vim.api.nvim_get_current_tabpage()
-      vim.api.nvim_create_autocmd("TermClose", {
-        buffer = vim.api.nvim_get_current_buf(),
-        once = true,
-        callback = function(args)
-          local status = vim.v.event.status
-          vim.schedule(function()
-            if vim.api.nvim_tabpage_is_valid(tab) and terminal_alive(vim.t[tab].corkboard_terminal) then return end
-            if status ~= 0 then
-              vim.notify("corkboard: claude exited with status " .. status, vim.log.levels.WARN)
-            end
-            pcall(vim.api.nvim_buf_delete, args.buf, { force = true })
-          end)
-        end,
-      })
-    end,
+    hint = "<C-.>",
+    run = M.claude,
   },
   {
     text = "Terminal",

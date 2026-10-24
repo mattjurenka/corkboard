@@ -487,11 +487,13 @@ function M.setup()
     vim.keymap.set({ "n", "i", "t" }, "<C-Space>", picker.tools, { desc = "corkboard: tools" })
     -- And as a command palette. The browser sends Ctrl+Shift+P as <C-S-p>.
     vim.keymap.set({ "n", "i", "t" }, "<C-S-p>", picker.tools, { desc = "corkboard: tools" })
-    -- Editor-style shortcuts for two of the tools, from any mode like
+    -- Editor-style shortcuts for some of the tools, from any mode like
     -- <C-Space>. <C-f> replaces normal mode's page down (<C-d> is still
     -- there) and, in a terminal, readline's forward-char (the arrow is too).
+    -- <C-.> is free in Vim, readline and the browser.
     vim.keymap.set({ "n", "i", "t" }, "<C-f>", picker.files, { desc = "corkboard: find file" })
     vim.keymap.set({ "n", "i", "t" }, "<C-`>", picker.terminal, { desc = "corkboard: terminal" })
+    vim.keymap.set({ "n", "i", "t" }, "<C-.>", picker.claude, { desc = "corkboard: Claude Code" })
     vim.keymap.set("n", "<leader>f", function() Snacks.picker.files() end, { desc = "find file" })
     vim.keymap.set("n", "<leader>g", function() Snacks.picker.grep() end, { desc = "grep" })
     vim.keymap.set("n", "<leader>,", function() Snacks.picker.buffers() end, { desc = "buffers" })

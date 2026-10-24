@@ -32,6 +32,7 @@ export function notifyAttention(cards: Card[], open: (id: string) => void) {
     const n = new Notification(`${c.agent ?? "An agent"} needs you`, {
       body: `${c.title}\n${c.attention}`,
       tag: `corkboard:${c.id}`,
+      icon: "/icon-192.png",
     });
     n.onclick = () => {
       window.focus();

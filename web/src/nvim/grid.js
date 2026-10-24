@@ -66,6 +66,8 @@ export class Grid {
     const root = document.documentElement.style;
     root.setProperty("--nv-bg", hex(this.defaults.bg));
     root.setProperty("--nv-fg", hex(this.defaults.fg));
+    // So does the title bar when installed as an app.
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", hex(this.defaults.bg));
     this.markAll();
   }
 
