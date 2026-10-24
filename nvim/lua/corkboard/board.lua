@@ -54,6 +54,8 @@ Front matter is YAML:
 - `attention` (corkboard): what the agent needs the user to do, one line;
   corkboard sends a desktop notification when it is set, and clears it when
   the user opens the card.
+- `worktree`, `branch` (corkboard): where the card's agent works, set when
+  corkboard starts one on it.
 
 The body is `## Description` and `## Implementation Notes`, each with its text
 between `<!-- SECTION:DESCRIPTION:BEGIN -->` / `END` (and `SECTION:NOTES`)
@@ -381,10 +383,67 @@ function M.create(title, status, body)
   return id
 end
 
--- Hand the card to an agent. Until the agent runner exists this only marks
--- it queued; anything watching the board (or a human) can pick it up.
+-- Append to a card's log (its Implementation Notes) as `who`, the way
+-- mcp/board.ts's appendLog does.
+function M.log(id, who, note)
+  local card = find(id)
+  local entry = string.format("- %s %s: %s\n", os.date("!%Y-%m-%dT%H:%M:%SZ"), who, vim.trim(note):gsub("\n", "\n  "))
+  local body = card.body or ""
+  local at = body:find("<!-- SECTION:NOTES:END -->", 1, true)
+  if at then
+    card.body = body:sub(1, at - 1):gsub("\n*$", "\n") .. entry .. body:sub(at)
+  else
+    card.body = body:gsub("\n*$", "\n") .. "\n" .. section("Implementation Notes", "NOTES", entry)
+  end
+  card.updated_date = now()
+  write(card)
+  M.push()
+end
+
+-- A comment marker and the text after it: "-- TODO(me): fix this" -> "fix
+-- this". Block-comment closers at the end are dropped.
+local function todo_text(line)
+  for _, marker in ipairs({ "TODO", "FIXME", "XXX", "HACK" }) do
+    local text = line:match("%f[%w]" .. marker .. "%f[%W]%s*%b()%s*:?%s*(.*)$")
+      or line:match("%f[%w]" .. marker .. "%f[%W]%s*:?%s*(.*)$")
+    if text then
+      text = vim.trim(text:gsub("%s*%*/%s*$", ""):gsub("%s*%-%->%s*$", ""))
+      if text ~= "" then return text end
+    end
+  end
+end
+
+-- A card from code (:AgentCard, <leader>c): lines first..last of the
+-- current buffer go in the description under their path:line; the title is
+-- asked for, prefilled with a TODO/FIXME comment's text when the first line
+-- has one.
+function M.card_from_code(first, last)
+  local buf = vim.api.nvim_get_current_buf()
+  local lines = vim.api.nvim_buf_get_lines(buf, first - 1, last, false)
+  local name = vim.api.nvim_buf_get_name(buf)
+  local where = (name ~= "" and vim.fn.fnamemodify(name, ":.") or "[No Name]")
+    .. ":" .. first .. (last > first and ("-" .. last) or "")
+  local code = table.concat(lines, "\n")
+  local indent = math.huge
+  for _, l in ipairs(lines) do
+    if l:match("%S") then indent = math.min(indent, #l:match("^%s*")) end
+  end
+  if indent ~= math.huge and indent > 0 then
+    code = table.concat(vim.tbl_map(function(l) return l:sub(indent + 1) end, lines), "\n")
+  end
+  local body = string.format("`%s`\n\n```%s\n%s\n```", where, vim.bo[buf].filetype, code)
+  local default = todo_text(lines[1] or "") or (last == first and vim.trim(lines[1] or "") or "")
+  vim.ui.input({ prompt = "New card from " .. where .. ": ", default = default }, function(title)
+    if not (title and vim.trim(title) ~= "") then return end
+    local id = M.create(vim.trim(title), "backlog", body)
+    vim.notify("corkboard: " .. id .. " " .. vim.trim(title))
+  end)
+end
+
+-- Hand the card to an agent: queued, corkboard.agents starts it when it
+-- may run.
 function M.assign(id, agent)
-  M.set(id, { agent = agent or "claude", agent_state = "queued", status = "ready" })
+  M.set(id, { agent = agent or "claude", agent_state = "queued", status = "ready", attention = "" })
 end
 
 -- The agent://board buffer ----------------------------------------------------
@@ -420,11 +479,63 @@ local function goto_card(id, win)
   if lnum then vim.api.nvim_win_set_cursor(win or 0, { lnum, 2 }) end
 end
 
+-- The dependencies a card still waits on, as { id, missing }: those not
+-- done, and ids with no card (missing), which never will be. nil when none,
+-- and for a done card.
+local function waiting_on(card)
+  if card.status == "done" then return nil end
+  local status = {}
+  for _, c in ipairs(cards) do status[c.id] = c.status end
+  local waiting = {}
+  for _, dep in ipairs(card.dependencies or {}) do
+    dep = dep:upper()
+    if status[dep] ~= "done" then table.insert(waiting, { id = dep, missing = status[dep] == nil }) end
+  end
+  return #waiting > 0 and waiting or nil
+end
+
+local function waiting_text(waiting)
+  return table.concat(vim.tbl_map(function(w) return w.id .. (w.missing and " (no such card)" or "") end, waiting), ", ")
+end
+
+-- The newest log entries across every card, newest first: the lines agents
+-- append to Implementation Notes as `- <ISO time> <name>: <note>`, with
+-- indented continuation lines. Entries in another shape are left out.
+local max_activity = 100
+
+local function activity()
+  local entries = {}
+  for _, c in ipairs(cards) do
+    local notes = (c.body or ""):match("<!%-%- SECTION:NOTES:BEGIN %-%->\n?(.-)<!%-%- SECTION:NOTES:END %-%->") or ""
+    local entry
+    for line in vim.gsplit(notes, "\n", { plain = true }) do
+      local time, agent, text = line:match("^%- (%d%d%d%d%-%d%d%-%d%dT[%d:]+Z) ([^:]+): (.*)$")
+      if time then
+        entry = { time = time, agent = agent, id = c.id, title = c.title, text = text, seq = #entries }
+        table.insert(entries, entry)
+      elseif entry and line:match("^  ") then
+        entry.text = entry.text .. "\n" .. line:sub(3)
+      else
+        entry = nil
+      end
+    end
+  end
+  -- ISO times in UTC sort as strings. Within a second, the later-written
+  -- entry (of a card) is the newer.
+  table.sort(entries, function(a, b)
+    if a.time ~= b.time then return a.time > b.time end
+    return a.seq > b.seq
+  end)
+  return vim.list_slice(entries, 1, max_activity)
+end
+
 local function state()
+  local costs = require("corkboard.usage").card_costs()
   return {
     root = vim.fn.getcwd(),
     statuses = M.statuses,
     selected = selected,
+    activity = activity(),
     cards = vim.tbl_map(function(c)
       return {
         id = c.id,
@@ -433,6 +544,9 @@ local function state()
         agent = c.agent,
         agent_state = c.agent_state,
         attention = c.attention,
+        waiting = waiting_on(c),
+        session = require("corkboard.agents").live(c.id),
+        cost = costs[c.id],
       }
     end, cards),
   }
@@ -451,10 +565,14 @@ local function render_text()
     for _, c in ipairs(col) do
       local who = ""
       if c.agent or c.agent_state then
-        who = "  [" .. (c.agent or "agent") .. (c.agent_state and (" · " .. c.agent_state) or "") .. "]"
+        local session = require("corkboard.agents").live(c.id)
+        who = "  [" .. (c.agent or "agent") .. (c.agent_state and (" · " .. c.agent_state) or "")
+          .. (session and (" · session " .. session) or "") .. "]"
       end
       table.insert(lines, "  " .. c.title .. who .. (c.attention and ("  ! " .. c.attention) or ""))
       map[#lines] = c.id
+      local waiting = waiting_on(c)
+      if waiting then table.insert(lines, "  └─ waits on " .. waiting_text(waiting)) end
     end
     if #col == 0 then table.insert(lines, "  —") end
     table.insert(lines, "")
@@ -506,51 +624,96 @@ function M.jump(dir)
   end
 end
 
--- Cards open in one split to the right of the board, reused for the next
--- card. q in that split saves and closes it.
-local card_win, card_buf
+-- Cards open in a float over the board, reused for the next card. It edits
+-- only the title (the first line, as a heading) and the description (the
+-- rest); :w writes them into the card file, leaving the front matter and the
+-- notes alone. q saves and closes it.
+local card_win
 
-local function release_card_buf()
-  if card_buf and vim.api.nvim_buf_is_valid(card_buf) then
-    pcall(vim.keymap.del, "n", "q", { buffer = card_buf })
+local DESCRIPTION = "(<!%-%- SECTION:DESCRIPTION:BEGIN %-%->\n?)(.-)(<!%-%- SECTION:DESCRIPTION:END %-%->)"
+
+local function description(card) return vim.trim(select(2, (card.body or ""):match(DESCRIPTION)) or "") end
+
+local function save_card(id, lines)
+  local title = vim.trim((lines[1] or ""):gsub("^#+%s*", ""))
+  local text = vim.trim(table.concat(vim.list_slice(lines, 2), "\n"))
+  local card = find(id)
+  local body = card.body or ""
+  if body:match(DESCRIPTION) then
+    -- A function replacement, so % in the text is not a capture reference.
+    card.body = body:gsub(DESCRIPTION, function(open, _, close)
+      return open .. (text ~= "" and text .. "\n" or "") .. close
+    end, 1)
+  else
+    card.body = "\n" .. section("Description", "DESCRIPTION", text) .. body
   end
-  card_buf = nil
+  if title ~= "" then card.title = title end
+  card.updated_date = now()
+  write(card)
+  M.push()
+end
+
+local function card_buffer(id)
+  local card = find(id)
+  local b = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(b, "agent://card/" .. id)
+  vim.bo[b].buftype = "acwrite"
+  vim.bo[b].bufhidden = "wipe"
+  vim.bo[b].filetype = "markdown"
+  local lines = { "# " .. card.title, "" }
+  vim.list_extend(lines, vim.split(description(card), "\n", { plain = true }))
+  vim.api.nvim_buf_set_lines(b, 0, -1, false, lines)
+  vim.bo[b].modified = false
+  vim.api.nvim_create_autocmd("BufWriteCmd", {
+    buffer = b,
+    callback = function()
+      save_card(id, vim.api.nvim_buf_get_lines(b, 0, -1, false))
+      vim.bo[b].modified = false
+    end,
+  })
+  vim.keymap.set("n", "q", "<Cmd>update | close<CR>", { buffer = b, nowait = true, desc = "board: save and close card" })
+  return b
+end
+
+local function card_float()
+  local width = math.min(80, vim.o.columns - 8)
+  local height = math.min(math.max(10, math.floor(vim.o.lines * 0.6)), vim.o.lines - 6)
+  return {
+    relative = "editor",
+    width = width,
+    height = height,
+    col = math.floor((vim.o.columns - width) / 2) - 1,
+    row = math.floor((vim.o.lines - height) / 2) - 1,
+    border = "rounded",
+  }
 end
 
 function M.open_card(id)
-  -- Opening a card is seeing what its agent asked for. Cleared before the
-  -- buffer loads, so it doesn't load a file about to change under it.
+  -- Opening a card is seeing what its agent asked for.
   if find(id).attention then M.set(id, { attention = "" }) end
-  local b = vim.fn.bufadd(find(id).path)
-  vim.fn.bufload(b)
-  vim.bo[b].buflisted = true
+  local b = card_buffer(id)
+  local title = { title = " " .. id .. " ", title_pos = "center" }
 
   if card_win and vim.api.nvim_win_is_valid(card_win) then
-    -- Save the card being replaced rather than leave it modified and hidden.
+    -- Save the card being replaced rather than drop its edits.
     vim.api.nvim_win_call(card_win, function() vim.cmd("silent update") end)
-    release_card_buf()
     vim.api.nvim_win_set_buf(card_win, b)
+    vim.api.nvim_win_set_config(card_win, title)
     vim.api.nvim_set_current_win(card_win)
   else
-    local host = vim.api.nvim_get_current_win()
-    card_win = vim.api.nvim_open_win(b, true, {
-      split = "right",
-      win = host,
-      width = math.max(40, math.floor(vim.api.nvim_win_get_width(host) * 0.4)),
-    })
+    card_win = vim.api.nvim_open_win(b, true, vim.tbl_extend("error", card_float(), title))
+    vim.wo[card_win].wrap = true
+    vim.wo[card_win].linebreak = true
     local win = card_win
     vim.api.nvim_create_autocmd("WinClosed", {
       pattern = tostring(win),
       once = true,
       callback = function()
-        release_card_buf()
         if card_win == win then card_win = nil end
       end,
     })
   end
-
-  card_buf = b
-  vim.keymap.set("n", "q", "<Cmd>update | close<CR>", { buffer = b, nowait = true, desc = "board: save and close card" })
+  vim.api.nvim_win_set_cursor(card_win, { 1, 2 })
 end
 
 -- Board actions on the card under the cursor; also what the HTML buttons call.
@@ -575,6 +738,17 @@ local actions = {
   end,
   assign = function(id)
     if id then M.assign(id) end
+  end,
+  session = function(id)
+    local buf = id and require("corkboard.agents").session(id)
+    if buf then return require("corkboard.picker").focus_terminal(buf) end
+    if id then vim.notify("corkboard: " .. id .. " has no agent running") end
+  end,
+  review = function(id)
+    if id then require("corkboard.review").open(id) end
+  end,
+  answer = function(id)
+    if id then require("corkboard.agents").attend(id) end
   end,
   open = function(id)
     if id then M.open_card(id) end
@@ -620,6 +794,9 @@ local function setup_buffer(b)
   map("L", function() M.action("right") end, "move card right")
   map("o", function() M.action("new") end, "new card")
   map("a", function() M.action("assign") end, "hand to agent")
+  map("s", function() M.action("session") end, "go to the agent's session")
+  map("v", function() M.action("review") end, "review the card's work")
+  map("r", function() M.action("answer") end, "go to what the agent is asking")
   map("<CR>", function() M.action("open") end, "open card")
   map("R", function() M.action("refresh") end, "refresh")
 
@@ -746,12 +923,26 @@ local function watch()
   end)
 end
 
--- Re-read the cards, redraw the text buffer, and send the browser the board.
+-- Re-read the cards, redraw the text buffer, send the browser the board,
+-- and start the agents that may now run.
 function M.push()
   watch()
   cards = M.list()
   render_text()
   push_state()
+  require("corkboard.agents").schedule(cards)
+  require("corkboard.budget").check(cards)
 end
+
+-- Draw again without re-reading: for what isn't in the files, like a
+-- session's live state.
+function M.redraw()
+  render_text()
+  push_state()
+end
+
+M.get = find
+M.dir = dir
+M.waiting_on = waiting_on
 
 return M

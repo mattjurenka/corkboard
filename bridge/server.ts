@@ -5,11 +5,13 @@
 // as {__ext, id} so they survive the round trip.
 //
 // Whoever can reach this socket can run arbitrary code through Neovim, so it
-// binds to loopback unless told otherwise.
+// binds to loopback unless told otherwise, and then wants a token (see
+// TOKEN). Either way the socket only opens for this bridge's own page.
 
 import { decodeMultiStream, decode, encode, ExtensionCodec } from "@msgpack/msgpack";
 import type { Subprocess } from "bun";
-import { readFileSync, statSync } from "node:fs";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
@@ -22,6 +24,53 @@ const PLUGIN_ROOT = new URL("../nvim", import.meta.url).pathname;
 // Third-party plugins (snacks.nvim) as a colon-separated list of plugin
 // directories; the flake's dev shell sets it from nixpkgs.
 const PLUGINS = (process.env.CORKBOARD_PLUGINS ?? "").split(":").filter(Boolean);
+// The app's name in the web app manifest, so two bridges installed as apps
+// (the installed one and the dev one) tell apart in launchers and
+// notifications.
+const NAME = process.env.CORKBOARD_NAME;
+
+// Loopback names, for the bind address and for the Host a loopback bridge
+// accepts.
+const isLoopback = (name: string) => /^(localhost|127(\.\d+){3}|::1)$/.test(name.replace(/^\[(.*)\]$/, "$1"));
+const LOCAL = isLoopback(HOST);
+
+// The token the page must send to open a socket: CORKBOARD_TOKEN, or the
+// contents of CORKBOARD_TOKEN_FILE (made there on first start, so it stays
+// the same across restarts). Bound beyond loopback with neither, the bridge
+// makes one for this run. The page gets it in the URL printed at startup, in
+// the fragment (#token=), which the browser never sends anywhere, and sends
+// it as a websocket subprotocol, which keeps it out of URLs and logs.
+function readToken(): string {
+  if (process.env.CORKBOARD_TOKEN) return process.env.CORKBOARD_TOKEN;
+  const file = process.env.CORKBOARD_TOKEN_FILE;
+  if (file && existsSync(file)) return readFileSync(file, "utf8").trim();
+  if (!file && LOCAL) return "";
+  const token = randomBytes(24).toString("hex");
+  if (file) writeFileSync(file, token + "\n", { mode: 0o600 });
+  return token;
+}
+const TOKEN = readToken();
+// It goes in Sec-WebSocket-Protocol, which allows only these.
+if (TOKEN && !/^[\w.~-]+$/.test(TOKEN)) throw new Error("CORKBOARD_TOKEN: use letters, digits and . _ ~ - only");
+if (!LOCAL && !TOKEN) throw new Error(`refusing to bind ${HOST} without a token`);
+const TOKEN_PROTOCOL = "corkboard.token.";
+
+const sameToken = (given: string) => {
+  const a = Buffer.from(given);
+  const b = Buffer.from(TOKEN);
+  return a.length === b.length && timingSafeEqual(a, b);
+};
+
+// Why an upgrade is refused, if it is. Origin must be this bridge's own
+// page, so another site open in the browser can't connect. A loopback
+// bridge also wants a loopback Host, or a site whose name was rebound to
+// 127.0.0.1 would be its own origin.
+function refuse(req: Request): string | undefined {
+  const host = req.headers.get("host") ?? "";
+  const origin = req.headers.get("origin");
+  if (LOCAL && !isLoopback(new URL(`http://${host}`).hostname)) return `wrong host: ${host}`;
+  if (!origin || URL.parse(origin)?.host !== host) return `wrong origin: ${origin}`;
+}
 
 const extensionCodec = new ExtensionCodec();
 for (const type of [0, 1, 2]) {
@@ -189,13 +238,32 @@ Bun.serve<Session, {}>({
     if (url.pathname === "/nvim") {
       const host = url.searchParams.get("host");
       const cwd = url.searchParams.get("cwd");
-      return server.upgrade(req, { data: host ? resolveRemote(host, cwd) : resolveCwd(cwd) })
-        ? undefined
-        : new Response("upgrade failed", { status: 400 });
+      const why = refuse(req);
+      if (why) {
+        console.error(`refused /nvim: ${why}`);
+        return new Response(why, { status: 403 });
+      }
+      const offered = (req.headers.get("sec-websocket-protocol") ?? "").split(",").map((p) => p.trim());
+      const token = offered.find((p) => p.startsWith(TOKEN_PROTOCOL))?.slice(TOKEN_PROTOCOL.length);
+      // A wrong token still upgrades, to be closed with the reason before
+      // Neovim starts, which the page can show; a refused upgrade it can't.
+      const data =
+        TOKEN && !(token && sameToken(token))
+          ? { cwd: "", error: "wrong or missing token: open the URL the bridge printed" }
+          : host
+            ? resolveRemote(host, cwd)
+            : resolveCwd(cwd);
+      // The browser drops a socket whose reply names no protocol it offered.
+      const headers = offered.includes("corkboard") ? { "sec-websocket-protocol": "corkboard" } : undefined;
+      return server.upgrade(req, { data, headers }) ? undefined : new Response("upgrade failed", { status: 400 });
     }
     const path = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
     if (path.split("/").includes("..")) return new Response("no", { status: 400 });
     const file = Bun.file(WEB_ROOT + path);
+    if (path === "manifest.webmanifest" && NAME) {
+      const manifest = { ...(await file.json()), name: NAME, short_name: NAME };
+      return new Response(JSON.stringify(manifest), { headers: { "content-type": "application/manifest+json" } });
+    }
     return (await file.exists()) ? new Response(file) : new Response("not found", { status: 404 });
   },
 
@@ -232,4 +300,4 @@ Bun.serve<Session, {}>({
   },
 });
 
-console.log(`corkboard on http://${HOST}:${PORT}`);
+console.log(`corkboard on http://${HOST.includes(":") ? `[${HOST}]` : HOST}:${PORT}/${TOKEN ? `#token=${TOKEN}` : ""}`);

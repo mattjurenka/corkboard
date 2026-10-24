@@ -7,7 +7,7 @@ import { attachInput } from "./nvim/input.js";
 import { Rpc } from "./nvim/rpc.js";
 import { makeNvim, NvimContext } from "./nvim/context";
 import { store } from "./store";
-import { askPermissionOnGesture, notifyAttention } from "./attention";
+import { askPermissionOnGesture, notifyAttention, notifyClaude } from "./attention";
 
 // ?cwd=/path/to/project opens Neovim there; ?host=<name> on that machine,
 // over ssh (CORKBOARD_REMOTES in bridge/server.ts).
@@ -23,7 +23,22 @@ const query = (cwd: string | null) => {
 };
 wsUrl.search = query(params.get("cwd"));
 
-const rpc = new Rpc(wsUrl);
+// The bridge's token, when it wants one (TOKEN in bridge/server.ts). It comes
+// in the fragment, #token=, and is kept so reloads and the windows of other
+// projects have it; it leaves the address bar so a bookmark or screenshot
+// doesn't carry it.
+const fragment = new URLSearchParams(location.hash.slice(1));
+let token = fragment.get("token");
+try {
+  if (token) localStorage.setItem("corkboard.token", token);
+  else token = localStorage.getItem("corkboard.token");
+} catch {}
+if (fragment.has("token")) {
+  fragment.delete("token");
+  history.replaceState(null, "", `${location.pathname}${location.search}${fragment.size ? `#${fragment}` : ""}`);
+}
+
+const rpc = new Rpc(wsUrl, ["corkboard", ...(token ? [`corkboard.token.${token}`] : [])]);
 const nvim = makeNvim(rpc);
 store.set({ host });
 
@@ -87,9 +102,12 @@ rpc.on("corkboard.scroll", ([scroll]: any[]) => {
 rpc.on("corkboard.board", ([state]: any[]) => {
   store.set({ views: { ...store.get().views, board: state } });
   notifyAttention(state.cards ?? [], (id) =>
-    rpc.notify("nvim_exec_lua", "local b = require('corkboard.board'); b.show(); b.select(...); b.open_card(...)", [id]),
+    rpc.notify("nvim_exec_lua", "require('corkboard.agents').attend(...)", [id]),
   );
 });
+rpc.on("corkboard.notification", ([n]: any[]) =>
+  notifyClaude(n, (buf) => rpc.notify("nvim_exec_lua", "require('corkboard.picker').focus_terminal(...)", [buf])),
+);
 rpc.on("corkboard.usage", ([state]: any[]) => store.set({ views: { ...store.get().views, usage: state } }));
 // A state without text (a markdown preview's scroll) keeps the last text.
 rpc.on("corkboard.view", ([buf, state]: any[]) => {
@@ -160,6 +178,12 @@ new ResizeObserver(() => {
 }).observe(container);
 
 attachInput(canvas, grid, rpc);
+// Whether this window has focus, which Neovim passes on to terminals that
+// ask (Claude Code holds back notifications while it thinks you're looking).
+const focus = () => rpc.notify("nvim_ui_set_focus", document.hasFocus());
+addEventListener("focus", focus);
+addEventListener("blur", focus);
+focus();
 canvas.focus();
 askPermissionOnGesture();
 

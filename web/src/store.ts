@@ -3,6 +3,7 @@
 // and a component re-renders when the slice it selected changes.
 
 import { useSyncExternalStore } from "react";
+import type { Note } from "./attention";
 
 export type Ext = { __ext: number; id: number };
 
@@ -32,6 +33,10 @@ export type State = {
   // Bumped when files in the project come or go.
   filesVersion: number;
   status: string | null;
+  // This page's notifications, newest first, and how many came since the
+  // list was last opened.
+  notifications: Note[];
+  unread: number;
 };
 
 let state: State = {
@@ -45,6 +50,8 @@ let state: State = {
   cell: { w: 9, h: 19 },
   filesVersion: 0,
   status: null,
+  notifications: [],
+  unread: 0,
 };
 
 const listeners = new Set<() => void>();

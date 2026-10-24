@@ -3,8 +3,8 @@
 // [2, method, params] notification.
 
 export class Rpc {
-  constructor(url) {
-    this.ws = new WebSocket(url);
+  constructor(url, protocols) {
+    this.ws = new WebSocket(url, protocols);
     this.nextId = 1;
     this.pending = new Map();
     this.handlers = new Map();

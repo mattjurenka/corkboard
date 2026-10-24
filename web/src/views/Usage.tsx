@@ -35,6 +35,10 @@ type UsageState = {
   periods?: { key: string; label: string }[];
   sort: string;
   total?: number;
+  // What the agents corkboard started cost, per card and per label
+  // (corkboard.usage's by_card), all time.
+  cards?: { id: string; title: string; cost?: number; tokens: number; sessions: number }[];
+  labels?: { label: string; cost: number; cards: number }[];
 };
 
 export function Usage({ state, win, focused, nvim }: ViewProps<UsageState>) {
@@ -46,12 +50,12 @@ export function Usage({ state, win, focused, nvim }: ViewProps<UsageState>) {
   const n = state.sessions.length;
 
   return (
-    <div className="flex h-full flex-col px-2ch pt-row">
+    <div className="@container/usage flex h-full flex-col px-2ch pt-row">
       <header className="flex justify-between gap-2ch pb-row text-muted-foreground">
         <span className="min-w-0 truncate">{state.root ?? ""}</span>
-        <span className="flex-none">j/k session · p period · s sort · R refresh</span>
+        <span className="flex-none @max-[80ch]/usage:hidden">j/k session · p period · s sort · R refresh</span>
       </header>
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(28ch,36ch)_1fr] gap-3ch">
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(28ch,36ch)_1fr] gap-3ch @max-[80ch]/usage:grid-cols-1 @max-[80ch]/usage:grid-rows-[minmax(0,2fr)_minmax(0,3fr)] @max-[80ch]/usage:gap-y-row">
         <div className="flex min-h-0 flex-col gap-row">
           <div className="flex flex-wrap items-center gap-x-2ch">
             <Segmented
@@ -97,10 +101,39 @@ export function Usage({ state, win, focused, nvim }: ViewProps<UsageState>) {
               </div>
             )}
           </div>
+          {!!state.cards?.length && <ByCard cards={state.cards} labels={state.labels ?? []} />}
         </div>
         {selected ? <Detail s={selected} /> : <div className="px-ch text-muted-foreground">—</div>}
       </div>
     </div>
+  );
+}
+
+function ByCard({ cards, labels }: { cards: NonNullable<UsageState["cards"]>; labels: NonNullable<UsageState["labels"]> }) {
+  return (
+    <section className="flex max-h-[40%] min-h-[calc(var(--cell-h)*4)] flex-none flex-col border-t pt-half">
+      <h2 className="text-muted-foreground lowercase">By card · all time</h2>
+      <ol className="min-h-row flex-1 overflow-y-auto">
+        {cards.map((c) => (
+          <li key={c.id} title={`${c.id} ${c.title}`} className="flex gap-ch px-ch tabular-nums">
+            <span className="flex-none text-muted-foreground">{c.id.replace(/^TASK-/, "#")}</span>
+            <span className="min-w-0 flex-1 truncate">{c.title}</span>
+            <span className="flex-none">{money(c.cost)}</span>
+            <span className="flex-none text-muted-foreground">×{c.sessions}</span>
+          </li>
+        ))}
+      </ol>
+      {labels.length > 0 && (
+        <p className="px-ch text-muted-foreground">
+          {labels.map((l, i) => (
+            <span key={l.label}>
+              {i > 0 && " · "}
+              {l.label} <span className="text-foreground tabular-nums">{money(l.cost)}</span>
+            </span>
+          ))}
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -140,6 +173,7 @@ function Detail({ s }: { s: Session }) {
         <Part title="Cache misses">
           <Grid
             head={["request", "cause", "re-sent", "written", "uncached", "cost"]}
+            minor={[3, 4]}
             wide={1}
             rows={c.misses.map((m) => ({
               cells: [
@@ -157,6 +191,7 @@ function Detail({ s }: { s: Session }) {
       <Part title="Heaviest items">
         <Grid
           head={["item", "size", "reads", "share", "cost"]}
+          minor={[2]}
           clip={2}
           rows={s.top.map((it) => ({
             title: `${it.kind}: ${tokens(it.size)} tokens, read by ${it.reads} later requests`,
@@ -168,6 +203,7 @@ function Detail({ s }: { s: Session }) {
         <Part title="Subagents">
           <Grid
             head={["agent", "task", "requests", "tokens", "cost"]}
+            minor={[2]}
             clip={2}
             rows={s.agents.map((a) => ({ cells: [a.type, a.description, String(a.requests), tokens(total(a.tokens)), money(a.cost)] }))}
           />
@@ -186,6 +222,7 @@ function Categories({ cats }: { cats: NonNullable<Session["categories"]> }) {
     <div>
       <Grid
         head={["", "", "share", "written", "uncached", "cache read", "cost"]}
+        minor={[3, 4, 5]}
         barColumn
         rows={cats.map((c) => ({
           title: `${c.label}: ${c.count}× · ${tokens(c.written)} written to cache, ${tokens(c.uncached)} sent uncached · read back ${tokens(c.read)} from cache`,
@@ -213,19 +250,22 @@ function Categories({ cats }: { cats: NonNullable<Session["categories"]> }) {
 // A table on the grid: one line per row, numbers right-aligned, the first
 // column left. `clip` columns from the start share the slack and truncate;
 // `wide` is a left-aligned column that takes half; `barColumn` puts a bar
-// in the second column.
+// in the second column; `minor` columns are left out when the view is
+// narrow.
 function Grid({
   head,
   rows,
   clip = 0,
   wide,
   barColumn,
+  minor = [],
 }: {
   head: string[];
   rows: { title?: string; cells: React.ReactNode[] }[];
   clip?: number;
   wide?: number;
   barColumn?: boolean;
+  minor?: number[];
 }) {
   const align = (i: number) =>
     cn(
@@ -234,6 +274,7 @@ function Grid({
       i < clip && "w-[45%] max-w-0 truncate",
       i === wide && "w-1/2 text-left",
       barColumn && i === 1 && "w-2/5",
+      minor.includes(i) && "@max-[80ch]/usage:hidden",
     );
   return (
     <Table>

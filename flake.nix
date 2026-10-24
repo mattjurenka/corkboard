@@ -71,7 +71,7 @@
           version = "0.1.0";
           src = pkgs.lib.fileset.toSource {
             root = ./.;
-            fileset = pkgs.lib.fileset.unions [ ./bridge ./nvim ];
+            fileset = pkgs.lib.fileset.unions [ ./bridge ./nvim ./mcp ];
           };
           # The bridge's only dependency, and it has none of its own, so it is fetched
           # straight from the registry with bun.lock's integrity hash instead
@@ -84,12 +84,12 @@
           installPhase = ''
             share=$out/share/corkboard
             mkdir -p $share/node_modules/@msgpack/msgpack
-            cp -r bridge nvim $share/
+            cp -r bridge nvim mcp $share/
             mkdir -p $share/web && cp -r ${web} $share/web/dist
             tar -xzf $msgpack -C $share/node_modules/@msgpack/msgpack --strip-components=1
             makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-bridge \
               --add-flags $share/bridge/server.ts \
-              --suffix PATH : ${pkgs.lib.makeBinPath [ pkgs.neovim pkgs.ripgrep pkgs.fd ]} \
+              --suffix PATH : ${pkgs.lib.makeBinPath [ pkgs.neovim pkgs.bun pkgs.ripgrep pkgs.fd ]} \
               --suffix CORKBOARD_PLUGINS : ${pluginPath pkgs}
           '';
           meta.mainProgram = "corkboard-bridge";

@@ -77,17 +77,61 @@ function M.terminal()
   end
 end
 
--- <C-.>: Claude Code in a tab of its own, in the project's cwd.
-function M.claude()
-  if vim.fn.executable("claude") == 0 then
-    return vim.notify("corkboard: claude is not on PATH", vim.log.levels.ERROR)
+-- Settings for the sessions claude() starts, on top of the user's own: a
+-- hook that passes each PushNotification, sent or held back, to the page's
+-- notification list (hooks/claude-notification.lua).
+-- And one for the session's own events, which keeps its live state
+-- (hooks/claude-session.lua).
+local function claude_settings()
+  local function command(name)
+    local hook = vim.api.nvim_get_runtime_file("hooks/" .. name, false)[1]
+    return { type = "command", command = table.concat({ vim.fn.shellescape(vim.v.progpath), "--clean --headless -l", vim.fn.shellescape(hook) }, " ") }
   end
+  local session = { { hooks = { command("claude-session.lua") } } }
+  return {
+    hooks = {
+      PostToolUse = {
+        { matcher = "PushNotification", hooks = { command("claude-notification.lua") } },
+        session[1],
+      },
+      SessionStart = session,
+      UserPromptSubmit = session,
+      PreToolUse = session,
+      PermissionRequest = session,
+      Notification = session,
+      Stop = session,
+    },
+  }
+end
+
+-- Claude Code holds a PushNotification back when it thinks you are at the
+-- terminal, which inside this page it can't tell; the hook passes every one
+-- on, and the page raises it when its window isn't focused. So sessions are
+-- asked to send them freely rather than sparingly.
+local notify_prompt = table.concat({
+  "You are running inside corkboard, which forwards PushNotification calls to the user's desktop when they are not looking at it.",
+  "Call PushNotification whenever you need the user to decide, approve or do something, and when you finish a task that took more than a minute or two.",
+  "Send it even if you think the user is watching; a \"not sent\" result is expected and still reaches them.",
+}, " ")
+
+-- Claude Code in a tab of its own, and the tab's terminal buffer, or nil
+-- if claude is not on PATH. opts: args (after corkboard's own), cwd (the
+-- project's when unset), env (on top of CORKBOARD_BUF), on_exit(status).
+function M.start_claude(opts)
+  opts = opts or {}
+  if vim.fn.executable("claude") == 0 then
+    vim.notify("corkboard: claude is not on PATH", vim.log.levels.ERROR)
+    return nil
+  end
+  -- jobstart's terminal takes over tabnew's empty buffer. CORKBOARD_BUF
+  -- tells the hooks which terminal the session is in.
   vim.cmd.tabnew()
-  local empty = vim.api.nvim_get_current_buf()
-  vim.cmd.terminal("claude")
-  -- :terminal replaces tabnew's empty buffer in the window but leaves it
-  -- loaded; nothing else will ever show it.
-  if empty ~= vim.api.nvim_get_current_buf() then pcall(vim.api.nvim_buf_delete, empty, {}) end
+  local buf = vim.api.nvim_get_current_buf()
+  vim.fn.jobstart(vim.list_extend({ "claude", "--settings", vim.json.encode(claude_settings()), "--append-system-prompt", notify_prompt }, opts.args or {}), {
+    term = true,
+    cwd = opts.cwd,
+    env = vim.tbl_extend("force", opts.env or {}, { CORKBOARD_BUF = tostring(buf) }),
+  })
   -- When Claude Code exits its tab goes too (deleting the buffer closes
   -- the windows showing it), unless the tab has a terminal still running,
   -- shown or hidden, which would go with it. A failure is reported,
@@ -99,6 +143,7 @@ function M.claude()
     callback = function(args)
       local status = vim.v.event.status
       vim.schedule(function()
+        if opts.on_exit then opts.on_exit(status) end
         if vim.api.nvim_tabpage_is_valid(tab) and terminal_alive(vim.t[tab].corkboard_terminal) then return end
         if status ~= 0 then
           vim.notify("corkboard: claude exited with status " .. status, vim.log.levels.WARN)
@@ -107,6 +152,26 @@ function M.claude()
       end)
     end,
   })
+  return buf
+end
+
+-- <C-.>: Claude Code in a tab of its own, in the project's cwd.
+function M.claude() M.start_claude() end
+
+-- Go to a terminal: the window showing it, in whichever tab, or a new tab
+-- for it if it is hidden. False when the buffer is gone.
+function M.focus_terminal(buf)
+  if not (buf and vim.api.nvim_buf_is_valid(buf)) then return false end
+  local win = vim.fn.win_findbuf(buf)[1]
+  if win then
+    vim.api.nvim_set_current_win(win)
+  else
+    vim.cmd.tabnew()
+    local empty = vim.api.nvim_get_current_buf()
+    vim.api.nvim_win_set_buf(0, buf)
+    pcall(vim.api.nvim_buf_delete, empty, {})
+  end
+  return true
 end
 
 -- The tool picker (<C-Space>): things to open, run in the window the picker
@@ -150,6 +215,14 @@ local tools = {
           vim.notify("Project: " .. vim.fn.fnamemodify(item.file, ":~"))
         end,
       })
+    end,
+  },
+  {
+    text = "Card from this line",
+    hint = "<leader>c",
+    run = function()
+      local lnum = vim.api.nvim_win_get_cursor(0)[1]
+      require("corkboard.board").card_from_code(lnum, lnum)
     end,
   },
   {

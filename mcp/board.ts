@@ -259,7 +259,17 @@ function ask(card: Card, message: string, wait: boolean) {
   appendLog(card, `${wait ? "blocked" : "needs you"}: ${text}`);
 }
 
-function summary(c: Card) {
+// The dependencies a card still waits on: those not done, and ids with no
+// card, which can never be done.
+function waitingOn(card: Card, cards = list()): string[] {
+  const status = new Map(cards.map((c) => [c.id, c.status]));
+  return (card.dependencies ?? [])
+    .map((d: string) => d.toUpperCase())
+    .filter((d: string) => status.get(d) !== "done")
+    .map((d: string) => (status.has(d) ? d : `${d} (no such card)`));
+}
+
+function summary(c: Card, cards?: Card[]) {
   return {
     id: c.id,
     title: c.title,
@@ -270,6 +280,7 @@ function summary(c: Card) {
     ordinal: c.ordinal ?? "",
     labels: c.labels ?? [],
     dependencies: c.dependencies ?? [],
+    waiting_on: c.status === "done" ? [] : waitingOn(c, cards),
   };
 }
 
@@ -280,10 +291,13 @@ function full(c: Card) {
   return { id: c.id, ...fields, description: description.trim(), log: log.trim() };
 }
 
-function claim(id: string): Card {
+function claim(id: string, force = false): Card {
   return change(id, (card) => {
     if (card.agent && card.agent !== ME) throw new Error(`card ${id} is held by ${card.agent}`);
     if (card.status === "done") throw new Error(`card ${id} is done`);
+    const waiting = waitingOn(card);
+    if (waiting.length && !force)
+      throw new Error(`card ${id} waits on ${waiting.join(", ")}; pass force to claim it anyway`);
     if (card.agent === ME && card.agent_state === "working") return;
     card.status = "doing";
     card.agent = ME;
@@ -343,13 +357,15 @@ const TOOLS: Record<string, Tool> = {
       agent: str("Only cards held by this agent"),
       mine: { type: "boolean", description: "Only cards held by you" },
     },
-    run: (a) =>
-      list()
+    run: (a) => {
+      const cards = list();
+      return cards
         .filter((c) => !a.status || c.status === a.status)
         .filter((c) => !a.agent_state || c.agent_state === a.agent_state)
         .filter((c) => !a.agent || c.agent === a.agent)
         .filter((c) => !a.mine || c.agent === ME)
-        .map(summary),
+        .map((c) => summary(c, cards));
+    },
   },
   read_card: {
     description: "Read a card: its fields, description and log.",
@@ -359,13 +375,13 @@ const TOOLS: Record<string, Tool> = {
   },
   next_card: {
     description:
-      "Claim the next card to work on and return it: a card queued for you first, else the top unassigned card in ready. Returns null when there is nothing to do.",
+      "Claim the next card to work on and return it: a card queued for you first, else the top unassigned card in ready. Cards still waiting on dependencies are skipped. Returns null when there is nothing to do.",
     run: () => {
       const cards = list();
       const candidates = [
         ...cards.filter((c) => c.agent === ME && c.agent_state === "queued"),
         ...cards.filter((c) => c.status === "ready" && !c.agent),
-      ];
+      ].filter((c) => !waitingOn(c, cards).length && !c.budget_hold);
       for (const c of candidates) {
         try {
           return full(claim(c.id));
@@ -375,10 +391,11 @@ const TOOLS: Record<string, Tool> = {
     },
   },
   claim_card: {
-    description: "Start work on a card: sets status doing, agent to you, agent_state working. Fails if another agent holds it.",
-    properties: { id },
+    description:
+      "Start work on a card: sets status doing, agent to you, agent_state working. Fails if another agent holds it, or if it waits on cards that aren't done (unless force).",
+    properties: { id, force: { type: "boolean", description: "Claim it even though its dependencies aren't done" } },
     required: ["id"],
-    run: (a) => full(claim(a.id)),
+    run: (a) => full(claim(a.id, a.force === true)),
   },
   release_card: {
     description: "Give up a card you hold without finishing it; it goes back to ready, unassigned.",
@@ -506,6 +523,18 @@ const TOOLS: Record<string, Tool> = {
   },
 };
 
+// budget_hold: corkboard's budget guard (corkboard/budget.lua) stopped the
+// agent on this card. Until the user answers, the agent may still read the
+// card, ask (block, request_user_action) or let it go, but not work on it.
+const HOLD_ALLOWS = new Set(["read_card", "block", "request_user_action", "release_card"]);
+
+function held(tool: string, args: any) {
+  if (HOLD_ALLOWS.has(tool) || typeof args.id !== "string") return;
+  const card = find(args.id);
+  if (card.budget_hold)
+    throw new Error(`budget reached on ${card.id}: ${card.budget_hold}. Stop working on it and wait; the user has been told and will answer on the card.`);
+}
+
 // MCP over stdio ----------------------------------------------------------------
 
 const INSTRUCTIONS = `The corkboard project board: one card per task. You are "${ME}".
@@ -546,6 +575,7 @@ function handle(msg: any) {
       const tool = TOOLS[params?.name];
       if (!tool) return fail(id, -32602, `unknown tool ${params?.name}`);
       try {
+        held(params.name, params.arguments ?? {});
         const out = tool.run(params.arguments ?? {});
         return reply(id, { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] });
       } catch (e: any) {

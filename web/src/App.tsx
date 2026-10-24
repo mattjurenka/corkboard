@@ -11,9 +11,16 @@ import { useStore } from "@/store";
 export function App() {
   const status = useStore((s) => s.status);
   return (
-    <div className="relative h-full [--sidebar-width:calc(var(--cell-w)*32)]">
+    // 32 cells, or less in a narrow window: never more than 30% of it, nor
+    // under 18 cells.
+    <div className="relative h-full [--sidebar-width:min(calc(var(--cell-w)*32),max(calc(var(--cell-w)*18),30vw))]">
       <Sidebar />
-      <div id="editor" className="absolute inset-y-0 right-0 left-(--sidebar-width)">
+      {/* Installed as an app, the page draws where the title bar was
+          (window-controls-overlay in the manifest), all but the window
+          buttons. The sidebar runs to the top; over the editor, the bar's
+          height is left to drag the window by. Zero in a browser tab. */}
+      <div className="absolute top-0 right-0 left-(--sidebar-width) h-[env(titlebar-area-height,0px)] [-webkit-app-region:drag] [app-region:drag]" />
+      <div id="editor" className="absolute top-[env(titlebar-area-height,0px)] right-0 bottom-0 left-(--sidebar-width)">
         <canvas tabIndex={0} className="block outline-none" />
         <Panels />
         <Scrollbars />

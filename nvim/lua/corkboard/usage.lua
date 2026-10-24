@@ -406,6 +406,61 @@ local function scan(cwd, since)
   return sessions, changed
 end
 
+-- Cards -----------------------------------------------------------------------
+--
+-- What each card's agents cost, from the sessions corkboard.agents started
+-- on it (sessions.json beside the board). Those run in worktrees, so their
+-- logs are under other project directories, out of scan()'s sight; they are
+-- read by path instead. A session's cost is its cost-state's total
+-- (subagents included); tokens are its own log's.
+
+-- id -> { cost (nil while no session has a cost-state), tokens, sessions,
+-- today (the cost of sessions started since local midnight) }
+function M.card_costs()
+  local out = {}
+  local midnight = os.time(vim.tbl_extend("force", os.date("*t"), { hour = 0, min = 0, sec = 0 }))
+  for id, list in pairs(require("corkboard.agents").card_sessions()) do
+    local c = { tokens = 0, sessions = 0, today = 0 }
+    for _, s in ipairs(list) do
+      if s.transcript and vim.uv.fs_stat(s.transcript) then
+        local log = log_for(s.transcript, vim.fn.getcwd())
+        c.sessions = c.sessions + 1
+        c.tokens = c.tokens + log.tokens.input + log.tokens.write + log.tokens.read + log.tokens.output
+        local cost = log.cost and log.cost.totalCostUSD
+        if cost then
+          c.cost = (c.cost or 0) + cost
+          if (s.started or 0) >= midnight then c.today = c.today + cost end
+        end
+      end
+    end
+    if c.sessions > 0 then out[id] = c end
+  end
+  return out
+end
+
+-- The cards with costs, most expensive first, and the same added up by
+-- label (a card with two labels counts in both).
+local function by_card()
+  local costs = M.card_costs()
+  if vim.tbl_isempty(costs) then return {}, {} end
+  local cards, labels = {}, {}
+  for _, card in ipairs(require("corkboard.board").list()) do
+    local c = costs[card.id]
+    if c then
+      table.insert(cards, { id = card.id, title = card.title, labels = card.labels or {}, cost = c.cost, tokens = c.tokens, sessions = c.sessions })
+      for _, label in ipairs(#(card.labels or {}) > 0 and card.labels or { "(no label)" }) do
+        labels[label] = labels[label] or { label = label, cost = 0, cards = 0 }
+        labels[label].cost = labels[label].cost + (c.cost or 0)
+        labels[label].cards = labels[label].cards + 1
+      end
+    end
+  end
+  table.sort(cards, function(a, b) return (a.cost or -1) > (b.cost or -1) end)
+  local label_list = vim.tbl_values(labels)
+  table.sort(label_list, function(a, b) return a.cost > b.cost end)
+  return cards, label_list
+end
+
 -- Summaries -------------------------------------------------------------------
 
 -- Dollars per input-token unit for each model, from the session's
@@ -697,9 +752,11 @@ local function state()
   end
   local periods = {}
   for _, p in ipairs(PERIODS) do table.insert(periods, { key = p.key, label = p.label }) end
+  local cards, labels = by_card()
   return {
     root = vim.fn.getcwd(), selected = selected, sessions = list,
     period = period, periods = periods, sort = sort, total = period_total(),
+    cards = cards, labels = labels,
   }
 end
 
@@ -721,6 +778,17 @@ local function render_text()
   if #sessions == 0 then
     table.insert(lines, "  — no Claude Code sessions in " .. project_dir(vim.fn.getcwd())
       .. (period ~= "all" and (" in the last " .. period_of(period).label) or ""))
+  end
+  local cards, labels = by_card()
+  if #cards > 0 then
+    vim.list_extend(lines, { "", "BY CARD (agents corkboard started; all time)" })
+    for _, c in ipairs(cards) do
+      table.insert(lines, string.format("  %-9s %-40s %8s %7s  %d session%s", c.id, short(c.title, 40),
+        dollars(c.cost), human(c.tokens), c.sessions, c.sessions == 1 and "" or "s"))
+    end
+    table.insert(lines, "  by label: " .. table.concat(vim.tbl_map(function(l)
+      return string.format("%s %s (%d)", l.label, dollars(l.cost), l.cards)
+    end, labels), " · "))
   end
 
   local s
@@ -798,6 +866,10 @@ function M.push(force)
   -- A session can also age out of the period without any log growing.
   changed = changed or #sessions ~= M.count
   M.count = #sessions
+  -- Cards' sessions are elsewhere (see card_costs), so they're compared.
+  local card_costs = vim.json.encode(M.card_costs())
+  changed = changed or card_costs ~= M.card_costs_seen
+  M.card_costs_seen = card_costs
   sort_sessions()
   if changed or force then
     render_text()

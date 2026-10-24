@@ -1,4 +1,5 @@
-// The project, then tabs over files, each half the remaining height.
+// The project, then tabs over files, each half the remaining height, and
+// the notifications folded at the foot (a third each when opened).
 //
 // Tabs are drawn from ext_tabline: Neovim stops drawing its own tabline and
 // sends tabline_update instead; gt/gT and :tab* still drive it. Tabs 1 and 2
@@ -11,7 +12,9 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { keepFocus, useNvim } from "@/nvim/context";
 import { useStore } from "@/store";
+import { Activity } from "./Activity";
 import { Files } from "./Files";
+import { Notifications } from "./Notifications";
 
 const PINNED = ["Board", "Usage"];
 
@@ -45,6 +48,8 @@ export function Sidebar() {
         <Tabs />
       </Section>
       <Files />
+      <Activity />
+      <Notifications />
     </nav>
   );
 }

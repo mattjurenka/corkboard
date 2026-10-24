@@ -75,6 +75,9 @@ function M.attach(chan)
   M.push_layout()
 end
 
+-- Whether a page is attached.
+function M.attached() return next(chans) ~= nil end
+
 function M.notify(method, ...)
   for chan in pairs(chans) do
     if not pcall(vim.rpcnotify, chan, method, ...) then chans[chan] = nil end
@@ -474,6 +477,12 @@ function M.setup()
   local board = require("corkboard.board")
   vim.keymap.set("n", "<leader>b", board.show, { desc = "corkboard: board" })
   vim.api.nvim_create_user_command("AgentBoard", board.show, { desc = "corkboard: board" })
+  vim.api.nvim_create_user_command("AgentCard", function(args) board.card_from_code(args.line1, args.line2) end, {
+    range = true,
+    desc = "corkboard: card from these lines",
+  })
+  vim.keymap.set("n", "<leader>c", "<Cmd>AgentCard<CR>", { desc = "corkboard: card from this line" })
+  vim.keymap.set("x", "<leader>c", ":AgentCard<CR>", { desc = "corkboard: card from the selection" })
   local usage = require("corkboard.usage")
   vim.keymap.set("n", "<leader>u", usage.show, { desc = "corkboard: token usage" })
   vim.api.nvim_create_user_command("AgentUsage", usage.show, { desc = "corkboard: token usage" })
@@ -502,13 +511,9 @@ function M.setup()
 
   -- Replaces <C-t>'s tag-stack pop.
   vim.keymap.set("n", "<C-t>", "<Cmd>tabnew<CR>", { desc = "corkboard: new tab" })
-  -- The browser sends <Tab> and <C-i> as different keys, so the jumplist's
-  -- <C-i> keeps working. In a terminal without extended keys they are one key.
-  vim.keymap.set("n", "<Tab>", "<Cmd>tabnext<CR>", { desc = "corkboard: next tab" })
-  vim.keymap.set("n", "<S-Tab>", "<Cmd>tabprevious<CR>", { desc = "corkboard: previous tab" })
-  -- The same from any mode. A terminal keeps plain Tab and Shift+Tab for
-  -- its program (completion; Claude Code's mode cycling), so these are how
-  -- to leave a Claude or terminal tab without <C-\><C-n> first.
+  -- Ctrl+Tab and Ctrl+Shift+Tab go through the tabs, from any mode. Plain
+  -- Tab and Shift+Tab are left alone everywhere: Vim's own in normal mode,
+  -- the program's in a terminal (completion; Claude Code's mode cycling).
   vim.keymap.set({ "n", "i", "t" }, "<C-Tab>", "<Cmd>tabnext<CR>", { desc = "corkboard: next tab" })
   vim.keymap.set({ "n", "i", "t" }, "<C-S-Tab>", "<Cmd>tabprevious<CR>", { desc = "corkboard: previous tab" })
 
@@ -544,11 +549,15 @@ function M.setup()
       wo.winhighlight = "SignColumn:Normal,WinBar:Normal,WinBarNC:Normal"
     end,
   })
-  -- Every window starts in normal mode, terminals included (i to type into
-  -- one), and <C-n> leaves terminal mode in any of them instead of
-  -- <C-\><C-n>. That costs readline's next-history in a shell, which the
-  -- down arrow still is.
-  vim.keymap.set("t", "<C-n>", [[<C-\><C-n>]], { desc = "corkboard: normal mode" })
+  -- A terminal (Claude Code or a shell) is for typing into, so entering one
+  -- is entering terminal mode. The tab and window keys above work from
+  -- there; <C-\><C-n> still gets to normal mode.
+  vim.api.nvim_create_autocmd({ "TermOpen", "BufEnter", "WinEnter" }, {
+    group = group,
+    callback = function(args)
+      if vim.bo[args.buf].buftype == "terminal" and vim.api.nvim_get_current_buf() == args.buf then vim.cmd.startinsert() end
+    end,
+  })
   -- A save can add a file, so the browser re-reads the folders it shows.
   vim.api.nvim_create_autocmd("BufWritePost", {
     group = group,
