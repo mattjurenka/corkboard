@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "corkboard": {
+      "command": "bun",
+      "args": ["mcp/board.ts"]
+    }
+  }
+}

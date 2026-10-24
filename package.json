@@ -1,0 +1,33 @@
+{
+  "name": "corkboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run build && bun bridge/server.ts",
+    "build": "vite build web",
+    "dev:web": "vite web",
+    "typecheck": "tsc -p .",
+    "mcp": "bun mcp/board.ts"
+  },
+  "dependencies": {
+    "@msgpack/msgpack": "^3.0.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "dompurify": "^3.4.17",
+    "marked": "^18.1.1",
+    "radix-ui": "^1.8.1",
+    "react": "19",
+    "react-dom": "19",
+    "tailwind-merge": "^3.7.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/bun": "^1.4.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  }
+}

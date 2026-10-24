@@ -1,0 +1,8 @@
+node_modules/
+web/dist/
+# nix build output
+result
+result-*
+# old in-repo board; boards live in ~/.local/share/corkboard/boards now
+.board/
+.claude/settings.local.json

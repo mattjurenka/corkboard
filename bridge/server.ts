@@ -1,0 +1,235 @@
+// Bridges a browser websocket to `nvim --embed`.
+//
+// Neovim speaks msgpack-RPC on stdio; the browser speaks the same messages
+// as JSON over the socket. Neovim's ext types (Buffer, Window, Tabpage) cross
+// as {__ext, id} so they survive the round trip.
+//
+// Whoever can reach this socket can run arbitrary code through Neovim, so it
+// binds to loopback unless told otherwise.
+
+import { decodeMultiStream, decode, encode, ExtensionCodec } from "@msgpack/msgpack";
+import type { Subprocess } from "bun";
+import { readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
+
+const HOST = process.env.CORKBOARD_HOST ?? "127.0.0.1";
+const PORT = Number(process.env.CORKBOARD_PORT ?? 7777);
+const NVIM = process.env.CORKBOARD_NVIM ?? "nvim";
+// The page as `bun run build` writes it (web/dist).
+const WEB_ROOT = new URL("../web/dist/", import.meta.url).pathname;
+const PLUGIN_ROOT = new URL("../nvim", import.meta.url).pathname;
+// Third-party plugins (snacks.nvim) as a colon-separated list of plugin
+// directories; the flake's dev shell sets it from nixpkgs.
+const PLUGINS = (process.env.CORKBOARD_PLUGINS ?? "").split(":").filter(Boolean);
+
+const extensionCodec = new ExtensionCodec();
+for (const type of [0, 1, 2]) {
+  extensionCodec.register({
+    type,
+    encode: (obj: any) => (obj?.__ext === type ? encode(obj.id) : null),
+    decode: (data: Uint8Array) => ({ __ext: type, id: decode(data) }),
+  });
+}
+
+// Machines a page can open a project on with ?host=<name>, as JSON, or the
+// path of a JSON file (systemd's Environment= mangles inline quotes):
+// { "<name>": { "target": "user@address", "options": [ssh args...] } }.
+// Their Neovim is CORKBOARD_REMOTE_NVIM, a store path (a wrapper that puts
+// this plugin and its company on the runtimepath) that nix copy delivers
+// first, so the far side needs Nix and a login, not an install.
+type Remote = { target: string; options?: string[] };
+const remotesRaw = process.env.CORKBOARD_REMOTES ?? "{}";
+const REMOTES: Record<string, Remote> = JSON.parse(
+  remotesRaw.startsWith("/") ? readFileSync(remotesRaw, "utf8") : remotesRaw,
+);
+const REMOTE_NVIM = process.env.CORKBOARD_REMOTE_NVIM;
+
+type Session = {
+  nvim?: Subprocess<"pipe", "pipe", "pipe">;
+  cwd: string;
+  host?: string;
+  error?: string;
+  // What the page sent while a remote Neovim was still being started.
+  queued?: string[];
+  closed?: boolean;
+  lastError?: string;
+};
+
+// The project Neovim last opened (remember_project in corkboard/init.lua).
+const LAST_PROJECT = resolve(process.env.XDG_STATE_HOME ?? resolve(homedir(), ".local/state"), "corkboard/last-project");
+
+function lastProject(): string | null {
+  try {
+    const dir = readFileSync(LAST_PROJECT, "utf8").trim();
+    return dir && statSync(dir).isDirectory() ? dir : null;
+  } catch {
+    return null;
+  }
+}
+
+// ?cwd= from the page: "~" expands, relative paths are from home. Without
+// one, the last project opened, or home if there is none. A missing
+// directory has to be caught here, because posix_spawn reports a bad cwd as
+// ENOENT on the executable ("posix_spawn 'nvim'").
+function resolveCwd(raw: string | null): { cwd: string; error?: string } {
+  const home = homedir();
+  const cwd = resolve(home, (raw ?? lastProject() ?? home).replace(/^~(?=$|\/)/, home));
+  try {
+    if (statSync(cwd).isDirectory()) return { cwd };
+  } catch {}
+  return { cwd, error: `no such directory: ${cwd}` };
+}
+
+// A page's ?host=, checked against REMOTES. The cwd is the far side's to
+// resolve ("~" included); with none, it is wherever that machine's login
+// leaves you.
+function resolveRemote(host: string, raw: string | null): Session {
+  if (!REMOTES[host]) return { cwd: "", host, error: `unknown host: ${host}` };
+  if (!REMOTE_NVIM) return { cwd: "", host, error: "CORKBOARD_REMOTE_NVIM is not set" };
+  return { cwd: raw ?? "", host, queued: [] };
+}
+
+// One word for a POSIX shell.
+const sh = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+
+// Run on the remote by sshd's shell. The login profile is sourced by hand
+// rather than with bash -l, with its output sent to stderr: whatever a
+// profile prints would otherwise land in Neovim's msgpack stream. It is
+// sourced at all because that is where a machine keeps the environment its
+// tools need (brain-vm's credentials), and Neovim's terminals inherit it.
+const REMOTE_SCRIPT = `
+exec 3>&1 1>&2
+[ -r /etc/profile ] && . /etc/profile
+[ -r "$HOME/.profile" ] && . "$HOME/.profile"
+if [ -n "$1" ]; then
+  case "$1" in "~") d=$HOME ;; "~/"*) d=$HOME/\${1#"~/"} ;; *) d=$1 ;; esac
+  cd -- "$d" || { echo "no such directory: $1" >&2; exit 1; }
+fi
+exec "$2" --embed 1>&3 3>&-
+`;
+
+async function spawnRemote(data: Session): Promise<NonNullable<Session["nvim"]>> {
+  const remote = REMOTES[data.host!];
+  const options = remote.options ?? [];
+  // A no-op once the store path is there, which is every time but the first
+  // after a rebuild. --no-check-sigs because the plugin and theme are built
+  // here and signed by nobody; the far side accepts that only from a user
+  // it trusts, which is the one requirement on it.
+  const copy = Bun.spawn(["nix", "copy", "--no-check-sigs", "--to", `ssh-ng://${remote.target}`, REMOTE_NVIM!], {
+    env: { ...process.env, NIX_SSHOPTS: options.join(" ") },
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  if ((await copy.exited) !== 0) {
+    const err = (await new Response(copy.stderr).text()).trim().split("\n").at(-1);
+    throw new Error(`nix copy to ${data.host} failed: ${err}`);
+  }
+  const command = `bash -c ${sh(REMOTE_SCRIPT)} corkboard ${sh(data.cwd)} ${sh(REMOTE_NVIM!)}`;
+  return Bun.spawn(["ssh", ...options, "-T", remote.target, "--", command], {
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+}
+
+function spawnLocal(data: Session): NonNullable<Session["nvim"]> {
+  const rtp = `set rtp^=${[PLUGIN_ROOT, ...PLUGINS].map((p) => p.replace(/[ \\,]/g, "\\$&")).join(",")}`;
+  return Bun.spawn([NVIM, "--embed", "--cmd", rtp], {
+    cwd: data.cwd,
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+}
+
+function toNvim(nvim: NonNullable<Session["nvim"]>, raw: string) {
+  nvim.stdin.write(encode(JSON.parse(raw), { extensionCodec }));
+  nvim.stdin.flush();
+}
+
+// Close reasons are capped at 123 bytes by the websocket spec.
+const closeReason = (s: string) => new TextEncoder().encode(s).length > 120 ? s.slice(0, 100) + "…" : s;
+
+async function pump(ws: Bun.ServerWebSocket<Session>, nvim: NonNullable<Session["nvim"]>) {
+  try {
+    for await (const msg of decodeMultiStream(nvim.stdout, { extensionCodec })) {
+      ws.send(JSON.stringify(msg));
+    }
+  } catch (err) {
+    console.error("nvim stream:", err);
+  }
+  // A remote that never got as far as Neovim (a missing directory, a
+  // refused login) says why on stderr; the page shows the close reason.
+  const why = ws.data.nvim && !(await ws.data.nvim.exited) ? "" : ws.data.lastError;
+  ws.close(1000, closeReason(why ? `nvim exited: ${why}` : "nvim exited"));
+}
+
+function start(ws: Bun.ServerWebSocket<Session>, nvim: NonNullable<Session["nvim"]>) {
+  ws.data.nvim = nvim;
+  pump(ws, nvim);
+  (async () => {
+    const decoder = new TextDecoder();
+    for await (const chunk of nvim.stderr) {
+      process.stderr.write(chunk);
+      const line = decoder.decode(chunk).trim().split("\n").at(-1);
+      if (line) ws.data.lastError = line;
+    }
+  })();
+  for (const raw of ws.data.queued ?? []) toNvim(nvim, raw);
+  ws.data.queued = undefined;
+}
+
+Bun.serve<Session, {}>({
+  hostname: HOST,
+  port: PORT,
+
+  async fetch(req, server) {
+    const url = new URL(req.url);
+    if (url.pathname === "/nvim") {
+      const host = url.searchParams.get("host");
+      const cwd = url.searchParams.get("cwd");
+      return server.upgrade(req, { data: host ? resolveRemote(host, cwd) : resolveCwd(cwd) })
+        ? undefined
+        : new Response("upgrade failed", { status: 400 });
+    }
+    const path = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
+    if (path.split("/").includes("..")) return new Response("no", { status: 400 });
+    const file = Bun.file(WEB_ROOT + path);
+    return (await file.exists()) ? new Response(file) : new Response("not found", { status: 404 });
+  },
+
+  websocket: {
+    open(ws) {
+      if (ws.data.error) return ws.close(4000, closeReason(ws.data.error));
+      if (ws.data.host) {
+        spawnRemote(ws.data).then(
+          (nvim) => (ws.data.closed ? nvim.kill() : start(ws, nvim)),
+          (err) => {
+            console.error(`remote ${ws.data.host}:`, err);
+            ws.close(4001, closeReason(err.message));
+          },
+        );
+        return;
+      }
+      try {
+        start(ws, spawnLocal(ws.data));
+      } catch (err: any) {
+        console.error("spawn nvim:", err);
+        ws.close(4001, closeReason(`could not start ${NVIM}: ${err.message}`));
+      }
+    },
+
+    message(ws, raw) {
+      if (ws.data.nvim) toNvim(ws.data.nvim, String(raw));
+      else ws.data.queued?.push(String(raw));
+    },
+
+    close(ws) {
+      ws.data.closed = true;
+      ws.data.nvim?.kill();
+    },
+  },
+});
+
+console.log(`corkboard on http://${HOST}:${PORT}`);

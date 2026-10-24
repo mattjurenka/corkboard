@@ -1,0 +1,154 @@
+@import "tailwindcss";
+
+/* Neovim's colors and cell size, which the page is drawn from. grid.js
+   measures the cell and sets --nv-bg/--nv-fg from the default colors;
+   corkboard.theme sets the rest from the colorscheme (push_theme in
+   corkboard/init.lua). */
+:root {
+  --font: "JetBrainsMono Nerd Font", "JetBrains Mono", monospace;
+  --font-size: 14px;
+  --cell-w: 9px;
+  --cell-h: 19px;
+  --nv-bg: #000;
+  --nv-fg: #fff;
+  --nv-accent: #7aa2f7;
+  --nv-working: #9ece6a;
+  --nv-blocked: #f7768e;
+  --nv-review: #e0af68;
+  --nv-selection: color-mix(in srgb, var(--nv-fg) 20%, var(--nv-bg));
+  --nv-focus: color-mix(in srgb, var(--nv-fg) 18%, var(--nv-bg));
+
+  /* shadcn's tokens, in those colors. */
+  --background: var(--nv-bg);
+  --foreground: var(--nv-fg);
+  --card: var(--nv-bg);
+  --card-foreground: var(--nv-fg);
+  --popover: var(--nv-bg);
+  --popover-foreground: var(--nv-fg);
+  --primary: var(--nv-accent);
+  --primary-foreground: var(--nv-bg);
+  --secondary: color-mix(in srgb, var(--nv-fg) 7%, var(--nv-bg));
+  --secondary-foreground: var(--nv-fg);
+  --muted: color-mix(in srgb, var(--nv-fg) 7%, var(--nv-bg));
+  --muted-foreground: color-mix(in srgb, var(--nv-fg) 55%, var(--nv-bg));
+  --accent: color-mix(in srgb, var(--nv-fg) 7%, var(--nv-bg));
+  --accent-foreground: var(--nv-fg);
+  --destructive: var(--nv-blocked);
+  --border: color-mix(in srgb, var(--nv-fg) 18%, var(--nv-bg));
+  --input: var(--border);
+  --ring: var(--nv-accent);
+  --selection: var(--nv-selection);
+  --focus: var(--nv-focus);
+  --working: var(--nv-working);
+  --blocked: var(--nv-blocked);
+  --review: var(--nv-review);
+}
+
+@theme inline {
+  --font-mono: var(--font);
+  --font-sans: var(--font);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-selection: var(--selection);
+  --color-focus: var(--focus);
+  --color-working: var(--working);
+  --color-blocked: var(--blocked);
+  --color-review: var(--review);
+
+  /* Everything is text on the editor's cells: one size, one line height,
+     square edges, no shadows. */
+  --text-xs: var(--font-size);
+  --text-xs--line-height: var(--cell-h);
+  --text-sm: var(--font-size);
+  --text-sm--line-height: var(--cell-h);
+  --text-base: var(--font-size);
+  --text-base--line-height: var(--cell-h);
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+  --radius-full: 0;
+  --shadow-xs: none;
+  --shadow-sm: none;
+
+  /* Grid units: h-row is one line, py-half half of one, px-ch one column. */
+  --spacing-row: var(--cell-h);
+  --spacing-half: calc(var(--cell-h) / 2);
+  --spacing-ch: 1ch;
+  --spacing-2ch: 2ch;
+  --spacing-3ch: 3ch;
+}
+
+@layer base {
+  * { border-color: var(--border); scrollbar-color: var(--border) transparent; scrollbar-width: thin; }
+  html, body, #root { height: 100%; overflow: hidden; }
+  body {
+    background: var(--background); color: var(--foreground);
+    font: var(--font-size)/var(--cell-h) var(--font);
+  }
+  kbd { font: inherit; }
+}
+
+@keyframes pulse-dot { 50% { opacity: .35; } }
+@utility animate-pulse-dot {
+  animation: pulse-dot 1.4s ease-in-out infinite;
+  @media (prefers-reduced-motion: reduce) { animation: none; }
+}
+
+/* A checkerboard behind an image's transparency. */
+@utility checkerboard {
+  background: repeating-conic-gradient(var(--muted) 0 25%, var(--background) 0 50%) 0 0 / 16px 16px;
+}
+
+/* The rendered half of a markdown file: generated HTML, so styled by
+   element. Prose in a proportional face, code in the editor's. */
+@layer components {
+  .markdown-body {
+    max-width: 780px; margin: 0 auto; padding: 16px 0 50vh;
+    font: 15px/1.6 system-ui, sans-serif; color: var(--foreground); overflow-wrap: break-word;
+  }
+  .markdown-body > div > :first-child { margin-top: 0; }
+  .markdown-body :is(h1, h2, h3, h4, h5, h6) { margin: 1.4em 0 .5em; line-height: 1.25; font-weight: 600; }
+  .markdown-body h1 { font-size: 1.9em; padding-bottom: .25em; border-bottom: 1px solid var(--border); }
+  .markdown-body h2 { font-size: 1.45em; padding-bottom: .2em; border-bottom: 1px solid var(--border); }
+  .markdown-body h3 { font-size: 1.2em; }
+  .markdown-body :is(h4, h5, h6) { font-size: 1em; }
+  .markdown-body h6 { color: var(--muted-foreground); }
+  .markdown-body :is(p, ul, ol, blockquote, pre, table) { margin: 0 0 1em; }
+  .markdown-body ul { list-style: disc; padding-left: 1.6em; }
+  .markdown-body ol { list-style: decimal; padding-left: 1.6em; }
+  .markdown-body li + li { margin-top: .2em; }
+  .markdown-body li > input[type=checkbox] { margin: 0 .4em 0 -1.3em; vertical-align: middle; }
+  .markdown-body a { color: var(--primary); cursor: pointer; }
+  .markdown-body a:hover { text-decoration: underline; }
+  .markdown-body code { font: .88em/1.4 var(--font); background: var(--muted); border-radius: 4px; padding: .15em .35em; }
+  .markdown-body pre {
+    font: 13px/1.45 var(--font); background: var(--muted); border: 1px solid var(--border);
+    border-radius: 6px; padding: 10px 14px; overflow-x: auto;
+  }
+  .markdown-body pre code { font: inherit; background: none; padding: 0; }
+  .markdown-body blockquote { padding: 0 1em; color: var(--muted-foreground); border-left: 3px solid var(--border); }
+  .markdown-body hr { border: 0; border-top: 1px solid var(--border); margin: 1.5em 0; }
+  .markdown-body table { border-collapse: collapse; display: block; overflow-x: auto; }
+  .markdown-body :is(th, td) { border: 1px solid var(--border); padding: 5px 12px; }
+  .markdown-body th { background: var(--muted); font-weight: 600; }
+  .markdown-body img { max-width: 100%; display: inline; }
+  .markdown-body .missing { color: var(--muted-foreground); }
+}
