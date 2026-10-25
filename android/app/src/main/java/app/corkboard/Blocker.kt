@@ -50,6 +50,16 @@ class Blocker : AccessibilityService() {
 
     override fun onInterrupt() {}
 
+    // On or off, the settings notification follows (Notifications.setup).
+    override fun onServiceConnected() = Ticker.update(this)
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        // A moment on, once the setting itself says it's off.
+        val app = applicationContext
+        android.os.Handler(mainLooper).postDelayed({ Notifications.setup(app) }, 1000)
+        return super.onUnbind(intent)
+    }
+
     companion object {
         fun enabled(context: Context): Boolean {
             val me = ComponentName(context, Blocker::class.java).flattenToString()

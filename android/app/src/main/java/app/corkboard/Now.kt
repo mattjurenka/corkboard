@@ -30,8 +30,10 @@ object Now {
 object Notifications {
     private const val NOW = "now"
     private const val MEDITATE = "meditate"
+    private const val SETUP = "setup"
     const val ID_NOW = 1
     const val ID_MEDITATE = 2
+    const val ID_SETUP = 3
 
     fun channels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java)
@@ -42,6 +44,9 @@ object Notifications {
         nm.createNotificationChannel(NotificationChannel(MEDITATE, "Meditation", NotificationManager.IMPORTANCE_DEFAULT).apply {
             description = "The timer, and when it's done"
             setSound(null, null)
+        })
+        nm.createNotificationChannel(NotificationChannel(SETUP, "Settings", NotificationManager.IMPORTANCE_DEFAULT).apply {
+            description = "A setting corkboard needs that's off"
         })
     }
 
@@ -94,6 +99,27 @@ object Notifications {
         post(context, ID_NOW, b.build())
     }
 
+    // The settings corkboard needs that are off (Setup), until they're on.
+    // Pinned while the app lock is off, since nothing is locked then.
+    fun setup(context: Context) {
+        val missing = Setup.missing(context)
+        val nm = context.getSystemService(NotificationManager::class.java)
+        if (missing.isEmpty()) return nm.cancel(ID_SETUP)
+        val text = missing.joinToString("\n") { "[ ] ${it.title}: ${it.why}" }
+        post(
+            context, ID_SETUP,
+            Notification.Builder(context, SETUP)
+                .setSmallIcon(R.drawable.ic_lock)
+                .setContentTitle(if (Setup.Need.Accessibility in missing) "The app lock is off" else "corkboard needs ${if (missing.size == 1) "a setting" else "${missing.size} settings"}")
+                .setContentText(missing.joinToString(" · ") { it.title })
+                .setStyle(Notification.BigTextStyle().bigText(text))
+                .setOngoing(Setup.Need.Accessibility in missing)
+                .setOnlyAlertOnce(true)
+                .setContentIntent(open(context, "setup"))
+                .build(),
+        )
+    }
+
     fun meditating(context: Context, until: Long) = post(
         context, ID_MEDITATE,
         Notification.Builder(context, MEDITATE)
@@ -128,17 +154,20 @@ object Notifications {
     )
 }
 
-// Keeps the ongoing notification and the widget current: updates them now
-// and sets an alarm for the next change (a block's start or end, the end of
-// an emergency unlock, midnight).
+// Keeps the ongoing notification, the settings one and the widget current:
+// updates them now and sets an alarm for the next change (a block's start
+// or end, the end of an emergency unlock, midnight), or in an hour.
 object Ticker {
     fun update(context: Context) {
         Notifications.now(context)
+        Notifications.setup(context)
         NowWidget.refresh(context)
         val plan = App.store.plan?.takeIf { it.date == today() }
         val minute = minuteNow()
         val edges = plan?.day?.blocks.orEmpty().flatMap { listOf(it.start, it.stop) }.filter { it > minute }
-        val times = (edges.map { Now.at(it) } + Now.at(24 * 60) + App.store.emergencyUntil)
+        // At least hourly, so a setting turned off is asked about soon.
+        val hour = System.currentTimeMillis() + 60 * 60_000L
+        val times = (edges.map { Now.at(it) } + Now.at(24 * 60) + App.store.emergencyUntil + hour)
             .filter { it > System.currentTimeMillis() }
         val at = times.min()
         context.getSystemService(AlarmManager::class.java).setAndAllowWhileIdle(AlarmManager.RTC, at + 1000, tick(context))

@@ -5,12 +5,12 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -43,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -54,6 +55,7 @@ sealed interface Screen {
     data object Plan : Screen
     data object Meditate : Screen
     data object Apps : Screen
+    data object Setup : Screen
     data class Chat(val draft: String = "") : Screen
 
     companion object {
@@ -62,6 +64,7 @@ sealed interface Screen {
             "meditate" -> Meditate
             "chat" -> Chat()
             "apps" -> Apps
+            "setup" -> Setup
             else -> null
         }
     }
@@ -83,6 +86,25 @@ fun Problem() {
     problem?.let { Text(it, style = Small.copy(color = Monokai.orange), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
 }
 
+// The settings corkboard needs that are off, notifications among them (the
+// settings notification can't say so when they're off). Read on every
+// recomposition, which a resume brings (MainActivity).
+@Composable
+fun SettingsOff(go: (Screen) -> Unit) {
+    val context = LocalContext.current
+    val off = Setup.missing(context).map { it.title } +
+        listOfNotNull("Notifications".takeIf { context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED })
+    if (off.isEmpty()) return
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 44.dp).clickable(role = Role.Button) { go(Screen.Setup) }.padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("off: ${off.joinToString(", ")}", style = Small.copy(color = Monokai.orange), modifier = Modifier.weight(1f))
+        Text("fix ›", color = Monokai.orange)
+    }
+    Rule()
+}
+
 // Signing in ---------------------------------------------------------------------------
 
 @Composable
@@ -101,7 +123,7 @@ fun SignInScreen() {
         }
         Footer {
             // Tapping again starts over, if the browser was closed.
-            Solid(if (opening) "Opening the browser…" else "Sign in", Modifier.weight(1f), enabled = !opening) {
+            Solid(if (opening) "Opening the browserâ¦" else "Sign in", Modifier.weight(1f), enabled = !opening) {
                 opening = true
                 Repo.signInError.value = null
                 scope.launch {
@@ -122,39 +144,43 @@ fun SignInScreen() {
 @Composable
 fun SetupScreen(resumed: Int, done: () -> Unit) {
     val context = LocalContext.current
-    val power = context.getSystemService(PowerManager::class.java)
     // Re-read on every resume: each one comes back from a settings page.
-    val accessibility = remember(resumed) { Blocker.enabled(context) }
-    val battery = remember(resumed) { power.isIgnoringBatteryOptimizations(context.packageName) }
+    val on = remember(resumed) { Setup.Need.entries.associateWith { Setup.on(context, it) } }
     var notifications by remember(resumed) {
         mutableStateOf(context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
     }
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { notifications = it }
+    // Alarms are only asked for where Android lets them be turned off.
+    val needs = Setup.Need.entries.filter { it != Setup.Need.Alarms || !on.getValue(it) }
+    val allowed = needs.count { on.getValue(it) } + if (notifications) 1 else 0
     Page {
-        Header("setup", "${listOf(accessibility, battery, notifications).count { it }}/3 allowed")
+        Header("setup", "$allowed/${needs.size + 1} allowed")
         Column(Modifier.padding(16.dp).weight(1f).verticalScroll(rememberScrollState())) {
             Text("To lock apps, corkboard needs", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
             Text("Each opens Android's settings. Come back here when it's on.", color = Monokai.base04)
             Spacer(Modifier.height(20.dp))
             Panel("permissions") {
-                Permission("Accessibility", "sees which app comes to the front, the moment it opens", accessibility) {
-                    context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                for ((i, need) in needs.withIndex()) {
+                    if (i > 0) Rule(Monokai.base01)
+                    Permission(need.title, need.why, on.getValue(need)) {
+                        @SuppressLint("BatteryLife")
+                        val intent = when (need) {
+                            Setup.Need.Accessibility -> Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                            Setup.Need.Battery -> Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
+                            Setup.Need.Alarms -> Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${context.packageName}"))
+                        }
+                        context.startActivity(intent)
+                    }
                 }
                 Rule(Monokai.base01)
-                Permission("Unrestricted battery", "so Android doesn't stop the blocker in the background", battery) {
-                    @SuppressLint("BatteryLife")
-                    val i = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
-                    context.startActivity(i)
-                }
-                Rule(Monokai.base01)
-                Permission("Notifications", "the current block and the timer, in the shade", notifications) {
+                Permission("Notifications", "the current block, the timer, and a word when one of these is off", notifications) {
                     ask.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
             }
             Spacer(Modifier.height(16.dp))
-            Text("On Android 13+, accessibility may be greyed out for an app installed outside the Play Store: open corkboard's App info, ⋮ › Allow restricted settings, then try again.", style = Small)
+            Text("On Android 13+, accessibility may be greyed out for an app installed outside the Play Store: open corkboard's App info, â® âº Allow restricted settings, then try again.", style = Small)
         }
-        Footer { Solid("Continue", Modifier.weight(1f), enabled = accessibility, onClick = done) }
+        Footer { Solid("Continue", Modifier.weight(1f), enabled = on.getValue(Setup.Need.Accessibility), onClick = done) }
     }
 }
 
@@ -166,7 +192,7 @@ private fun Permission(title: String, why: String, on: Boolean, allow: () -> Uni
             Text(title, fontWeight = FontWeight.SemiBold)
             Text(why, style = Small)
         }
-        if (!on) Text("allow ›", color = Monokai.orange)
+        if (!on) Text("allow âº", color = Monokai.orange)
     }
 }
 
@@ -182,12 +208,13 @@ fun LockedScreen(go: (Screen) -> Unit) {
     Page {
         Header("corkboard", java.time.LocalDate.now().let { "%ta %<td %<tb".format(it).lowercase() })
         Problem()
+        SettingsOff(go)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
             Spacer(Modifier.height(32.dp))
-            Text("▌LOCKED", color = Monokai.orange, fontSize = 28.sp, lineHeight = 40.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 2.sp)
+            Text("âLOCKED", color = Monokai.orange, fontSize = 28.sp, lineHeight = 40.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 2.sp)
             Text("Your locked apps stay closed until both of these are done.", color = Monokai.base04)
             Spacer(Modifier.height(24.dp))
-            Panel("unlock · ${listOf(planned, med >= Meditation.GOAL).count { it }}/2") {
+            Panel("unlock Â· ${listOf(planned, med >= Meditation.GOAL).count { it }}/2") {
                 PanelRow({ go(Screen.Plan) }) {
                     Check(planned)
                     Column(Modifier.weight(1f)) {
@@ -201,7 +228,7 @@ fun LockedScreen(go: (Screen) -> Unit) {
                             style = Small,
                         )
                     }
-                    Text("›", color = Monokai.orange)
+                    Text("âº", color = Monokai.orange)
                 }
                 Rule(Monokai.base01)
                 PanelRow({ go(Screen.Meditate) }) {
@@ -210,14 +237,14 @@ fun LockedScreen(go: (Screen) -> Unit) {
                         Text("Meditate", fontWeight = FontWeight.SemiBold)
                         Text("%02d:%02d of 30:00".format(med / 60, med % 60), style = Small)
                     }
-                    Text("›", color = Monokai.orange)
+                    Text("âº", color = Monokai.orange)
                 }
             }
             Spacer(Modifier.height(24.dp))
             Panel("locked apps") {
                 PanelRow({ go(Screen.Apps) }) {
                     Text(
-                        App.store.lockedApps.map { Blocker.label(context, it) }.sorted().joinToString("  ") { "▪ $it" },
+                        App.store.lockedApps.map { Blocker.label(context, it) }.sorted().joinToString("  ") { "âª $it" },
                         modifier = Modifier.weight(1f),
                     )
                     Text("edit", color = Monokai.base04)
@@ -246,19 +273,20 @@ fun NowScreen(go: (Screen) -> Unit) {
     Page {
         Header("corkboard", java.time.LocalDate.now().let { "%ta %<td %<tb".format(it).lowercase() })
         Problem()
+        SettingsOff(go)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
             Spacer(Modifier.height(28.dp))
             if (block != null) {
-                Text("NOW · ${clock(block.start)}–${clock(block.stop)}", style = Small.copy(color = Monokai.cyan), letterSpacing = 2.sp)
+                Text("NOW Â· ${clock(block.start)}â${clock(block.stop)}", style = Small.copy(color = Monokai.cyan), letterSpacing = 2.sp)
                 Text(block.title, fontSize = 26.sp, lineHeight = 32.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(top = 8.dp))
-                listOfNotNull(block.card, block.project).joinToString(" · ").takeIf { it.isNotEmpty() }?.let {
+                listOfNotNull(block.card, block.project).joinToString(" Â· ").takeIf { it.isNotEmpty() }?.let {
                     Text(it, color = Monokai.base04, modifier = Modifier.padding(top = 4.dp))
                 }
                 block.desc?.let { Text(it, modifier = Modifier.padding(top = 12.dp)) }
                 Spacer(Modifier.height(24.dp))
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(length(block.stop - minute), fontSize = 40.sp, lineHeight = 48.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.weight(1f))
-                    Text("left · ${length(minute - block.start)} in", color = Monokai.base04)
+                    Text("left Â· ${length(minute - block.start)} in", color = Monokai.base04)
                 }
                 Spacer(Modifier.height(8.dp))
                 Box(Modifier.fillMaxWidth().height(8.dp).background(Monokai.base01)) {
@@ -316,7 +344,7 @@ private fun DayStrip(plan: Plan, minute: Int) {
     val to = (blocks.maxOf { it.stop } + 59) / 60 * 60
     val cells = (to - from) / 30
     Spacer(Modifier.height(28.dp))
-    Text("today · ${clock(from).take(2)}–${clock(to).take(2)}", style = Small)
+    Text("today Â· ${clock(from).take(2)}â${clock(to).take(2)}", style = Small)
     Spacer(Modifier.height(6.dp))
     Row(Modifier.fillMaxWidth().height(16.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         for (i in 0 until cells) {
@@ -400,11 +428,11 @@ fun PlanScreen(go: (Screen) -> Unit, back: () -> Unit) {
             when {
                 proposal != null -> {
                     Outline("change", Modifier.weight(1f), color = Monokai.purple) { go(Screen.Chat("")) }
-                    Solid(if (busy) "…" else "Accept ✓", Modifier.weight(1f), enabled = !busy) { act { Cloud.accept(plan!!) } }
+                    Solid(if (busy) "â¦" else "Accept â", Modifier.weight(1f), enabled = !busy) { act { Cloud.accept(plan!!) } }
                 }
                 plan?.accepted != null ->
                     Outline("Ask Pepper to re-plan", Modifier.weight(1f), color = Monokai.purple) { go(Screen.Chat("Re-plan the rest of my day: ")) }
-                else -> Solid("Talk to Pepper ›", Modifier.weight(1f)) { go(Screen.Chat("Plan my day. ")) }
+                else -> Solid("Talk to Pepper âº", Modifier.weight(1f)) { go(Screen.Chat("Plan my day. ")) }
             }
         }
     }
@@ -426,7 +454,7 @@ private fun Timeline(blocks: List<Block>, why: Map<String, String>) {
                         Text(b.title, fontWeight = if (work) FontWeight.SemiBold else FontWeight.Normal, color = if (work) Monokai.base05 else Monokai.base04, modifier = Modifier.weight(1f))
                         Text(length(b.stop - b.start), style = Small)
                     }
-                    listOfNotNull(b.card, if (b.kind == "fixed") "fixed" else null).joinToString(" · ").takeIf { it.isNotEmpty() }?.let { Text(it, style = Small) }
+                    listOfNotNull(b.card, if (b.kind == "fixed") "fixed" else null).joinToString(" Â· ").takeIf { it.isNotEmpty() }?.let { Text(it, style = Small) }
                     why[b.id]?.let { Text(it, style = Small.copy(color = Monokai.purple), modifier = Modifier.padding(top = 2.dp)) }
                 }
             }
@@ -446,7 +474,7 @@ fun ChatScreen(draft: String, back: () -> Unit) {
     val list = rememberLazyListState()
     LaunchedEffect(messages.size) { if (messages.isNotEmpty()) list.animateScrollToItem(messages.size - 1) }
     Page {
-        Header("pepper", if (messages.lastOrNull()?.who == "matt") "thinking…" else "chat")
+        Header("pepper", if (messages.lastOrNull()?.who == "matt") "thinkingâ¦" else "chat")
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             if (!ready) item { Text("This Worker has no chat yet: deploy the cloud/ update for messages to reach Pepper.", color = Monokai.orange) }
             if (ready && messages.isEmpty()) item { Text("Nothing yet. Pepper answers here, and can change today's plan while you talk.", color = Monokai.base04) }
@@ -465,7 +493,7 @@ fun ChatScreen(draft: String, back: () -> Unit) {
                 Modifier.weight(1f).heightIn(min = 52.dp).border(1.dp, Monokai.base02).padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("› ", color = Monokai.purple)
+                Text("âº ", color = Monokai.purple)
                 BasicTextField(
                     value = text,
                     onValueChange = { text = it },
@@ -522,7 +550,7 @@ fun MeditateScreen(back: () -> Unit) {
         }
         Footer {
             if (left == 0) {
-                Solid("Done ✓", Modifier.weight(1f), color = Monokai.cyan, onClick = back)
+                Solid("Done â", Modifier.weight(1f), color = Monokai.cyan, onClick = back)
             } else {
                 Outline(if (running) "Pause" else if (elapsed > 0) "Carry on" else "Start", Modifier.weight(1f), color = Monokai.orange, border = Monokai.orange) {
                     if (running) Meditation.pause(context) else Meditation.start(context)

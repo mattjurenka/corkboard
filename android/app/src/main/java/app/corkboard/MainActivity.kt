@@ -50,6 +50,7 @@ class MainActivity : ComponentActivity() {
                             Screen.Plan -> PlanScreen(go, home)
                             Screen.Meditate -> MeditateScreen(home)
                             Screen.Apps -> AppsScreen(home)
+                            Screen.Setup -> SetupScreen(resumed, home)
                             is Screen.Chat -> ChatScreen(s.draft) { screen = Screen.Plan.takeIf { plan?.accepted == null } ?: Screen.Home }
                         }
                     }
