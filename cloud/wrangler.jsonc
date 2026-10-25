@@ -7,6 +7,9 @@
   "name": "corkboard",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
+  // Outbound fetches reach only the public internet: the OAuth provider
+  // needs it to fetch clients' metadata documents (CIMD) safely.
+  "compatibility_flags": ["global_fetch_strictly_public"],
   "workers_dev": true,
   "durable_objects": {
     "bindings": [
