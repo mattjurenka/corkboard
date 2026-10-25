@@ -6,6 +6,41 @@ const hex = (n) => "#" + n.toString(16).padStart(6, "0");
 const mix = (a, b, t) =>
   [16, 8, 0].reduce((n, s) => n | (Math.round(((a >> s) & 255) * t + ((b >> s) & 255) * (1 - t)) << s), 0);
 
+// Block elements (U+2580-259F) as rectangles that fill the cell: the font's
+// glyphs are drawn at its own size, and a cell rounded up to whole pixels
+// and 1.3 lines tall leaves gaps between them (bars through Claude Code's
+// logo). Each part is [x, y, w, h] in eighths of the cell; a shade fills it
+// with the colour partly mixed into the background.
+const UL = [0, 0, 4, 4];
+const UR = [4, 0, 4, 4];
+const LL = [0, 4, 4, 4];
+const LR = [4, 4, 4, 4];
+const BLOCKS = new Map([
+  [0x2580, [[0, 0, 8, 4]]],
+  [0x2588, [[0, 0, 8, 8]]],
+  [0x2590, [[4, 0, 4, 8]]],
+  [0x2594, [[0, 0, 8, 1]]],
+  [0x2595, [[7, 0, 1, 8]]],
+  [0x2596, [LL]],
+  [0x2597, [LR]],
+  [0x2598, [UL]],
+  [0x2599, [UL, LL, LR]],
+  [0x259a, [UL, LR]],
+  [0x259b, [UL, UR, LL]],
+  [0x259c, [UL, UR, LR]],
+  [0x259d, [UR]],
+  [0x259e, [UR, LL]],
+  [0x259f, [UR, LL, LR]],
+]);
+// Lower eighths (▁ to ▇), then left eighths (▉ to ▏).
+for (let n = 1; n <= 7; n++) BLOCKS.set(0x2580 + n, [[0, 8 - n, 8, n]]);
+for (let n = 1; n <= 7; n++) BLOCKS.set(0x2590 - n, [[0, 0, n, 8]]);
+const SHADES = new Map([
+  [0x2591, 0.25],
+  [0x2592, 0.5],
+  [0x2593, 0.75],
+]);
+
 export class Grid {
   constructor(canvas) {
     this.canvas = canvas;
@@ -158,11 +193,35 @@ export class Grid {
     return { a, fg, bg, sp: a.special ?? this.defaults.sp };
   }
 
+  // A block element drawn as rectangles; false for any other text.
+  drawBlock(text, x, y, fg, bg) {
+    const code = text.length === 1 ? text.charCodeAt(0) : 0;
+    const { ctx, cellW, cellH } = this;
+    const shade = SHADES.get(code);
+    if (shade) {
+      ctx.fillStyle = hex(mix(fg, bg, shade));
+      ctx.fillRect(x, y, cellW, cellH);
+      return true;
+    }
+    const parts = BLOCKS.get(code);
+    if (!parts) return false;
+    ctx.fillStyle = hex(fg);
+    // Edges on whole pixels, so neighbouring cells meet exactly.
+    const at = (n, size) => Math.round((n * size) / 8);
+    for (const [l, t, w, h] of parts) {
+      ctx.fillRect(x + at(l, cellW), y + at(t, cellH), at(l + w, cellW) - at(l, cellW), at(t + h, cellH) - at(t, cellH));
+    }
+    return true;
+  }
+
+  // Backgrounds first, then text: a glyph a little wider than its cell
+  // would otherwise lose its right edge to the next cell's background.
   drawRow(row) {
     const line = this.cells[row];
     if (!line) return;
     const { ctx, cellW, cellH } = this;
     const y = row * cellH;
+    const texts = [];
     for (let col = 0; col < line.length; col++) {
       const { text, hl } = line[col];
       const { a, fg, bg, sp } = this.colors(hl);
@@ -183,7 +242,14 @@ export class Grid {
       }
       ctx.fillStyle = hex(bg);
       ctx.fillRect(x, y, cellW * wide, cellH);
-      if (text === "" || text === " ") continue;
+      if (text !== "" && text !== " ") texts.push(col);
+    }
+    for (const col of texts) {
+      const { text, hl } = line[col];
+      const { a, fg, bg, sp } = this.colors(hl);
+      const x = col * cellW;
+      const wide = line[col + 1]?.text === "" ? 2 : 1;
+      if (this.drawBlock(text, x, y, fg, bg)) continue;
       ctx.font = `${a.italic ? "italic " : ""}${a.bold ? "bold " : ""}${this.fontSize}px ${this.fontFamily}`;
       ctx.fillStyle = hex(fg);
       ctx.fillText(text, x, y + cellH / 2);
@@ -218,8 +284,11 @@ export class Grid {
       ctx.fillRect(x, y + cellH * (1 - pct), cellW, Math.max(1, cellH * pct));
     } else {
       ctx.fillRect(x, y, cellW, cellH);
-      ctx.fillStyle = hex(cursorHl?.a.foreground !== undefined ? cursorHl.fg : bg);
-      ctx.fillText(cell.text, x, y + cellH / 2);
+      const text = cursorHl?.a.foreground !== undefined ? cursorHl.fg : bg;
+      if (!this.drawBlock(cell.text, x, y, text, color)) {
+        ctx.fillStyle = hex(text);
+        ctx.fillText(cell.text, x, y + cellH / 2);
+      }
     }
   }
 

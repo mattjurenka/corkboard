@@ -45,6 +45,7 @@ export function Sidebar() {
       </div>
       <Section
         title="Tabs"
+        className="border-t pt-row"
         action={
           // The tool picker, as Ctrl+Space opens it: a bare tabnew is an empty
           // buffer, and the picker is where the things worth a tab (Claude
