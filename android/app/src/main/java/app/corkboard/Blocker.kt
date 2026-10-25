@@ -34,7 +34,7 @@ class Blocker : AccessibilityService() {
         val owners = apps.map { it.root?.packageName?.toString() }
         // The shield itself is up.
         if (apps.zip(owners).any { (w, pkg) -> w.isFocused && pkg == packageName }) return
-        val locked = owners.firstOrNull { it in App.store.lockedApps } ?: return
+        val locked = owners.firstOrNull { it != null && Locks.locked(this, it) } ?: return
         // Once, not again for the events its own opening sets off.
         if (System.currentTimeMillis() - shielded < 1000) return
         shielded = System.currentTimeMillis()

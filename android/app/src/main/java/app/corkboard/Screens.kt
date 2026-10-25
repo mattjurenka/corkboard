@@ -123,7 +123,7 @@ fun SignInScreen() {
         }
         Footer {
             // Tapping again starts over, if the browser was closed.
-            Solid(if (opening) "Opening the browserâ¦" else "Sign in", Modifier.weight(1f), enabled = !opening) {
+            Solid(if (opening) "Opening the browser…" else "Sign in", Modifier.weight(1f), enabled = !opening) {
                 opening = true
                 Repo.signInError.value = null
                 scope.launch {
@@ -178,7 +178,7 @@ fun SetupScreen(resumed: Int, done: () -> Unit) {
                 }
             }
             Spacer(Modifier.height(16.dp))
-            Text("On Android 13+, accessibility may be greyed out for an app installed outside the Play Store: open corkboard's App info, â® âº Allow restricted settings, then try again.", style = Small)
+            Text("On Android 13+, accessibility may be greyed out for an app installed outside the Play Store: open corkboard's App info, ⋮ › Allow restricted settings, then try again.", style = Small)
         }
         Footer { Solid("Continue", Modifier.weight(1f), enabled = on.getValue(Setup.Need.Accessibility), onClick = done) }
     }
@@ -192,7 +192,7 @@ private fun Permission(title: String, why: String, on: Boolean, allow: () -> Uni
             Text(title, fontWeight = FontWeight.SemiBold)
             Text(why, style = Small)
         }
-        if (!on) Text("allow âº", color = Monokai.orange)
+        if (!on) Text("allow ›", color = Monokai.orange)
     }
 }
 
@@ -211,10 +211,10 @@ fun LockedScreen(go: (Screen) -> Unit) {
         SettingsOff(go)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
             Spacer(Modifier.height(32.dp))
-            Text("âLOCKED", color = Monokai.orange, fontSize = 28.sp, lineHeight = 40.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 2.sp)
+            Text("▌LOCKED", color = Monokai.orange, fontSize = 28.sp, lineHeight = 40.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 2.sp)
             Text("Your locked apps stay closed until both of these are done.", color = Monokai.base04)
             Spacer(Modifier.height(24.dp))
-            Panel("unlock Â· ${listOf(planned, med >= Meditation.GOAL).count { it }}/2") {
+            Panel("unlock · ${listOf(planned, med >= Meditation.GOAL).count { it }}/2") {
                 PanelRow({ go(Screen.Plan) }) {
                     Check(planned)
                     Column(Modifier.weight(1f)) {
@@ -228,7 +228,7 @@ fun LockedScreen(go: (Screen) -> Unit) {
                             style = Small,
                         )
                     }
-                    Text("âº", color = Monokai.orange)
+                    Text("›", color = Monokai.orange)
                 }
                 Rule(Monokai.base01)
                 PanelRow({ go(Screen.Meditate) }) {
@@ -237,14 +237,15 @@ fun LockedScreen(go: (Screen) -> Unit) {
                         Text("Meditate", fontWeight = FontWeight.SemiBold)
                         Text("%02d:%02d of 30:00".format(med / 60, med % 60), style = Small)
                     }
-                    Text("âº", color = Monokai.orange)
+                    Text("›", color = Monokai.orange)
                 }
             }
             Spacer(Modifier.height(24.dp))
-            Panel("locked apps") {
+            Panel("${Locks.count(context)} apps locked") {
                 PanelRow({ go(Screen.Apps) }) {
+                    val open = App.store.openApps.filter { it in Locks.launcherApps(context) }.map { Blocker.label(context, it) }.sorted()
                     Text(
-                        App.store.lockedApps.map { Blocker.label(context, it) }.sorted().joinToString("  ") { "âª $it" },
+                        "open: " + open.take(4).joinToString(", ") + if (open.size > 4) " +${open.size - 4}" else "",
                         modifier = Modifier.weight(1f),
                     )
                     Text("edit", color = Monokai.base04)
@@ -252,7 +253,7 @@ fun LockedScreen(go: (Screen) -> Unit) {
             }
         }
         Footer {
-            Text("calls, maps and messages stay open", style = Small, modifier = Modifier.weight(1f).align(Alignment.CenterVertically))
+            Text("email, calls and maps stay open", style = Small, modifier = Modifier.weight(1f).align(Alignment.CenterVertically))
             Outline(
                 if (confirm) "unlock ${Gate.EMERGENCY_MINUTES}m?" else "emergency",
                 color = if (confirm) Monokai.orange else Monokai.base04,
@@ -277,16 +278,16 @@ fun NowScreen(go: (Screen) -> Unit) {
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
             Spacer(Modifier.height(28.dp))
             if (block != null) {
-                Text("NOW Â· ${clock(block.start)}â${clock(block.stop)}", style = Small.copy(color = Monokai.cyan), letterSpacing = 2.sp)
+                Text("NOW · ${clock(block.start)}–${clock(block.stop)}", style = Small.copy(color = Monokai.cyan), letterSpacing = 2.sp)
                 Text(block.title, fontSize = 26.sp, lineHeight = 32.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(top = 8.dp))
-                listOfNotNull(block.card, block.project).joinToString(" Â· ").takeIf { it.isNotEmpty() }?.let {
+                listOfNotNull(block.card, block.project).joinToString(" · ").takeIf { it.isNotEmpty() }?.let {
                     Text(it, color = Monokai.base04, modifier = Modifier.padding(top = 4.dp))
                 }
                 block.desc?.let { Text(it, modifier = Modifier.padding(top = 12.dp)) }
                 Spacer(Modifier.height(24.dp))
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(length(block.stop - minute), fontSize = 40.sp, lineHeight = 48.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.weight(1f))
-                    Text("left Â· ${length(minute - block.start)} in", color = Monokai.base04)
+                    Text("left · ${length(minute - block.start)} in", color = Monokai.base04)
                 }
                 Spacer(Modifier.height(8.dp))
                 Box(Modifier.fillMaxWidth().height(8.dp).background(Monokai.base01)) {
@@ -344,7 +345,7 @@ private fun DayStrip(plan: Plan, minute: Int) {
     val to = (blocks.maxOf { it.stop } + 59) / 60 * 60
     val cells = (to - from) / 30
     Spacer(Modifier.height(28.dp))
-    Text("today Â· ${clock(from).take(2)}â${clock(to).take(2)}", style = Small)
+    Text("today · ${clock(from).take(2)}–${clock(to).take(2)}", style = Small)
     Spacer(Modifier.height(6.dp))
     Row(Modifier.fillMaxWidth().height(16.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         for (i in 0 until cells) {
@@ -428,11 +429,11 @@ fun PlanScreen(go: (Screen) -> Unit, back: () -> Unit) {
             when {
                 proposal != null -> {
                     Outline("change", Modifier.weight(1f), color = Monokai.purple) { go(Screen.Chat("")) }
-                    Solid(if (busy) "â¦" else "Accept â", Modifier.weight(1f), enabled = !busy) { act { Cloud.accept(plan!!) } }
+                    Solid(if (busy) "…" else "Accept ✓", Modifier.weight(1f), enabled = !busy) { act { Cloud.accept(plan!!) } }
                 }
                 plan?.accepted != null ->
                     Outline("Ask Pepper to re-plan", Modifier.weight(1f), color = Monokai.purple) { go(Screen.Chat("Re-plan the rest of my day: ")) }
-                else -> Solid("Talk to Pepper âº", Modifier.weight(1f)) { go(Screen.Chat("Plan my day. ")) }
+                else -> Solid("Talk to Pepper ›", Modifier.weight(1f)) { go(Screen.Chat("Plan my day. ")) }
             }
         }
     }
@@ -454,7 +455,7 @@ private fun Timeline(blocks: List<Block>, why: Map<String, String>) {
                         Text(b.title, fontWeight = if (work) FontWeight.SemiBold else FontWeight.Normal, color = if (work) Monokai.base05 else Monokai.base04, modifier = Modifier.weight(1f))
                         Text(length(b.stop - b.start), style = Small)
                     }
-                    listOfNotNull(b.card, if (b.kind == "fixed") "fixed" else null).joinToString(" Â· ").takeIf { it.isNotEmpty() }?.let { Text(it, style = Small) }
+                    listOfNotNull(b.card, if (b.kind == "fixed") "fixed" else null).joinToString(" · ").takeIf { it.isNotEmpty() }?.let { Text(it, style = Small) }
                     why[b.id]?.let { Text(it, style = Small.copy(color = Monokai.purple), modifier = Modifier.padding(top = 2.dp)) }
                 }
             }
@@ -474,7 +475,7 @@ fun ChatScreen(draft: String, back: () -> Unit) {
     val list = rememberLazyListState()
     LaunchedEffect(messages.size) { if (messages.isNotEmpty()) list.animateScrollToItem(messages.size - 1) }
     Page {
-        Header("pepper", if (messages.lastOrNull()?.who == "matt") "thinkingâ¦" else "chat")
+        Header("pepper", if (messages.lastOrNull()?.who == "matt") "thinking…" else "chat")
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             if (!ready) item { Text("This Worker has no chat yet: deploy the cloud/ update for messages to reach Pepper.", color = Monokai.orange) }
             if (ready && messages.isEmpty()) item { Text("Nothing yet. Pepper answers here, and can change today's plan while you talk.", color = Monokai.base04) }
@@ -493,7 +494,7 @@ fun ChatScreen(draft: String, back: () -> Unit) {
                 Modifier.weight(1f).heightIn(min = 52.dp).border(1.dp, Monokai.base02).padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("âº ", color = Monokai.purple)
+                Text("› ", color = Monokai.purple)
                 BasicTextField(
                     value = text,
                     onValueChange = { text = it },
@@ -550,7 +551,7 @@ fun MeditateScreen(back: () -> Unit) {
         }
         Footer {
             if (left == 0) {
-                Solid("Done â", Modifier.weight(1f), color = Monokai.cyan, onClick = back)
+                Solid("Done ✓", Modifier.weight(1f), color = Monokai.cyan, onClick = back)
             } else {
                 Outline(if (running) "Pause" else if (elapsed > 0) "Carry on" else "Start", Modifier.weight(1f), color = Monokai.orange, border = Monokai.orange) {
                     if (running) Meditation.pause(context) else Meditation.start(context)
@@ -562,36 +563,49 @@ fun MeditateScreen(back: () -> Unit) {
     }
 }
 
-// Which apps to lock -------------------------------------------------------------------
+// Which apps stay open ----------------------------------------------------------------
 
 @Composable
 fun AppsScreen(back: () -> Unit) {
     val context = LocalContext.current
-    var locked by remember { mutableStateOf(App.store.lockedApps) }
+    var open by remember { mutableStateOf(App.store.openApps) }
+    // A locked app let out while the gate is shut asks once more first.
+    var confirming by remember { mutableStateOf<String?>(null) }
     val apps = remember {
         val pm = context.packageManager
         pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
             .map { it.activityInfo.packageName to it.loadLabel(pm).toString() }
-            .filter { it.first != context.packageName }
+            .filter { Locks.locked(context, it.first) || it.first in App.store.openApps }
             .distinctBy { it.first }
     }
-    val sorted = remember(apps) { apps.sortedWith(compareBy({ it.first !in App.store.lockedApps }, { it.second.lowercase() })) }
-    val open = Gate.open()
+    // The open ones first, as they were when the screen opened, so a row
+    // doesn't jump away from under a tap.
+    val sorted = remember(apps) { apps.sortedWith(compareBy({ it.first !in App.store.openApps }, { it.second.lowercase() })) }
+    val shut = !Gate.open()
     Page {
-        Header("apps", "${locked.size} locked")
-        if (!open) Text("While the gate is shut you can lock more apps, not let any out.", style = Small, modifier = Modifier.padding(16.dp))
+        Header("apps", "${apps.count { it.first !in open }} locked · ${apps.count { it.first in open }} open")
+        Text(
+            "Everything is locked until the morning's done, except the apps left open here. An app installed later starts out locked.",
+            style = Small,
+            modifier = Modifier.padding(16.dp),
+        )
+        Rule()
         LazyColumn(Modifier.weight(1f)) {
             items(sorted, key = { it.first }) { (pkg, label) ->
-                val on = pkg in locked
+                val isOpen = pkg in open
                 PanelRow({
-                    // While the gate is shut an app can be locked, not let out.
-                    if (on && !Gate.open()) return@PanelRow
-                    locked = if (on) locked - pkg else locked + pkg
-                    App.store.lockedApps = locked
+                    if (!isOpen && shut && confirming != pkg) return@PanelRow run { confirming = pkg }
+                    confirming = null
+                    open = if (isOpen) open - pkg else open + pkg
+                    App.store.openApps = open
                     Ticker.update(context)
                 }) {
-                    Check(on)
-                    Text(label, modifier = Modifier.weight(1f), color = if (on && !open) Monokai.base04 else Monokai.base05)
+                    Text(label, modifier = Modifier.weight(1f), color = if (isOpen) Monokai.base05 else Monokai.base04)
+                    when {
+                        confirming == pkg -> Text("tap again to open it now", style = Small.copy(color = Monokai.orange))
+                        isOpen -> Text("open", color = Monokai.cyan)
+                        else -> Text("locked", color = Monokai.orange)
+                    }
                 }
             }
         }

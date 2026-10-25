@@ -55,7 +55,7 @@ data class Auth(val clientId: String, val access: String, val refresh: String, v
 
 // A sign-in waiting for the browser to come back (Cloud.startSignIn).
 @Serializable
-data class PendingSignIn(val clientId: String, val verifier: String, val state: String)
+data class PendingSignIn(val clientId: String, val verifier: String, val state: String, val at: Long = 0)
 
 fun clock(m: Int) = "%02d:%02d".format(m / 60 % 24, m % 60)
 

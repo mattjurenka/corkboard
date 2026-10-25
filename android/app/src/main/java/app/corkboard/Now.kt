@@ -76,7 +76,7 @@ object Notifications {
         if (!Gate.open(store)) {
             val plan1 = if (Gate.planned(store)) "[x]" else "[ ]"
             val med = Meditation.elapsed(store) / 60
-            b.setContentTitle("${store.lockedApps.size} apps locked")
+            b.setContentTitle("${Locks.count(context)} apps locked")
                 .setContentText("$plan1 plan the day   [${if (Gate.meditated(store)) "x" else " "}] meditate $med/30m")
             if (!Gate.planned(store)) b.addAction(Notification.Action.Builder(null, "Plan", open(context, "plan")).build())
             if (!Gate.meditated(store)) b.addAction(Notification.Action.Builder(null, "Meditate", open(context, "meditate")).build())

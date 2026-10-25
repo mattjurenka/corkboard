@@ -65,7 +65,7 @@ object Cloud {
                 token = null,
             )
         }
-        val pending = PendingSignIn(reg.jsonObject["client_id"]!!.jsonPrimitive.content, random(32), random(16))
+        val pending = PendingSignIn(reg.jsonObject["client_id"]!!.jsonPrimitive.content, random(32), random(16), System.currentTimeMillis())
         App.store.pendingSignIn = pending
         val challenge = base64url(MessageDigest.getInstance("SHA-256").digest(pending.verifier.toByteArray()))
         val url = Uri.parse("$ORIGIN/authorize").buildUpon()
