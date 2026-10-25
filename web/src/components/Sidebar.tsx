@@ -5,9 +5,9 @@
 // sends tabline_update instead; gt/gT and :tab* still drive it. Tabs 1 and 2
 // are always the board and token usage (corkboard.board and corkboard.usage
 // keep them there), so they are labelled Board and Usage whatever window is
-// focused in them, and have no close button or number. The tabs after them
-// are numbered from 1, under a gap. The day plan has a window of its own,
-// opened from the project's header (planWindow.ts).
+// focused in them, and have no close button. The tabs after them come under
+// a gap. All are numbered as Neovim does, for Ctrl+Shift+<n>. The day plan
+// has a window of its own, opened from the project's header (planWindow.ts).
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -83,7 +83,7 @@ function Tabs() {
             )}
           >
             <span className={cn("w-ch flex-none text-right text-muted-foreground", current && "text-primary")}>
-              {pinned ? "" : i + 1 - PINNED.length}
+              {i + 1}
             </span>
             {pinned ? (
               <span className="min-w-0 flex-1 truncate text-primary">{pinned}</span>

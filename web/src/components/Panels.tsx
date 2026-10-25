@@ -12,6 +12,7 @@
 // The board's state is one per view; a file viewer's (corkboard.viewer) is
 // per buffer, since two windows can show two different images.
 
+import { useEffect, useState } from "react";
 import { keepFocus, useNvim } from "@/nvim/context";
 import { type Rect, useStore } from "@/store";
 import { VIEWS } from "@/views";
@@ -22,6 +23,7 @@ export function Panels() {
   const views = useStore((s) => s.views);
   const bufs = useStore((s) => s.bufs);
   const { w: cellW, h: cellH } = useStore((s) => s.cell);
+  const focused = useEditorFocus();
   if (!layout) return null;
   return (
     <>
@@ -47,12 +49,30 @@ export function Panels() {
         );
       })}
       {/* A 1px outline around the focused window and its status line, absent
-          when the tab is not split. Above the panels; clicks pass through. */}
-      {layout.focus && (
-        <div className="pointer-events-none absolute z-2 border border-focus" style={box(layout.focus, cellW, cellH)} />
+          when the tab is not split. Like the sidebar's around the current
+          tab, only while the keys go to Neovim. Above the panels; clicks
+          pass through. */}
+      {layout.focus && focused && (
+        <div className="pointer-events-none absolute z-2 border border-primary" style={box(layout.focus, cellW, cellH)} />
       )}
     </>
   );
+}
+
+// Whether focus is in the editor: its canvas, or a viewer's frame over it.
+const EVENTS = ["focusin", "focusout", "focus", "blur"];
+function useEditorFocus() {
+  const has = () => document.hasFocus() && !!document.activeElement?.closest("#editor");
+  const [focused, setFocused] = useState(has);
+  useEffect(() => {
+    // On the next tick, once activeElement has moved.
+    const update = () => setTimeout(() => setFocused(has()));
+    for (const e of EVENTS) addEventListener(e, update);
+    return () => {
+      for (const e of EVENTS) removeEventListener(e, update);
+    };
+  }, []);
+  return focused;
 }
 
 export const box = (r: Rect, cellW: number, cellH: number) => ({

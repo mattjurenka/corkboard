@@ -581,6 +581,14 @@ function M.setup()
   vim.keymap.set({ "n", "i", "t" }, "<C-Tab>", "<Cmd>tabnext<CR>", { desc = "corkboard: next tab" })
   vim.keymap.set({ "n", "i", "t" }, "<C-S-Tab>", "<Cmd>tabprevious<CR>", { desc = "corkboard: previous tab" })
 
+  -- Ctrl+Shift+1 to 9 go to that tab, as the sidebar numbers them: the
+  -- board, usage, then the agents.
+  for i = 1, 9 do
+    vim.keymap.set({ "n", "i", "t" }, ("<C-S-%d>"):format(i), function()
+      if i <= vim.fn.tabpagenr("$") then vim.cmd.tabnext(i) end
+    end, { desc = "corkboard: tab " .. i })
+  end
+
   -- Ctrl+h/j/k/l moves between windows, from terminal mode too. Not insert
   -- mode, where <C-h> is backspace and <C-k> a digraph.
   for _, dir in ipairs({ "h", "j", "k", "l" }) do
