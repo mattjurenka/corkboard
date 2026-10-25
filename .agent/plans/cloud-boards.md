@@ -1,11 +1,11 @@
 # corkboard cloud: boards, notes and MCP on Cloudflare
 
 **Written:** 2026-10-24 · **Decided:** single user for now; Cloudflare is the only store (local
-boards imported once, then retired); the life brain's memory lives here too.
+boards imported once, then retired); Pepper's memory lives here too.
 
 Boards move from `~/.local/share/corkboard/boards/*/tasks/*.md` to a Cloudflare Worker. Everything
 that reads or writes a card goes through it: corkboard's UI (via the bridge), the card agents
-corkboard spawns, the life brain in its VM, and claude.ai as a custom connector. Nothing else holds
+corkboard spawns, Pepper in its VM, and claude.ai as a custom connector. Nothing else holds
 card state, so nothing can drift.
 
 ---
@@ -30,7 +30,7 @@ Lost on purpose: the Backlog.md CLI on the files, and working offline (see Offli
                  ┌──────────────── corkboard Worker (corkboard.<domain>) ───────────────┐
 browser ─ bridge ┤  /api/*   REST + /api/live WebSocket   (session cookie)              │
 card agents ─────┤  /mcp     MCP, streamable HTTP          (OAuth bearer, scoped)        │
-life-vm ─────────┤  /authorize /token /register  OAuth 2.1 + DCR (workers-oauth-provider)│
+pepper-vm ───────┤  /authorize /token /register  OAuth 2.1 + DCR (workers-oauth-provider)│
 claude.ai ───────┤                                                                      │
                  │  UserDO (one per user): board list, notes, plans, token grants       │
                  │  BoardDO (one per board): cards, log, live sockets  — SQLite storage │
@@ -66,7 +66,8 @@ never even sees a tool it may not use.
 |---|---|---|
 | `owner` | the UI session | everything, including **accepting a plan** |
 | `card:<board>/<id>` | a card agent corkboard spawns | read its board; claim, log, update, block on that card; create child cards |
-| `assistant` | the life brain | read all boards and notes; create and update cards; write notes; **propose** plans |
+| `assistant` | any OAuth MCP client (Claude Code sessions) | read all boards and notes except goals; create and update cards; write notes; **propose** plans |
+| `pepper` | Pepper's session, with a token the bridge mints as owner (`/api/tokens/pepper`) | what `assistant` can, and the `goal` notes, which no other grant sees over MCP |
 | `connector` | claude.ai | same as `assistant` (phone use) |
 
 Card tokens are minted by the bridge (it calls `/api/tokens` as owner) when it starts an agent, and
@@ -100,7 +101,7 @@ The current 12 tools from `mcp/board.ts` keep their names and semantics: `list_c
 (defaulting to the token's own board for card agents). New:
 
 - `list_boards`
-- `notes_search`, `note_read`, `note_write` — the life brain's memory (kinds above)
+- `notes_search`, `note_read`, `note_write` — Pepper's memory (kinds above)
 - `plan_read`, `plan_propose` — the day plan; `plan_feedback` reads what Matt said in the plan tab
 
 `attention` and `request_user_action` keep notifying the desktop: the bridge sees the change on the
@@ -177,7 +178,7 @@ they would bring conflicts back.
    `stdpath("state")/corkboard/agents/` and revokes the token when the agent exits. Checked with
    a real `claude -p` session against the Worker. 46 Worker tests; `bun run test:cloud` covers
    the agent path end to end.
-6. Notes + plans + their tools; `plan.lua` on real data. (This is what the life brain needs.)
+6. Notes + plans + their tools; `plan.lua` on real data. (This is what Pepper needs.)
    **Built and deployed 2026-10-24.** The `User` object holds notes (FTS5 search) and plans
    (`cloud/src/plans.ts`): per date, the day, an optional proposal, and what the user said to
    change; versioned like cards; `GET /api/live` sends each plan change. MCP (OAuth only):

@@ -2,6 +2,9 @@
 // Single grid for now; ext_multigrid comes later.
 
 const hex = (n) => "#" + n.toString(16).padStart(6, "0");
+// a weighted by t over b, per channel: color-mix(in srgb, a t, b).
+const mix = (a, b, t) =>
+  [16, 8, 0].reduce((n, s) => n | (Math.round(((a >> s) & 255) * t + ((b >> s) & 255) * (1 - t)) << s), 0);
 
 export class Grid {
   constructor(canvas) {
@@ -71,8 +74,11 @@ export class Grid {
     this.markAll();
   }
 
-  on_hl_attr_define(id, rgb) {
-    this.hl.set(id, rgb);
+  // info (ext_hlstate) names the groups behind the attr; WinSeparator's
+  // cells are drawn as a line rather than their glyph (drawRow).
+  on_hl_attr_define(id, rgb, _cterm, info) {
+    const sep = info?.some((i) => i.ui_name === "WinSeparator" || i.ui_name === "VertSplit");
+    this.hl.set(id, sep ? { ...rgb, separator: true } : rgb);
   }
 
   on_grid_resize(_grid, cols, rows) {
@@ -163,6 +169,18 @@ export class Grid {
       const x = col * cellW;
       // A wide character's second cell arrives as "", so give the glyph room.
       const wide = line[col + 1]?.text === "" ? 2 : 1;
+      // A window separator: a 1px line through the middle of its cells, in
+      // the panels' --border colour, as the floats' borders are drawn. The
+      // colorscheme's own colours for it are ignored (stylix's fills the
+      // whole cell).
+      if (a.separator && (text === "│" || text === "─")) {
+        ctx.fillStyle = hex(this.defaults.bg);
+        ctx.fillRect(x, y, cellW, cellH);
+        ctx.fillStyle = hex(mix(this.defaults.fg, this.defaults.bg, 0.18));
+        if (text === "│") ctx.fillRect(x + Math.floor(cellW / 2), y, 1, cellH);
+        else ctx.fillRect(x, y + Math.floor(cellH / 2), cellW, 1);
+        continue;
+      }
       ctx.fillStyle = hex(bg);
       ctx.fillRect(x, y, cellW * wide, cellH);
       if (text === "" || text === " ") continue;

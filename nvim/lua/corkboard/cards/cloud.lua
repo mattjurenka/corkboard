@@ -137,7 +137,7 @@ function M.on_change(fn) table.insert(listeners, fn) end
 
 -- The fields a card file has that the Worker keeps as columns. Anything else
 -- a caller sets (worktree, branch) goes in the card's extra.
-local FIELDS = { "title", "status", "agent", "agent_state", "attention", "ordinal", "labels", "dependencies" }
+local FIELDS = { "title", "status", "agent", "agent_state", "attention", "priority", "ordinal", "labels", "dependencies" }
 local DERIVED = { id = true, body = true, path = true, version = true, created_date = true, updated_date = true }
 for _, f in ipairs(FIELDS) do DERIVED[f] = true end
 
@@ -220,7 +220,10 @@ end
 
 -- corkboard.cards' functions ---------------------------------------------------------
 
+-- As the Worker lists them: by priority, then ordinal, then number.
 local function by_board_order(a, b)
+  local rank = require("corkboard.cards").rank
+  if rank(a) ~= rank(b) then return rank(a) < rank(b) end
   local oa, ob = tonumber(a.ordinal) or math.huge, tonumber(b.ordinal) or math.huge
   if oa ~= ob then return oa < ob end
   return tonumber(a.id:match("%d+$")) < tonumber(b.id:match("%d+$"))
@@ -295,6 +298,20 @@ M.call = request
 function M.agent_token(id, agent) return request("token", key(), id:upper(), agent) end
 
 function M.revoke(token) request("revoke", key(), token) end
+
+-- A token for Pepper's MCP session, the only one that sees the goals:
+-- { token, url, expires_at }.
+function M.pepper_token() return request("pepper_token") end
+
+-- Tell the Worker card id's agent is still running, so its claim doesn't
+-- lapse (cloud/src/board.ts's leases). Not waited for: a heartbeat that
+-- doesn't arrive is made up by the next one.
+function M.touch(id, agent)
+  local chan = channel()
+  if not chan then return end
+  last_id = last_id + 1
+  vim.rpcnotify(chan, "corkboard.cloud", last_id, "touch", key(), id:upper(), agent)
+end
 
 function M.log(id, who, note)
   id = id:upper()

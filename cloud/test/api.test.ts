@@ -103,6 +103,23 @@ describe("cards", () => {
     expect(list.map((c: { title: string }) => c.title)).toEqual(["c", "b", "a"]);
   });
 
+  it("lists high priority first and low last, none as medium, then by ordinal", async () => {
+    await send("POST", cards(), { title: "low", priority: "low", ordinal: 1 });
+    await send("POST", cards(), { title: "none" });
+    await send("POST", cards(), { title: "medium", priority: "medium", ordinal: 1 });
+    await send("POST", cards(), { title: "high", priority: "high" });
+    const list = await (await api(cards())).json<any[]>();
+    expect(list.map((c: { title: string }) => c.title)).toEqual(["high", "medium", "none", "low"]);
+    expect(list.find((c) => c.title === "none").priority).toBeNull();
+  });
+
+  it("refuses a priority that isn't high, medium or low", async () => {
+    expect((await send("POST", cards(), { title: "x", priority: "urgent" })).status).toBe(400);
+    await send("POST", cards(), { title: "x", priority: "high" });
+    const res = await send("PATCH", `${cards()}/TASK-1`, { version: 1, priority: null });
+    expect((await res.json<any>()).priority).toBeNull();
+  });
+
   it("reports what a card is waiting on", async () => {
     await send("POST", cards(), { title: "dep" });
     await send("POST", cards(), { title: "waits", dependencies: ["task-1", "TASK-9"] });

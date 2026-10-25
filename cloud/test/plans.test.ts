@@ -36,8 +36,8 @@ const block = (id: string, start: number, stop: number, extra: object = {}) => (
 
 describe("notes", () => {
   it("are written, read, listed and searched", async () => {
-    const goal = await tool(assistant, "note_write", { kind: "goal", title: "Land an engineering job", body: "Apply to five places a week; follow up with Slalom." });
-    expect(goal.id).toBe("land-an-engineering-job");
+    const decision = await tool(assistant, "note_write", { kind: "decision", title: "Land an engineering job", body: "Apply to five places a week; follow up with Slalom." });
+    expect(decision.id).toBe("land-an-engineering-job");
     await tool(assistant, "note_write", { id: "telegram-bot", kind: "project", title: "Telegram bot", body: "Pons launchpad deposit call next." });
     expect((await tool(assistant, "note_read", { id: "telegram-bot" })).body).toMatch(/deposit call/);
     const found = await tool(assistant, "notes_search", { query: "slalom" });
@@ -192,5 +192,54 @@ describe("who sees what", () => {
     expect((await call(assistant, "GET", "/api/boards")).status).toBe(403);
     expect((await call(assistant, "GET", `/api/notes`)).status).toBe(403);
     expect((await tool(assistant, "list_boards")).length).toBe(0);
+  });
+});
+
+describe("goals", () => {
+  const pepperToken = async () => (await (await call(owner, "POST", "/api/tokens/pepper", {})).json<any>()).token as string;
+  const kindsOf = async (token: string) => {
+    const tools = (await (await call(token, "POST", "/mcp", { jsonrpc: "2.0", id: 1, method: "tools/list" })).json<any>()).result.tools;
+    return tools.find((t: any) => t.name === "note_write").inputSchema.properties.kind.enum as string[];
+  };
+
+  it("are Pepper's: written, read, searched and appended with its token", async () => {
+    const pepper = await pepperToken();
+    expect(pepper).toMatch(/^cbc_/);
+    expect(await kindsOf(pepper)).toContain("goal");
+    const goal = await tool(pepper, "note_write", { kind: "goal", title: "Land an engineering job", body: "Apply to five places a week." });
+    expect(goal.id).toBe("land-an-engineering-job");
+    expect((await tool(pepper, "notes_search", { kind: "goal" })).map((n: any) => n.id)).toEqual(["land-an-engineering-job"]);
+    expect((await tool(pepper, "notes_search", { query: "five places" })).length).toBe(1);
+    expect((await tool(pepper, "note_append", { id: goal.id, text: "applied to Slalom" })).body).toMatch(/pepper: applied to Slalom/);
+    expect((await tool(pepper, "note_read", { id: goal.id })).kind).toBe("goal");
+  });
+
+  it("don't exist to any other agent", async () => {
+    const pepper = await pepperToken();
+    await tool(pepper, "note_write", { id: "job", kind: "goal", title: "Land a job", body: "secret plan" });
+    await tool(assistant, "note_write", { id: "jobs-day", kind: "day", title: "Sat", body: "secret plan too" });
+    expect(await kindsOf(assistant)).not.toContain("goal");
+    expect((await tool(assistant, "notes_search", {})).map((n: any) => n.id)).toEqual(["jobs-day"]);
+    expect((await tool(assistant, "notes_search", { query: "secret" })).map((n: any) => n.id)).toEqual(["jobs-day"]);
+    expect(await tool(assistant, "notes_search", { kind: "goal" })).toEqual([]);
+    expect((await tool(assistant, "note_read", { id: "job" })).error).toMatch(/no note job/);
+    expect((await tool(assistant, "note_append", { id: "job", text: "x" })).error).toMatch(/no note job/);
+    // Nor can one be written, or one written over.
+    expect((await tool(assistant, "note_write", { kind: "goal", title: "Mine", body: "" })).error).toMatch(/kind must be one of/);
+    expect((await tool(assistant, "note_write", { id: "job", kind: "memory", title: "Job", body: "gone" })).error).toMatch(/taken/);
+    expect((await tool(pepper, "note_read", { id: "job" })).body).toBe("secret plan");
+    // The user still sees them in corkboard.
+    expect((await (await call(owner, "GET", "/api/notes?kind=goal")).json<any[]>()).map((n) => n.id)).toEqual(["job"]);
+  });
+
+  it("aren't the owner's over MCP either, and a Pepper token reaches only MCP", async () => {
+    const pepper = await pepperToken();
+    await tool(pepper, "note_write", { id: "job", kind: "goal", title: "Land a job", body: "b" });
+    expect((await tool(owner, "note_read", { id: "job" })).error).toMatch(/no note job/);
+    expect((await call(pepper, "GET", "/api/notes")).status).toBe(403);
+    expect((await call(pepper, "POST", "/api/tokens/pepper", {})).status).toBe(403);
+    expect((await call(assistant, "POST", "/api/tokens/pepper", {})).status).toBe(403);
+    await call(owner, "POST", "/api/tokens/revoke", { token: pepper });
+    expect((await call(pepper, "POST", "/mcp", { jsonrpc: "2.0", id: 1, method: "tools/list" })).status).toBe(401);
   });
 });

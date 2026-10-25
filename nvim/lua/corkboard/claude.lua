@@ -42,29 +42,56 @@ local NOTIFY_PROMPT = table.concat({
 
 -- Start Claude Code in a new tab; returns its terminal buffer, or nil when
 -- claude is not on PATH. opts: args (after corkboard's own), cwd, env,
+-- kind (what the mod draws: "pepper", "card", or "project" by default),
 -- on_exit(status), prompt (added to the system prompt after corkboard's),
--- split (in a window to the right of the current one instead of a tab). The
--- tab closes with the session, unless a shell in it is still running.
+-- here (in the current window instead of a tab), split (in a window to the
+-- right of the current one), via
+-- (a command that runs claude somewhere else, like { "pepper-vm-ssh" }:
+-- corkboard's hooks and mod are files on this machine, so that session goes
+-- without them). The tab closes with the session, unless a shell in it is
+-- still running.
 function M.start(opts)
   opts = opts or {}
-  if vim.fn.executable("claude") == 0 then
-    vim.notify("corkboard: claude is not on PATH", vim.log.levels.ERROR)
+  local exe = opts.via and opts.via[1] or "claude"
+  if vim.fn.executable(exe) == 0 then
+    vim.notify("corkboard: " .. exe .. " is not on PATH", vim.log.levels.ERROR)
     return nil
   end
-  if opts.split then
+  if opts.here then
+    vim.cmd.enew()
+  elseif opts.split then
     vim.cmd("rightbelow vnew")
   else
     vim.cmd.tabnew()
   end
   local buf = vim.api.nvim_get_current_buf()
   local tab = vim.api.nvim_get_current_tabpage()
-  local prompt = opts.prompt and (NOTIFY_PROMPT .. "\n\n" .. opts.prompt) or NOTIFY_PROMPT
-  local cmd = { "claude", "--settings", vim.json.encode(settings()), "--append-system-prompt", prompt }
+  -- What it is, for corkboard.claude.cards, which opens beside it.
+  vim.b[buf].corkboard_claude = opts.kind or "project"
+  -- Elsewhere, its PushNotifications have no hook to bring them here.
+  local parts = opts.via and {} or { NOTIFY_PROMPT }
+  if opts.prompt then table.insert(parts, opts.prompt) end
+  local prompt = table.concat(parts, "\n\n")
+  local cmd
+  if opts.via then
+    cmd = vim.list_extend(vim.deepcopy(opts.via), { "claude", "--append-system-prompt", prompt })
+  else
+    cmd = { "claude", "--settings", vim.json.encode(settings()), "--append-system-prompt", prompt }
+    -- The mod (claude-plugin/) that draws the transcript as corkboard's ledger,
+    -- and Pepper's plan beside it.
+    local mod = vim.api.nvim_get_runtime_file("claude-plugin/.claude-plugin/plugin.json", false)[1]
+    if mod then vim.list_extend(cmd, { "--plugin-dir", vim.fs.dirname(vim.fs.dirname(mod)) }) end
+  end
   vim.fn.jobstart(vim.list_extend(cmd, opts.args or {}), {
     term = true,
     cwd = opts.cwd,
-    -- CORKBOARD_BUF tells the hooks which terminal the session is in.
-    env = vim.tbl_extend("force", opts.env or {}, { CORKBOARD_BUF = tostring(buf) }),
+    -- CORKBOARD_BUF tells the hooks which terminal the session is in;
+    -- CORKBOARD_LIVE and CORKBOARD_SESSION, the mod what to draw.
+    env = vim.tbl_extend("force", opts.env or {}, {
+      CORKBOARD_BUF = tostring(buf),
+      CORKBOARD_LIVE = require("corkboard.live").path(),
+      CORKBOARD_SESSION = opts.kind or "project",
+    }),
   })
   vim.api.nvim_create_autocmd("TermClose", {
     buffer = buf,
@@ -85,5 +112,38 @@ end
 
 -- <C-.>: Claude Code in the project.
 function M.open() M.start() end
+
+local HANDOFF_PROMPT = [=[
+Pepper, Matt's personal assistant, handed you this work from the day plan window. Do it here, in this project.
+If it is unclear or needs a decision, ask Matt here with AskUserQuestion.]=]
+
+-- The project a hand-off names: a directory, or the name of a recent
+-- project's folder; this Neovim's own when it names none.
+local function project_dir(project)
+  if not project or project == "" then return vim.fn.getcwd(-1, -1) end
+  local dir = vim.fs.normalize(project)
+  if vim.fn.isdirectory(dir) == 1 then return dir end
+  local recent = require("corkboard").recent_projects()
+  for _, d in ipairs(recent) do
+    if vim.fs.basename(d) == project then return d end
+  end
+  return nil, string.format("no project %q; recent projects: %s", project, table.concat(recent, ", "))
+end
+
+-- Pepper's hand_off (hooks/handoff.lua, from the mod): a Claude Code tab in
+-- the project, started on the task. req: task, project, name. Returns
+-- whether it started, and what to tell Pepper.
+function M.handoff(req)
+  local corkboard = require("corkboard")
+  if corkboard.window == "plan" or not corkboard.attached() then return false, "this Neovim has no page" end
+  if type(req) ~= "table" or type(req.task) ~= "string" or req.task == "" then return false, "no task" end
+  local dir, err = project_dir(req.project)
+  if not dir then return false, err end
+  local name = type(req.name) == "string" and req.name ~= "" and req.name or nil
+  local args = name and { "--name", name } or {}
+  vim.list_extend(args, { "--", req.task })
+  if not M.start({ cwd = dir, prompt = HANDOFF_PROMPT, args = args }) then return false, "claude is not on PATH" end
+  return true, string.format("started Claude Code in %s%s", vim.fn.fnamemodify(dir, ":~"), name and (", tab " .. name) or "")
+end
 
 return M

@@ -22,6 +22,9 @@ const PORT = Number(process.env.CORKBOARD_PORT ?? 7777);
 const NVIM = process.env.CORKBOARD_NVIM ?? "nvim";
 // The page as `bun run build` writes it (web/dist).
 const WEB_ROOT = new URL("../web/dist/", import.meta.url).pathname;
+// `bun run dev` (--dev): build the page again each time it loads, so a
+// reload shows the source as it is now.
+const DEV = process.argv.includes("--dev");
 const PLUGIN_ROOT = new URL("../nvim", import.meta.url).pathname;
 // Third-party plugins (snacks.nvim) as a colon-separated list of plugin
 // directories; the flake's dev shell sets it from nixpkgs.
@@ -266,8 +269,49 @@ function start(ws: Bun.ServerWebSocket<Session>, nvim: NonNullable<Session["nvim
   ws.data.queued = undefined;
 }
 
+// The build under way, which loads at the same time (the day plan's window
+// and a project's) share, and which the page's assets wait for, since the
+// build empties dist/ first. Its error output, if it failed.
+let building: Promise<string | undefined> | undefined;
+
+function build() {
+  building ??= (async () => {
+    const proc = Bun.spawn(["bun", "run", "build"], {
+      cwd: new URL("..", import.meta.url).pathname,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    if (code === 0) return undefined;
+    console.error(`page build failed:\n${err}`);
+    return out + err;
+  })().finally(() => (building = undefined));
+  return building;
+}
+
 // The day plan's window, while one is open.
 let planWindow: Bun.ServerWebSocket<Session> | undefined;
+// Every page's socket, for the reload below.
+const pages = new Set<Bun.ServerWebSocket<Session>>();
+
+// In dev, a new commit reloads every page: the build, Neovim and its plugin
+// as committed, rather than each save half way through a change. A reload
+// starts the page's Neovim again, terminals and all.
+async function head() {
+  const proc = Bun.spawn(["git", "rev-parse", "HEAD"], { cwd: new URL("..", import.meta.url).pathname, stdout: "pipe", stderr: "ignore" });
+  const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+  return code === 0 ? out.trim() : undefined;
+}
+if (DEV) {
+  let last = await head();
+  setInterval(async () => {
+    const now = await head();
+    if (!now || now === last) return;
+    last = now;
+    console.log(`commit ${now.slice(0, 7)}: reloading ${pages.size} page(s)`);
+    for (const ws of pages) ws.send(JSON.stringify([2, "corkboard.reload", []]));
+  }, 2000);
+}
 
 Bun.serve<Session, {}>({
   hostname: HOST,
@@ -304,6 +348,10 @@ Bun.serve<Session, {}>({
     }
     const path = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
     if (path.split("/").includes("..")) return new Response("no", { status: 400 });
+    if (DEV) {
+      const failed = await (path === "index.html" ? build() : building);
+      if (failed) return new Response(failed, { status: 500, headers: { "content-type": "text/plain" } });
+    }
     const file = Bun.file(WEB_ROOT + path);
     if (path === "manifest.webmanifest" && NAME) {
       const manifest = { ...(await file.json()), name: NAME, short_name: NAME };
@@ -315,6 +363,7 @@ Bun.serve<Session, {}>({
   websocket: {
     open(ws) {
       if (ws.data.error) return ws.close(4000, closeReason(ws.data.error));
+      pages.add(ws);
       // One day plan at a time: a new plan window takes over from the old.
       if (ws.data.view === "plan") {
         planWindow?.close(4002, "the day plan opened in another window");
@@ -345,6 +394,7 @@ Bun.serve<Session, {}>({
 
     close(ws) {
       if (planWindow === ws) planWindow = undefined;
+      pages.delete(ws);
       ws.data.closed = true;
       ws.data.cloud?.close();
       ws.data.nvim?.kill();

@@ -8,7 +8,7 @@
 
 import { createInterface } from "node:readline";
 import {
-  AGENT_STATES, STATUSES, type Card, appendLog, change, create, find, list, sections, split, waitingOn,
+  AGENT_STATES, PRIORITIES, STATUSES, type Card, appendLog, change, create, find, list, sections, split, waitingOn,
 } from "./cards";
 
 const ME = process.env.CORKBOARD_AGENT || "claude";
@@ -42,6 +42,7 @@ function summary(c: Card, cards?: Card[]) {
     agent: c.agent ?? "",
     agent_state: c.agent_state ?? "",
     attention: c.attention ?? "",
+    priority: c.priority ?? "",
     ordinal: c.ordinal ?? "",
     labels: c.labels ?? [],
     dependencies: c.dependencies ?? [],
@@ -86,11 +87,18 @@ const id = str("Card id, e.g. TASK-4");
 const strings = (description: string) => ({ type: "array", items: { type: "string" }, description });
 const labels = strings("Labels, replacing the card's");
 const dependencies = strings("Ids of cards this one waits on, e.g. TASK-4; replaces the card's");
+const priority = { type: "string", enum: [...PRIORITIES, ""], description: "high, medium or low; empty clears it, which counts as medium" };
+// A priority from a tool call: one of PRIORITIES, or "" to clear it.
+function priorityOf(v: unknown) {
+  if (v === "" || v === null) return "";
+  if (!PRIORITIES.includes(String(v))) throw new Error(`priority must be one of ${PRIORITIES.join(", ")}`);
+  return String(v);
+}
 const cleanList = (v: unknown) => (Array.isArray(v) ? v.map((s) => String(s).trim()).filter(Boolean) : []);
 
 const TOOLS: Record<string, Tool> = {
   list_cards: {
-    description: "List cards (without their bodies), ordered by ordinal then id. Filters are optional and combine.",
+    description: "List cards (without their bodies), ordered by priority (high first; none is medium), then ordinal, then id. Filters are optional and combine.",
     properties: {
       status: { type: "string", enum: STATUSES },
       agent_state: { type: "string", enum: AGENT_STATES },
@@ -194,11 +202,12 @@ const TOOLS: Record<string, Tool> = {
   },
   update_card: {
     description:
-      "Change a card's title, status, ordinal, labels, dependencies or agent_state. Only the agent holding a card may change its agent_state.",
+      "Change a card's title, status, priority, ordinal, labels, dependencies or agent_state. Only the agent holding a card may change its agent_state.",
     properties: {
       id,
       title: str("New title"),
       status: { type: "string", enum: STATUSES },
+      priority,
       ordinal: { type: "number", description: "Lower sorts first within a column" },
       labels,
       dependencies,
@@ -215,6 +224,7 @@ const TOOLS: Record<string, Tool> = {
           }
           if (a.title !== undefined) c.title = String(a.title).replace(/\n/g, " ").trim();
           if (a.status !== undefined) c.status = a.status;
+          if (a.priority !== undefined) c.priority = priorityOf(a.priority);
           if (a.ordinal !== undefined) c.ordinal = String(a.ordinal);
           if (a.labels !== undefined) c.labels = cleanList(a.labels);
           if (a.dependencies !== undefined) c.dependencies = cleanList(a.dependencies);
@@ -243,6 +253,7 @@ const TOOLS: Record<string, Tool> = {
       title: str("One line"),
       description: str("What needs doing and why, markdown"),
       status: { type: "string", enum: STATUSES },
+      priority,
       labels,
       dependencies,
       parent: str("Id of the card this came out of; both cards get a log entry linking them"),
@@ -254,6 +265,7 @@ const TOOLS: Record<string, Tool> = {
       const card = create(String(a.title).replace(/\n/g, " ").trim(), a.description, a.status, {
         labels: cleanList(a.labels),
         dependencies: cleanList(a.dependencies),
+        ...(a.priority ? { priority: priorityOf(a.priority) } : {}),
       });
       if (!a.parent) return summary(card);
       change(a.parent, (c) => log(c, `follow-up: ${card.id}`));

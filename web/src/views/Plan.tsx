@@ -127,7 +127,7 @@ const PLAN_KEYS = [
   ["later", "z", "Not today"],
   ["open", "⏎", "Open card"],
   ["reset", "R", "Read again"],
-  ["claude", "c", "Claude"],
+  ["claude", "c", "Pepper"],
 ];
 
 // Half an hour is a line of the grid.
@@ -158,11 +158,12 @@ export function Plan({ state, win, focused, nvim }: ViewProps<PlanState>) {
         ) : state.problem ? (
           <span className="text-blocked">● {state.problem}</span>
         ) : !state.blocks.length ? (
-          <span className="text-muted-foreground">no plan yet · the assistant proposes one</span>
+          <span className="text-muted-foreground">no plan yet · Pepper proposes one</span>
         ) : null}
       </header>
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(34ch,46ch)] gap-x-3ch @max-[96ch]/plan:grid-cols-1 @max-[96ch]/plan:overflow-y-auto @max-[96ch]/plan:pt-half">
-        <Box title="day" aside="00:00 → 24:00" className="flex min-h-0 flex-col @max-[96ch]/plan:min-h-[calc(var(--cell-h)*20)]">
+        {/* Down half a line, as the aside is for its titles: the boxes' tops line up. */}
+        <Box title="day" aside="00:00 → 24:00" className="mt-half flex min-h-0 flex-col @max-[96ch]/plan:mt-0 @max-[96ch]/plan:min-h-[calc(var(--cell-h)*20)]">
           <div ref={ref} className="min-h-0 flex-1 overflow-y-auto py-half pr-ch">
             <div className="relative" style={{ height: rows(24 * 60) }}>
               {Array.from({ length: 24 }, (_, h) => (
@@ -418,7 +419,7 @@ export function PlanDiff({ state, win, focused, nvim }: ViewProps<DiffState>) {
               <span className="text-review">~{c["~"]}</span>
             </>
           }
-          className="flex min-h-0 flex-col"
+          className="mt-half flex min-h-0 flex-col @max-[96ch]/plan:mt-0"
         >
           <div ref={ref} className="min-h-0 flex-1 overflow-y-auto py-half">
             {state.lines.map((l, i) => {
@@ -494,7 +495,7 @@ export function PlanDiff({ state, win, focused, nvim }: ViewProps<DiffState>) {
                   <kbd className="text-primary">S</kbd> to say what to change
                 </span>
               )}
-              {state.asked.length > 0 && <div className="text-muted-foreground">for the assistant's next re-plan</div>}
+              {state.asked.length > 0 && <div className="text-muted-foreground">for Pepper's next re-plan</div>}
             </div>
           </Box>
         </aside>

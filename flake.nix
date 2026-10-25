@@ -13,7 +13,7 @@
     {
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
-          packages = [ pkgs.neovim pkgs.bun pkgs.ripgrep pkgs.fd ];
+          packages = [ pkgs.neovim pkgs.bun pkgs.ripgrep pkgs.fd pkgs.electron ];
           CORKBOARD_PLUGINS = pluginPath pkgs;
         };
       });
@@ -93,6 +93,28 @@
               --suffix CORKBOARD_PLUGINS : ${pluginPath pkgs}
           '';
           meta.mainProgram = "corkboard-bridge";
+        };
+
+        # The desktop window (app/main.js): nixpkgs' Electron on the bridge's
+        # page. `corkboard-app [--name ID] [--title NAME] URL`; ID is the
+        # window's app_id and wants a desktop entry of the same name.
+        app = pkgs.stdenvNoCC.mkDerivation {
+          pname = "corkboard-app";
+          version = "0.1.0";
+          src = pkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = pkgs.lib.fileset.unions [ ./app ./web/public/logo.svg ./web/public/icon-512.png ];
+          };
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          installPhase = ''
+            mkdir -p $out/share/corkboard-app $out/share/icons/hicolor/scalable/apps $out/share/icons/hicolor/512x512/apps
+            cp app/* $out/share/corkboard-app/
+            cp web/public/logo.svg $out/share/icons/hicolor/scalable/apps/corkboard.svg
+            cp web/public/icon-512.png $out/share/icons/hicolor/512x512/apps/corkboard.png
+            makeWrapper ${pkgs.lib.getExe pkgs.electron} $out/bin/corkboard-app \
+              --add-flags $out/share/corkboard-app
+          '';
+          meta.mainProgram = "corkboard-app";
         };
 
         # The Neovim plugin alone, for a Neovim the bridge runs on another

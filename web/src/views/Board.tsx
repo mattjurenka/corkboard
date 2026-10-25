@@ -12,6 +12,8 @@ type BoardCard = {
   id: string;
   title: string;
   status: string;
+  // None counts as medium.
+  priority?: "high" | "medium" | "low";
   agent?: string;
   agent_state?: string;
   attention?: string;
@@ -58,8 +60,16 @@ const STATE_AGENT: Record<string, string> = {
   "needs-review": "text-review",
 };
 
+// Each priority's color in the card's top border.
+export const PRIORITY: Record<string, string> = {
+  high: "text-blocked",
+  medium: "text-foreground",
+  low: "text-muted-foreground",
+};
+
 const KEYS = [
   ["new", "o", "New card"],
+  ["priority", "p", "Priority"],
   ["left", "H", "Move left"],
   ["right", "L", "Move right"],
   ["assign", "a", "Hand to agent"],
@@ -112,7 +122,7 @@ export function Board({ state, win, focused, nvim }: ViewProps<BoardState>) {
           const active = cards.some((c) => c.id === state.selected);
           return (
             <section key={status} className="flex min-h-0 flex-col">
-              <h2 className={cn("mb-row", focused && active && "text-primary")}>
+              <h2 className={cn("mb-row", focused && active && "text-focus")}>
                 {status} <span className="text-muted-foreground">{cards.length}</span>
               </h2>
               <div className={cn("flex flex-col gap-row pt-half", oneRow && "overflow-y-auto")}>
@@ -122,8 +132,7 @@ export function Board({ state, win, focused, nvim }: ViewProps<BoardState>) {
                     card={c}
                     selected={c.id === state.selected}
                     focused={focused}
-                    onClick={() => select(c.id)}
-                    onDoubleClick={() => action("open")}
+                    onClick={() => select(c.id).then(() => action("open"))}
                     onSession={() => select(c.id).then(() => action("session"))}
                     onAnswer={() => select(c.id).then(() => action("answer"))}
                   />
@@ -162,7 +171,7 @@ function BoardCardView({
   ...handlers
 }: { card: BoardCard; selected: boolean; focused: boolean; onSession: () => void; onAnswer: () => void } & Pick<
   React.ComponentProps<"div">,
-  "onClick" | "onDoubleClick"
+  "onClick"
 >) {
   const s = card.agent_state ?? "";
   // A pin and the card's number, set into the top border.
@@ -173,13 +182,14 @@ function BoardCardView({
       className={cn(
         "relative cursor-pointer gap-0 px-ch pt-half pb-[calc(var(--cell-h)/2-1px)] hover:bg-accent",
         selected && "border-muted-foreground bg-selection hover:bg-selection",
-        selected && focused && "border-primary",
+        selected && focused && "border-focus",
       )}
       {...handlers}
     >
       <span className="absolute -top-half left-ch bg-background px-ch whitespace-nowrap text-muted-foreground">
         <span className={STATE_DOT[s] ?? "text-border"}>●</span>
         {number ? ` ${number}` : ""}
+        {card.priority && <span className={PRIORITY[card.priority]}> {card.priority}</span>}
       </span>
       <div className={cn(selected && focused && "font-bold", card.waiting && "text-muted-foreground")}>{card.title}</div>
       {(card.agent || card.agent_state) && (

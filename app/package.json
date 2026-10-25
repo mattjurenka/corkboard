@@ -1,0 +1,6 @@
+{
+  "name": "corkboard",
+  "private": true,
+  "type": "module",
+  "main": "main.js"
+}

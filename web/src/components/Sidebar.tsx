@@ -12,7 +12,9 @@
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { keepFocus, useNvim } from "@/nvim/context";
+import { toNvimKey } from "@/nvim/input.js";
 import { useStore } from "@/store";
+import { useState } from "react";
 import { Activity } from "./Activity";
 import { Files } from "./Files";
 import { Notifications } from "./Notifications";
@@ -63,11 +65,50 @@ export function Sidebar() {
 
 function Tabs() {
   const nvim = useNvim();
-  const tabs = useStore((s) => s.tabs);
+  // Until Neovim has put the editor back, the tabs the page last saw
+  // (skeleton.ts), there to look at but not yet to click.
+  const restored = useStore((s) => !!s.layout && s.layout.restored !== false);
+  const skeleton = useStore((s) => s.skeleton);
+  const live = useStore((s) => s.tabs);
+  const tabs = !restored && skeleton ? skeleton.tabs : live;
   const previewTab = useStore((s) => s.previewTab);
-  if (!tabs) return <ol className="flex-1" />;
+  const [focused, setFocused] = useState(false);
+  if (!tabs) return <ol id="tabs" tabIndex={-1} className="flex-1" />;
+
+  // With focus here (Ctrl+h from Neovim's leftmost window), Ctrl+j/k, j/k or
+  // the arrows change tab, stopping at the ends; Ctrl+l, Enter or Esc go
+  // back to Neovim. Any other key goes back too, and on to Neovim.
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const at = tabs.tabs.findIndex(({ tab }) => tab.id === tabs.current.id);
+    const plain = !e.altKey && !e.metaKey;
+    const step =
+      plain && (e.key === "ArrowDown" || e.key.toLowerCase() === "j") ? 1
+      : plain && (e.key === "ArrowUp" || e.key.toLowerCase() === "k") ? -1
+      : 0;
+    if (step) {
+      e.preventDefault();
+      const next = tabs.tabs[at + step];
+      if (next) nvim.notify("nvim_set_current_tabpage", next.tab);
+      return;
+    }
+    // Null for a lone modifier, as the Ctrl of Ctrl+j goes down.
+    const key = toNvimKey(e.nativeEvent);
+    if (!key) return;
+    e.preventDefault();
+    nvim.refocus();
+    if ((e.ctrlKey && e.key.toLowerCase() === "l") || e.key === "Enter" || e.key === "Escape") return;
+    nvim.notify("nvim_input", key);
+  };
+
   return (
-    <ol className="flex-1 overflow-y-auto pb-row">
+    <ol
+      id="tabs"
+      tabIndex={-1}
+      onKeyDown={onKeyDown}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      className={cn("flex-1 overflow-y-auto pb-row outline-none", !restored && skeleton && "pointer-events-none")}
+    >
       {tabs.tabs.map(({ tab, name }, i) => {
         const pinned = PINNED[i];
         const current = tab.id === tabs.current.id;
@@ -79,14 +120,15 @@ function Tabs() {
             className={cn(
               "group flex min-w-0 cursor-pointer items-center gap-ch py-half pr-ch pl-2ch hover:bg-accent",
               current && "bg-selection hover:bg-selection",
+              current && focused && "outline outline-focus -outline-offset-1",
               i === PINNED.length - 1 && "mb-row",
             )}
           >
-            <span className={cn("w-ch flex-none text-right text-muted-foreground", current && "text-primary")}>
+            <span className={cn("w-ch flex-none text-right text-muted-foreground", current && "text-focus")}>
               {i + 1}
             </span>
             {pinned ? (
-              <span className="min-w-0 flex-1 truncate text-primary">{pinned}</span>
+              <span className="min-w-0 flex-1 truncate text-focus">{pinned}</span>
             ) : (
               <TabLabel name={name} preview={tab.id === previewTab} />
             )}

@@ -6,6 +6,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Panels } from "@/components/Panels";
 import { Scrollbars } from "@/components/Scrollbars";
 import { Sidebar } from "@/components/Sidebar";
+import { Skeleton } from "@/components/Skeleton";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/store";
 
@@ -26,12 +27,15 @@ export function App() {
       {/* Installed as an app, the page draws where the title bar was
           (window-controls-overlay in the manifest), all but the window
           buttons. The sidebar runs to the top; over the editor, the bar's
-          height is left to drag the window by. Zero in a browser tab. */}
-      <div className="absolute top-0 right-0 left-(--sidebar-width) h-[env(titlebar-area-height,0px)] [-webkit-app-region:drag] [app-region:drag]" />
-      <div id="editor" className="absolute top-[env(titlebar-area-height,0px)] right-0 bottom-0 left-(--sidebar-width)">
+          height is left to drag the window by, with a 1px border below it
+          (outside the window buttons' strip, which would cover it). Zero
+          in a browser tab. */}
+      <div className="absolute top-0 right-0 left-(--sidebar-width) box-content h-[env(titlebar-area-height,0px)] border-b-[length:min(1px,env(titlebar-area-height,0px))] [-webkit-app-region:drag] [app-region:drag]" />
+      <div id="editor" className="absolute top-[calc(env(titlebar-area-height,0px)+min(1px,env(titlebar-area-height,0px)))] right-0 bottom-0 left-(--sidebar-width)">
         <canvas tabIndex={0} className="block outline-none" />
         <Panels />
         <Scrollbars />
+        <Skeleton />
       </div>
       {status && (
         <Alert
@@ -44,3 +48,4 @@ export function App() {
     </div>
   );
 }
+

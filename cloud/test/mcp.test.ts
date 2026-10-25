@@ -182,4 +182,10 @@ describe("an OAuth client", () => {
     expect((await tool(owner, "read_card", { id: "TASK-2" })).error).toMatch(/which board/);
     expect((await tool(owner, "read_card", { board: "nope", id: "TASK-2" })).error).toMatch(/no such board/);
   });
+
+  it("makes a card that asks for the user, which a card agent can't", async () => {
+    const made = await tool(owner, "create_card", { board: BOARD, title: "Fix the login", status: "ready", attention: "Pepper made this\nfor you" });
+    expect((await card(made.id)).attention).toBe("Pepper made this for you");
+    expect((await tool(await cardToken(), "create_card", { title: "x", attention: "look" })).error).toMatch(/request_user_action/);
+  });
 });

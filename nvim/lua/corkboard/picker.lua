@@ -73,6 +73,7 @@ local tools = {
   { text = "Day plan", hint = "<leader>p", run = function() require("corkboard.plan").show() end },
   { text = "Claude Code", hint = "<C-.>", run = function() require("corkboard.claude").open() end },
   { text = "Terminal", hint = "", run = function() require("corkboard.terminal").tab() end },
+  { text = "Reload window", hint = "F5", run = function() require("corkboard.restore").reload() end },
 }
 
 function M.tools()

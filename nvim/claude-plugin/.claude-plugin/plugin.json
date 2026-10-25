@@ -1,0 +1,6 @@
+{
+  "name": "corkboard-ui",
+  "version": "0.1.0",
+  "description": "Claude Code as corkboard draws it: the transcript as a ledger, the cards agents are on, the day plan for Pepper",
+  "types": "./types/index.d.ts"
+}

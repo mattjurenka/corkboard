@@ -91,6 +91,7 @@ export function Files() {
           )}
         >
           <span className="w-ch flex-none text-center text-muted-foreground">{entry.dir ? (open ? "▾" : "▸") : ""}</span>
+          <FileIcon entry={entry} open={!!open} />
           <span className={cn("truncate", entry.git === "modified" && "text-review", entry.git === "added" && "text-working")}>
             {entry.name}
           </span>
@@ -104,7 +105,7 @@ export function Files() {
   return (
     <Section
       title="Files"
-      className="pt-row"
+      className="border-t pt-row"
       action={<HeaderButton title="Collapse all folders" onClick={collapseAll}>⊟</HeaderButton>}
     >
       <div ref={tree} className="flex-1 overflow-auto pb-row">
@@ -112,4 +113,76 @@ export function Files() {
       </div>
     </Section>
   );
+}
+
+// A Nerd Font glyph by file type, in the theme's colors rather than each
+// language's own, so the tree stays in the colorscheme.
+type Icon = [glyph: string, color: string];
+const BLUE = "text-primary";
+const YELLOW = "text-review";
+const GREEN = "text-working";
+const RED = "text-blocked";
+const PURPLE = "text-special";
+const GREY = "text-muted-foreground";
+
+const FILE: Icon = ["", GREY]; // nf-fa-file
+const FOLDER: Icon = ["", BLUE]; // nf-fa-folder
+const FOLDER_OPEN: Icon = ["", BLUE]; // nf-fa-folder_open
+
+const BY_NAME: Record<string, Icon> = {
+  ".gitignore": ["", RED], // nf-dev-git
+  ".gitattributes": ["", RED],
+  ".env": ["", YELLOW], // nf-oct-key
+  "package.json": ["", RED], // nf-dev-npm
+  "flake.nix": ["", BLUE], // nf-linux-nixos
+  "flake.lock": ["", GREY],
+  "bun.lock": ["", GREY], // nf-fa-lock
+  Dockerfile: ["", BLUE], // nf-linux-docker
+  Makefile: ["", GREY], // nf-dev-gnu
+  LICENSE: ["", YELLOW], // nf-oct-law
+};
+
+const BY_EXT: Record<string, Icon> = {
+  ts: ["", BLUE], // nf-seti-typescript
+  mts: ["", BLUE],
+  tsx: ["", BLUE], // nf-dev-react
+  jsx: ["", YELLOW],
+  js: ["", YELLOW], // nf-dev-javascript
+  mjs: ["", YELLOW],
+  cjs: ["", YELLOW],
+  json: ["", YELLOW], // nf-seti-json
+  lua: ["", BLUE], // nf-seti-lua
+  vim: ["", GREEN], // nf-seti-vim
+  md: ["", GREY], // nf-oct-markdown
+  nix: ["", BLUE],
+  sh: ["", GREEN], // nf-oct-terminal
+  bash: ["", GREEN],
+  zsh: ["", GREEN],
+  py: ["", YELLOW], // nf-seti-python
+  rs: ["", RED], // nf-dev-rust
+  go: ["", BLUE], // nf-seti-go
+  css: ["", BLUE], // nf-dev-css3
+  html: ["", RED], // nf-dev-html5
+  toml: ["", GREY], // nf-seti-config
+  yaml: ["", PURPLE],
+  yml: ["", PURPLE],
+  sql: ["", YELLOW], // nf-dev-database
+  txt: ["", GREY], // nf-fa-file_text
+  lock: ["", GREY],
+  svg: ["", PURPLE], // nf-fa-file_image
+  png: ["", PURPLE],
+  jpg: ["", PURPLE],
+  jpeg: ["", PURPLE],
+  gif: ["", PURPLE],
+  webp: ["", PURPLE],
+  ico: ["", PURPLE],
+  pdf: ["", RED], // nf-fa-file_pdf
+  webmanifest: ["", YELLOW],
+};
+
+function FileIcon({ entry, open }: { entry: Entry; open: boolean }) {
+  const dot = entry.name.lastIndexOf(".");
+  const ext = dot > 0 ? entry.name.slice(dot + 1).toLowerCase() : "";
+  const [glyph, color] = entry.dir ? (open ? FOLDER_OPEN : FOLDER) : (BY_NAME[entry.name] ?? BY_EXT[ext] ?? FILE);
+  return <span className={cn("w-ch flex-none text-center", color)}>{glyph}</span>;
 }

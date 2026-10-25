@@ -12,10 +12,6 @@ local M = {}
 -- plan's, which the bridge starts with CORKBOARD_WINDOW=plan (?view=plan).
 M.window = vim.env.CORKBOARD_WINDOW
 
--- The Claude account the day plan's Claude Code is logged in to
--- (corkboard.plan.claude). CORKBOARD_PLAN_ACCOUNT overrides it.
-M.plan_account = vim.env.CORKBOARD_PLAN_ACCOUNT or "matthewjurenka@gmail.com"
-
 local chans = {}
 -- What each channel was last sent, so unchanged state isn't sent again.
 -- shown_preview: the preview tab last sent (M.push_preview); false when
@@ -77,9 +73,12 @@ function M.attach(chan)
   M.push_context()
   require("corkboard.board").push_all()
   require("corkboard.viewer").push_all()
+  require("corkboard.claude.cards").push_all()
   require("corkboard.usage").push_all()
   require("corkboard.plan").push_all()
   M.push_layout()
+  -- Once the grid has its size, so the windows come back in proportion.
+  vim.schedule(require("corkboard.restore").restore)
 end
 
 -- Whether a page is attached.
@@ -113,9 +112,13 @@ end
 
 -- Windows in the current tabpage that show an HTML view, the floats the
 -- browser must not cover, and the focused window (with its status line),
--- which the browser outlines when the tab is split. In grid cells.
+-- which the browser outlines. In grid cells.
+-- Also every split, and whether its content is still coming (a terminal
+-- put back that has drawn nothing yet), and whether the editor has been put
+-- back at all, for the page to show what is loading.
 function M.layout()
-  local views, floats, current = {}, {}, vim.api.nvim_get_current_win()
+  local views, floats, wins, current = {}, {}, {}, vim.api.nvim_get_current_win()
+  local restore = require("corkboard.restore")
   local splits, focus = 0, nil
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
     local config = vim.api.nvim_win_get_config(win)
@@ -125,6 +128,7 @@ function M.layout()
     if not floating then
       splits = splits + 1
       if win == current then focus = rect(win, config) end
+      table.insert(wins, vim.tbl_extend("error", rect(win, config), { loading = restore.loading(buf) or nil }))
     end
     if view then
       table.insert(views, vim.tbl_extend("error", rect(win, config), {
@@ -133,19 +137,28 @@ function M.layout()
         view = view,
         focused = win == current,
         float = floating,
+        -- The panel covers a float's border, so the browser draws it, and
+        -- its title on it.
+        border = floating and type(config.border) == "table" and #config.border == 8 or nil,
+        title = type(config.title) == "table"
+            and vim.trim(table.concat(vim.tbl_map(function(c) return c[1] end, config.title)))
+          or nil,
       }))
     elseif floating and not config.hide then
       table.insert(floats, rect(win, config))
     end
   end
-  if focus then
-    if splits < 2 then
-      focus = nil
-    elseif vim.o.laststatus == 1 or vim.o.laststatus == 2 then
-      focus.height = focus.height + 1 -- its own status line
-    end
+  -- Its own status line: always with laststatus=2, with 1 only when split.
+  if focus and (vim.o.laststatus == 2 or (vim.o.laststatus == 1 and splits > 1)) then
+    focus.height = focus.height + 1
   end
-  return { views = views, floats = floats, focus = focus }
+  -- A window beside another has a separator column between them, which the
+  -- browser draws as a line down its middle and runs the outline along.
+  if focus then
+    focus.left = focus.col > 0 or nil
+    focus.right = focus.col + focus.width < vim.o.columns or nil
+  end
+  return { views = views, floats = floats, focus = focus, wins = wins, restored = restore.restored() }
 end
 
 -- Checked after every redraw and sent when it changed. Window events aren't
@@ -232,8 +245,10 @@ function M.push_theme()
     return c and ("#%06x"):format(c) or nil
   end
   M.notify("corkboard.theme", {
-    -- The focused window's outline, in the colour of its status line.
-    focus = bg("StatusLine"),
+    -- Where you are: the focused window's outline, the current tab's, the
+    -- pinned tabs. Type is the yellow in base16 (stylix's base0A) and most
+    -- schemes; vim.g.corkboard_focus_hl names another group.
+    focus = fg(vim.g.corkboard_focus_hl or "Type", "Function"),
     -- The selected card, tab and file, as a visual selection.
     selection = bg("Visual"),
     accent = fg("Function", "Identifier"),
@@ -418,7 +433,9 @@ function M.statusline()
 
   local title, detail, pos = nil, nil, true
   local cwd, cmd = name:match("^term://(.-)//%d+:(.*)$")
-  if cwd then
+  if vim.b[buf].corkboard_plan_claude then
+    title, detail, pos = "Pepper", "beside the day plan", false
+  elseif cwd then
     title = vim.fs.basename(vim.split(cmd, " ", { trimempty = true })[1] or "terminal")
     detail, pos = vim.fn.fnamemodify(cwd, ":~"), false
   elseif vim.b[buf].corkboard_view == "board" then
@@ -528,6 +545,13 @@ local function clip_copy(lines, regtype)
 end
 local function clip_paste() return { clip.lines, clip.regtype } end
 
+-- To the tab a step away, if there is one: no wrapping at the ends.
+local function tab_step(step)
+  local i = vim.fn.tabpagenr() + step
+  if i < 1 or i > vim.fn.tabpagenr("$") then return end
+  vim.cmd.tabnext(i)
+end
+
 function M.setup()
   vim.g.clipboard = {
     name = "corkboard",
@@ -557,6 +581,8 @@ function M.setup()
   vim.api.nvim_create_user_command("AgentPlan", M.open_plan, { desc = "corkboard: day plan" })
 
   require("corkboard.viewer").setup()
+  require("corkboard.claude.cards").setup()
+  require("corkboard.restore").setup()
 
   local picker = require("corkboard.picker")
   if picker.setup() then
@@ -576,10 +602,14 @@ function M.setup()
 
   -- Replaces <C-t>'s tag-stack pop.
   vim.keymap.set("n", "<C-t>", "<Cmd>tabnew<CR>", { desc = "corkboard: new tab" })
-  -- Ctrl+Tab and Ctrl+Shift+Tab go through the tabs, from any mode; plain
-  -- Tab stays the program's (completion, Claude Code's mode cycling).
-  vim.keymap.set({ "n", "i", "t" }, "<C-Tab>", "<Cmd>tabnext<CR>", { desc = "corkboard: next tab" })
-  vim.keymap.set({ "n", "i", "t" }, "<C-S-Tab>", "<Cmd>tabprevious<CR>", { desc = "corkboard: previous tab" })
+  -- Ctrl+Tab and Ctrl+Shift+Tab, or Ctrl+Shift+j and k, go down and up the
+  -- tabs from any mode, stopping at the first and last; plain Tab stays the
+  -- program's (completion, Claude Code's mode cycling).
+  for lhs, step in pairs({ ["<C-Tab>"] = 1, ["<C-S-Tab>"] = -1, ["<C-S-j>"] = 1, ["<C-S-k>"] = -1 }) do
+    vim.keymap.set({ "n", "i", "t" }, lhs, function() tab_step(step) end, {
+      desc = "corkboard: " .. (step > 0 and "next" or "previous") .. " tab",
+    })
+  end
 
   -- Ctrl+Shift+1 to 9 go to that tab, as the sidebar numbers them: the
   -- board, usage, then the agents.
@@ -589,11 +619,29 @@ function M.setup()
     end, { desc = "corkboard: tab " .. i })
   end
 
-  -- Ctrl+h/j/k/l moves between windows, from terminal mode too. Not insert
-  -- mode, where <C-h> is backspace and <C-k> a digraph.
-  for _, dir in ipairs({ "h", "j", "k", "l" }) do
-    vim.keymap.set({ "n", "t" }, "<C-" .. dir .. ">", "<Cmd>wincmd " .. dir .. "<CR>", { desc = "corkboard: window " .. dir })
+  -- Ctrl+h/j/k/l moves between the tab's windows, from terminal mode too.
+  -- Not insert mode, where <C-h> is backspace and <C-k> a digraph.
+  vim.keymap.set({ "n", "t" }, "<C-l>", "<Cmd>wincmd l<CR>", { desc = "corkboard: window l" })
+  -- With no window below or above (and not from a float), Ctrl+j/k go on
+  -- to the next or previous tab.
+  for dir, step in pairs({ j = 1, k = -1 }) do
+    vim.keymap.set({ "n", "t" }, "<C-" .. dir .. ">", function()
+      local win = vim.api.nvim_get_current_win()
+      vim.cmd.wincmd(dir)
+      if vim.api.nvim_get_current_win() == win and vim.api.nvim_win_get_config(win).relative == "" then
+        tab_step(step)
+      end
+    end, { desc = "corkboard: window " .. dir .. ", or the " .. (step > 0 and "next" or "previous") .. " tab" })
   end
+  -- From the leftmost window (not a float), Ctrl+h goes on to the page's
+  -- list of tabs (corkboard.focus_tabs), where Ctrl+j/k change tab.
+  vim.keymap.set({ "n", "t" }, "<C-h>", function()
+    local win = vim.api.nvim_get_current_win()
+    vim.cmd.wincmd("h")
+    if vim.api.nvim_get_current_win() == win and vim.api.nvim_win_get_config(win).relative == "" then
+      M.notify("corkboard.focus_tabs")
+    end
+  end, { desc = "corkboard: window h, or the tabs" })
   vim.keymap.set({ "n", "t" }, "<C-q>", M.close, { desc = "corkboard: close window or tab" })
 
   vim.api.nvim_set_decoration_provider(vim.api.nvim_create_namespace("corkboard.layout"), {
@@ -601,6 +649,12 @@ function M.setup()
   })
   local group = vim.api.nvim_create_augroup("corkboard", {})
   vim.api.nvim_create_autocmd("DirChanged", { group = group, callback = board.push })
+  -- Where to reach this Neovim, for Pepper's hand_off (hooks/handoff.lua).
+  local function announce()
+    require("corkboard.live").set("nvim", { server = vim.v.servername, window = M.window or "main", cwd = vim.fn.getcwd(-1, -1) })
+  end
+  announce()
+  vim.api.nvim_create_autocmd("DirChanged", { group = group, callback = announce })
   vim.api.nvim_create_autocmd({ "VimEnter", "DirChanged" }, { group = group, callback = remember_project })
   vim.api.nvim_create_autocmd({ "DirChanged", "BufEnter", "WinEnter", "TabEnter", "BufFilePost" }, {
     group = group,

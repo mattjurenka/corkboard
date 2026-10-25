@@ -4,9 +4,12 @@
 
 export const STATUSES = ["backlog", "ready", "doing", "review", "done"] as const;
 export const AGENT_STATES = ["queued", "working", "blocked", "needs-review", "done"] as const;
+// Backlog.md's; a card without one counts as medium.
+export const PRIORITIES = ["high", "medium", "low"] as const;
 
 export type Status = (typeof STATUSES)[number];
 export type AgentState = (typeof AGENT_STATES)[number];
+export type Priority = (typeof PRIORITIES)[number];
 
 export type Card = {
   id: string;
@@ -15,6 +18,7 @@ export type Card = {
   agent: string | null;
   agent_state: AgentState | null;
   attention: string | null;
+  priority: Priority | null;
   ordinal: number | null;
   labels: string[];
   dependencies: string[];
@@ -118,6 +122,10 @@ export function fields(input: unknown): Fields {
         break;
       case "attention":
         out.attention = nullable(k, v, MAX_ATTENTION);
+        break;
+      case "priority":
+        if (v !== null && !PRIORITIES.includes(v as Priority)) throw new Invalid(`priority must be one of ${PRIORITIES.join(", ")}, or null`);
+        out.priority = v as Priority | null;
         break;
       case "ordinal":
         if (v !== null && (typeof v !== "number" || !Number.isFinite(v))) throw new Invalid("ordinal must be a number or null");

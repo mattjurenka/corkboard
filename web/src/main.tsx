@@ -9,6 +9,7 @@ import { makeNvim, NvimContext } from "./nvim/context";
 import { store } from "./store";
 import { askPermissionOnGesture, notifyAttention, notifyClaude } from "./attention";
 import { openPlan } from "./planWindow";
+import { save as saveSkeleton } from "./skeleton";
 
 // ?cwd=/path/to/project opens Neovim there; ?host=<name> on that machine,
 // over ssh (CORKBOARD_REMOTES in bridge/server.ts). ?view=plan is the day
@@ -66,7 +67,12 @@ rpc.on("corkboard.context", ([context]: any[]) => {
   store.set({ context });
 });
 rpc.on("corkboard.preview", ([tab]: any[]) => store.set({ previewTab: tab ?? null }));
-rpc.on("corkboard.files_changed", () => store.set({ filesVersion: store.get().filesVersion + 1 }));
+// Ctrl+h from Neovim's leftmost window (corkboard/init.lua): keys go to
+// the sidebar's tabs (Tabs in Sidebar.tsx) until they hand them back.
+rpc.on("corkboard.focus_tabs", () => document.querySelector<HTMLElement>("#tabs")?.focus());
+// A new commit, under `bun run dev` (bridge/server.ts).
+rpc.on("corkboard.reload", () => location.reload());
+rpc.on("corkboard.files_changed",() => store.set({ filesVersion: store.get().filesVersion + 1 }));
 
 // Neovim sends a layout just before the flush that draws it. Rendering it
 // synchronously (flushSync) in the same task as that flush's paint means a
@@ -167,6 +173,8 @@ rpc.on("corkboard.theme", async ([theme]: any[]) => {
   rpc.notify("nvim_ui_try_resize", next.cols, next.rows);
   rpc.notify("nvim_command", "redraw!");
 });
+// The tabs and windows, for the next load to show while Neovim starts.
+addEventListener("pagehide", () => saveSkeleton(store.get()));
 rpc.on("close", (e: CloseEvent) => {
   document.title = "corkboard (disconnected)";
   store.set({ status: e.reason || (e.code === 1006 ? "can't reach the bridge — is it running?" : "nvim exited") });
@@ -179,7 +187,7 @@ cell();
 
 const size = () => grid.fit(container.clientWidth, container.clientHeight);
 const { cols, rows } = size();
-await rpc.request("nvim_ui_attach", cols, rows, { rgb: true, ext_linegrid: true, ext_tabline: true });
+await rpc.request("nvim_ui_attach", cols, rows, { rgb: true, ext_linegrid: true, ext_tabline: true, ext_hlstate: true });
 
 new ResizeObserver(() => {
   const next = size();

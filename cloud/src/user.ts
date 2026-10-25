@@ -86,21 +86,21 @@ export class User extends DurableObject {
   }
 
   // Without a query: the newest first. With one: the best matches, each with
-  // a snippet around what matched.
-  notes(query: string | undefined, kind: string | undefined, limit: number) {
+  // a snippet around what matched. Never a note of the hidden kinds.
+  notes(query: string | undefined, kind: string | undefined, limit: number, hidden: readonly string[] = []) {
     const q = query?.trim() ? ftsQuery(query) : "";
+    const where: string[] = [];
+    const args: string[] = [];
+    if (kind) where.push("n.kind = ?"), args.push(kind);
+    if (hidden.length) where.push(`n.kind NOT IN (${hidden.map(() => "?").join(", ")})`), args.push(...hidden);
     if (!q) {
-      const rows = kind
-        ? this.sql.exec("SELECT id, kind, title, updated FROM notes WHERE kind = ? ORDER BY updated DESC LIMIT ?", kind, limit)
-        : this.sql.exec("SELECT id, kind, title, updated FROM notes ORDER BY updated DESC LIMIT ?", limit);
-      return rows.toArray();
+      const cond = where.length ? ` WHERE ${where.join(" AND ")}` : "";
+      return this.sql.exec(`SELECT n.id, n.kind, n.title, n.updated FROM notes n${cond} ORDER BY n.updated DESC LIMIT ?`, ...args, limit).toArray();
     }
     const select = `SELECT n.id, n.kind, n.title, n.updated, snippet(notes_fts, 1, '[', ']', '…', 16) AS snippet
       FROM notes_fts JOIN notes n ON n.rowid = notes_fts.rowid WHERE notes_fts MATCH ?`;
-    const rows = kind
-      ? this.sql.exec(`${select} AND n.kind = ? ORDER BY rank LIMIT ?`, q, kind, limit)
-      : this.sql.exec(`${select} ORDER BY rank LIMIT ?`, q, limit);
-    return rows.toArray();
+    const cond = where.map((w) => ` AND ${w}`).join("");
+    return this.sql.exec(`${select}${cond} ORDER BY rank LIMIT ?`, q, ...args, limit).toArray();
   }
 
   note(id: string): Result<Note> {

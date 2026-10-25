@@ -13,10 +13,12 @@ import { basename, dirname, join } from "node:path";
 
 export const STATUSES = ["backlog", "ready", "doing", "review", "done"];
 export const AGENT_STATES = ["queued", "working", "blocked", "needs-review", "done"];
+// Backlog.md's; a card without one counts as medium.
+export const PRIORITIES = ["high", "medium", "low"];
 // Backlog.md's keys in the order it writes them, then corkboard's own.
 const KEY_ORDER = [
   "id", "title", "status", "assignee", "created_date", "updated_date",
-  "labels", "dependencies", "ordinal", "agent_state", "attention",
+  "labels", "dependencies", "priority", "ordinal", "agent_state", "attention",
 ];
 const LISTS = ["assignee", "labels", "dependencies"];
 
@@ -144,9 +146,11 @@ export function list(): Card[] {
   const cards = tasks()
     .map((n) => parse(join(TASKS, n)))
     .filter((c): c is Card => !!c);
+  // High first, low last, anything else medium; then ordinal, then number.
+  const rank = (c: Card) => ({ high: 0, low: 2 })[c.priority as string] ?? 1;
   const ordinal = (c: Card) =>
     c.ordinal !== undefined && c.ordinal !== "" && !isNaN(Number(c.ordinal)) ? Number(c.ordinal) : Infinity;
-  return cards.sort((a, b) => ordinal(a) - ordinal(b) || number(a.id) - number(b.id));
+  return cards.sort((a, b) => rank(a) - rank(b) || ordinal(a) - ordinal(b) || number(a.id) - number(b.id));
 }
 
 // A card's file starts with its id; the rest is its title when created.

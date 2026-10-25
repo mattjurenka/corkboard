@@ -194,6 +194,15 @@ local function notify_page()
   local corkboard = require("corkboard")
   corkboard.notify("corkboard.plan", plan_state())
   if proposal then corkboard.notify("corkboard.plan_diff", diff_state()) end
+  -- For Pepper's band and status line (corkboard.live).
+  require("corkboard.live").set("plan", {
+    date = today(),
+    problem = problem,
+    proposal = proposal ~= nil,
+    blocks = vim.tbl_map(function(b)
+      return { start = b.start, stop = b.stop, title = b.title, kind = b.kind, card = b.card }
+    end, day.blocks),
+  })
 end
 
 -- Text under the HTML --------------------------------------------------------------
@@ -207,7 +216,7 @@ local function render_plan()
   local lines, map = { "Day plan  " .. os.date("%a %d %b"), "" }, {}
   if problem then table.insert(lines, "  " .. problem) end
   if not problem and #day.blocks == 0 and not proposal then
-    table.insert(lines, "  no plan yet: the assistant proposes one (plan_propose), and it shows here")
+    table.insert(lines, "  no plan yet: Pepper proposes one (plan_propose), and it shows here")
   end
   for _, b in ipairs(day.blocks) do
     table.insert(lines, string.format("  %s–%s  %s %-48s %s%s", clock(b.start), clock(b.stop), pin_of(b), b.title,
@@ -311,7 +320,7 @@ end
 -- what to change.
 function M.replan()
   if not proposal then
-    return vim.notify("corkboard: no re-plan is waiting. The assistant proposes them; S on a re-plan says what to change.")
+    return vim.notify("corkboard: no re-plan is waiting. Pepper proposes them; S on a re-plan says what to change.")
   end
   show_buf(M.diff_buffer())
   redraw()
@@ -564,7 +573,7 @@ function M.buffer()
     e = { "edit", "edit the block" },
     p = { "pin", "pin the block" },
     z = { "later", "show what's not today" },
-    c = { "claude", "go to Claude Code, beside the plan" },
+    c = { "claude", "go to Pepper, beside the plan" },
     ["<CR>"] = { "open", "open the block's card" },
     R = { "reset", "read the plan again" },
   })
@@ -607,7 +616,7 @@ end
 function M.ensure()
   if pinned.ensure("corkboard_plan", 1, M.buffer()) then
     M.load()
-    -- The window opens with Claude Code beside the plan, focus on the plan.
+    -- The window opens with Pepper beside the plan, focus on the plan.
     -- CORKBOARD_PLAN_CLAUDE=0 leaves it out (tests).
     if vim.env.CORKBOARD_PLAN_CLAUDE == "0" then return end
     vim.schedule(function()

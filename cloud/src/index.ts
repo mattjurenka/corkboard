@@ -29,10 +29,12 @@ export type Env = {
 };
 
 // What a token carries about its user. Encrypted in KV by the provider. A
-// card token (POST /api/tokens) also carries its grant.
-export type Props = { userId: string; email: string; grant?: Extract<Grant, { kind: "card" }> };
+// card token (POST /api/tokens) or Pepper's (/api/tokens/pepper) also
+// carries its grant.
+export type Props = { userId: string; email: string; grant?: Extract<Grant, { kind: "card" | "pepper" }> };
 
-// Card tokens start with this, so they're told from OAuth tokens at a glance.
+// Card and Pepper tokens start with this, so they're told from OAuth tokens
+// at a glance.
 export const CARD_TOKEN = "cbc_";
 
 // Built on first request, since the resource's URL comes from env.

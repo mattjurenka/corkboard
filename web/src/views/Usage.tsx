@@ -2,6 +2,7 @@
 // selection (corkboard.usage); a click on a session calls back into it.
 
 import { useEffect, useRef, useState } from "react";
+import { Spinner } from "@/components/Spinner";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -35,6 +36,8 @@ type UsageState = {
   periods?: { key: string; label: string }[];
   sort: string;
   total?: number;
+  // Neovim is still reading the session logs for the first time.
+  loading?: boolean;
   // What the agents corkboard started cost, per card and per label
   // (corkboard.usage's by_card), all time.
   cards?: { id: string; title: string; cost?: number; tokens: number; sessions: number }[];
@@ -95,7 +98,8 @@ export function Usage({ state, win, focused, nvim }: ViewProps<UsageState>) {
                 </article>
               );
             })}
-            {!n && (
+            {!n && state.loading && <Spinner className="flex-1" />}
+            {!n && !state.loading && (
               <div className="px-ch text-muted-foreground">
                 {state.period === "all" ? "No Claude Code sessions in this project yet." : "No sessions in this period."}
               </div>

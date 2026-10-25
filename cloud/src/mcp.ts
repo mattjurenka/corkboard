@@ -12,16 +12,19 @@
 //              /api/tokens): its board, and only its own card to change
 //   owner,     OAuth: every board, named by each tool's board argument
 //   assistant
+//   pepper     a token corkboard made for Pepper's session (POST
+//              /api/tokens/pepper): what assistant sees, and the goals too
 
 import type { Result } from "./board";
-import { AGENT_STATES, type Card, type Fields, type LogEntry, STATUSES, waitingOn } from "./cards";
+import { AGENT_STATES, type Card, type Fields, type LogEntry, PRIORITIES, STATUSES, waitingOn } from "./cards";
 import type { Env } from "./index";
 import { Invalid } from "./cards";
-import { NOTE_KINDS, OWNER_ONLY_NOTES, date, note, noteId, projects, proposal, slug, today } from "./plans";
+import { NOTE_KINDS, OWNER_ONLY_NOTES, PEPPER_ONLY_KINDS, date, note, noteId, projects, proposal, slug, today } from "./plans";
 import type { User } from "./user";
 
 export type Grant =
   | { kind: "card"; board: string; card: string; agent: string }
+  | { kind: "pepper"; agent: string }
   | { kind: "owner" | "assistant"; agent: string };
 
 // The board's methods as this file calls them. Typed by hand: through
@@ -32,6 +35,7 @@ type Stub = {
   create(f: Fields): Promise<Result<Card>>;
   update(id: string, f: Fields, version: number): Promise<Result<Card>>;
   appendLog(id: string, who: string, note: string): Promise<Result<LogEntry>>;
+  touch(id: string, agent: string): Promise<Result<{ until: number } | null>>;
 };
 
 class ToolError extends Error {}
@@ -42,7 +46,7 @@ function unwrap<T>(r: Result<T>): T {
 }
 
 type Draft = Card & { logs: string[] };
-const FIELDS = ["title", "status", "agent", "agent_state", "attention", "ordinal", "labels", "dependencies", "description", "extra"] as const;
+const FIELDS = ["title", "status", "agent", "agent_state", "attention", "priority", "ordinal", "labels", "dependencies", "description", "extra"] as const;
 
 // Read, change and write a card: fn changes a draft and queues log entries
 // on it. Written with the version it read; if someone wrote the card since,
@@ -82,6 +86,7 @@ function summary(c: Card, cards: Card[]) {
     agent: c.agent ?? "",
     agent_state: c.agent_state ?? "",
     attention: c.attention ?? "",
+    priority: c.priority ?? "",
     ordinal: c.ordinal ?? "",
     labels: c.labels,
     dependencies: c.dependencies,
@@ -112,6 +117,13 @@ const id = str("Card id, e.g. TASK-4");
 const strings = (description: string) => ({ type: "array", items: { type: "string" }, description });
 const labels = strings("Labels, replacing the card's");
 const dependencies = strings("Ids of cards this one waits on, e.g. TASK-4; replaces the card's");
+const priority = { type: "string", enum: [...PRIORITIES, ""], description: "high, medium or low; empty clears it, which counts as medium" };
+// A priority from a tool call: one of PRIORITIES, or null for empty.
+function priorityOf(v: unknown) {
+  if (v === "" || v === null) return null;
+  if (!PRIORITIES.includes(v as (typeof PRIORITIES)[number])) throw new ToolError(`priority must be one of ${PRIORITIES.join(", ")}`);
+  return v as (typeof PRIORITIES)[number];
+}
 const cleanList = (v: unknown) => (Array.isArray(v) ? v.map((s) => String(s).trim()).filter(Boolean) : []);
 const oneLine = (s: unknown) => String(s).replace(/\n/g, " ").trim();
 
@@ -155,7 +167,7 @@ const brief = async (c: Call, card: Card) => summary(card, await c.cards());
 
 const TOOLS: Record<string, Tool> = {
   list_cards: {
-    description: "List cards (without their bodies), ordered by ordinal then id. Filters are optional and combine.",
+    description: "List cards (without their bodies), ordered by priority (high first; none is medium), then ordinal, then id. Filters are optional and combine.",
     properties: {
       status: { type: "string", enum: STATUSES },
       agent_state: { type: "string", enum: AGENT_STATES },
@@ -273,11 +285,12 @@ const TOOLS: Record<string, Tool> = {
   },
   update_card: {
     description:
-      "Change a card's title, status, ordinal, labels, dependencies or agent_state. Only the agent holding a card may change its agent_state.",
+      "Change a card's title, status, priority, ordinal, labels, dependencies or agent_state. Only the agent holding a card may change its agent_state.",
     properties: {
       id,
       title: str("New title"),
       status: { type: "string", enum: STATUSES },
+      priority,
       ordinal: { type: "number", description: "Lower sorts first within a column" },
       labels,
       dependencies,
@@ -296,6 +309,7 @@ const TOOLS: Record<string, Tool> = {
           }
           if (a.title !== undefined) x.title = oneLine(a.title);
           if (a.status !== undefined) x.status = a.status;
+          if (a.priority !== undefined) x.priority = priorityOf(a.priority);
           if (a.ordinal !== undefined) {
             if (typeof a.ordinal !== "number" || !Number.isFinite(a.ordinal)) throw new ToolError("ordinal must be a number");
             x.ordinal = a.ordinal;
@@ -322,9 +336,11 @@ const TOOLS: Record<string, Tool> = {
       title: str("One line"),
       description: str("What needs doing and why, markdown"),
       status: { type: "string", enum: STATUSES },
+      priority,
       labels,
       dependencies,
       parent: str("Id of the card this came out of; both cards get a log entry linking them"),
+      attention: str("What you're asking the user about this card, one line; corkboard notifies them. Not for card agents"),
     },
     required: ["title"],
     card: "any",
@@ -332,6 +348,10 @@ const TOOLS: Record<string, Tool> = {
       const parent = a.parent ? String(a.parent).toUpperCase() : undefined;
       if (parent && c.grant.kind === "card" && parent !== c.grant.card)
         throw new ToolError(`you can only make follow-ups of your own card, ${c.grant.card}`);
+      // A card agent asks about its own card (block, request_user_action);
+      // this is for Pepper and other OAuth clients, which hold no card.
+      if (a.attention !== undefined && c.grant.kind === "card") throw new ToolError("ask about your own card with request_user_action");
+      const attention = typeof a.attention === "string" ? oneLine(a.attention) : "";
       // Checked first, so a bad parent leaves no card behind.
       if (parent) unwrap(await c.board.get(parent));
       if (a.status !== undefined && !STATUSES.includes(a.status)) throw new ToolError(`status must be one of ${STATUSES.join(", ")}`);
@@ -342,8 +362,10 @@ const TOOLS: Record<string, Tool> = {
           title,
           description: typeof a.description === "string" ? a.description.trim() : "",
           status: a.status ?? "backlog",
+          priority: a.priority === undefined ? null : priorityOf(a.priority),
           labels: cleanList(a.labels),
           dependencies: cleanList(a.dependencies).map((d) => d.toUpperCase()),
+          ...(attention ? { attention: attention.length > 200 ? attention.slice(0, 199) + "…" : attention } : {}),
         }),
       );
       if (!parent) return brief(c, card);
@@ -365,9 +387,9 @@ If you need a human decision, call block with your question and stop. If you nee
 (log in, approve, test on a device), call request_user_action; both notify them on their desktop. When done, call submit_for_review.
 Put follow-up work you discover in new cards with create_card (parent: the card you are on).`;
 
-// The user's own tools, for OAuth clients only: notes (the assistant's
-// memory) and the day plan. There's no tool to accept a plan; only the user
-// does that, in corkboard.
+// The user's own tools, for OAuth clients and Pepper, not card agents: notes
+// (the assistant's memory; the goals are Pepper's alone) and the day plan.
+// There's no tool to accept a plan; only the user does that, in corkboard.
 
 type UserCall = { users: DurableObjectStub<User>; grant: Grant; timeZone: string };
 type UserTool = { description: string; properties?: Record<string, object>; required?: string[]; run: (a: any, c: UserCall) => Promise<unknown> };
@@ -401,18 +423,37 @@ function writable(id: string, grant: Grant) {
   if (OWNER_ONLY_NOTES.has(id) && grant.kind !== "owner") throw new ToolError(`only the user writes the ${id} note`);
 }
 
+// The note kinds a grant can't see (the goals, to all but Pepper): to it,
+// those notes don't exist.
+const hidden = (grant: Grant) => (grant.kind === "pepper" ? [] : PEPPER_ONLY_KINDS);
+const kinds = (grant: Grant) => NOTE_KINDS.filter((k) => !hidden(grant).includes(k));
+
+async function visible(id: string, c: UserCall) {
+  const n = unwrap(await c.users.note(id));
+  if (hidden(c.grant).includes(n.kind)) throw new ToolError(`no note ${id}`);
+  return n;
+}
+
+// Writing a note of a hidden kind, or over one, is refused.
+async function unhidden(id: string, kind: unknown, c: UserCall) {
+  const hide = hidden(c.grant);
+  if (hide.includes(kind as string)) throw new ToolError(`kind must be one of ${kinds(c.grant).join(", ")}`);
+  const was = await c.users.note(id);
+  if (was.ok && hide.includes(was.value.kind)) throw new ToolError(`the id ${id} is taken; choose another`);
+}
+
 const USER_TOOLS: Record<string, UserTool> = {
   notes_search: {
     description:
-      "Search your notes: goals, day records, decisions, projects, people, reviews, memory, drafts. With no query, the newest. Every word must match.",
+      "Search your notes: day records, decisions, projects, people, reviews, memory, drafts, and whatever else kind lists. With no query, the newest. Every word must match.",
     properties: { query: str("Words to find"), kind: { type: "string", enum: NOTE_KINDS }, limit: { type: "integer", description: "At most this many (default 20)" } },
-    run: async (a, c) => c.users.notes(a.query ? String(a.query) : undefined, a.kind, Math.min(Number(a.limit) || 20, 100)),
+    run: async (a, c) => c.users.notes(a.query ? String(a.query) : undefined, a.kind, Math.min(Number(a.limit) || 20, 100), hidden(c.grant)),
   },
   note_read: {
     description: "Read a note.",
     properties: { id: str("The note's id") },
     required: ["id"],
-    run: async (a, c) => unwrap(await c.users.note(noteId(String(a.id)))),
+    run: async (a, c) => visible(noteId(String(a.id)), c),
   },
   note_write: {
     description: "Write a note, replacing it if it exists. Without an id, one is made from the title. Returns the note, with its id.",
@@ -426,6 +467,7 @@ const USER_TOOLS: Record<string, UserTool> = {
     run: async (a, c) => {
       const id = noteId(a.id ? String(a.id) : slug(String(a.title ?? "")));
       writable(id, c.grant);
+      await unhidden(id, a.kind, c);
       return c.users.putNote(id, note(a));
     },
   },
@@ -436,6 +478,7 @@ const USER_TOOLS: Record<string, UserTool> = {
     run: async (a, c) => {
       const id = noteId(String(a.id));
       writable(id, c.grant);
+      await visible(id, c);
       if (typeof a.text !== "string" || !a.text.trim()) throw new ToolError("say what to add");
       return unwrap(await c.users.appendNote(id, c.grant.agent, a.text));
     },
@@ -471,8 +514,11 @@ const USER_TOOLS: Record<string, UserTool> = {
 };
 
 // What a grant sees: a card token its board's tools, with no board argument;
-// an OAuth client every tool with one, list_boards, and the user's tools.
+// an OAuth client or Pepper every tool with one, list_boards, and the user's
+// tools, whose note kinds are only those it can see.
 function toolsFor(grant: Grant) {
+  const ownKinds = (properties: Record<string, object>) =>
+    Object.fromEntries(Object.entries(properties).map(([k, p]) => [k, "enum" in p && p.enum === NOTE_KINDS ? { ...p, enum: kinds(grant) } : p]));
   const tools = Object.entries(TOOLS)
     .filter(([, t]) => grant.kind !== "card" || t.card)
     .map(([name, t]) => {
@@ -487,7 +533,7 @@ function toolsFor(grant: Grant) {
       inputSchema: { type: "object", properties: {}, required: [] },
     });
     for (const [name, t] of Object.entries(USER_TOOLS))
-      tools.push({ name, description: t.description, inputSchema: { type: "object", properties: t.properties ?? {}, required: t.required ?? [] } });
+      tools.push({ name, description: t.description, inputSchema: { type: "object", properties: ownKinds(t.properties ?? {}), required: t.required ?? [] } });
   }
   return tools;
 }
@@ -510,6 +556,11 @@ async function callTool(env: Env, user: string, grant: Grant, name: string, args
   if (args.id !== undefined) args.id = String(args.id).toUpperCase();
   if (grant.kind === "card" && tool.card === "own" && args.id !== grant.card)
     throw new ToolError(`this session works on ${grant.card}; it can read other cards but not change them`);
+  // Any call from the agent holding a card keeps its claim (board.ts's
+  // leases): a card agent's for its card, anyone else's for the card named.
+  // A card that's gone or not theirs is the tool's to report, not this.
+  const heard = grant.kind === "card" ? grant.card : args.id;
+  if (typeof heard === "string") await board.touch(heard, grant.agent);
   if (!HOLD_ALLOWS.has(name) && typeof args.id === "string") {
     const { extra } = unwrap(await board.get(args.id));
     if (extra.budget_hold)

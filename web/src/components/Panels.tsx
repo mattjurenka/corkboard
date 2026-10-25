@@ -13,8 +13,10 @@
 // per buffer, since two windows can show two different images.
 
 import { useEffect, useState } from "react";
+import { cn } from "@/lib/utils";
+import { Spinner } from "@/components/Spinner";
 import { keepFocus, useNvim } from "@/nvim/context";
-import { type Rect, useStore } from "@/store";
+import { type Layout, type Rect, useStore } from "@/store";
 import { VIEWS } from "@/views";
 
 export function Panels() {
@@ -35,7 +37,13 @@ export function Panels() {
             // Another kind of view in the window (an image, then a PDF) is a
             // new panel.
             key={`${w.win}:${w.view}`}
-            onMouseDown={keepFocus}
+            // A click in a panel is a click in its window, as on the grid:
+            // the window is focused, and a float that closes on losing
+            // focus (a card over the board) goes.
+            onMouseDown={(e) => {
+              keepFocus(e);
+              if (!w.focused) nvim.lua("local w = ... if vim.api.nvim_win_is_valid(w) then vim.api.nvim_set_current_win(w) end", w.win);
+            }}
             className="absolute overflow-hidden bg-background select-none"
             style={{
               ...box(w, cellW, cellH),
@@ -44,16 +52,46 @@ export function Panels() {
               clipPath: w.float ? undefined : holes(w, layout.floats, cellW, cellH) || undefined,
             }}
           >
-            {View && state && <View state={state} win={w.win} focused={!!w.focused} nvim={nvim} />}
+            {w.border ? (
+              // A bordered float: its border a line through the middle of
+              // the border cells, as a box-drawing one would be, with the
+              // title on it, and the view in the cells inside.
+              <div className="float-view absolute inset-0">
+                <div
+                  className={cn("absolute border", w.focused ? "border-focus" : "border-border")}
+                  style={{ inset: `${cellH / 2}px ${cellW / 2}px` }}
+                />
+                {w.title && (
+                  <div className="absolute inset-x-0 top-0 flex justify-center">
+                    <span className="bg-background px-ch text-muted-foreground">{w.title}</span>
+                  </div>
+                )}
+                <div className="absolute" style={{ inset: `${cellH}px ${cellW}px` }}>
+                  {View && state ? <View state={state} win={w.win} focused={!!w.focused} nvim={nvim} /> : <Spinner className="h-full" />}
+                </div>
+              </div>
+            ) : (
+              View && state ? <View state={state} win={w.win} focused={!!w.focused} nvim={nvim} /> : <Spinner className="h-full" />
+            )}
           </div>
         );
       })}
-      {/* A 1px outline around the focused window and its status line, absent
-          when the tab is not split. Like the sidebar's around the current
-          tab, only while the keys go to Neovim. Above the panels; clicks
-          pass through. */}
+      {/* A terminal put back that has yet to draw (a Claude Code session
+          starting). Clicks pass through to it. */}
+      {layout.wins
+        ?.filter((w) => w.loading)
+        .map((w) => (
+          <Spinner
+            key={`loading:${w.row}:${w.col}`}
+            className="pointer-events-none absolute z-1 bg-background"
+            style={{ ...box(w, cellW, cellH), clipPath: holes(w, layout.floats, cellW, cellH) || undefined }}
+          />
+        ))}
+      {/* A 1px outline around the focused window and its status line. Like
+          the sidebar's around the current tab, only while the keys go to
+          Neovim. Above the panels; clicks pass through. */}
       {layout.focus && focused && (
-        <div className="pointer-events-none absolute z-2 border border-primary" style={box(layout.focus, cellW, cellH)} />
+        <div className="pointer-events-none absolute z-2 border border-focus" style={outline(layout.focus, cellW, cellH)} />
       )}
     </>
   );
@@ -81,6 +119,17 @@ export const box = (r: Rect, cellW: number, cellH: number) => ({
   width: r.width * cellW,
   height: r.height * cellH,
 });
+
+// The focused window's outline. On a side with a window separator it runs
+// over the separator's line, the pixel grid.js draws it on, rather than
+// along the window's edge half a cell short of it.
+function outline(focus: NonNullable<Layout["focus"]>, cellW: number, cellH: number) {
+  const r = box(focus, cellW, cellH);
+  const half = Math.floor(cellW / 2);
+  const left = focus.left ? r.left - cellW + half : r.left;
+  const right = focus.right ? r.left + r.width + half + 1 : r.left + r.width;
+  return { ...r, left, width: right - left };
+}
 
 // A clip-path that cuts the floats over this rectangle out of it. Clipped
 // areas also drop out of hit testing, so clicks there reach the canvas.

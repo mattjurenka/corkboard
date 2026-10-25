@@ -133,6 +133,7 @@ local function state()
         id = c.id,
         title = c.title,
         status = c.status,
+        priority = c.priority,
         agent = c.agent,
         agent_state = c.agent_state,
         attention = c.attention,
@@ -144,12 +145,19 @@ local function state()
   }
 end
 
+-- The cards agents are on, beside the Claude Code sessions
+-- (corkboard.claude.cards).
+local AT_WORK = { queued = true, working = true, blocked = true, ["needs-review"] = true }
+
 local function push_state()
   local s = state()
   local key = vim.json.encode(s)
   if key == last_state then return end
   last_state = key
   require("corkboard").notify("corkboard.board", s)
+  require("corkboard.claude.cards").set(vim.tbl_map(function(c)
+    return { id = c.id, title = c.title, priority = c.priority, agent_state = c.agent_state, attention = c.attention, session = c.session }
+  end, vim.tbl_filter(function(c) return AT_WORK[c.agent_state] end, s.cards)))
 end
 
 local function render_text()
@@ -166,7 +174,8 @@ local function render_text()
         who = "  [" .. (c.agent or "agent") .. (c.agent_state and (" · " .. c.agent_state) or "")
           .. (session and (" · session " .. session) or "") .. "]"
       end
-      table.insert(lines, "  " .. c.title .. who .. (c.attention and ("  ! " .. c.attention) or ""))
+      local priority = c.priority and ("(" .. c.priority .. ") ") or ""
+      table.insert(lines, "  " .. priority .. c.title .. who .. (c.attention and ("  ! " .. c.attention) or ""))
       map[#lines] = c.id
       local waiting = M.waiting_on(c)
       if waiting then table.insert(lines, "  └─ waits on " .. waiting_text(waiting)) end
@@ -214,11 +223,15 @@ end
 
 -- The card float ----------------------------------------------------------------
 --
--- A card opens in a float over the board, reused for the next one. It edits
--- the title (the first line, as a heading) and the description (the rest);
--- :w writes them into the card file. q saves and closes it.
+-- A card opens in a float over the board, reused for the next one. It opens
+-- rendered: a markdown view (b:corkboard_view "markdown") the browser draws
+-- over the same text, kept up with the card file. e edits it in place (or
+-- straight from the board): the title is the first line, as a heading, and
+-- the description the rest; :w writes them into the card file. q closes it,
+-- saving edits.
 
 local card_win
+local rendered -- the rendered float: { buf, id }
 
 local function save_card(id, lines)
   local title = vim.trim((lines[1] or ""):gsub("^#+%s*", ""))
@@ -229,16 +242,19 @@ local function save_card(id, lines)
   M.push()
 end
 
+local function card_lines(card)
+  local lines = { "# " .. card.title, "" }
+  vim.list_extend(lines, vim.split(cards.section(card, "DESCRIPTION"), "\n", { plain = true }))
+  return lines
+end
+
 local function card_buffer(id)
-  local card = cards.get(id)
   local b = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_name(b, "agent://card/" .. id)
   vim.bo[b].buftype = "acwrite"
   vim.bo[b].bufhidden = "wipe"
   vim.bo[b].filetype = "markdown"
-  local lines = { "# " .. card.title, "" }
-  vim.list_extend(lines, vim.split(cards.section(card, "DESCRIPTION"), "\n", { plain = true }))
-  vim.api.nvim_buf_set_lines(b, 0, -1, false, lines)
+  vim.api.nvim_buf_set_lines(b, 0, -1, false, card_lines(cards.get(id)))
   vim.bo[b].modified = false
   vim.api.nvim_create_autocmd("BufWriteCmd", {
     buffer = b,
@@ -248,6 +264,38 @@ local function card_buffer(id)
     end,
   })
   vim.keymap.set("n", "q", "<Cmd>update | close<CR>", { buffer = b, nowait = true, desc = "board: save and close card" })
+  return b
+end
+
+-- The rendered card, as the card file now has it.
+local function push_rendered()
+  if not (rendered and vim.api.nvim_buf_is_valid(rendered.buf)) then return end
+  local card = cards.get(rendered.id)
+  if not card then return end
+  local lines = card_lines(card)
+  vim.bo[rendered.buf].modifiable = true
+  vim.api.nvim_buf_set_lines(rendered.buf, 0, -1, false, lines)
+  vim.bo[rendered.buf].modifiable = false
+  -- A cloud card has no file; its links and images resolve from the project.
+  local path = card.path or vim.fs.joinpath(vim.fn.getcwd(), rendered.id .. ".md")
+  require("corkboard").notify("corkboard.view", rendered.buf, { path = path, text = table.concat(lines, "\n") })
+end
+
+local function rendered_buffer(id)
+  local b = vim.api.nvim_create_buf(false, true)
+  vim.bo[b].bufhidden = "wipe"
+  vim.b[b].corkboard_view = "markdown"
+  rendered = { buf = b, id = id }
+  vim.keymap.set("n", "q", "<Cmd>close<CR>", { buffer = b, nowait = true, desc = "board: close card" })
+  vim.keymap.set("n", "e", function() M.open_card(id, { edit = true }) end, { buffer = b, nowait = true, desc = "board: edit card" })
+  vim.api.nvim_create_autocmd("BufWipeout", {
+    buffer = b,
+    once = true,
+    callback = function()
+      if rendered and rendered.buf == b then rendered = nil end
+    end,
+  })
+  push_rendered()
   return b
 end
 
@@ -264,10 +312,11 @@ local function card_float()
   }
 end
 
-function M.open_card(id)
+-- Rendered to read; opts.edit to edit.
+function M.open_card(id, opts)
   -- Opening a card is seeing what its agent asked for.
   if cards.get(id).attention then M.set(id, { attention = "" }) end
-  local b = card_buffer(id)
+  local b = (opts and opts.edit and card_buffer or rendered_buffer)(id)
   local title = { title = " " .. id .. " ", title_pos = "center" }
 
   if card_win and vim.api.nvim_win_is_valid(card_win) then
@@ -281,11 +330,27 @@ function M.open_card(id)
     vim.wo[card_win].wrap = true
     vim.wo[card_win].linebreak = true
     local win = card_win
+    local group = vim.api.nvim_create_augroup("corkboard.board.card" .. win, {})
     vim.api.nvim_create_autocmd("WinClosed", {
+      group = group,
       pattern = tostring(win),
       once = true,
       callback = function()
         if card_win == win then card_win = nil end
+        vim.api.nvim_del_augroup_by_id(group)
+      end,
+    })
+    -- Focus going elsewhere (a click off it, another window) closes it,
+    -- saving edits.
+    vim.api.nvim_create_autocmd("WinLeave", {
+      group = group,
+      callback = function()
+        if vim.api.nvim_get_current_win() ~= win then return end
+        vim.schedule(function()
+          if not vim.api.nvim_win_is_valid(win) or vim.api.nvim_get_current_win() == win then return end
+          vim.api.nvim_win_call(win, function() vim.cmd("silent! update") end)
+          pcall(vim.api.nvim_win_close, win, true)
+        end)
       end,
     })
   end
@@ -316,6 +381,14 @@ local actions = {
   assign = function(id)
     if id then M.assign(id) end
   end,
+  -- None clears it, which counts as medium.
+  priority = function(id)
+    if not id then return end
+    local choices = vim.list_extend(vim.deepcopy(cards.priorities), { "none" })
+    vim.ui.select(choices, { prompt = "Priority of " .. id .. ": " }, function(choice)
+      if choice then M.set(id, { priority = choice == "none" and "" or choice }) end
+    end)
+  end,
   session = function(id)
     local b = id and require("corkboard.agents").session(id)
     if b then return require("corkboard.terminal").focus(b) end
@@ -329,6 +402,9 @@ local actions = {
   end,
   open = function(id)
     if id then M.open_card(id) end
+  end,
+  edit = function(id)
+    if id then M.open_card(id, { edit = true }) end
   end,
   refresh = function() M.push() end,
 }
@@ -374,10 +450,12 @@ local function buffer()
     L = { act("right"), "move card right" },
     o = { act("new"), "new card" },
     a = { act("assign"), "hand to agent" },
+    p = { act("priority"), "set the card's priority" },
     s = { act("session"), "go to the agent's session" },
     v = { act("review"), "review the card's work" },
     r = { act("answer"), "go to what the agent is asking" },
     ["<CR>"] = { act("open"), "open card" },
+    e = { act("edit"), "edit card" },
     R = { act("refresh"), "refresh" },
   }, function() return line_card end, function(id)
     if id == selected then return end
@@ -437,6 +515,7 @@ function M.push()
   costs = require("corkboard.usage").card_costs()
   render_text()
   push_state()
+  push_rendered()
   require("corkboard.agents").schedule(shown)
   require("corkboard.budget").check(shown, costs)
 end
@@ -452,6 +531,7 @@ end
 function M.push_all()
   last_state = nil
   M.push()
+  push_rendered()
 end
 
 return M

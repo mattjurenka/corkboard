@@ -138,6 +138,7 @@ end
 local buf
 local sessions = {}
 local summaries = {} -- session id -> summary, rebuilt when its logs change
+local warmed = {} -- cwd -> true once its logs were read, false while reading (warm)
 local cards, labels = {}, {} -- by_card's, as of the last push
 local costs_seen -- card_costs as of the last push, to notice a change
 local line_session = {} -- line number -> session id
@@ -250,6 +251,7 @@ local function state()
   for _, p in ipairs(PERIODS) do table.insert(periods, { key = p.key, label = p.label }) end
   return {
     root = vim.fn.getcwd(), selected = selected, sessions = list,
+    loading = warmed[vim.fn.getcwd()] ~= true or nil,
     period = period, periods = periods, sort = sort, total = period_total(),
     cards = cards, labels = labels,
   }
@@ -271,8 +273,12 @@ local function render_text()
     map[#lines] = s.id
   end
   if #sessions == 0 then
-    table.insert(lines, "  — no Claude Code sessions in " .. project_dir(vim.fn.getcwd())
-      .. (period ~= "all" and (" in the last " .. period_of(period).label) or ""))
+    if warmed[vim.fn.getcwd()] ~= true then
+      table.insert(lines, "  reading session logs…")
+    else
+      table.insert(lines, "  — no Claude Code sessions in " .. project_dir(vim.fn.getcwd())
+        .. (period ~= "all" and (" in the last " .. period_of(period).label) or ""))
+    end
   end
   if #cards > 0 then
     vim.list_extend(lines, { "", "BY CARD (agents corkboard started; all time)" })
@@ -336,9 +342,47 @@ local function render_text()
   pinned.follow(buf, line_session, selected)
 end
 
+-- The first read of a project's logs parses every one of them, most of a
+-- second for a busy project. It happens a log per tick, so Neovim stays
+-- responsive; until it's done the view says it is reading, and push()
+-- leaves the logs alone.
+local function warm(cwd)
+  warmed[cwd] = false
+  local paths = {}
+  local dir = project_dir(cwd)
+  if vim.fn.isdirectory(dir) == 1 then
+    for name, kind in vim.fs.dir(dir, { depth = 3 }) do
+      if kind == "file" and name:match("%.jsonl$") then table.insert(paths, vim.fs.joinpath(dir, name)) end
+    end
+  end
+  for _, list in pairs(require("corkboard.agents").card_sessions()) do
+    for _, s in ipairs(list) do
+      if s.transcript then table.insert(paths, s.transcript) end
+    end
+  end
+  local i = 0
+  local function step()
+    i = i + 1
+    if paths[i] then
+      pcall(transcript.read, paths[i], cwd)
+      return vim.defer_fn(step, 0)
+    end
+    warmed[cwd] = true
+    if vim.fn.getcwd() == cwd then M.push(true) end
+  end
+  vim.defer_fn(step, 0)
+end
+
 -- Re-read the logs; redraw and push when anything changed (or force).
 function M.push(force)
   local cwd = vim.fn.getcwd()
+  if not warmed[cwd] then
+    if warmed[cwd] == nil then warm(cwd) end
+    sessions, cards, labels, M.cwd = {}, {}, {}, nil
+    render_text()
+    push_state()
+    return
+  end
   local p = period_of(period)
   local changed
   sessions, changed = scan(cwd, p.secs and os.time() - p.secs)

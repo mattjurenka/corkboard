@@ -11,7 +11,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { AGENT_STATES, STATUSES, parse, split } from "../mcp/cards";
+import { AGENT_STATES, PRIORITIES, STATUSES, parse, split } from "../mcp/cards";
 import { CLOUD, token } from "./cloud";
 
 const DATA = process.env.XDG_DATA_HOME ?? join(homedir(), ".local/share");
@@ -27,7 +27,7 @@ function roots(): Map<string, string> {
   return new Map(known.map((p) => [pathKey(p), p]));
 }
 
-const KNOWN = new Set(["id", "title", "status", "assignee", "created_date", "updated_date", "labels", "dependencies", "ordinal", "agent_state", "attention", "path", "body", "agent"]);
+const KNOWN = new Set(["id", "title", "status", "assignee", "created_date", "updated_date", "labels", "dependencies", "priority", "ordinal", "agent_state", "attention", "path", "body", "agent"]);
 
 // 'yyyy-mm-dd hh:mm', local time, as the files write it, to ISO UTC.
 function iso(local: string | undefined, fallback: string): string {
@@ -68,6 +68,7 @@ function cardsOf(dir: string) {
       agent: c.agent || null,
       agent_state: AGENT_STATES.includes(c.agent_state) ? c.agent_state : null,
       attention: c.attention || null,
+      priority: PRIORITIES.includes(c.priority) ? c.priority : null,
       ordinal,
       labels: c.labels ?? [],
       dependencies: (c.dependencies ?? []).map((d: string) => d.toUpperCase()),
@@ -123,7 +124,7 @@ for (const key of keys) {
   // Read back and compare, so a lost field shows here and not weeks later.
   const back: any[] = await api("GET", `/${key}/cards?log=1`);
   const byId = new Map(back.map((c) => [c.id, c]));
-  const fields = ["title", "status", "agent", "agent_state", "attention", "ordinal", "labels", "dependencies", "description", "extra", "created", "updated"] as const;
+  const fields = ["title", "status", "agent", "agent_state", "attention", "priority", "ordinal", "labels", "dependencies", "description", "extra", "created", "updated"] as const;
   const wrong = cards.flatMap((c) => {
     const b = byId.get(c.id);
     if (!b) return [`${c.id} missing`];

@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS cards (
   agent TEXT,
   agent_state TEXT,
   attention TEXT,
+  priority TEXT,
   ordinal REAL,
   labels TEXT NOT NULL DEFAULT '[]',
   dependencies TEXT NOT NULL DEFAULT '[]',
@@ -43,12 +44,25 @@ CREATE TABLE IF NOT EXISTS log (
   note TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS log_card ON log(card_id, seq);
+CREATE TABLE IF NOT EXISTS leases (
+  card_id TEXT PRIMARY KEY REFERENCES cards(id),
+  agent TEXT NOT NULL,
+  until INTEGER NOT NULL,
+  lapsed INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS meta (
   one INTEGER PRIMARY KEY CHECK (one = 1),
   name TEXT NOT NULL,
   root TEXT
 );
 `;
+
+// A working card's claim lasts this long past the last word from its agent:
+// a board call, or corkboard's heartbeat while its session runs. Then the
+// board's alarm marks the card blocked for the user, since the agent likely
+// died. until is in milliseconds; lapsed: the alarm did that, and the card
+// hasn't changed hands or state since, so hearing from the agent undoes it.
+export const LEASE_MS = 15 * 60_000;
 
 // What a board is: a name, and the local project path corkboard maps it to.
 export type BoardInfo = { key: string; name: string; root: string | null };
@@ -64,6 +78,7 @@ function card(row: Row): Card {
     agent: (row.agent as string | null) ?? null,
     agent_state: (row.agent_state as Card["agent_state"]) ?? null,
     attention: (row.attention as string | null) ?? null,
+    priority: (row.priority as Card["priority"]) ?? null,
     ordinal: (row.ordinal as number | null) ?? null,
     labels: JSON.parse(row.labels as string),
     dependencies: JSON.parse(row.dependencies as string),
@@ -86,6 +101,9 @@ export class Board extends DurableObject {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     this.sql.exec(SCHEMA);
+    // Boards made before cards had a priority.
+    const columns = this.sql.exec("SELECT name FROM pragma_table_info('cards')").toArray();
+    if (!columns.some((c) => c.name === "priority")) this.sql.exec("ALTER TABLE cards ADD COLUMN priority TEXT");
   }
 
   // A board exists once it has been named (PUT /api/boards/:key); until then
@@ -128,13 +146,19 @@ export class Board extends DurableObject {
     }
   }
 
-  // In board order: by ordinal, unordered cards last, then by number. With
+  // In board order: high priority first and low last (none is medium), then
+  // by ordinal, unordered cards last, then by number. With
   // log, each card carries its log too: a whole copy of the board at once,
   // which is what a live copy starts from.
   list(log = false): Result<(Card & { waiting_on: string[]; log?: LogEntry[] })[]> {
     if (!this.exists()) return NO_BOARD;
+    // For cards that were working before boards had leases, which no write
+    // has armed the alarm for yet.
+    this.arm();
     const cards = this.sql
-      .exec("SELECT * FROM cards ORDER BY ordinal IS NULL, ordinal, n")
+      .exec(
+        "SELECT * FROM cards ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END, ordinal IS NULL, ordinal, n",
+      )
       .toArray()
       .map(card);
     return ok(cards.map((c) => ({ ...c, waiting_on: waitingOn(c, cards), ...(log ? { log: this.logOf(c.id) } : {}) })));
@@ -193,6 +217,7 @@ export class Board extends DurableObject {
     }
     const all = this.list(true);
     if (all.ok) this.broadcast({ type: "snapshot", cards: all.value });
+    this.arm();
     return ok(cards.length);
   }
 
@@ -212,6 +237,7 @@ export class Board extends DurableObject {
     );
     const made = this.find(id)!;
     this.broadcast({ type: "card", card: made });
+    this.arm();
     return ok(made);
   }
 
@@ -222,17 +248,96 @@ export class Board extends DurableObject {
     const current = this.find(id);
     if (!current) return fail(404, `no card ${id}`);
     if (current.version !== version) return fail(409, `card ${id} is at version ${current.version}, not ${version}`, current);
+    if (!Object.keys(f).length) return fail(400, "nothing to change");
+    return ok(this.write(id, f));
+  }
+
+  private write(id: string, f: Fields): Card {
     const keys = Object.keys(f);
-    if (!keys.length) return fail(400, "nothing to change");
     this.sql.exec(
       `UPDATE cards SET ${keys.map((k) => `${k} = ?`).join(", ")}, updated = ?, version = version + 1 WHERE id = ?`,
       ...keys.map((k) => column(k, f[k as keyof Fields])),
       now(),
       id,
     );
+    if ("agent" in f || "agent_state" in f) this.sql.exec("UPDATE leases SET lapsed = 0 WHERE card_id = ?", id);
     const changed = this.find(id)!;
     this.broadcast({ type: "card", card: changed });
-    return ok(changed);
+    this.arm();
+    return changed;
+  }
+
+  // Leases ----------------------------------------------------------------------
+
+  // Cards whose claims can lapse: working, held, and not stopped by the
+  // budget guard (which is waiting on the user, as blocked cards are).
+  private working(): Card[] {
+    return this.sql
+      .exec("SELECT * FROM cards WHERE agent_state = 'working' AND agent IS NOT NULL")
+      .toArray()
+      .map(card)
+      .filter((c) => !c.extra.budget_hold);
+  }
+
+  // When a working card's claim lapses: LEASE_MS past the later of its last
+  // change and its agent's last word, so a claim needs no lease row to last.
+  private deadline(c: Card): number {
+    const rows = this.sql.exec("SELECT until FROM leases WHERE card_id = ? AND agent = ?", c.id, c.agent).toArray();
+    return Math.max(Date.parse(c.updated) + LEASE_MS, rows.length ? (rows[0].until as number) : 0);
+  }
+
+  // The alarm goes off at the first deadline; with no working cards, never.
+  private arm() {
+    const deadlines = this.working().map((c) => this.deadline(c));
+    if (deadlines.length) void this.ctx.storage.setAlarm(Math.min(...deadlines));
+    else void this.ctx.storage.deleteAlarm();
+  }
+
+  // The agent holding the card was heard from: its claim holds another
+  // LEASE_MS. A card the alarm marked blocked is working again. null when
+  // agent doesn't hold the card or it isn't one whose claim can lapse.
+  touch(id: string, agent: string): Result<{ until: number } | null> {
+    if (!this.exists()) return NO_BOARD;
+    const c = this.find(id);
+    if (!c) return fail(404, `no card ${id}`);
+    if (c.agent !== agent) return ok(null);
+    const lease = this.sql.exec("SELECT lapsed FROM leases WHERE card_id = ? AND agent = ?", id, agent).toArray()[0];
+    if (c.agent_state === "blocked" && lease?.lapsed) {
+      this.write(id, { agent_state: "working", attention: null });
+      this.appendLog(id, "corkboard", `${agent} is responding again, so it's back to working`);
+    } else if (c.agent_state !== "working") return ok(null);
+    const until = Date.now() + LEASE_MS;
+    this.sql.exec(
+      "INSERT INTO leases (card_id, agent, until) VALUES (?, ?, ?) ON CONFLICT (card_id) DO UPDATE SET agent = excluded.agent, until = excluded.until, lapsed = 0",
+      id,
+      agent,
+      until,
+    );
+    this.arm();
+    return ok({ until });
+  }
+
+  // Each working card past its deadline is blocked, for the user to queue
+  // again or release; its worktree and branch are left as they are.
+  async alarm() {
+    if (!this.exists()) return;
+    const at = Date.now();
+    for (const c of this.working()) {
+      if (this.deadline(c) > at) continue;
+      this.write(c.id, { agent_state: "blocked", attention: `${c.agent} stopped responding; queue it again or release it` });
+      this.sql.exec(
+        "INSERT INTO leases (card_id, agent, until, lapsed) VALUES (?, ?, ?, 1) ON CONFLICT (card_id) DO UPDATE SET agent = excluded.agent, lapsed = 1",
+        c.id,
+        c.agent,
+        at,
+      );
+      this.appendLog(
+        c.id,
+        "corkboard",
+        `nothing from ${c.agent} for ${LEASE_MS / 60_000} minutes, so it's marked blocked: the agent likely stopped. Queue it again to restart it, or release it.`,
+      );
+    }
+    this.arm();
   }
 
   // Appends commute, so a log entry takes no version and doesn't bump it:
@@ -247,6 +352,8 @@ export class Board extends DurableObject {
     this.sql.exec("UPDATE cards SET updated = ? WHERE id = ?", at, id);
     const entry = { seq, at, who, note };
     this.broadcast({ type: "log", id, entry });
+    // A log entry moves the card's deadline.
+    this.arm();
     return ok(entry);
   }
 }

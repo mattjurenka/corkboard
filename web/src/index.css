@@ -17,7 +17,7 @@
   --nv-review: #e0af68;
   --nv-special: #bb9af7;
   --nv-selection: color-mix(in srgb, var(--nv-fg) 20%, var(--nv-bg));
-  --nv-focus: color-mix(in srgb, var(--nv-fg) 18%, var(--nv-bg));
+  --nv-focus: #e0af68;
 
   /* shadcn's tokens, in those colors. */
   --background: var(--nv-bg);
@@ -127,6 +127,12 @@
     max-width: 780px; margin: 0 auto; padding: 16px 0 50vh;
     font: 15px/1.6 system-ui, sans-serif; color: var(--foreground); overflow-wrap: break-word;
   }
+  /* In a float (a card), the editor's face, on its grid. */
+  .float-view .markdown-body { font: var(--font-size)/var(--cell-h) var(--font); padding-top: var(--cell-h); }
+  .float-view .markdown-body :is(h1, h2) { font-size: 1em; font-weight: 700; padding-bottom: 0; }
+  .float-view .markdown-body h1 { color: var(--primary); }
+  .float-view .markdown-body :is(h3, h4, h5, h6) { font-size: 1em; }
+  .float-view .markdown-body pre { font-size: var(--font-size); }
   .markdown-body > div > :first-child { margin-top: 0; }
   .markdown-body :is(h1, h2, h3, h4, h5, h6) { margin: 1.4em 0 .5em; line-height: 1.25; font-weight: 600; }
   .markdown-body h1 { font-size: 1.9em; padding-bottom: .25em; border-bottom: 1px solid var(--border); }

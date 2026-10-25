@@ -4,14 +4,28 @@
 
 import { useSyncExternalStore } from "react";
 import type { Note } from "./attention";
+import { type Skeleton, load as loadSkeleton } from "./skeleton";
 
 export type Ext = { __ext: number; id: number };
 
 // A window that shows a view buffer, or a float, in grid cells
 // (corkboard.layout).
 export type Rect = { row: number; col: number; width: number; height: number };
-export type ViewWin = Rect & { win: number; buf: number; view: string; focused?: boolean; float?: boolean };
-export type Layout = { views: ViewWin[]; floats: Rect[]; focus: Rect | null };
+export type ViewWin = Rect & { win: number; buf: number; view: string; focused?: boolean;
+  float?: boolean;
+  border?: boolean;
+  title?: string;
+};
+// focus's left/right: a window separator on that side (see Panels). wins:
+// every split, loading while its terminal has yet to draw; restored: whether
+// Neovim has put the editor back as it was (corkboard.restore).
+export type Layout = {
+  views: ViewWin[];
+  floats: Rect[];
+  focus: (Rect & { left?: boolean; right?: boolean }) | null;
+  wins?: (Rect & { loading?: boolean })[];
+  restored?: boolean;
+};
 
 // One window of text's scroll position (corkboard.scroll).
 export type Bar = Rect & { win: number; top: number; bottom: number; lines: number };
@@ -42,6 +56,9 @@ export type State = {
   // list was last opened.
   notifications: Note[];
   unread: number;
+  // The tabs and windows as the page last saw them (skeleton.ts), shown
+  // loading until Neovim has put the editor back.
+  skeleton: Skeleton | null;
 };
 
 let state: State = {
@@ -59,6 +76,7 @@ let state: State = {
   status: null,
   notifications: [],
   unread: 0,
+  skeleton: loadSkeleton(),
 };
 
 const listeners = new Set<() => void>();

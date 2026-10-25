@@ -100,6 +100,11 @@ function M.hook(ev)
   local buf = ev.buf
   if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
   local id = vim.b[buf].corkboard_card
+  -- What corkboard.restore resumes; a /clear starts another.
+  if ev.event == "SessionStart" and ev.session_id then
+    vim.b[buf].corkboard_claude_session = ev.session_id
+    vim.b[buf].corkboard_claude_transcript = ev.transcript_path
+  end
   if ev.event == "SessionStart" and id and ev.session_id then remember(id, ev.session_id, ev.transcript_path) end
   local was = live[buf]
   local state = event_state(ev)
@@ -124,6 +129,23 @@ function M.running()
     if M.session(id) then n = n + 1 end
   end
   return n
+end
+
+-- While a card's session runs here, its claim on a cloud board holds: the
+-- Worker blocks a working card it hasn't heard about for 15 minutes, and a
+-- session that sits idle calls the board seldom. Every 5, it's told.
+local HEARTBEAT_MS = 5 * 60 * 1000
+local heartbeat
+
+local function beat()
+  local cards = require("corkboard.cards")
+  if not cards.cloud() then return end
+  for id in pairs(sessions) do
+    if M.session(id) then
+      local found, card = pcall(board().get, id)
+      if found and card.agent then cards.touch(id, card.agent) end
+    end
+  end
 end
 
 -- The card's worktree and branch, made from the main checkout's HEAD the
@@ -190,7 +212,9 @@ local function prompt(card, branch, sent_back)
 end
 
 -- Start an agent on the card now, whatever the limit, or go to its session
--- if one is running. opts.sent_back: see prompt().
+-- if one is running. opts.sent_back: see prompt(); opts.resume: a session
+-- to resume instead of starting one (corkboard.restore); opts.here: in the
+-- current window, not a tab.
 function M.start(id, opts)
   if M.session(id) then return terminal.focus(sessions[id]) end
   local card = board().get(id)
@@ -210,11 +234,17 @@ function M.start(id, opts)
   if config then vim.list_extend(args, { "--mcp-config", config }) end
   vim.list_extend(args, { "--name", id .. " " .. card.title })
   vim.list_extend(args, vim.g.corkboard_agent_args or {})
-  vim.list_extend(args, { "--", prompt(card, branch, opts and opts.sent_back) })
+  if opts and opts.resume then
+    vim.list_extend(args, { "--resume", opts.resume })
+  else
+    vim.list_extend(args, { "--", prompt(card, branch, opts and opts.sent_back) })
+  end
 
   local buf
   buf = require("corkboard.claude").start({
+    kind = "card",
     args = args,
+    here = opts and opts.here,
     cwd = dir,
     -- For the MCP server: who the agent is, and the board, which a worktree
     -- outside the repository couldn't find by itself.
@@ -243,6 +273,10 @@ function M.start(id, opts)
   vim.b[buf].corkboard_card = id
   sessions[id] = buf
   exited[id] = nil
+  if not heartbeat then
+    heartbeat = assert(vim.uv.new_timer())
+    heartbeat:start(HEARTBEAT_MS, HEARTBEAT_MS, vim.schedule_wrap(beat))
+  end
   board().set(id, { agent = card.agent or "claude", worktree = dir or "", branch = branch or "" })
 end
 

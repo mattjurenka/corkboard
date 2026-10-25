@@ -162,6 +162,12 @@ local function preview_buf(src)
   vim.bo[p].modifiable = false
   vim.b[p].corkboard_view = "markdown"
   vim.b[p].corkboard_source = src
+  -- Closed by hand, so it stays closed (see open_preview).
+  vim.keymap.set("n", "<Esc>", function() pcall(vim.api.nvim_win_close, 0, false) end, {
+    buffer = p,
+    nowait = true,
+    desc = "corkboard: close markdown preview",
+  })
 
   local group = vim.api.nvim_create_augroup("corkboard.preview." .. src, {})
   vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "BufWritePost" }, {

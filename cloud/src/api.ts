@@ -10,6 +10,7 @@
 //   GET   /api/boards/:board/cards/:id       one card, with its log
 //   PATCH /api/boards/:board/cards/:id       { version, ...fields }; 409 + the card on a stale version
 //   POST  /api/boards/:board/cards/:id/log   { who, note }
+//   POST  /api/boards/:board/cards/:id/lease { agent }: the agent is alive; { until } or null (board.ts's touch)
 //   POST  /api/boards/:board/import          { cards: [...] } with their ids, times and logs; empty boards only
 //   GET   /api/live                          WebSocket: { type: "plan", plan } on every plan change
 //   GET   /api/notes                         ?q= to search, ?kind=, ?limit=
@@ -20,10 +21,11 @@
 //   POST  /api/plans/:date/discard           { version }
 //   PUT   /api/plans/:date/day               { version, blocks }: the day, edited
 //   POST  /api/tokens                        a card token for an agent: { board, card, agent }
+//   POST  /api/tokens/pepper                 a token for Pepper's session: the goals, besides what assistant sees
 //   POST  /api/tokens/revoke                 { token }
 //
 // All of it needs the owner scope. /mcp (mcp.ts) is behind the same token
-// check, and takes owner and assistant tokens, and card tokens.
+// check, and takes owner and assistant tokens, card tokens and Pepper's.
 
 import { insufficientScope, type OAuthResourceContext } from "@cloudflare/workers-oauth-provider";
 import { Invalid, cardId, fields, imported, logEntry } from "./cards";
@@ -43,7 +45,7 @@ function reply<T>(result: Result<T>, status = 200): Response {
 // A board key is a local project path with / as - (corkboard's path_key).
 const BOARD_KEY = /^[A-Za-z0-9._-]{1,128}$/;
 
-const ROUTE = /^\/api\/boards(?:\/([^/]+)(?:\/cards(?:\/([^/]+)(\/log)?)?|\/(live|import))?)?$/;
+const ROUTE = /^\/api\/boards(?:\/([^/]+)(?:\/cards(?:\/([^/]+)(?:\/(log|lease))?)?|\/(live|import))?)?$/;
 
 async function body(request: Request): Promise<Record<string, unknown>> {
   let value: unknown;
@@ -67,7 +69,7 @@ function boardInfo(key: string, input: Record<string, unknown>) {
 async function route(request: Request, env: Env, user: string): Promise<Response> {
   const m = new URL(request.url).pathname.match(ROUTE);
   if (!m) return error(404, "not found");
-  const [, key, rawId, log, live] = m;
+  const [, key, rawId, sub, live] = m;
   const method = request.method;
   const users = env.USER.get(env.USER.idFromName(user));
 
@@ -104,10 +106,16 @@ async function route(request: Request, env: Env, user: string): Promise<Response
     return error(405, "method not allowed");
   }
   const id = cardId(rawId);
-  if (log) {
+  if (sub === "log") {
     if (method !== "POST") return error(405, "method not allowed");
     const { who, note } = logEntry(await body(request));
     return reply(await board.appendLog(id, who, note), 201);
+  }
+  if (sub === "lease") {
+    if (method !== "POST") return error(405, "method not allowed");
+    const { agent } = await body(request);
+    if (typeof agent !== "string" || !agent.trim()) throw new Invalid("agent must be the agent's name");
+    return reply(await board.touch(id, agent.trim()));
   }
   if (method === "GET") return reply(await board.get(id));
   if (method === "PATCH") {
@@ -171,12 +179,21 @@ async function plans(request: Request, users: Users): Promise<Response> {
 }
 
 // Card tokens: random, kept only as their SHA-256, each good for one agent on
-// one card until it's revoked or expires.
+// one card until it's revoked or expires. Pepper's are the same, for Pepper's
+// session: the one grant that sees the goals.
 const CARD_TOKEN_TTL = 7 * 24 * 3600;
 
 const hex = (buf: ArrayBuffer) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 export const tokenKey = async (token: string) =>
   `card-token:${hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))}`;
+
+async function mint(env: Env, props: Props, grant: NonNullable<Props["grant"]>): Promise<Response> {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  const token = CARD_TOKEN + btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const minted: Props = { userId: props.userId, email: props.email, grant };
+  await env.OAUTH_KV.put(await tokenKey(token), JSON.stringify(minted), { expirationTtl: CARD_TOKEN_TTL });
+  return json({ token, expires_at: new Date(Date.now() + CARD_TOKEN_TTL * 1000).toISOString() }, 201);
+}
 
 async function tokens(request: Request, env: Env, props: Props): Promise<Response> {
   const path = new URL(request.url).pathname;
@@ -187,6 +204,7 @@ async function tokens(request: Request, env: Env, props: Props): Promise<Respons
     await env.OAUTH_KV.delete(await tokenKey(input.token));
     return new Response(null, { status: 204 });
   }
+  if (path === "/api/tokens/pepper") return mint(env, props, { kind: "pepper", agent: "pepper" });
   if (path !== "/api/tokens") return error(404, "not found");
   const { board: key, card: rawCard, agent } = input;
   if (typeof key !== "string" || !BOARD_KEY.test(key)) throw new Invalid("board must be a board key");
@@ -196,14 +214,11 @@ async function tokens(request: Request, env: Env, props: Props): Promise<Respons
   // The card must exist, on a board that does.
   const found = (await env.BOARD.get(env.BOARD.idFromName(`${props.userId}/${key}`)).get(card)) as Result<unknown>;
   if (!found.ok) return reply(found);
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  const token = CARD_TOKEN + btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  const grant: Props = { userId: props.userId, email: props.email, grant: { kind: "card", board: key, card, agent: agent.trim() } };
-  await env.OAUTH_KV.put(await tokenKey(token), JSON.stringify(grant), { expirationTtl: CARD_TOKEN_TTL });
-  return json({ token, expires_at: new Date(Date.now() + CARD_TOKEN_TTL * 1000).toISOString() }, 201);
+  return mint(env, props, { kind: "card", board: key, card, agent: agent.trim() });
 }
 
-// Who's asking, for the MCP server: a card token says; OAuth tokens by scope.
+// Who's asking, for the MCP server: a card or Pepper token says; OAuth
+// tokens by scope.
 function grantOf(ctx: OAuthResourceContext<Props>): Grant | undefined {
   if (ctx.props.grant) return ctx.props.grant;
   if (ctx.auth.scope.includes("owner")) return { kind: "owner", agent: "claude" };

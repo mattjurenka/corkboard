@@ -21,10 +21,15 @@ local M = {}
 
 M.statuses = { "backlog", "ready", "doing", "review", "done" }
 
+-- Backlog.md's, highest first; a card without one counts as medium.
+M.priorities = { "high", "medium", "low" }
+local RANK = { high = 1, low = 3 }
+function M.rank(card) return RANK[card.priority] or 2 end
+
 -- Backlog.md's keys in the order it writes them, then corkboard's own.
 local KEY_ORDER = {
   "id", "title", "status", "assignee", "created_date", "updated_date",
-  "labels", "dependencies", "ordinal", "agent_state", "attention",
+  "labels", "dependencies", "priority", "ordinal", "agent_state", "attention",
 }
 local LISTS = { assignee = true, labels = true, dependencies = true }
 
@@ -44,7 +49,10 @@ Front matter is YAML:
   when nobody is.
 - `created_date`, `updated_date`: 'yyyy-mm-dd hh:mm'.
 - `labels`, `dependencies`: lists; dependencies are card ids.
-- `ordinal`: optional number; lower sorts first within a column.
+- `priority`: high | medium | low; none is medium. Higher sorts first within
+  a column, and agents start on it first.
+- `ordinal`: optional number; lower sorts first within a column., among
+  cards of the same priority.
 - `agent_state` (corkboard): queued | working | blocked | needs-review | done
 - `attention` (corkboard): what the agent needs the user to do, one line;
   corkboard sends a desktop notification when it is set, and clears it when
@@ -289,6 +297,7 @@ function M.list()
     end
   end
   table.sort(cards, function(a, b)
+    if M.rank(a) ~= M.rank(b) then return M.rank(a) < M.rank(b) end
     local oa, ob = tonumber(a.ordinal) or math.huge, tonumber(b.ordinal) or math.huge
     if oa ~= ob then return oa < ob end
     return number(a.id) < number(b.id)
@@ -433,6 +442,7 @@ M.cloud = cloud.enabled
 M.cloud_event = cloud.event
 M.agent_token = cloud.agent_token
 M.revoke_agent_token = cloud.revoke
+M.touch = cloud.touch
 -- fn runs after the cloud board changes; the file board has its watcher.
 M.on_change = cloud.on_change
 

@@ -121,6 +121,17 @@ export class Session {
   // op and args as cards/cloud.lua sends them.
   async call(op: string, args: any[]): Promise<unknown> {
     if (op.startsWith("plan_")) return this.plan(op, args);
+    // Pepper's session (plan/claude.lua): the one token that sees the goals.
+    if (op === "pepper_token") {
+      const res = await fetch(`${CLOUD}/api/tokens/pepper`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await token()}`, "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const json = (await res.json().catch(() => ({}))) as any;
+      if (!res.ok) throw new Error(`corkboard cloud: ${json.error ?? `HTTP ${res.status}`}`);
+      return { ...json, url: `${CLOUD}/mcp` };
+    }
     const [key] = args;
     if (typeof key !== "string" || !key) throw new Error("corkboard cloud: no board key");
     const board = `/${encodeURIComponent(key)}`;
@@ -150,6 +161,11 @@ export class Session {
       case "log": {
         const [, id, who, note] = args;
         return ok("POST", `${board}/cards/${id}/log`, { who, note });
+      }
+      // The card's agent is still running here: its claim holds.
+      case "touch": {
+        const [, id, agent] = args;
+        return ok("POST", `${board}/cards/${id}/lease`, { agent });
       }
       // A token for one agent on one card, and where to use it.
       case "token": {

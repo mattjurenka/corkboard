@@ -158,6 +158,10 @@ export type Note = { id: string; kind: (typeof NOTE_KINDS)[number]; title: strin
 // Only the owner writes these: the assistant's identity and rules.
 export const OWNER_ONLY_NOTES = new Set(["soul"]);
 
+// Kinds only Pepper's token (the pepper grant) sees over MCP: to any other
+// client they don't exist. The user sees them in corkboard, through /api.
+export const PEPPER_ONLY_KINDS: readonly string[] = ["goal"];
+
 export function noteId(v: unknown): string {
   if (typeof v !== "string" || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(v)) throw new Invalid("a note id is lowercase letters, digits and -, like goals-2026");
   return v;

@@ -8,8 +8,14 @@ export class Rpc {
     this.nextId = 1;
     this.pending = new Map();
     this.handlers = new Map();
+    // What was sent before the socket opened, sent once it has.
+    this.queue = [];
     this.ready = new Promise((resolve, reject) => {
-      this.ws.onopen = resolve;
+      this.ws.onopen = (e) => {
+        for (const msg of this.queue) this.ws.send(msg);
+        this.queue = [];
+        resolve(e);
+      };
       this.ws.onerror = reject;
     });
     this.ws.onmessage = (e) => this.#receive(JSON.parse(e.data));
@@ -22,12 +28,17 @@ export class Rpc {
 
   request(method, ...params) {
     const id = this.nextId++;
-    this.ws.send(JSON.stringify([0, id, method, params]));
+    this.#send(JSON.stringify([0, id, method, params]));
     return new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
   }
 
   notify(method, ...params) {
-    this.ws.send(JSON.stringify([2, method, params]));
+    this.#send(JSON.stringify([2, method, params]));
+  }
+
+  #send(msg) {
+    if (this.ws.readyState === WebSocket.CONNECTING) this.queue.push(msg);
+    else this.ws.send(msg);
   }
 
   #receive(msg) {
