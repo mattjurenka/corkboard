@@ -47,6 +47,9 @@ local function request(op, ...)
   return answer.result
 end
 
+-- A note on the Worker, made or replaced: { kind, title, body }.
+function M.note_put(id, note) return request("note_put", id, note) end
+
 -- The bridge's answer: { id, error?, result? }.
 function M.answer(a)
   if waiting[a.id] then answers[a.id] = a end

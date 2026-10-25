@@ -132,6 +132,18 @@ export class Session {
       if (!res.ok) throw new Error(`corkboard cloud: ${json.error ?? `HTTP ${res.status}`}`);
       return { ...json, url: `${CLOUD}/mcp` };
     }
+    // A note, made or replaced: the usage report Pepper reads (usage.lua).
+    if (op === "note_put") {
+      const [id, note] = args;
+      const res = await fetch(`${CLOUD}/api/notes/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${await token()}`, "Content-Type": "application/json" },
+        body: JSON.stringify(note),
+      });
+      const json = (await res.json().catch(() => ({}))) as any;
+      if (!res.ok) throw new Error(`corkboard cloud: ${json.error ?? `HTTP ${res.status}`}`);
+      return null;
+    }
     const [key] = args;
     if (typeof key !== "string" || !key) throw new Error("corkboard cloud: no board key");
     const board = `/${encodeURIComponent(key)}`;

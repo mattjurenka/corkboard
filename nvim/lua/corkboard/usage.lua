@@ -342,6 +342,154 @@ local function render_text()
   pinned.follow(buf, line_session, selected)
 end
 
+-- Pepper's report -------------------------------------------------------------
+--
+-- The last week of this project's sessions, as a note on the Worker
+-- (usage-<project>, kind review) that Pepper reads to suggest how to spend
+-- fewer tokens. Sent once the logs are read, then hourly when it changed.
+-- Absolute times only, so an unchanged week sends nothing.
+
+local REPORT_DAYS = 7
+
+local function pct(x) return string.format("%.0f%%", (x or 0) * 100) end
+local function when(timestamp) return (tostring(timestamp or ""):sub(1, 16):gsub("T", " ")) .. "Z" end
+
+function M.report(cwd)
+  local list = scan(cwd, os.time() - REPORT_DAYS * 86400)
+  if #list == 0 then return nil end
+  local sums = { cost = 0, tokens = 0, requests = 0, read = 0, sent = 0, misses = 0, miss_tokens = 0, miss_cost = 0 }
+  local by_label, by_agent, by_model = {}, {}, {}
+  local rows = {}
+  for _, session in ipairs(list) do
+    local s = summary_of(session)
+    local cost = cost_of(s) or 0
+    local t = s.tokens
+    sums.cost = sums.cost + cost
+    sums.tokens = sums.tokens + total(t)
+    sums.requests = sums.requests + s.requests
+    sums.read = sums.read + t.read
+    sums.sent = sums.sent + t.read + t.write + t.input
+    sums.misses = sums.misses + #s.cache.misses
+    sums.miss_tokens = sums.miss_tokens + s.cache.miss_tokens
+    for _, m in ipairs(s.cache.misses) do sums.miss_cost = sums.miss_cost + (m.cost or 0) end
+    for _, c in ipairs(s.categories or {}) do
+      local l = by_label[c.label] or { label = c.label, cost = 0, count = 0, sessions = 0 }
+      l.cost, l.count, l.sessions = l.cost + (c.cost or 0), l.count + c.count, l.sessions + 1
+      by_label[c.label] = l
+    end
+    for _, a in ipairs(s.agents) do
+      local g = by_agent[a.type] or { type = a.type, cost = 0, runs = 0 }
+      g.cost, g.runs = g.cost + (a.cost or 0), g.runs + 1
+      by_agent[a.type] = g
+    end
+    local model = model_name(s.model)
+    by_model[model] = (by_model[model] or 0) + cost
+    table.insert(rows, { s = s, cost = cost })
+  end
+  local function sorted(t, key)
+    local out = vim.tbl_values(t)
+    table.sort(out, function(a, b) return a[key] > b[key] end)
+    return out
+  end
+
+  local lines = {
+    string.format("# Token usage: %s, the %d days to %s", cwd, REPORT_DAYS, os.date("!%Y-%m-%d")),
+    "",
+    "From corkboard's usage view (Claude Code's session logs). Costs are list-price estimates; a session's cost is",
+    "its own record where it has one. Cache hit: the share of input read from the prompt cache. A miss is a request",
+    "that sent an already-sent context again, usually after the cache expired while the session sat idle.",
+    "",
+    "## Totals",
+    "",
+    string.format("- %d sessions, %d requests, %s tokens, %s", #list, sums.requests, human(sums.tokens), dollars(sums.cost)),
+    string.format("- cache hit %s; %d misses re-sent %s tokens, %s", pct(sums.sent > 0 and sums.read / sums.sent or 0),
+      sums.misses, human(sums.miss_tokens), dollars(sums.miss_cost)),
+  }
+  local models = {}
+  for name, cost in pairs(by_model) do
+    if cost >= 0.005 then table.insert(models, { name = name ~= "" and name or "unknown", cost = cost }) end
+  end
+  table.sort(models, function(a, b) return a.cost > b.cost end)
+  table.insert(lines, "- by model: " .. table.concat(vim.tbl_map(function(m) return m.name .. " " .. dollars(m.cost) end, models), ", "))
+
+  vim.list_extend(lines, { "", "## What the context was spent on", "", "Across all sessions; cost is writing and re-reading it.", "" })
+  for i, l in ipairs(sorted(by_label, "cost")) do
+    if i > 12 then break end
+    table.insert(lines, string.format("- %s: %s (%d items, in %d sessions)", l.label, dollars(l.cost), l.count, l.sessions))
+  end
+
+  local agents = sorted(by_agent, "cost")
+  if #agents > 0 then
+    vim.list_extend(lines, { "", "## Subagents", "" })
+    for _, g in ipairs(agents) do
+      table.insert(lines, string.format("- %s: %d runs, %s", g.type, g.runs, dollars(g.cost)))
+    end
+  end
+
+  table.sort(rows, function(a, b) return a.cost > b.cost end)
+  vim.list_extend(lines, { "", "## The costliest sessions", "" })
+  for i, r in ipairs(rows) do
+    if i > 10 then break end
+    local s = r.s
+    local peak = 0
+    for _, v in ipairs(s.series or {}) do peak = math.max(peak, v) end
+    vim.list_extend(lines, {
+      string.format("### %s", s.title),
+      "",
+      string.format("- %s, last active %s, %s, %d requests, peak context %s", dollars(r.cost), when(s.updated),
+        model_name(s.model), s.requests, human(peak)),
+      string.format("- cache hit %s, %d misses (%s tokens)", pct(s.cache.hit), #s.cache.misses, human(s.cache.miss_tokens)),
+    })
+    local cats = {}
+    for j, c in ipairs(s.categories or {}) do
+      if j > 4 then break end
+      table.insert(cats, string.format("%s %s", c.label, pct(c.share)))
+    end
+    if #cats > 0 then table.insert(lines, "- spent on: " .. table.concat(cats, ", ")) end
+    local top = {}
+    for j, it in ipairs(s.top or {}) do
+      if j > 3 then break end
+      table.insert(top, string.format("%s (%s, %s tokens, read %d times)", short(it.label, 60), it.kind, human(it.size), it.reads))
+    end
+    if #top > 0 then table.insert(lines, "- heaviest items: " .. table.concat(top, "; ")) end
+    if #s.agents > 0 then
+      table.insert(lines, "- subagents: " .. table.concat(vim.tbl_map(function(a)
+        return string.format("%s %s", a.type, dollars(a.cost))
+      end, s.agents), ", "))
+    end
+    table.insert(lines, "")
+  end
+  return table.concat(lines, "\n")
+end
+
+local published = {} -- cwd -> the report last sent
+
+local function note_id(cwd)
+  return (("usage-" .. cwd:lower():gsub("[^a-z0-9]+", "-"):gsub("^-+", ""):gsub("-+$", "")):sub(1, 80):gsub("-+$", ""))
+end
+
+local function publish(cwd)
+  local cloud = require("corkboard.cards.cloud")
+  if not cloud.enabled() or cwd == vim.uv.os_homedir() or require("corkboard").window == "plan" then return end
+  local ok, text = pcall(M.report, cwd)
+  if not ok or not text or published[cwd] == text then return end
+  local sent, err = pcall(cloud.note_put, note_id(cwd), { kind = "review", title = "Usage: " .. vim.fs.basename(cwd), body = text })
+  if sent then
+    published[cwd] = text
+  else
+    vim.notify("corkboard: sending the usage report: " .. tostring(err), vim.log.levels.WARN)
+  end
+end
+
+local hourly
+local function publish_hourly(cwd)
+  hourly = hourly or assert(vim.uv.new_timer())
+  if not hourly:is_active() then
+    hourly:start(3600 * 1000, 3600 * 1000, vim.schedule_wrap(function() publish(vim.fn.getcwd()) end))
+  end
+  vim.schedule(function() publish(cwd) end)
+end
+
 -- The first read of a project's logs parses every one of them, most of a
 -- second for a busy project. It happens a log per tick, so Neovim stays
 -- responsive; until it's done the view says it is reading, and push()
@@ -369,6 +517,7 @@ local function warm(cwd)
     end
     warmed[cwd] = true
     if vim.fn.getcwd() == cwd then M.push(true) end
+    publish_hourly(cwd)
   end
   vim.defer_fn(step, 0)
 end
