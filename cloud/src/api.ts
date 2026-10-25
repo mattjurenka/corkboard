@@ -12,8 +12,11 @@
 //   POST  /api/boards/:board/cards/:id/log   { who, note }
 //   POST  /api/boards/:board/cards/:id/lease { agent }: the agent is alive; { until } or null (board.ts's touch)
 //   POST  /api/boards/:board/import          { cards: [...] } with their ids, times and logs; empty boards only
-//   GET   /api/live                          WebSocket: { type: "plan", plan } on every plan change
-//   GET   /api/notes                         ?q= to search, ?kind=, ?limit=
+//   GET   /api/live                          WebSocket: { type: "plan", plan } on every plan change,
+//                                            { type: "chat", message } on every chat message
+//   GET   /api/chat                          the chat with Pepper, oldest first: ?after=id, else the newest 100
+//   POST  /api/chat                          { text }: the user says something to Pepper
+//   GET   /api/notes                        ?q= to search, ?kind=, ?limit=
 //   GET, PUT, DELETE /api/notes/:id          PUT { kind, title, body }
 //   GET, DELETE /api/plans/:date             the day and any proposal (an empty plan if none); gone for good
 //   POST  /api/plans/:date/say               { text }: what to change, for the next proposal
@@ -32,7 +35,7 @@ import { Invalid, cardId, fields, imported, logEntry } from "./cards";
 import type { Result } from "./board";
 import { CARD_TOKEN, type Env, type Props } from "./index";
 import { type Grant, mcp } from "./mcp";
-import { blocks, date, note, noteId } from "./plans";
+import { blocks, chatText, date, note, noteId } from "./plans";
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const error = (status: number, message: string, extra: object = {}) => json({ error: message, ...extra }, status);
@@ -147,6 +150,16 @@ async function notes(request: Request, users: Users): Promise<Response> {
   return error(405, "method not allowed");
 }
 
+async function chat(request: Request, users: Users): Promise<Response> {
+  if (request.method === "GET") {
+    const after = Number(new URL(request.url).searchParams.get("after") ?? 0);
+    if (!Number.isInteger(after) || after < 0) throw new Invalid("after must be a message id");
+    return json(await users.chat(after, 100));
+  }
+  if (request.method !== "POST") return error(405, "method not allowed");
+  return json(await users.post("matt", chatText((await body(request)).text)), 201);
+}
+
 async function plans(request: Request, users: Users): Promise<Response> {
   const m = new URL(request.url).pathname.match(/^\/api\/plans\/([^/]+)(?:\/(say|accept|discard|day))?$/);
   if (!m) return error(404, "not found");
@@ -241,6 +254,7 @@ export const api = {
       if (path === "/api/live") return users.fetch(request);
       if (path.startsWith("/api/notes")) return await notes(request, users);
       if (path.startsWith("/api/plans/")) return await plans(request, users);
+      if (path === "/api/chat") return await chat(request, users);
       return await route(request, env, ctx.props.userId);
     } catch (e) {
       if (e instanceof Invalid) return error(400, e.message);

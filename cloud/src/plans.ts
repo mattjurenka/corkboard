@@ -1,5 +1,5 @@
-// Day plans and notes, as the API and the MCP tools take them. Stored per
-// user (user.ts).
+// Day plans, notes and the chat, as the API and the MCP tools take them.
+// Stored per user (user.ts).
 //
 // A plan is a date's day (its blocks, the ranked work, what's not today,
 // what the planner looked at) and, when the assistant has proposed one, a
@@ -177,3 +177,10 @@ export function note(input: Record<string, unknown>): Pick<Note, "kind" | "title
   if (input.body.length > 200_000) throw new Invalid("body is longer than 200000 characters");
   return { kind: input.kind as Note["kind"], title: text("title", input.title, 200), body: input.body };
 }
+
+// Chat ---------------------------------------------------------------------------------
+
+// A message between the user ("matt", from the phone) and Pepper.
+export type ChatMessage = { id: number; at: string; who: string; text: string };
+
+export const chatText = (v: unknown) => text("text", v, 4000);

@@ -178,6 +178,56 @@ describe("plans", () => {
   });
 });
 
+describe("chat", () => {
+  const pepperToken = async () => (await (await call(owner, "POST", "/api/tokens/pepper", {})).json<any>()).token as string;
+
+  it("carries the user's messages to Pepper and its replies back", async () => {
+    const pepper = await pepperToken();
+    const said = await call(owner, "POST", "/api/chat", { text: "  plan my day; gym is closed  " });
+    expect(said.status).toBe(201);
+    const first = await said.json<any>();
+    expect(first).toMatchObject({ who: "matt", text: "plan my day; gym is closed" });
+    expect((await tool(pepper, "chat_read")).map((m: any) => m.text)).toEqual(["plan my day; gym is closed"]);
+    const reply = await tool(pepper, "chat_send", { text: "On it: a proposal in a minute." });
+    expect(reply.who).toBe("pepper");
+    expect(await tool(pepper, "chat_read", { after: first.id })).toEqual([reply]);
+    const all = await (await call(owner, "GET", "/api/chat")).json<any[]>();
+    expect(all.map((m) => m.who)).toEqual(["matt", "pepper"]);
+    expect(await (await call(owner, "GET", `/api/chat?after=${reply.id}`)).json<any[]>()).toEqual([]);
+  });
+
+  it("is Pepper's alone over MCP, and the owner's over the API", async () => {
+    const names = async (token: string) =>
+      (await (await call(token, "POST", "/mcp", { jsonrpc: "2.0", id: 1, method: "tools/list" })).json<any>()).result.tools.map((t: any) => t.name);
+    expect(await names(await pepperToken())).toEqual(expect.arrayContaining(["chat_read", "chat_send"]));
+    expect(await names(assistant)).not.toContain("chat_send");
+    expect(await names(owner)).not.toContain("chat_read");
+    expect((await tool(assistant, "chat_send", { text: "I'm Pepper, honest" })).error).toMatch(/unknown tool/);
+    expect((await call(assistant, "POST", "/api/chat", { text: "hi" })).status).toBe(403);
+    expect(await (await call(owner, "GET", "/api/chat")).json<any[]>()).toEqual([]);
+  });
+
+  it("refuses empty or overlong messages and bad ids", async () => {
+    expect((await call(owner, "POST", "/api/chat", { text: " " })).status).toBe(400);
+    expect((await call(owner, "POST", "/api/chat", { text: "x".repeat(4001) })).status).toBe(400);
+    expect((await call(owner, "GET", "/api/chat?after=-1")).status).toBe(400);
+    expect((await call(owner, "PUT", "/api/chat", { text: "x" })).status).toBe(405);
+    expect((await tool(await pepperToken(), "chat_send", { text: "" })).error).toMatch(/text/);
+  });
+
+  it("goes to the user's live sockets", async () => {
+    const live = await worker("/api/live", { headers: { Authorization: `Bearer ${owner}`, Upgrade: "websocket" } });
+    const ws = live.webSocket!;
+    ws.accept();
+    const events: any[] = [];
+    ws.addEventListener("message", (e) => events.push(JSON.parse(e.data as string)));
+    await tool(await pepperToken(), "chat_send", { text: "Morning. Want a plan?" });
+    for (let i = 0; i < 50 && !events.length; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(events[0]).toMatchObject({ type: "chat", message: { who: "pepper", text: "Morning. Want a plan?" } });
+    ws.close();
+  });
+});
+
 describe("who sees what", () => {
   it("card tokens get no notes or plan tools", async () => {
     await call(owner, "PUT", "/api/boards/b", {});
