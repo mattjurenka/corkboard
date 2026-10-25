@@ -21,6 +21,11 @@ export type Tab = { tab: Ext; name: string };
 
 export type State = {
   host: string | null;
+  // "plan" in the day plan's window (?view=plan), which has no sidebar.
+  view: string | null;
+  // The tab the file explorer previews into (corkboard.push_preview), shown
+  // in italics while its file is untouched.
+  previewTab: number | null;
   context: { cwd: string; file?: string } | null;
   tabs: { current: Ext; tabs: Tab[] } | null;
   layout: Layout | null;
@@ -41,6 +46,8 @@ export type State = {
 
 let state: State = {
   host: null,
+  view: null,
+  previewTab: null,
   context: null,
   tabs: null,
   layout: null,

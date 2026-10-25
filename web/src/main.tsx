@@ -8,11 +8,14 @@ import { Rpc } from "./nvim/rpc.js";
 import { makeNvim, NvimContext } from "./nvim/context";
 import { store } from "./store";
 import { askPermissionOnGesture, notifyAttention, notifyClaude } from "./attention";
+import { openPlan } from "./planWindow";
 
 // ?cwd=/path/to/project opens Neovim there; ?host=<name> on that machine,
-// over ssh (CORKBOARD_REMOTES in bridge/server.ts).
+// over ssh (CORKBOARD_REMOTES in bridge/server.ts). ?view=plan is the day
+// plan's window instead (planWindow.ts).
 const params = new URLSearchParams(location.search);
-const host = params.get("host");
+const view = params.get("view") === "plan" ? "plan" : null;
+const host = view ? null : params.get("host");
 const wsUrl = new URL("nvim", location.href);
 wsUrl.protocol = location.protocol === "https:" ? "wss:" : "ws:";
 const query = (cwd: string | null) => {
@@ -21,7 +24,7 @@ const query = (cwd: string | null) => {
   if (cwd != null) q.set("cwd", cwd);
   return q.size ? `?${q}` : "";
 };
-wsUrl.search = query(params.get("cwd"));
+wsUrl.search = view ? "?view=plan" : query(params.get("cwd"));
 
 // The bridge's token, when it wants one (TOKEN in bridge/server.ts). It comes
 // in the fragment, #token=, and is kept so reloads and the windows of other
@@ -40,7 +43,7 @@ if (fragment.has("token")) {
 
 const rpc = new Rpc(wsUrl, ["corkboard", ...(token ? [`corkboard.token.${token}`] : [])]);
 const nvim = makeNvim(rpc);
-store.set({ host });
+store.set({ host, view });
 
 // Rendered at once, so the canvas is there for the grid.
 const root = createRoot(document.getElementById("root")!);
@@ -58,10 +61,11 @@ const cell = () => store.set({ cell: { w: grid.cellW as number, h: grid.cellH as
 cell();
 
 rpc.on("corkboard.context", ([context]: any[]) => {
-  const name = context.cwd.split("/").at(-1);
+  const name = view ? "Day plan" : context.cwd.split("/").at(-1);
   document.title = `${name}${host ? ` @ ${host}` : ""} — corkboard`;
   store.set({ context });
 });
+rpc.on("corkboard.preview", ([tab]: any[]) => store.set({ previewTab: tab ?? null }));
 rpc.on("corkboard.files_changed", () => store.set({ filesVersion: store.get().filesVersion + 1 }));
 
 // Neovim sends a layout just before the flush that draws it. Rendering it
@@ -128,6 +132,11 @@ rpc.on("corkboard.clipboard", ([text]: any[]) => {
 // rather than a tab in the browser. It arrives within moments of the key
 // that chose the project, so the popup blocker still counts that key.
 // On the same machine as this one: a project picked on brain-vm is there.
+// <leader>p in a project's window. Like corkboard.open below, it comes
+// right after the key, so the popup blocker lets it through.
+rpc.on("corkboard.open_plan", () => {
+  if (!openPlan()) rpc.notify("nvim_exec_lua", "vim.notify(...)", ["corkboard: the browser blocked the day plan's window", 3]);
+});
 rpc.on("corkboard.open", ([{ cwd }]: any[]) => {
   const url = new URL(location.href);
   url.search = query(cwd);

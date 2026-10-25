@@ -429,15 +429,15 @@ local function buffer()
   return buf
 end
 
--- Keep the usage view third among the tabs, after the board. Leaves focus
+-- Keep the usage view second among the tabs, after the board. Leaves focus
 -- where it was.
 function M.ensure()
-  if pinned.ensure("corkboard_usage", 3, buffer()) then M.push(true) end
+  if pinned.ensure("corkboard_usage", 2, buffer()) then M.push(true) end
 end
 
 function M.show()
   M.ensure()
-  pinned.show("corkboard_usage", 3, buffer())
+  pinned.show("corkboard_usage", 2, buffer())
   M.push(true)
 end
 

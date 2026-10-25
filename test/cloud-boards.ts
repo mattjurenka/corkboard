@@ -60,6 +60,10 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
 
 try {
   check("cloud backend is on", await lua("return require('corkboard.cards').cloud()"));
+  // Looking at a project with no board doesn't make it one.
+  const before = await lua("return #require('corkboard.cards').list()");
+  const listed = await fetch(`${CLOUD}/api/boards`, { headers: { Authorization: `Bearer ${await token()}` } }).then((r) => r.json());
+  check("a project with no board reads as empty, and isn't made one", before === 0 && !listed.some((b: any) => b.key === KEY), { before, listed });
   const id = await lua(`local c = require('corkboard.cards')
     local id = c.create("First card", "ready", "the description")
     c.set(id, { agent = "claude", agent_state = "working", worktree = "/tmp/wt", branch = "card/x" })

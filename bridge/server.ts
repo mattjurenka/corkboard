@@ -108,6 +108,8 @@ type Session = {
   lastError?: string;
   // Neovim's cloud boards, made when it first asks for one (boards.ts).
   cloud?: boards.Session;
+  // "plan": the day plan's window (?view=plan), of which there's one.
+  view?: "plan";
 };
 
 // The project Neovim last opened (remember_project in corkboard/init.lua).
@@ -191,6 +193,8 @@ function spawnLocal(data: Session): NonNullable<Session["nvim"]> {
   const rtp = `set rtp^=${[PLUGIN_ROOT, ...PLUGINS].map((p) => p.replace(/[ \\,]/g, "\\$&")).join(",")}`;
   return Bun.spawn([NVIM, "--embed", "--cmd", rtp], {
     cwd: data.cwd,
+    // corkboard.window: which window this Neovim is for.
+    env: data.view ? { ...process.env, CORKBOARD_WINDOW: data.view } : process.env,
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -256,6 +260,9 @@ function start(ws: Bun.ServerWebSocket<Session>, nvim: NonNullable<Session["nvim
   ws.data.queued = undefined;
 }
 
+// The day plan's window, while one is open.
+let planWindow: Bun.ServerWebSocket<Session> | undefined;
+
 Bun.serve<Session, {}>({
   hostname: HOST,
   port: PORT,
@@ -274,12 +281,17 @@ Bun.serve<Session, {}>({
       const token = offered.find((p) => p.startsWith(TOKEN_PROTOCOL))?.slice(TOKEN_PROTOCOL.length);
       // A wrong token still upgrades, to be closed with the reason before
       // Neovim starts, which the page can show; a refused upgrade it can't.
-      const data =
+      // The day plan isn't a project's, so its window opens in the home
+      // directory, on this machine.
+      const view = url.searchParams.get("view") === "plan" ? "plan" : undefined;
+      const data: Session =
         TOKEN && !(token && sameToken(token))
           ? { cwd: "", error: "wrong or missing token: open the URL the bridge printed" }
-          : host
-            ? resolveRemote(host, cwd)
-            : resolveCwd(cwd);
+          : view
+            ? { ...resolveCwd(homedir()), view }
+            : host
+              ? resolveRemote(host, cwd)
+              : resolveCwd(cwd);
       // The browser drops a socket whose reply names no protocol it offered.
       const headers = offered.includes("corkboard") ? { "sec-websocket-protocol": "corkboard" } : undefined;
       return server.upgrade(req, { data, headers }) ? undefined : new Response("upgrade failed", { status: 400 });
@@ -297,6 +309,11 @@ Bun.serve<Session, {}>({
   websocket: {
     open(ws) {
       if (ws.data.error) return ws.close(4000, closeReason(ws.data.error));
+      // One day plan at a time: a new plan window takes over from the old.
+      if (ws.data.view === "plan") {
+        planWindow?.close(4002, "the day plan opened in another window");
+        planWindow = ws;
+      }
       if (ws.data.host) {
         spawnRemote(ws.data).then(
           (nvim) => (ws.data.closed ? nvim.kill() : start(ws, nvim)),
@@ -321,6 +338,7 @@ Bun.serve<Session, {}>({
     },
 
     close(ws) {
+      if (planWindow === ws) planWindow = undefined;
       ws.data.closed = true;
       ws.data.cloud?.close();
       ws.data.nvim?.kill();

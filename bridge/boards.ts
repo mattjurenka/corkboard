@@ -117,10 +117,13 @@ export class Session {
     if (typeof key !== "string" || !key) throw new Error("corkboard cloud: no board key");
     const board = `/${encodeURIComponent(key)}`;
     switch (op) {
-      // Makes the board if it's new, follows it, and answers with a whole copy.
+      // Follows the board and answers with a whole copy; null for a board
+      // that doesn't exist yet, unless make, which makes it (a first card).
+      // Opening corkboard somewhere doesn't make that a board.
       case "subscribe": {
-        const [, name, root] = args;
-        await ok("PUT", board, { name, root: root ?? null });
+        const [, name, root, make] = args;
+        if (make) await ok("PUT", board, { name, root: root ?? null });
+        else if ((await api("GET", `${board}/cards`)).status === 404) return null;
         await follow(key, this.listener);
         this.keys.add(key);
         return snapshot(key);

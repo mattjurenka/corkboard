@@ -6,15 +6,23 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Panels } from "@/components/Panels";
 import { Scrollbars } from "@/components/Scrollbars";
 import { Sidebar } from "@/components/Sidebar";
+import { cn } from "@/lib/utils";
 import { useStore } from "@/store";
 
 export function App() {
   const status = useStore((s) => s.status);
+  // The day plan's window is the plan alone.
+  const plan = useStore((s) => s.view === "plan");
   return (
     // 32 cells, or less in a narrow window: never more than 30% of it, nor
     // under 18 cells.
-    <div className="relative h-full [--sidebar-width:min(calc(var(--cell-w)*32),max(calc(var(--cell-w)*18),30vw))]">
-      <Sidebar />
+    <div
+      className={cn(
+        "relative h-full",
+        plan ? "[--sidebar-width:0px]" : "[--sidebar-width:min(calc(var(--cell-w)*32),max(calc(var(--cell-w)*18),30vw))]",
+      )}
+    >
+      {!plan && <Sidebar />}
       {/* Installed as an app, the page draws where the title bar was
           (window-controls-overlay in the manifest), all but the window
           buttons. The sidebar runs to the top; over the editor, the bar's

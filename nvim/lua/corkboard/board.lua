@@ -387,15 +387,14 @@ local function buffer()
   return buf
 end
 
--- Keep the board second among the tabs, after the day plan. Leaves focus
--- where it was.
+-- Keep the board first among the tabs. Leaves focus where it was.
 function M.ensure()
-  if pinned.ensure("corkboard_board", 2, buffer()) then M.push() end
+  if pinned.ensure("corkboard_board", 1, buffer()) then M.push() end
 end
 
 function M.show()
   M.ensure()
-  pinned.show("corkboard_board", 2, buffer())
+  pinned.show("corkboard_board", 1, buffer())
 end
 
 -- Watching and pushing --------------------------------------------------------------
@@ -431,6 +430,8 @@ end
 -- Re-read the cards and what they cost, redraw, send the page anything new,
 -- and start the agents that may now run.
 function M.push()
+  -- The day plan's window has no board.
+  if require("corkboard").window == "plan" then return end
   watch()
   shown = cards.list()
   costs = require("corkboard.usage").card_costs()

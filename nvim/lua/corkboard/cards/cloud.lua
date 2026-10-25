@@ -79,7 +79,10 @@ local function put_entry(copy, id, entry)
 end
 
 local function load(copy, cards)
-  copy.cards, copy.logs = {}, {}
+  -- No board: the bridge's null, which arrives as vim.NIL.
+  local missing = cards == nil or cards == vim.NIL
+  copy.cards, copy.logs, copy.missing = {}, {}, missing
+  if missing then return end
   for _, c in ipairs(cards) do
     local log = c.log or {}
     c.log, c.waiting_on = nil, nil
@@ -88,14 +91,17 @@ local function load(copy, cards)
   end
 end
 
-local function copy_of(k)
+-- make: make the board if there isn't one, for its first card. Otherwise a
+-- project with no board reads as an empty one, and stays off the Worker.
+local function copy_of(k, make)
   k = k or key()
+  if copies[k] and copies[k].missing and make then copies[k] = nil end
   if not copies[k] then
     local cwd = vim.fn.getcwd()
-    local cards = request("subscribe", k, vim.fs.basename(cwd), cwd)
+    local cards = request("subscribe", k, vim.fs.basename(cwd), cwd, make or false)
     -- A call made while this one waited may have subscribed already and
     -- written since; its copy is newer than this answer.
-    if not copies[k] then
+    if not copies[k] or (make and copies[k].missing) then
       local copy = {}
       load(copy, cards)
       copies[k] = copy
@@ -274,7 +280,7 @@ end
 
 function M.create(title, status, body)
   local k = key()
-  local copy = copy_of(k)
+  local copy = copy_of(k, true)
   local card = request("create", k, { title = title, status = status or "backlog", description = vim.trim(body or "") })
   put_card(copy, card)
   copy.logs[card.id] = copy.logs[card.id] or {}

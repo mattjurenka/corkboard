@@ -473,12 +473,14 @@ function M.diff_buffer()
   return diff_buf
 end
 
--- Keep the plan first among the tabs. Leaves focus where it was.
+-- In the day plan's window (corkboard.window == "plan"), keep the plan its
+-- first tab. Leaves focus where it was.
 function M.ensure()
   if pinned.ensure("corkboard_plan", 1, M.buffer()) then redraw() end
 end
 
--- The plan's tab (<leader>p, :AgentPlan).
+-- The plan's tab, in the day plan's window. Elsewhere, <leader>p and
+-- :AgentPlan open that window instead (corkboard.open_plan).
 function M.show()
   M.ensure()
   pinned.show("corkboard_plan", 1, M.buffer())

@@ -8,9 +8,16 @@
 
 local M = {}
 
+-- Which window this Neovim is: nil for a project's, "plan" for the day
+-- plan's, which the bridge starts with CORKBOARD_WINDOW=plan (?view=plan).
+M.window = vim.env.CORKBOARD_WINDOW
+
 local chans = {}
 -- What each channel was last sent, so unchanged state isn't sent again.
+-- shown_preview: the preview tab last sent (M.push_preview); false when
+-- the page has been sent nothing.
 local last_layout, last_scroll, last_context
+local shown_preview = false
 
 -- The last project opened, which the bridge opens when a page names no
 -- ?cwd. Shared with bridge/server.ts, so not under stdpath().
@@ -61,7 +68,8 @@ function M.attach(chan)
   status_highlights()
   M.push_theme()
   -- The new channel has seen nothing yet.
-  last_context, last_layout, last_scroll = nil, nil, nil
+  last_context, last_layout, last_scroll, shown_preview = nil, nil, nil, false
+  vim.schedule(M.push_preview)
   M.push_context()
   require("corkboard.board").push_all()
   require("corkboard.viewer").push_all()
@@ -311,6 +319,15 @@ function M.is_panel(buf)
   return vim.b[buf].corkboard_view ~= nil and not vim.b[buf].corkboard_file
 end
 
+-- <leader>p, :AgentPlan: the day plan, which has a window of its own. Here,
+-- that's the plan's tab; in a project's window, the page opens the plan's
+-- window, or brings it forward if it's open.
+function M.open_plan()
+  if M.window == "plan" then return require("corkboard.plan").show() end
+  if not M.attached() then return vim.notify("corkboard: the day plan opens from the page") end
+  M.notify("corkboard.open_plan")
+end
+
 -- The file explorer's preview, as VS Code has one: the tab its last file
 -- opened in, while that file is still untouched. The next file opened from
 -- the explorer replaces it there instead of adding a tab. An edit (any
@@ -327,6 +344,15 @@ end
 
 function M.preview_tab()
   return preview_win() and preview.tab or nil
+end
+
+-- The page shows the preview's tab in italics; tell it when that changes:
+-- a file opened into it, an edit that keeps it, its tab closed.
+function M.push_preview()
+  local tab = M.preview_tab()
+  if tab == shown_preview then return end
+  shown_preview = tab
+  M.notify("corkboard.preview", tab or vim.NIL)
 end
 
 local function open_in_preview(path)
@@ -349,6 +375,7 @@ local function open_in_preview(path)
   end
   local current = vim.api.nvim_get_current_buf()
   preview = { tab = vim.api.nvim_get_current_tabpage(), buf = current, tick = vim.api.nvim_buf_get_changedtick(current) }
+  M.push_preview()
 end
 
 -- A click on a file in the browser. With tab (the file explorer), it opens
@@ -522,8 +549,8 @@ function M.setup()
   vim.keymap.set("n", "<leader>u", usage.show, { desc = "corkboard: token usage" })
   vim.api.nvim_create_user_command("AgentUsage", usage.show, { desc = "corkboard: token usage" })
   local plan = require("corkboard.plan")
-  vim.keymap.set("n", "<leader>p", plan.show, { desc = "corkboard: day plan" })
-  vim.api.nvim_create_user_command("AgentPlan", plan.show, { desc = "corkboard: day plan" })
+  vim.keymap.set("n", "<leader>p", M.open_plan, { desc = "corkboard: day plan" })
+  vim.api.nvim_create_user_command("AgentPlan", M.open_plan, { desc = "corkboard: day plan" })
 
   require("corkboard.viewer").setup()
 
@@ -591,6 +618,11 @@ function M.setup()
     group = group,
     callback = function() M.notify("corkboard.files_changed") end,
   })
+  -- An edit, or a closed tab, can end the explorer's preview.
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "TabClosed", "BufWinLeave" }, {
+    group = group,
+    callback = function() vim.schedule(M.push_preview) end,
+  })
   vim.api.nvim_create_autocmd("ColorScheme", {
     group = group,
     callback = function()
@@ -599,13 +631,14 @@ function M.setup()
     end,
   })
   status_highlights()
-  -- Anything that could have closed or moved the plan, board or usage tab.
-  -- In order, so each finds the ones before it already in place.
+  -- Anything that could have closed or moved a pinned tab: the plan in the
+  -- day plan's window, else the board and usage, in order, so each finds the
+  -- ones before it already in place.
   vim.api.nvim_create_autocmd({ "VimEnter", "TabClosed", "TabNewEntered", "TabEnter", "WinClosed" }, {
     group = group,
     callback = function()
       vim.schedule(function()
-        plan.ensure()
+        if M.window == "plan" then return plan.ensure() end
         board.ensure()
         usage.ensure()
       end)
