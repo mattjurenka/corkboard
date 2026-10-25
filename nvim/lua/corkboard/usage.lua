@@ -145,6 +145,10 @@ local line_session = {} -- line number -> session id
 local selected
 local period = "week"
 local sort = "recent"
+-- Pepper's usage-recommendations note as last fetched, and whether the
+-- view shows it in place of the selected session.
+local advice
+local show_advice = false
 
 local function period_of(key)
   for i, p in ipairs(PERIODS) do
@@ -253,6 +257,7 @@ local function state()
     root = vim.fn.getcwd(), selected = selected, sessions = list,
     loading = warmed[vim.fn.getcwd()] ~= true or nil,
     period = period, periods = periods, sort = sort, total = period_total(),
+    advice = advice and { body = advice.body, updated = advice.updated } or nil, show_advice = show_advice,
     cards = cards, labels = labels,
   }
 end
@@ -481,13 +486,38 @@ local function publish(cwd)
   end
 end
 
+-- Pepper's answer to the report (its daily review in pepper-vm).
+local function fetch_advice()
+  local cloud = require("corkboard.cards.cloud")
+  if not cloud.enabled() then return end
+  local ok, note = pcall(cloud.note_get, "usage-recommendations")
+  if not ok or type(note) ~= "table" or (advice and advice.updated == note.updated) then return end
+  advice = note
+  push_state()
+end
+
+-- Show Pepper's advice (on true), the selected session (false), or the
+-- other one (nil).
+function M.show_advice(on)
+  if on == nil then on = not show_advice end
+  show_advice = on
+  push_state()
+  if on then vim.schedule(fetch_advice) end
+end
+
 local hourly
 local function publish_hourly(cwd)
   hourly = hourly or assert(vim.uv.new_timer())
   if not hourly:is_active() then
-    hourly:start(3600 * 1000, 3600 * 1000, vim.schedule_wrap(function() publish(vim.fn.getcwd()) end))
+    hourly:start(3600 * 1000, 3600 * 1000, vim.schedule_wrap(function()
+      publish(vim.fn.getcwd())
+      fetch_advice()
+    end))
   end
-  vim.schedule(function() publish(cwd) end)
+  vim.schedule(function()
+    publish(cwd)
+    fetch_advice()
+  end)
 end
 
 -- The first read of a project's logs parses every one of them, most of a
@@ -602,7 +632,11 @@ local function buffer()
     k = { function() pinned.step(line_session, -1) end, "previous session" },
     ["<Down>"] = { function() pinned.step(line_session, 1) end, "next session" },
     ["<Up>"] = { function() pinned.step(line_session, -1) end, "previous session" },
-    R = { function() M.push(true) end, "refresh" },
+    R = { function()
+      M.push(true)
+      vim.schedule(fetch_advice)
+    end, "refresh" },
+    a = { function() M.show_advice() end, "Pepper's advice / the session" },
     p = { function() M.set_period() end, "next period" },
     s = { function() M.set_sort() end, "sort by recent/cost" },
   }, function() return line_session end, function(id)

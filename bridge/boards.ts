@@ -132,6 +132,15 @@ export class Session {
       if (!res.ok) throw new Error(`corkboard cloud: ${json.error ?? `HTTP ${res.status}`}`);
       return { ...json, url: `${CLOUD}/mcp` };
     }
+    // A note, or null when there is none: Pepper's recommendations (usage.lua).
+    if (op === "note_get") {
+      const [id] = args;
+      const res = await fetch(`${CLOUD}/api/notes/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${await token()}` } });
+      if (res.status === 404) return null;
+      const json = (await res.json().catch(() => ({}))) as any;
+      if (!res.ok) throw new Error(`corkboard cloud: ${json.error ?? `HTTP ${res.status}`}`);
+      return json;
+    }
     // A note, made or replaced: the usage report Pepper reads (usage.lua).
     if (op === "note_put") {
       const [id, note] = args;

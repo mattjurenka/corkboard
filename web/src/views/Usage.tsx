@@ -1,6 +1,7 @@
 // The token-usage view. Neovim reads the session logs and owns the
 // selection (corkboard.usage); a click on a session calls back into it.
 
+import { Marked } from "marked";
 import { useEffect, useRef, useState } from "react";
 import { Spinner } from "@/components/Spinner";
 import { Card } from "@/components/ui/card";
@@ -42,6 +43,10 @@ type UsageState = {
   // (corkboard.usage's by_card), all time.
   cards?: { id: string; title: string; cost?: number; tokens: number; sessions: number }[];
   labels?: { label: string; cost: number; cards: number }[];
+  // Pepper's usage-recommendations note (its daily review of the report
+  // corkboard.usage sends), and whether it shows in place of the session.
+  advice?: { body: string; updated: string };
+  show_advice?: boolean;
 };
 
 export function Usage({ state, win, focused, nvim }: ViewProps<UsageState>) {
@@ -56,7 +61,7 @@ export function Usage({ state, win, focused, nvim }: ViewProps<UsageState>) {
     <div className="@container/usage flex h-full flex-col px-2ch pt-row">
       <header className="flex justify-between gap-2ch pb-row text-muted-foreground">
         <span className="min-w-0 truncate">{state.root ?? ""}</span>
-        <span className="flex-none @max-[80ch]/usage:hidden">j/k session · p period · s sort · R refresh</span>
+        <span className="flex-none @max-[80ch]/usage:hidden">j/k session · p period · s sort · a advice · R refresh</span>
       </header>
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(28ch,36ch)_1fr] gap-3ch @max-[80ch]/usage:grid-cols-1 @max-[80ch]/usage:grid-rows-[minmax(0,2fr)_minmax(0,3fr)] @max-[80ch]/usage:gap-y-row">
         <div className="flex min-h-0 flex-col gap-row">
@@ -107,8 +112,56 @@ export function Usage({ state, win, focused, nvim }: ViewProps<UsageState>) {
           </div>
           {!!state.cards?.length && <ByCard cards={state.cards} labels={state.labels ?? []} />}
         </div>
-        {selected ? <Detail s={selected} /> : <div className="px-ch text-muted-foreground">—</div>}
+        <div className="flex min-h-0 min-w-0 flex-col gap-row">
+          <Segmented
+            options={[["session", "Session"], ["advice", "Pepper's advice"]]}
+            value={state.show_advice ? "advice" : "session"}
+            onPick={(key) => nvim.lua("require('corkboard.usage').show_advice(...)", key === "advice")}
+          />
+          {state.show_advice ? (
+            <Advice advice={state.advice} />
+          ) : selected ? (
+            <Detail s={selected} />
+          ) : (
+            <div className="px-ch text-muted-foreground">—</div>
+          )}
+        </div>
       </div>
+    </div>
+  );
+}
+
+// Pepper's notes are model-written, and Pepper reads mail, so its markdown
+// is shown as markdown only: raw HTML as text, links only to http(s) and in
+// a new window (never this page, which drives Neovim), images as their alt
+// text.
+const escape = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+const safe = new Marked({
+  gfm: true,
+  async: false,
+  renderer: {
+    html: ({ text }) => escape(text),
+    image: ({ text }) => escape(text),
+    link({ href, tokens }) {
+      const text = this.parser.parseInline(tokens);
+      return /^https?:\/\//i.test(href) ? `<a href="${escape(href)}" target="_blank" rel="noopener noreferrer">${text}</a>` : text;
+    },
+  },
+});
+
+// What Pepper made of the report: markdown, on the grid like a card's.
+function Advice({ advice }: { advice: UsageState["advice"] }) {
+  if (!advice) {
+    return (
+      <div className="px-ch text-muted-foreground">
+        No advice yet. Pepper reviews the usage report daily at 5pm, in pepper-vm.
+      </div>
+    );
+  }
+  return (
+    <div className="on-grid min-h-0 min-w-0 flex-1 overflow-y-auto pr-ch">
+      <p className="text-muted-foreground">Pepper · updated {advice.updated.slice(0, 16).replace("T", " ")}Z</p>
+      <article className="markdown-body" dangerouslySetInnerHTML={{ __html: safe.parse(advice.body) as string }} />
     </div>
   );
 }
@@ -146,7 +199,7 @@ function Detail({ s }: { s: Session }) {
   const c = s.cache;
   const writes = c.write_1h === c.write ? "1h" : c.write_1h ? `${tokens(c.write_1h)} 1h` : "5m";
   return (
-    <div className="min-w-0 overflow-y-auto pr-ch">
+    <div className="min-h-0 min-w-0 flex-1 overflow-y-auto pr-ch">
       <h1 className="mb-row font-bold">{s.title}</h1>
       <div className="mt-half grid grid-cols-[repeat(auto-fit,minmax(18ch,1fr))] gap-x-2ch gap-y-half">
         <Tile label="Cost" value={money(s.session_cost)} sub={s.agents.length ? `incl. ${s.agents.length} subagent${s.agents.length > 1 ? "s" : ""}` : ""} />

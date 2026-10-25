@@ -49,6 +49,8 @@ end
 
 -- A note on the Worker, made or replaced: { kind, title, body }.
 function M.note_put(id, note) return request("note_put", id, note) end
+-- A note on the Worker, or nil when there is none.
+function M.note_get(id) return request("note_get", id) end
 
 -- The bridge's answer: { id, error?, result? }.
 function M.answer(a)

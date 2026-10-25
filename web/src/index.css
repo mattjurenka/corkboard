@@ -127,12 +127,15 @@
     max-width: 780px; margin: 0 auto; padding: 16px 0 50vh;
     font: 15px/1.6 system-ui, sans-serif; color: var(--foreground); overflow-wrap: break-word;
   }
-  /* In a float (a card), the editor's face, on its grid. */
-  .float-view .markdown-body { font: var(--font-size)/var(--cell-h) var(--font); padding-top: var(--cell-h); }
-  .float-view .markdown-body :is(h1, h2) { font-size: 1em; font-weight: 700; padding-bottom: 0; }
-  .float-view .markdown-body h1 { color: var(--primary); }
-  .float-view .markdown-body :is(h3, h4, h5, h6) { font-size: 1em; }
-  .float-view .markdown-body pre { font-size: var(--font-size); }
+  /* In a float (a card) or a panel, the editor's face, on its grid. */
+  :is(.float-view, .on-grid) .markdown-body { font: var(--font-size)/var(--cell-h) var(--font); padding-top: var(--cell-h); }
+  :is(.float-view, .on-grid) .markdown-body :is(h1, h2) { font-size: 1em; font-weight: 700; padding-bottom: 0; }
+  :is(.float-view, .on-grid) .markdown-body h1 { color: var(--primary); }
+  :is(.float-view, .on-grid) .markdown-body :is(h3, h4, h5, h6) { font-size: 1em; }
+  :is(.float-view, .on-grid) .markdown-body pre { font-size: var(--font-size); }
+  /* In a panel (Pepper's advice in the usage view), its whole width. */
+  .on-grid .markdown-body { max-width: none; margin: 0; padding: 0 0 var(--cell-h); }
+  .on-grid .markdown-body > :first-child { margin-top: 0; }
   .markdown-body > div > :first-child { margin-top: 0; }
   .markdown-body :is(h1, h2, h3, h4, h5, h6) { margin: 1.4em 0 .5em; line-height: 1.25; font-weight: 600; }
   .markdown-body h1 { font-size: 1.9em; padding-bottom: .25em; border-bottom: 1px solid var(--border); }
