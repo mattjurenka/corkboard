@@ -8,18 +8,37 @@
 -- against the current plan, in hunks like a review: accepted whole, or
 -- with hunks undone first.
 --
--- Until it reads real projects and a calendar the plan is test data
--- (corkboard.plan.sample), and accepting writes nothing anywhere.
+-- The plan is today's on corkboard's Worker (cloud/src/plans.ts), read
+-- through the bridge and followed live: the assistant proposes (MCP
+-- plan_propose), the proposal shows here as a diff against the day, and
+-- accepting it, which only happens here, writes the Claude calendar with
+-- `dayplan apply` and then tells the Worker. A first plan of the day is a
+-- proposal against an empty day. It lives in the day plan's window
+-- (corkboard.window == "plan").
 
 local pinned = require("corkboard.pinned")
-local sample = require("corkboard.plan.sample")
 
 local M = {}
 
-local day = sample.day()
--- The re-plan waiting to be accepted, as sample.replan returns it.
+local function cloud() return require("corkboard.cards.cloud") end
+
+-- The plan's date: today, or CORKBOARD_PLAN_DATE for tests, which must not
+-- touch today's.
+local function today() return vim.env.CORKBOARD_PLAN_DATE or os.date("%Y-%m-%d") end
+
+-- What writes the calendar; CORKBOARD_DAYPLAN in tests, which must not.
+local DAYPLAN = vim.env.CORKBOARD_DAYPLAN or "dayplan"
+
+local function empty_day() return { blocks = {}, ranked = {}, later = {}, inputs = {} } end
+
+-- The plan as the Worker has it. proposal is copied, so undoing hunks here
+-- changes only what will be accepted.
+local doc
+local day = empty_day()
 local proposal
 local asked = {}
+local projects = {}
+local problem -- why there's no plan to show: no bridge, not signed in
 local selected
 local show_later = false
 local plan_buf, diff_buf
@@ -110,7 +129,7 @@ end
 local function effects(n)
   return {
     string.format("calendar: %d added, %d moved, %d removed", n["+"], n["~"], n["-"]),
-    "test data: nothing is written to a calendar yet",
+    "written to the Claude calendar with dayplan apply, which opens the gate",
   }
 end
 
@@ -125,8 +144,8 @@ local function plan_state()
   return {
     date = os.date("%a %d %b"),
     now = now(),
-    test = true,
-    projects = sample.projects,
+    problem = problem,
+    projects = projects,
     blocks = day.blocks,
     selected = selected,
     ranked = day.ranked,
@@ -144,13 +163,12 @@ local function diff_state()
   return {
     date = os.date("%a %d %b"),
     from = clock(proposal.from),
-    test = true,
-    projects = sample.projects,
+    projects = projects,
     reasons = proposal.reasons,
     lines = vim.tbl_map(function(l)
       return {
         op = l.op, hunk = l.hunk, id = l.block.id, start = l.block.start, stop = l.block.stop,
-        title = l.block.title, kind = l.block.kind, project = l.block.project, card = l.block.card,
+        title = l.block.title, kind = l.block.kind, project = l.block.project, card = l.block.card, board = l.block.board,
         was = l.was and clock(l.was.start) or nil,
       }
     end, lines),
@@ -186,7 +204,11 @@ end
 
 local function render_plan()
   if not (plan_buf and vim.api.nvim_buf_is_valid(plan_buf)) then return end
-  local lines, map = { "Day plan  " .. os.date("%a %d %b") .. "  (test data)", "" }, {}
+  local lines, map = { "Day plan  " .. os.date("%a %d %b"), "" }, {}
+  if problem then table.insert(lines, "  " .. problem) end
+  if not problem and #day.blocks == 0 and not proposal then
+    table.insert(lines, "  no plan yet: the assistant proposes one (plan_propose), and it shows here")
+  end
   for _, b in ipairs(day.blocks) do
     table.insert(lines, string.format("  %s–%s  %s %-48s %s%s", clock(b.start), clock(b.stop), pin_of(b), b.title,
       b.tag or "", b.pinned and "  pinned" or ""))
@@ -209,7 +231,7 @@ end
 local function render_diff()
   if not (proposal and diff_buf and vim.api.nvim_buf_is_valid(diff_buf)) then return end
   local lines, hunks = diff()
-  local text = { "Re-plan of " .. os.date("%a %d %b") .. " from " .. clock(proposal.from) .. "  (test data)", "" }
+  local text = { "Re-plan of " .. os.date("%a %d %b") .. " from " .. clock(proposal.from), "" }
   for _, r in ipairs(proposal.reasons) do table.insert(text, "  why now: " .. r.text .. " (" .. r.source .. ")") end
   table.insert(text, "")
   local map, heads, last = {}, {}, nil
@@ -270,20 +292,26 @@ end
 
 -- Actions ----------------------------------------------------------------------------
 
-local function open_card(id)
+-- A block's card. In a project's window, on its board. The day plan's
+-- window has no board, so it opens the card's project in a window of its
+-- own (corkboard.open), where the card is on the board.
+local function open_card(id, board)
   if not id then return vim.notify("corkboard: this block has no card") end
-  if not pcall(require("corkboard.cards").get, id) then
-    return vim.notify("corkboard: " .. id .. " is test data, not a card on this board")
+  if require("corkboard").window ~= "plan" then return require("corkboard.board").reveal(id) end
+  local ok, boards = pcall(cloud().call, "plan_boards")
+  local root
+  for _, b in ipairs(ok and boards or {}) do
+    if b.key == board and b.root ~= vim.NIL then root = b.root end
   end
-  require("corkboard.board").reveal(id)
+  if not root then return vim.notify("corkboard: " .. id .. " is on a board with no project to open (" .. tostring(board) .. ")") end
+  require("corkboard").notify("corkboard.open", { cwd = root })
 end
 
--- Make a re-plan (the sample's) and show it; the one waiting, if there is.
+-- The re-plan waiting to be accepted. The assistant makes them; S tells it
+-- what to change.
 function M.replan()
   if not proposal then
-    proposal = sample.replan(day.blocks)
-    asked = {}
-    selected_hunk = 1
+    return vim.notify("corkboard: no re-plan is waiting. The assistant proposes them; S on a re-plan says what to change.")
   end
   show_buf(M.diff_buffer())
   redraw()
@@ -291,20 +319,60 @@ function M.replan()
   if head then vim.api.nvim_win_set_cursor(0, { head, 0 }) end
 end
 
+-- dayplan apply's blocks: what's still ahead and isn't already a calendar
+-- event, as local times on doc.date.
+local function calendar_blocks(blocks)
+  local at = function(m) return doc.date .. "T" .. (m >= 24 * 60 and "23:59" or clock(m)) end
+  -- What's past is only past today; another day's plan is written whole.
+  local from = doc.date == os.date("%Y-%m-%d") and now() or 0
+  local out = {}
+  for _, b in ipairs(blocks) do
+    if b.kind ~= "fixed" and b.stop > from then
+      table.insert(out, { title = b.title, desc = b.desc or "", start = at(math.max(b.start, from)), ["end"] = at(b.stop) })
+    end
+  end
+  return out
+end
+
+-- An answer from the Worker: { plan } or { conflict = the plan as it is }.
+local function settle(res, what)
+  if res.conflict then
+    M.apply(res.conflict)
+    vim.notify("corkboard: the plan changed before " .. what .. "; look at it again", vim.log.levels.WARN)
+    return false
+  end
+  M.apply(res.plan)
+  return true
+end
+
+-- The calendar first, then the Worker: a plan is only accepted once it's
+-- on the calendar, which is what opens the dayplan gate.
 function M.accept()
-  if not proposal then return end
-  day.blocks = proposal.blocks
-  proposal = nil
-  if not find(day.blocks, selected) then selected = current_block() end
-  close_diff()
-  redraw()
-  vim.notify("corkboard: re-plan accepted (test data: nothing written to a calendar)")
+  if not (proposal and doc) then return end
+  local blocks, version = vim.deepcopy(proposal.blocks), doc.version
+  -- Accepting approves the day, which opens the dayplan gate; an empty plan
+  -- would open it with nothing planned.
+  if #blocks == 0 then return vim.notify("corkboard: nothing is left to accept; q keeps the plan as it was", vim.log.levels.WARN) end
+  local input = vim.json.encode({ blocks = calendar_blocks(blocks), approve = true })
+  vim.notify("corkboard: writing the plan to the calendar…")
+  vim.system({ DAYPLAN, "apply" }, { stdin = input, text = true }, vim.schedule_wrap(function(r)
+    if r.code ~= 0 then
+      return vim.notify("corkboard: dayplan apply failed, so the plan isn't accepted: " .. vim.trim(r.stderr ~= "" and r.stderr or r.stdout), vim.log.levels.ERROR)
+    end
+    local ok, res = pcall(cloud().call, "plan_accept", doc.date, version, blocks)
+    if not ok then
+      return vim.notify("corkboard: on the calendar, but the Worker didn't take it: " .. res .. "; accept again", vim.log.levels.ERROR)
+    end
+    if settle(res, "it was accepted") then
+      close_diff()
+      vim.notify("corkboard: plan accepted. " .. vim.trim(r.stdout))
+    end
+  end))
 end
 
 function M.discard()
-  proposal = nil
-  close_diff()
-  redraw()
+  if not (proposal and doc) then return end
+  if settle(cloud().call("plan_discard", doc.date, doc.version), "it was discarded") then close_diff() end
 end
 
 -- Put the hunk's blocks back as the current plan has them.
@@ -328,14 +396,19 @@ function M.undo_hunk(i)
   redraw()
 end
 
--- What to change, for whoever makes the next re-plan. With test data it is
--- only kept and shown.
+-- What to change, for the assistant's next re-plan (it reads it with
+-- plan_read).
 function M.say()
+  if not doc then return end
   vim.ui.input({ prompt = "Change the plan: " }, function(text)
     if not (text and vim.trim(text) ~= "") then return end
-    table.insert(asked, vim.trim(text))
-    redraw()
+    settle(cloud().call("plan_say", doc.date, vim.trim(text)), "that was said")
   end)
+end
+
+-- The day, after an edit here: written back by version.
+local function save_day()
+  if doc then settle(cloud().call("plan_day", doc.date, doc.version, day.blocks), "the edit") end
 end
 
 local function step_hunk(dir)
@@ -350,7 +423,7 @@ function M.edit()
   vim.ui.input({ prompt = clock(b.start) .. "–" .. clock(b.stop) .. ": ", default = b.title }, function(title)
     if not (title and vim.trim(title) ~= "") then return end
     b.title = vim.trim(title)
-    redraw()
+    save_day()
   end)
 end
 
@@ -359,7 +432,7 @@ function M.pin()
   local b = selected_block()
   if not b or b.kind ~= "work" then return end
   b.pinned = not b.pinned or nil
-  redraw()
+  save_day()
 end
 
 function M.toggle_later()
@@ -367,21 +440,75 @@ function M.toggle_later()
   redraw()
 end
 
--- Start again from the sample day.
-function M.reset()
-  day, proposal, asked = sample.day(), nil, {}
-  selected = current_block()
-  if diff_buf and vim.api.nvim_buf_is_valid(diff_buf) and #vim.fn.win_findbuf(diff_buf) > 0 then close_diff() end
+-- Read the plan again, and follow it from now on.
+local following = false
+
+function M.load()
+  if not cloud().enabled() then
+    problem = "the day plan needs corkboard's bridge and the cloud"
+    return redraw()
+  end
+  local ok, res = pcall(function()
+    if not following then
+      cloud().call("plan_subscribe")
+      following = true
+    end
+    return cloud().call("plan_get", today())
+  end)
+  if not ok then
+    problem = tostring(res)
+    return redraw()
+  end
+  -- Read again on purpose (R): the proposal as the Worker has it, without
+  -- the hunks undone here.
+  proposal = nil
+  M.apply(res)
+end
+
+-- The Worker's plan becomes what's shown. A new version replaces any hunks
+-- undone here.
+function M.apply(plan)
+  if plan.date ~= today() then return end
+  if doc and plan.version < doc.version then return end
+  local was = doc and doc.version
+  doc, problem = plan, nil
+  day = vim.tbl_extend("force", empty_day(), plan.day or {})
+  projects = plan.projects or {}
+  asked = plan.asked or {}
+  if plan.proposal and plan.proposal ~= vim.NIL then
+    if was ~= plan.version or not proposal then
+      proposal = vim.deepcopy(plan.proposal)
+      proposal.why = type(proposal.why) == "table" and proposal.why or {}
+      selected_hunk = 1
+    end
+  else
+    proposal = nil
+  end
+  if not find(day.blocks, selected) then selected = current_block() end
   redraw()
 end
+
+-- What the page is sent, for tests.
+function M.state() return plan_state(), proposal and diff_state() or nil end
+
+-- From the bridge: the user's socket.
+function M.cloud_event(event)
+  if event.type == "plan" then M.apply(event.plan) end
+  if event.type == "reconnected" then M.load() end
+end
+
+M.reset = M.load
 
 local PLAN_ACTIONS = {
   replan = M.replan,
   edit = M.edit,
   pin = M.pin,
   later = M.toggle_later,
-  open = function() open_card((selected_block() or {}).card) end,
-  reset = M.reset,
+  open = function()
+    local b = selected_block() or {}
+    open_card(b.card, b.board)
+  end,
+  reset = M.load,
 }
 
 local DIFF_ACTIONS = {
@@ -393,7 +520,7 @@ local DIFF_ACTIONS = {
   discard = M.discard,
   open = function()
     for _, l in ipairs(diff_state().lines) do
-      if l.hunk == selected_hunk and l.card then return open_card(l.card) end
+      if l.hunk == selected_hunk and l.card then return open_card(l.card, l.board) end
     end
     open_card(nil)
   end,
@@ -437,7 +564,7 @@ function M.buffer()
     p = { "pin", "pin the block" },
     z = { "later", "show what's not today" },
     ["<CR>"] = { "open", "open the block's card" },
-    R = { "reset", "start over from the test data" },
+    R = { "reset", "read the plan again" },
   })
   k.j = { step(1), "next block" }
   k.k = { step(-1), "previous block" }
@@ -476,7 +603,7 @@ end
 -- In the day plan's window (corkboard.window == "plan"), keep the plan its
 -- first tab. Leaves focus where it was.
 function M.ensure()
-  if pinned.ensure("corkboard_plan", 1, M.buffer()) then redraw() end
+  if pinned.ensure("corkboard_plan", 1, M.buffer()) then M.load() end
 end
 
 -- The plan's tab, in the day plan's window. Elsewhere, <leader>p and

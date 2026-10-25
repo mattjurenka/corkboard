@@ -8,7 +8,8 @@
 import { DurableObject } from "cloudflare:workers";
 import { type BoardEvent, type Card, type Fields, type Imported, type LogEntry, type Status, waitingOn } from "./cards";
 
-export type Result<T> = { ok: true; value: T } | { ok: false; status: number; error: string; card?: Card };
+// card, plan: on a conflict, the thing as it is now, to redo the change on.
+export type Result<T> = { ok: true; value: T } | { ok: false; status: number; error: string; card?: Card; plan?: unknown };
 
 const ok = <T>(value: T): Result<T> => ({ ok: true, value });
 const fail = (status: number, error: string, card?: Card): Result<never> => ({ ok: false, status, error, card });

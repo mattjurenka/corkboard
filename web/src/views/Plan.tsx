@@ -14,7 +14,8 @@ type Block = { id: string; start: number; stop: number; title: string; kind: Kin
 type Ranked = { title: string; project: string; est: string; why: string; block?: string };
 type PlanState = {
   date: string;
-  test?: boolean;
+  // Why there's no plan to show: no bridge, not signed in, the Worker down.
+  problem?: string;
   projects: Project[];
   blocks: Block[];
   selected?: string;
@@ -33,7 +34,6 @@ type Hunk = { start: number; stop: number; why: string[]; counts: Record<string,
 type DiffState = {
   date: string;
   from: string;
-  test?: boolean;
   projects: Project[];
   reasons: { tone?: string; text: string; source: string }[];
   lines: Line[];
@@ -126,7 +126,7 @@ const PLAN_KEYS = [
   ["pin", "p", "Pin"],
   ["later", "z", "Not today"],
   ["open", "⏎", "Open card"],
-  ["reset", "R", "Reset test data"],
+  ["reset", "R", "Read again"],
 ];
 
 // Half an hour is a line of the grid.
@@ -154,8 +154,10 @@ export function Plan({ state, win, focused, nvim }: ViewProps<PlanState>) {
         </span>
         {state.proposal ? (
           <span className="text-review">● a re-plan is waiting · r to see it</span>
-        ) : state.test ? (
-          <span className="text-review">● test data · nothing is written to a calendar</span>
+        ) : state.problem ? (
+          <span className="text-blocked">● {state.problem}</span>
+        ) : !state.blocks.length ? (
+          <span className="text-muted-foreground">no plan yet · the assistant proposes one</span>
         ) : null}
       </header>
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(34ch,46ch)] gap-x-3ch @max-[96ch]/plan:grid-cols-1 @max-[96ch]/plan:overflow-y-auto @max-[96ch]/plan:pt-half">
@@ -387,7 +389,9 @@ export function PlanDiff({ state, win, focused, nvim }: ViewProps<DiffState>) {
         <span>
           re-plan · {state.date} <span className="text-muted-foreground">· from {state.from}</span>
         </span>
-        {state.test && <span className="text-review">● test data · accepting writes nothing</span>}
+        <span className="text-muted-foreground">
+          <kbd className="text-primary">A</kbd> writes it to the calendar
+        </span>
       </header>
 
       <Box title="why now" className="mb-row">
@@ -489,7 +493,7 @@ export function PlanDiff({ state, win, focused, nvim }: ViewProps<DiffState>) {
                   <kbd className="text-primary">S</kbd> to say what to change
                 </span>
               )}
-              {state.test && state.asked.length > 0 && <div className="text-muted-foreground">test data: kept for the next re-plan, not sent yet</div>}
+              {state.asked.length > 0 && <div className="text-muted-foreground">for the assistant's next re-plan</div>}
             </div>
           </Box>
         </aside>

@@ -218,7 +218,11 @@ function cloud(data: Session, nvim: NonNullable<Session["nvim"]>, params: any[])
   const lua = (code: string, ...args: unknown[]) => {
     if (!data.closed) send(nvim, [2, "nvim_exec_lua", [code, args]]);
   };
-  data.cloud ??= new boards.Session((key, event) => lua("require('corkboard.cards').cloud_event(...)", key, event));
+  data.cloud ??= new boards.Session((key, event) =>
+    key === boards.USER
+      ? lua("require('corkboard.plan').cloud_event(...)", event)
+      : lua("require('corkboard.cards').cloud_event(...)", key, event),
+  );
   const [id, op, ...args] = params;
   const answer = (a: object) => lua("require('corkboard.cards.cloud').answer(...)", { id, ...a });
   data.cloud.call(op, args).then(

@@ -9,7 +9,8 @@
     "typecheck": "tsc -p .",
     "mcp": "bun mcp/board.ts",
     "login": "bun bridge/cloud.ts login",
-    "test:cloud": "bun test/cloud-boards.ts"
+    "test:cloud": "bun test/cloud-boards.ts",
+    "test:plan": "bun test/day-plan.ts"
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.0.0",

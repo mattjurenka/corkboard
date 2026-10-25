@@ -9,6 +9,7 @@ export default defineConfig({
         bindings: {
           ORIGIN: "https://corkboard.test",
           ALLOWED_EMAIL: "me@example.com",
+          TIMEZONE: "America/Phoenix",
           GOOGLE_CLIENT_ID: "google-client",
           GOOGLE_CLIENT_SECRET: "google-secret",
         },

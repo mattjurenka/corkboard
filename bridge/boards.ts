@@ -14,7 +14,11 @@
 
 import { CLOUD, token } from "./cloud";
 
+// key: the board's, or USER for the user's own socket (plans).
 export type Listener = (key: string, event: unknown) => void;
+
+// The user's socket, which tells of plan changes (GET /api/live).
+export const USER = "@user";
 
 async function api(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
   const res = await fetch(`${CLOUD}/api/boards${path}`, {
@@ -46,7 +50,8 @@ class Live {
   // Resolves once the socket is open, so a copy fetched after it misses
   // nothing.
   async open(): Promise<void> {
-    const url = `${CLOUD.replace(/^http/, "ws")}/api/boards/${encodeURIComponent(this.key)}/live`;
+    const path = this.key === USER ? "/api/live" : `/api/boards/${encodeURIComponent(this.key)}/live`;
+    const url = `${CLOUD.replace(/^http/, "ws")}${path}`;
     const ws = new WebSocket(url, { headers: { Authorization: `Bearer ${await token()}` } } as any);
     this.ws = ws;
     await new Promise<void>((resolve, reject) => {
@@ -72,8 +77,10 @@ class Live {
     if (this.closed) return;
     try {
       await this.open();
-      const cards = await snapshot(this.key);
-      for (const l of this.listeners) l(this.key, { type: "snapshot", cards });
+      // What was missed: a board's whole copy; for plans, just that the
+      // socket was gone, so whoever shows one reads it again.
+      const event = this.key === USER ? { type: "reconnected" } : { type: "snapshot", cards: await snapshot(this.key) };
+      for (const l of this.listeners) l(this.key, event);
     } catch (e) {
       console.error((e as Error).message);
       this.retry = Math.min(this.retry * 2, 60_000);
@@ -113,6 +120,7 @@ export class Session {
 
   // op and args as cards/cloud.lua sends them.
   async call(op: string, args: any[]): Promise<unknown> {
+    if (op.startsWith("plan_")) return this.plan(op, args);
     const [key] = args;
     if (typeof key !== "string" || !key) throw new Error("corkboard cloud: no board key");
     const board = `/${encodeURIComponent(key)}`;
@@ -164,6 +172,46 @@ export class Session {
         });
         return null;
       }
+      default:
+        throw new Error(`corkboard cloud: no operation ${op}`);
+    }
+  }
+
+  // The day plan (plan.lua): its date's plan, and the user's socket for
+  // its changes. A stale version answers with the plan as it is now.
+  private async plan(op: string, args: any[]): Promise<unknown> {
+    if (op === "plan_subscribe") {
+      await follow(USER, this.listener);
+      this.keys.add(USER);
+      return null;
+    }
+    // The boards, so a block's card can be opened in its project's window.
+    if (op === "plan_boards") return ok("GET", "");
+    const [date, ...rest] = args;
+    if (typeof date !== "string" || !/^\d{4}-\d\d-\d\d$/.test(date)) throw new Error("corkboard cloud: plans need a YYYY-MM-DD date");
+    const path = `${CLOUD}/api/plans/${date}`;
+    const send = async (method: string, sub: string, body?: unknown) => {
+      const res = await fetch(`${path}${sub}`, {
+        method,
+        headers: { Authorization: `Bearer ${await token()}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      const json = (await res.json().catch(() => ({}))) as any;
+      if (res.status === 409) return { conflict: json.plan };
+      if (!res.ok) throw new Error(`corkboard cloud: ${json.error ?? `HTTP ${res.status}`}`);
+      return { plan: json };
+    };
+    switch (op) {
+      case "plan_get":
+        return (await send("GET", "")).plan;
+      case "plan_say":
+        return send("POST", "/say", { text: rest[0] });
+      case "plan_accept":
+        return send("POST", "/accept", { version: rest[0], blocks: rest[1] });
+      case "plan_discard":
+        return send("POST", "/discard", { version: rest[0] });
+      case "plan_day":
+        return send("PUT", "/day", { version: rest[0], blocks: rest[1] });
       default:
         throw new Error(`corkboard cloud: no operation ${op}`);
     }

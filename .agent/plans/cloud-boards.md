@@ -178,6 +178,15 @@ they would bring conflicts back.
    a real `claude -p` session against the Worker. 46 Worker tests; `bun run test:cloud` covers
    the agent path end to end.
 6. Notes + plans + their tools; `plan.lua` on real data. (This is what the life brain needs.)
+   **Built and deployed 2026-10-24.** The `User` object holds notes (FTS5 search) and plans
+   (`cloud/src/plans.ts`): per date, the day, an optional proposal, and what the user said to
+   change; versioned like cards; `GET /api/live` sends each plan change. MCP (OAuth only):
+   `notes_search`, `note_read`, `note_write`, `note_append`, `plan_read`, `plan_propose`; no
+   accept tool; the `soul` note is owner-only. The day plan has its own window (one at a time);
+   `plan.lua` reads the plan through the bridge and follows it live, and `A` runs
+   `dayplan apply` on the host before telling the Worker; an empty plan isn't accepted, since
+   accepting opens the gate. `bun run test:plan` runs it end to end on a 2099 date with a
+   stand-in `dayplan`.
 7. claude.ai connector (`connector` grant).
 
 ## Open

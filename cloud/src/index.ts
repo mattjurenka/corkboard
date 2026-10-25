@@ -22,6 +22,8 @@ export type Env = {
   ORIGIN: string;
   // The one Google account allowed in.
   ALLOWED_EMAIL: string;
+  // Where "today" is, for plans (IANA, America/Phoenix).
+  TIMEZONE: string;
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
 };

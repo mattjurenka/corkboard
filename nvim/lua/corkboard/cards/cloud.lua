@@ -287,6 +287,9 @@ function M.create(title, status, body)
   return card.id
 end
 
+-- Any of the bridge's operations, for corkboard.plan's plan_* ones.
+M.call = request
+
 -- A token for agent's MCP session on card id: { token, url, expires_at }.
 -- It can read the board and work on that card only.
 function M.agent_token(id, agent) return request("token", key(), id:upper(), agent) end

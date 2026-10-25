@@ -420,7 +420,7 @@ function M.statusline()
   elseif vim.b[buf].corkboard_view == "board" then
     title, detail, pos = "Board", vim.fn.fnamemodify(vim.fn.getcwd(win), ":~"), false
   elseif vim.b[buf].corkboard_view == "plan" then
-    title, detail, pos = "Day plan", "test data", false
+    title, detail, pos = "Day plan", os.date("%a %d %b"), false
   elseif vim.b[buf].corkboard_view == "plan-diff" then
     title, detail, pos = "Re-plan", "A accept · q keep old", false
   elseif vim.b[buf].corkboard_view == "markdown" then

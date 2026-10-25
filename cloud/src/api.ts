@@ -11,6 +11,14 @@
 //   PATCH /api/boards/:board/cards/:id       { version, ...fields }; 409 + the card on a stale version
 //   POST  /api/boards/:board/cards/:id/log   { who, note }
 //   POST  /api/boards/:board/import          { cards: [...] } with their ids, times and logs; empty boards only
+//   GET   /api/live                          WebSocket: { type: "plan", plan } on every plan change
+//   GET   /api/notes                         ?q= to search, ?kind=, ?limit=
+//   GET, PUT, DELETE /api/notes/:id          PUT { kind, title, body }
+//   GET, DELETE /api/plans/:date             the day and any proposal (an empty plan if none); gone for good
+//   POST  /api/plans/:date/say               { text }: what to change, for the next proposal
+//   POST  /api/plans/:date/accept            { version, blocks }: the proposal, as the user left it
+//   POST  /api/plans/:date/discard           { version }
+//   PUT   /api/plans/:date/day               { version, blocks }: the day, edited
 //   POST  /api/tokens                        a card token for an agent: { board, card, agent }
 //   POST  /api/tokens/revoke                 { token }
 //
@@ -22,13 +30,14 @@ import { Invalid, cardId, fields, imported, logEntry } from "./cards";
 import type { Result } from "./board";
 import { CARD_TOKEN, type Env, type Props } from "./index";
 import { type Grant, mcp } from "./mcp";
+import { blocks, date, note, noteId } from "./plans";
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const error = (status: number, message: string, extra: object = {}) => json({ error: message, ...extra }, status);
 
 function reply<T>(result: Result<T>, status = 200): Response {
   if (result.ok) return json(result.value, status);
-  return error(result.status, result.error, result.card ? { card: result.card } : {});
+  return error(result.status, result.error, result.card ? { card: result.card } : result.plan ? { plan: result.plan } : {});
 }
 
 // A board key is a local project path with / as - (corkboard's path_key).
@@ -109,6 +118,58 @@ async function route(request: Request, env: Env, user: string): Promise<Response
   return error(405, "method not allowed");
 }
 
+type Users = DurableObjectStub<import("./user").User>;
+
+async function notes(request: Request, users: Users): Promise<Response> {
+  const url = new URL(request.url);
+  const id = url.pathname.match(/^\/api\/notes(?:\/([^/]+))?$/);
+  if (!id) return error(404, "not found");
+  if (!id[1]) {
+    if (request.method !== "GET") return error(405, "method not allowed");
+    const limit = Math.min(Number(url.searchParams.get("limit") ?? 50) || 50, 200);
+    return json(await users.notes(url.searchParams.get("q") ?? undefined, url.searchParams.get("kind") ?? undefined, limit));
+  }
+  const key = noteId(id[1]);
+  if (request.method === "GET") return reply(await users.note(key));
+  if (request.method === "PUT") return json(await users.putNote(key, note(await body(request))));
+  if (request.method === "DELETE") {
+    await users.deleteNote(key);
+    return new Response(null, { status: 204 });
+  }
+  return error(405, "method not allowed");
+}
+
+async function plans(request: Request, users: Users): Promise<Response> {
+  const m = new URL(request.url).pathname.match(/^\/api\/plans\/([^/]+)(?:\/(say|accept|discard|day))?$/);
+  if (!m) return error(404, "not found");
+  const day = date(m[1]);
+  const action = m[2];
+  if (!action) {
+    if (request.method === "GET") return json(await users.plan(day));
+    if (request.method !== "DELETE") return error(405, "method not allowed");
+    await users.deletePlan(day);
+    return new Response(null, { status: 204 });
+  }
+  const input = await body(request);
+  const version = () => {
+    if (!Number.isInteger(input.version)) throw new Invalid("version must be the integer version you read");
+    return input.version as number;
+  };
+  if (action === "day" ? request.method !== "PUT" : request.method !== "POST") return error(405, "method not allowed");
+  switch (action) {
+    case "say": {
+      if (typeof input.text !== "string" || !input.text.trim()) throw new Invalid("text must say what to change");
+      return reply(await users.say(day, input.text.trim()));
+    }
+    case "accept":
+      return reply(await users.accept(day, version(), blocks(input.blocks)));
+    case "discard":
+      return reply(await users.discard(day, version()));
+    default:
+      return reply(await users.setDay(day, version(), blocks(input.blocks)));
+  }
+}
+
 // Card tokens: random, kept only as their SHA-256, each good for one agent on
 // one card until it's revoked or expires.
 const CARD_TOKEN_TTL = 7 * 24 * 3600;
@@ -161,6 +222,10 @@ export const api = {
     if (ctx.props.grant || !ctx.auth.scope.includes("owner")) return insufficientScope(ctx.auth, ["owner"]);
     try {
       if (path.startsWith("/api/tokens")) return await tokens(request, env, ctx.props);
+      const users = env.USER.get(env.USER.idFromName(ctx.props.userId));
+      if (path === "/api/live") return users.fetch(request);
+      if (path.startsWith("/api/notes")) return await notes(request, users);
+      if (path.startsWith("/api/plans/")) return await plans(request, users);
       return await route(request, env, ctx.props.userId);
     } catch (e) {
       if (e instanceof Invalid) return error(400, e.message);

@@ -16,6 +16,9 @@
 import type { Result } from "./board";
 import { AGENT_STATES, type Card, type Fields, type LogEntry, STATUSES, waitingOn } from "./cards";
 import type { Env } from "./index";
+import { Invalid } from "./cards";
+import { NOTE_KINDS, OWNER_ONLY_NOTES, date, note, noteId, projects, proposal, slug, today } from "./plans";
+import type { User } from "./user";
 
 export type Grant =
   | { kind: "card"; board: string; card: string; agent: string }
@@ -362,8 +365,113 @@ If you need a human decision, call block with your question and stop. If you nee
 (log in, approve, test on a device), call request_user_action; both notify them on their desktop. When done, call submit_for_review.
 Put follow-up work you discover in new cards with create_card (parent: the card you are on).`;
 
+// The user's own tools, for OAuth clients only: notes (the assistant's
+// memory) and the day plan. There's no tool to accept a plan; only the user
+// does that, in corkboard.
+
+type UserCall = { users: DurableObjectStub<User>; grant: Grant; timeZone: string };
+type UserTool = { description: string; properties?: Record<string, object>; required?: string[]; run: (a: any, c: UserCall) => Promise<unknown> };
+
+const day = str("YYYY-MM-DD; today, where the user is, if left out");
+const blockSchema = {
+  type: "array",
+  description:
+    "The blocks, minutes since midnight. kind: work (planned), fixed (a calendar event, not yours to move) or off (meals, free time). title: 'Prefix: concrete action'. desc: the first physical step, which is what the block's notification says. project: a key from projects. card and board: the corkboard card it's for.",
+  items: {
+    type: "object",
+    properties: {
+      id: str("Unique within the plan; keep a block's id when you move it"),
+      start: { type: "integer" },
+      stop: { type: "integer" },
+      title: str("One line"),
+      kind: { type: "string", enum: ["work", "fixed", "off"] },
+      desc: str("The first physical step"),
+      project: str("Project key"),
+      tag: str("Short label: deep, review, due Wed"),
+      card: str("Card id"),
+      board: str("Board key"),
+      pinned: { type: "boolean" },
+    },
+    required: ["id", "start", "stop", "title", "kind"],
+  },
+};
+const lineList = (description: string) => ({ type: "array", items: { type: "object" }, description });
+
+function writable(id: string, grant: Grant) {
+  if (OWNER_ONLY_NOTES.has(id) && grant.kind !== "owner") throw new ToolError(`only the user writes the ${id} note`);
+}
+
+const USER_TOOLS: Record<string, UserTool> = {
+  notes_search: {
+    description:
+      "Search your notes: goals, day records, decisions, projects, people, reviews, memory, drafts. With no query, the newest. Every word must match.",
+    properties: { query: str("Words to find"), kind: { type: "string", enum: NOTE_KINDS }, limit: { type: "integer", description: "At most this many (default 20)" } },
+    run: async (a, c) => c.users.notes(a.query ? String(a.query) : undefined, a.kind, Math.min(Number(a.limit) || 20, 100)),
+  },
+  note_read: {
+    description: "Read a note.",
+    properties: { id: str("The note's id") },
+    required: ["id"],
+    run: async (a, c) => unwrap(await c.users.note(noteId(String(a.id)))),
+  },
+  note_write: {
+    description: "Write a note, replacing it if it exists. Without an id, one is made from the title. Returns the note, with its id.",
+    properties: {
+      id: str("lowercase-and-dashes; from the title if left out"),
+      kind: { type: "string", enum: NOTE_KINDS },
+      title: str("One line"),
+      body: str("Markdown"),
+    },
+    required: ["kind", "title", "body"],
+    run: async (a, c) => {
+      const id = noteId(a.id ? String(a.id) : slug(String(a.title ?? "")));
+      writable(id, c.grant);
+      return c.users.putNote(id, note(a));
+    },
+  },
+  note_append: {
+    description: "Add a timestamped line to a note, such as today's day record, without rewriting it.",
+    properties: { id: str("The note's id"), text: str("What to add") },
+    required: ["id", "text"],
+    run: async (a, c) => {
+      const id = noteId(String(a.id));
+      writable(id, c.grant);
+      if (typeof a.text !== "string" || !a.text.trim()) throw new ToolError("say what to add");
+      return unwrap(await c.users.appendNote(id, c.grant.agent, a.text));
+    },
+  },
+  plan_read: {
+    description:
+      "Read a day's plan: the day as accepted (its blocks, the ranked work, what's not today), any proposal waiting for the user, and asked: what the user has said to change since your last proposal.",
+    properties: { date: day },
+    run: async (a, c) => c.users.plan(a.date ? date(a.date) : today(c.timeZone)),
+  },
+  plan_propose: {
+    description:
+      "Propose a day plan, or a re-plan of the rest of one, for the user to accept in corkboard's day plan window; it replaces any proposal still waiting. blocks are the whole day as you'd have it (keep the ids of blocks you don't change, so the user sees only what changed). from: the time the re-plan starts. Accepting writes it to their calendar, which only the user can do. What they asked is answered by this proposal.",
+    properties: {
+      date: day,
+      from: { type: "integer", description: "Minutes since midnight; changes before it aren't shown" },
+      blocks: blockSchema,
+      reasons: lineList("Why a re-plan, now: [{ text, source, tone }]"),
+      why: { type: "object", description: "Block id to why it was added, moved or dropped" },
+      ranked: lineList("The work you ranked, most important first: [{ title, project, est, why, block }]"),
+      later: lineList("What's not today and when: [{ title, project, why }]"),
+      inputs: lineList("What you looked at: [{ label, value, tone }]"),
+      projects: lineList("The projects blocks refer to: [{ key, name, color }]; color is accent, review, working or special"),
+    },
+    required: ["blocks"],
+    run: async (a, c) => {
+      const d = a.date ? date(a.date) : today(c.timeZone);
+      const p = proposal(a, c.grant.agent, []);
+      const { answering: _, ...made } = p;
+      return unwrap(await c.users.propose(d, made, a.projects === undefined ? undefined : projects(a.projects)));
+    },
+  },
+};
+
 // What a grant sees: a card token its board's tools, with no board argument;
-// an OAuth client every tool with one, and list_boards.
+// an OAuth client every tool with one, list_boards, and the user's tools.
 function toolsFor(grant: Grant) {
   const tools = Object.entries(TOOLS)
     .filter(([, t]) => grant.kind !== "card" || t.card)
@@ -372,17 +480,28 @@ function toolsFor(grant: Grant) {
       const required = grant.kind === "card" ? (t.required ?? []) : ["board", ...(t.required ?? [])];
       return { name, description: t.description, inputSchema: { type: "object", properties, required } };
     });
-  if (grant.kind !== "card")
+  if (grant.kind !== "card") {
     tools.unshift({
       name: "list_boards",
       description: "List the boards: their keys (for every other tool's board argument), names and project paths.",
       inputSchema: { type: "object", properties: {}, required: [] },
     });
+    for (const [name, t] of Object.entries(USER_TOOLS))
+      tools.push({ name, description: t.description, inputSchema: { type: "object", properties: t.properties ?? {}, required: t.required ?? [] } });
+  }
   return tools;
 }
 
 async function callTool(env: Env, user: string, grant: Grant, name: string, args: any): Promise<unknown> {
   if (name === "list_boards" && grant.kind !== "card") return env.USER.get(env.USER.idFromName(user)).boards();
+  if (USER_TOOLS[name] && grant.kind !== "card") {
+    try {
+      return await USER_TOOLS[name].run({ ...args }, { users: env.USER.get(env.USER.idFromName(user)), grant, timeZone: env.TIMEZONE });
+    } catch (e) {
+      if (e instanceof Invalid) throw new ToolError(e.message);
+      throw e;
+    }
+  }
   const tool = TOOLS[name];
   if (!tool || (grant.kind === "card" && !tool.card)) throw new ToolError(`unknown tool ${name}`);
   const key = grant.kind === "card" ? grant.board : String(args.board ?? "");

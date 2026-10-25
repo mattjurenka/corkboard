@@ -22,6 +22,8 @@
   "vars": {
     "ORIGIN": "https://corkboard.matthewjurenka.workers.dev",
     "ALLOWED_EMAIL": "matthewjurenka@gmail.com",
+    // Where "today" is, for plans.
+    "TIMEZONE": "America/Phoenix",
     // The dayplan-512206 project's Web application client.
     "GOOGLE_CLIENT_ID": "911829084497-iab0dt2ufoiobeot2uanudsc1tc02s8o.apps.googleusercontent.com"
   }
