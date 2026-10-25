@@ -67,7 +67,7 @@ rpc.on("corkboard.context", ([context]: any[]) => {
   store.set({ context });
 });
 rpc.on("corkboard.preview", ([tab]: any[]) => store.set({ previewTab: tab ?? null }));
-// Ctrl+h from Neovim's leftmost window (corkboard/init.lua): keys go to
+// Alt+h from Neovim's leftmost window (corkboard/init.lua): keys go to
 // the sidebar's tabs (Tabs in Sidebar.tsx) until they hand them back.
 rpc.on("corkboard.focus_tabs", () => document.querySelector<HTMLElement>("#tabs")?.focus());
 // A new commit, under `bun run dev` (bridge/server.ts).

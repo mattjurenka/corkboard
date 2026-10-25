@@ -11,10 +11,10 @@ for (let i = 1; i <= 12; i++) SPECIAL[`F${i}`] = `F${i}`;
 // (a lone modifier, a dead key, composition).
 export function toNvimKey(e) {
   if (e.isComposing || e.key === "Dead") return null;
-  // Ctrl+Shift+digit, which goes to a tab by number: e.key is the shifted
-  // symbol ("#" for 3, whatever the layout puts there), so read the key.
+  // Alt+digit, which goes to a tab by number: e.key may be a symbol the
+  // layout puts on Alt+digit (macOS "¡" for 1), so read the key.
   const digit = /^Digit(\d)$/.exec(e.code);
-  if (digit && e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) return `<C-S-${digit[1]}>`;
+  if (digit && e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) return `<A-${digit[1]}>`;
   let key = SPECIAL[e.key];
   const special = key !== undefined;
   if (!special) {

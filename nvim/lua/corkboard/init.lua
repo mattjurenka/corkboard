@@ -611,21 +611,21 @@ function M.setup()
     })
   end
 
-  -- Ctrl+Shift+1 to 9 go to that tab, as the sidebar numbers them: the
+  -- Alt+1 to 9 go to that tab, as the sidebar numbers them: the
   -- board, usage, then the agents.
   for i = 1, 9 do
-    vim.keymap.set({ "n", "i", "t" }, ("<C-S-%d>"):format(i), function()
+    vim.keymap.set({ "n", "i", "t" }, ("<A-%d>"):format(i), function()
       if i <= vim.fn.tabpagenr("$") then vim.cmd.tabnext(i) end
     end, { desc = "corkboard: tab " .. i })
   end
 
-  -- Ctrl+h/j/k/l moves between the tab's windows, from terminal mode too.
-  -- Not insert mode, where <C-h> is backspace and <C-k> a digraph.
-  vim.keymap.set({ "n", "t" }, "<C-l>", "<Cmd>wincmd l<CR>", { desc = "corkboard: window l" })
-  -- With no window below or above (and not from a float), Ctrl+j/k go on
+  -- Alt+h/j/k/l moves between the tab's windows, from insert and terminal
+  -- mode too, leaving Ctrl+h/j/k/l to Vim and the terminal's programs.
+  vim.keymap.set({ "n", "i", "t" }, "<A-l>", "<Cmd>wincmd l<CR>", { desc = "corkboard: window l" })
+  -- With no window below or above (and not from a float), Alt+j/k go on
   -- to the next or previous tab.
   for dir, step in pairs({ j = 1, k = -1 }) do
-    vim.keymap.set({ "n", "t" }, "<C-" .. dir .. ">", function()
+    vim.keymap.set({ "n", "i", "t" }, "<A-" .. dir .. ">", function()
       local win = vim.api.nvim_get_current_win()
       vim.cmd.wincmd(dir)
       if vim.api.nvim_get_current_win() == win and vim.api.nvim_win_get_config(win).relative == "" then
@@ -633,9 +633,9 @@ function M.setup()
       end
     end, { desc = "corkboard: window " .. dir .. ", or the " .. (step > 0 and "next" or "previous") .. " tab" })
   end
-  -- From the leftmost window (not a float), Ctrl+h goes on to the page's
-  -- list of tabs (corkboard.focus_tabs), where Ctrl+j/k change tab.
-  vim.keymap.set({ "n", "t" }, "<C-h>", function()
+  -- From the leftmost window (not a float), Alt+h goes on to the page's
+  -- list of tabs (corkboard.focus_tabs), where Alt+j/k change tab.
+  vim.keymap.set({ "n", "i", "t" }, "<A-h>", function()
     local win = vim.api.nvim_get_current_win()
     vim.cmd.wincmd("h")
     if vim.api.nvim_get_current_win() == win and vim.api.nvim_win_get_config(win).relative == "" then

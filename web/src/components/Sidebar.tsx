@@ -6,7 +6,7 @@
 // are always the board and token usage (corkboard.board and corkboard.usage
 // keep them there), so they are labelled Board and Usage whatever window is
 // focused in them, and have no close button. The tabs after them come under
-// a gap. All are numbered as Neovim does, for Ctrl+Shift+<n>. The day plan
+// a gap. All are numbered as Neovim does, for Alt+<n>. The day plan
 // has a window of its own, opened from the project's header (planWindow.ts).
 
 import { Button } from "@/components/ui/button";
@@ -76,12 +76,12 @@ function Tabs() {
   const [focused, setFocused] = useState(false);
   if (!tabs) return <ol id="tabs" tabIndex={-1} className="flex-1" />;
 
-  // With focus here (Ctrl+h from Neovim's leftmost window), Ctrl+j/k, j/k or
-  // the arrows change tab, stopping at the ends; Ctrl+l, Enter or Esc go
+  // With focus here (Alt+h from Neovim's leftmost window), Alt+j/k, j/k or
+  // the arrows change tab, stopping at the ends; Alt+l, Enter or Esc go
   // back to Neovim. Any other key goes back too, and on to Neovim.
   const onKeyDown = (e: React.KeyboardEvent) => {
     const at = tabs.tabs.findIndex(({ tab }) => tab.id === tabs.current.id);
-    const plain = !e.altKey && !e.metaKey;
+    const plain = !e.ctrlKey && !e.metaKey;
     const step =
       plain && (e.key === "ArrowDown" || e.key.toLowerCase() === "j") ? 1
       : plain && (e.key === "ArrowUp" || e.key.toLowerCase() === "k") ? -1
@@ -92,12 +92,12 @@ function Tabs() {
       if (next) nvim.notify("nvim_set_current_tabpage", next.tab);
       return;
     }
-    // Null for a lone modifier, as the Ctrl of Ctrl+j goes down.
+    // Null for a lone modifier, as the Alt of Alt+j goes down.
     const key = toNvimKey(e.nativeEvent);
     if (!key) return;
     e.preventDefault();
     nvim.refocus();
-    if ((e.ctrlKey && e.key.toLowerCase() === "l") || e.key === "Enter" || e.key === "Escape") return;
+    if ((e.altKey && e.key.toLowerCase() === "l") || e.key === "Enter" || e.key === "Escape") return;
     nvim.notify("nvim_input", key);
   };
 
