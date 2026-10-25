@@ -9,25 +9,20 @@
 local M = {}
 
 local chans = {}
--- Declared before M.attach so its reset reaches the upvalue, not a global.
-local last_layout = nil
-local last_scroll = nil -- push_layout's scrollbars, likewise
-local last_context = nil -- push_context's, for the same reason
+-- What each channel was last sent, so unchanged state isn't sent again.
+local last_layout, last_scroll, last_context
 
--- Where the last project opened is kept; the bridge opens it when a page
--- names no ?cwd. Shared with bridge/server.ts, so not under stdpath().
+-- The last project opened, which the bridge opens when a page names no
+-- ?cwd. Shared with bridge/server.ts, so not under stdpath().
 local last_project_file = vim.fs.joinpath(
   vim.env.XDG_STATE_HOME or vim.fs.joinpath(vim.uv.os_homedir(), ".local/state"),
   "corkboard",
   "last-project"
 )
 
--- Every project opened, newest first, for Open project. Its own file rather
--- than snacks' recent list, which it derives from oldfiles: the bridge
--- stops Neovim with SIGTERM when a window closes, and Neovim writes no
--- shada on a deadly signal, so oldfiles never learn anything. Written as
--- each project opens instead, like last-project. Per machine: a remote's
--- list is in that machine's state dir.
+-- Every project opened, newest first, for Open project. Not snacks' recent
+-- list: that comes from oldfiles, and the bridge stops Neovim with SIGTERM,
+-- so shada is never written.
 local projects_file = vim.fs.joinpath(vim.fs.dirname(last_project_file), "projects")
 local max_projects = 50
 
@@ -50,9 +45,9 @@ local function remember_project()
   pcall(vim.fn.writefile, projects, projects_file)
 end
 
--- The statusline's dimmed folder: comment-coloured text. Foreground only,
--- so it lands on whichever bar it is in (a terminal's is StatusLineTerm,
--- not StatusLine). Again after every colorscheme, which clears it.
+-- The statusline's dimmed folder, in Comment's colour. Foreground only, so it
+-- suits whichever bar it is in (a terminal's is StatusLineTerm). Set again
+-- after every colorscheme, which clears it.
 local function status_highlights()
   local dim = vim.api.nvim_get_hl(0, { name = "Comment", link = false })
   vim.api.nvim_set_hl(0, "CorkboardStatusDetail", { fg = dim.fg })
@@ -61,17 +56,17 @@ end
 -- Called by the browser with its own channel id after nvim_ui_attach.
 function M.attach(chan)
   chans[chan] = true
-  -- By now every plugin has loaded, a colorscheme set from one included
-  -- (stylix's sets highlights without a ColorScheme event).
+  -- By now every plugin has loaded, including a colorscheme that set its
+  -- highlights without a ColorScheme event (stylix's).
   status_highlights()
   M.push_theme()
-  last_context = nil -- the new channel has seen nothing yet
+  -- The new channel has seen nothing yet.
+  last_context, last_layout, last_scroll = nil, nil, nil
   M.push_context()
-  require("corkboard.board").push()
+  require("corkboard.board").push_all()
   require("corkboard.viewer").push_all()
   require("corkboard.usage").push_all()
-  last_layout = nil -- the new channel has seen nothing yet
-  last_scroll = nil
+  require("corkboard.plan").push_all()
   M.push_layout()
 end
 
@@ -141,14 +136,13 @@ function M.layout()
   return { views = views, floats = floats, focus = focus }
 end
 
--- Checked after every redraw, sent only when it changed. Window events are
--- not enough: plugins move floats with nvim_win_set_config, which fires no
+-- Checked after every redraw and sent when it changed. Window events aren't
+-- enough: plugins move floats with nvim_win_set_config, which fires no
 -- autocommand, but every visible change redraws.
 --
--- Sent synchronously from the redraw, not scheduled: on_end runs before
--- Neovim flushes the grid to the UI, so the browser places a panel before
--- it paints the text beneath it. Scheduled, the layout came one flush late
--- and the view buffer's text showed for a frame on every tab switch.
+-- Synchronous, not scheduled: on_end runs before the grid is flushed to the
+-- UI, so the browser places a panel before painting the text beneath it.
+-- Scheduled, the view buffer's text flashed for a frame on tab switches.
 function M.push_layout()
   local layout = M.layout()
   local key = vim.json.encode(layout)
@@ -156,7 +150,7 @@ function M.push_layout()
     last_layout = key
     M.notify("corkboard.layout", layout)
   end
-  -- Apart from the layout, which redraws every panel: scrolling changes
+  -- Separate from the layout, which redraws every panel: scrolling changes
   -- this on nearly every redraw.
   local scroll = { bars = M.scrollbars(), floats = layout.floats }
   key = vim.json.encode(scroll)
@@ -166,11 +160,9 @@ function M.push_layout()
   end
 end
 
--- Every split in the current tabpage showing text, and how far it is
--- scrolled, for the browser's scrollbars: its rectangle in grid cells
--- (status line excluded), the first and last lines on screen and the
--- buffer's length. Not terminals, whose scrollback is not lines to jump
--- to, or panels.
+-- For the browser's scrollbars: each split in the tab showing text, as its
+-- rectangle in grid cells (status line excluded), the first and last lines
+-- on screen, and the buffer's length. Not terminals or panels.
 function M.scrollbars()
   local bars = {}
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
@@ -213,11 +205,9 @@ function M.scroll_to(win, top)
   end)
 end
 
--- The HTML panels' accents, from highlight groups every colorscheme sets,
--- so they follow it like the background and text already do (those come
--- with the grid's default colors). The font is optional:
--- vim.g.corkboard_font = { family = ..., size = ... }, set by whatever
--- installs the colorscheme (the stylix module in nixosconfig).
+-- The panels' accent colours, from highlight groups every colorscheme sets
+-- (background and text come with the grid's default colours). Optionally a
+-- font: vim.g.corkboard_font = { family = ..., size = ... }.
 function M.push_theme()
   local function fg(...)
     for _, group in ipairs({ ... }) do
@@ -238,13 +228,17 @@ function M.push_theme()
     working = fg("DiagnosticOk", "String"),
     blocked = fg("DiagnosticError", "ErrorMsg"),
     review = fg("DiagnosticWarn", "WarningMsg"),
+    -- A fourth color for the day plan's projects; the page's own when the
+    -- colorscheme's keywords are plain text color.
+    special = (function()
+      local c = fg("Keyword", "Statement")
+      return c ~= fg("Normal") and c or nil
+    end)(),
     font = vim.g.corkboard_font,
   })
 end
 
--- What the sidebar shows besides tabs: the project (the cwd) and the file
--- in the current window, which the file browser highlights. Sent when either
--- changes.
+-- The project (the cwd) and the current window's file, for the sidebar.
 function M.push_context()
   local buf = vim.api.nvim_get_current_buf()
   local file = (vim.bo[buf].buftype == "" or vim.b[buf].corkboard_file) and vim.api.nvim_buf_get_name(buf) or ""
@@ -255,9 +249,7 @@ function M.push_context()
   M.notify("corkboard.context", context)
 end
 
--- One directory for the file browser: folders first, then files, by name.
--- .git is left out; what git ignores is marked so the browser can dim it, and
--- what has changed since the last commit is marked so it can colour it. A
+-- Each entry of dir that git sees as changed: "added" or "modified". A
 -- folder takes the status of what changed inside it, modified over added.
 local function git_status(dir)
   local status = {}
@@ -283,6 +275,8 @@ local function git_status(dir)
   return status
 end
 
+-- One directory for the file browser: folders first, then files, by name,
+-- without .git, each marked if git ignores it or it has changed.
 function M.list_dir(dir)
   local entries, names = {}, {}
   for name, type in vim.fs.dir(dir) do
@@ -317,13 +311,55 @@ function M.is_panel(buf)
   return vim.b[buf].corkboard_view ~= nil and not vim.b[buf].corkboard_file
 end
 
--- A click on a file in the browser. It goes to the tab's editor window: the
--- current one if it holds a file, else the first that does, else a split
--- beside the current window, so the board, Claude or a terminal is never
--- replaced.
-function M.open_file(path)
+-- The file explorer's preview, as VS Code has one: the tab its last file
+-- opened in, while that file is still untouched. The next file opened from
+-- the explorer replaces it there instead of adding a tab. An edit (any
+-- change to the buffer, saved or not) keeps it: { tab, buf, tick }.
+local preview
+
+local function preview_win()
+  if not (preview and vim.api.nvim_tabpage_is_valid(preview.tab) and vim.api.nvim_buf_is_valid(preview.buf)) then return end
+  if vim.api.nvim_buf_get_changedtick(preview.buf) ~= preview.tick then return end
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(preview.tab)) do
+    if vim.api.nvim_win_get_buf(win) == preview.buf then return win end
+  end
+end
+
+function M.preview_tab()
+  return preview_win() and preview.tab or nil
+end
+
+local function open_in_preview(path)
+  local file = vim.fn.fnameescape(path)
+  -- Already open somewhere: go there, and leave that tab as it is.
+  local buf = vim.fn.bufnr(vim.fn.fnamemodify(path, ":p"))
+  if buf ~= -1 and #vim.fn.win_findbuf(buf) > 0 then return vim.cmd("$tab drop " .. file) end
+  local win = preview_win()
+  if win then
+    local old = preview.buf
+    vim.api.nvim_set_current_win(win)
+    vim.cmd.edit(file)
+    -- The file it replaced is closed, as VS Code closes it, unless it's
+    -- still shown elsewhere.
+    if old ~= vim.api.nvim_get_current_buf() and #vim.fn.win_findbuf(old) == 0 and not vim.bo[old].modified then
+      pcall(vim.api.nvim_buf_delete, old, {})
+    end
+  else
+    vim.cmd("$tab drop " .. file)
+  end
+  local current = vim.api.nvim_get_current_buf()
+  preview = { tab = vim.api.nvim_get_current_tabpage(), buf = current, tick = vim.api.nvim_buf_get_changedtick(current) }
+end
+
+-- A click on a file in the browser. With tab (the file explorer), it opens
+-- in the explorer's preview tab (above), or a tab of its own at the end, or
+-- goes to the window already showing it. Otherwise it opens in the current
+-- window if that holds a file, else the tab's first that does, else a new
+-- split, so a panel or terminal is never replaced.
+function M.open_file(path, tab)
   vim.schedule(function()
     vim.cmd.stopinsert()
+    if tab then return open_in_preview(path) end
     local function editor(w)
       local b = vim.api.nvim_win_get_buf(w)
       return vim.api.nvim_win_get_config(w).relative == ""
@@ -340,10 +376,9 @@ function M.open_file(path)
   end)
 end
 
--- Each window's status line: what is in it, by the name a person would use.
--- A terminal (term://<cwd>//<pid>:<cmd>) is its program and where it runs,
--- the board is "Board", a file is its path from the cwd with ● for unsaved
--- changes. Line and column only where there is a cursor worth reading.
+-- Each window's status line names what is in it: a terminal by its program
+-- and directory, the board as "Board", a file by its path with ● for unsaved
+-- changes. Line and column only where the cursor means something.
 function M.statusline()
   local win = vim.g.statusline_winid
   local buf = vim.api.nvim_win_get_buf(win)
@@ -357,6 +392,10 @@ function M.statusline()
     detail, pos = vim.fn.fnamemodify(cwd, ":~"), false
   elseif vim.b[buf].corkboard_view == "board" then
     title, detail, pos = "Board", vim.fn.fnamemodify(vim.fn.getcwd(win), ":~"), false
+  elseif vim.b[buf].corkboard_view == "plan" then
+    title, detail, pos = "Day plan", "test data", false
+  elseif vim.b[buf].corkboard_view == "plan-diff" then
+    title, detail, pos = "Re-plan", "A accept · q keep old", false
   elseif vim.b[buf].corkboard_view == "markdown" then
     local src = vim.b[buf].corkboard_source
     local file = src and vim.api.nvim_buf_is_valid(src) and vim.api.nvim_buf_get_name(src) or ""
@@ -383,10 +422,9 @@ function M.statusline()
   return table.concat(parts)
 end
 
--- Before closing wins: asks about each file with unsaved changes that no
--- other window still shows. 'hidden' means :close would keep them quietly
--- in the background, which is how changes get forgotten. Returns whether to
--- go ahead, and the buffers whose changes were discarded.
+-- Before closing wins, ask about each file with unsaved changes that no
+-- other window shows; with 'hidden', :close would quietly keep them in the
+-- background. Returns whether to go ahead, and the buffers to discard.
 local function settle(wins)
   local closing = {}
   for _, w in ipairs(wins) do closing[w] = true end
@@ -416,10 +454,9 @@ local function settle(wins)
   return true, discard
 end
 
--- <C-q>: the current window, or its tab when it is the tab's last one.
--- Unsaved changes are asked about first (settle). A terminal's shell keeps
--- running. The board is left alone, since board.ensure would only bring it
--- back.
+-- <C-q>: close the current window, or its tab when it is the last one, after
+-- asking about unsaved changes. The board stays, since ensure() would only
+-- bring it back.
 function M.close()
   local win = vim.api.nvim_get_current_win()
   local ok, err = pcall(function()
@@ -449,12 +486,10 @@ function M.close()
   if not ok then vim.notify("corkboard: " .. tostring(err), vim.log.levels.ERROR) end
 end
 
--- The + and * registers are the browser's clipboard. A copy is pushed to the
--- page, which writes it with navigator.clipboard; that works the same on a
--- remote, where Neovim has no wl-copy and no display to reach. Paste cannot
--- go the other way (the page cannot answer a synchronous read), so "+p
--- gives back the last thing copied from here. Ctrl+V reads the real
--- clipboard instead, through the page's paste event and nvim_paste.
+-- The + and * registers are the browser's clipboard: a copy goes to the page,
+-- which works on a remote too. The page can't answer a synchronous read, so
+-- "+p gives back the last copy from here; Ctrl+V pastes the real clipboard
+-- through the page's paste event.
 local clip = { lines = { "" }, regtype = "v" }
 local function clip_copy(lines, regtype)
   clip = { lines = lines, regtype = regtype }
@@ -486,23 +521,22 @@ function M.setup()
   local usage = require("corkboard.usage")
   vim.keymap.set("n", "<leader>u", usage.show, { desc = "corkboard: token usage" })
   vim.api.nvim_create_user_command("AgentUsage", usage.show, { desc = "corkboard: token usage" })
+  local plan = require("corkboard.plan")
+  vim.keymap.set("n", "<leader>p", plan.show, { desc = "corkboard: day plan" })
+  vim.api.nvim_create_user_command("AgentPlan", plan.show, { desc = "corkboard: day plan" })
 
   require("corkboard.viewer").setup()
 
   local picker = require("corkboard.picker")
   if picker.setup() then
-    -- The browser sends Ctrl+Space as <C-Space>. Terminal and insert mode
-    -- too, so it opens from a terminal or mid-edit.
+    -- The tool picker, and editor-style shortcuts for some of its tools, from
+    -- any mode. <C-f> replaces page down (<C-d> remains) and, in a terminal,
+    -- readline's forward-char.
     vim.keymap.set({ "n", "i", "t" }, "<C-Space>", picker.tools, { desc = "corkboard: tools" })
-    -- And as a command palette. The browser sends Ctrl+Shift+P as <C-S-p>.
     vim.keymap.set({ "n", "i", "t" }, "<C-S-p>", picker.tools, { desc = "corkboard: tools" })
-    -- Editor-style shortcuts for some of the tools, from any mode like
-    -- <C-Space>. <C-f> replaces normal mode's page down (<C-d> is still
-    -- there) and, in a terminal, readline's forward-char (the arrow is too).
-    -- <C-.> is free in Vim, readline and the browser.
     vim.keymap.set({ "n", "i", "t" }, "<C-f>", picker.files, { desc = "corkboard: find file" })
-    vim.keymap.set({ "n", "i", "t" }, "<C-`>", picker.terminal, { desc = "corkboard: terminal" })
-    vim.keymap.set({ "n", "i", "t" }, "<C-.>", picker.claude, { desc = "corkboard: Claude Code" })
+    vim.keymap.set({ "n", "i", "t" }, "<C-`>", require("corkboard.terminal").toggle, { desc = "corkboard: terminal" })
+    vim.keymap.set({ "n", "i", "t" }, "<C-.>", require("corkboard.claude").open, { desc = "corkboard: Claude Code" })
     vim.keymap.set("n", "<leader>f", function() Snacks.picker.files() end, { desc = "find file" })
     vim.keymap.set("n", "<leader>g", function() Snacks.picker.grep() end, { desc = "grep" })
     vim.keymap.set("n", "<leader>,", function() Snacks.picker.buffers() end, { desc = "buffers" })
@@ -511,15 +545,13 @@ function M.setup()
 
   -- Replaces <C-t>'s tag-stack pop.
   vim.keymap.set("n", "<C-t>", "<Cmd>tabnew<CR>", { desc = "corkboard: new tab" })
-  -- Ctrl+Tab and Ctrl+Shift+Tab go through the tabs, from any mode. Plain
-  -- Tab and Shift+Tab are left alone everywhere: Vim's own in normal mode,
-  -- the program's in a terminal (completion; Claude Code's mode cycling).
+  -- Ctrl+Tab and Ctrl+Shift+Tab go through the tabs, from any mode; plain
+  -- Tab stays the program's (completion, Claude Code's mode cycling).
   vim.keymap.set({ "n", "i", "t" }, "<C-Tab>", "<Cmd>tabnext<CR>", { desc = "corkboard: next tab" })
   vim.keymap.set({ "n", "i", "t" }, "<C-S-Tab>", "<Cmd>tabprevious<CR>", { desc = "corkboard: previous tab" })
 
-  -- Ctrl+h/j/k/l moves to the window in that direction. Terminal mode too, so
-  -- a terminal can be left without <C-\><C-n> first; not insert mode, where
-  -- <C-h> is backspace and <C-k> enters a digraph.
+  -- Ctrl+h/j/k/l moves between windows, from terminal mode too. Not insert
+  -- mode, where <C-h> is backspace and <C-k> a digraph.
   for _, dir in ipairs({ "h", "j", "k", "l" }) do
     vim.keymap.set({ "n", "t" }, "<C-" .. dir .. ">", "<Cmd>wincmd " .. dir .. "<CR>", { desc = "corkboard: window " .. dir })
   end
@@ -535,10 +567,8 @@ function M.setup()
     group = group,
     callback = function() M.push_context() end,
   })
-  -- Terminals (Claude Code, shells) get the board and usage panels' inset:
-  -- an empty sign column on the left (the program's width shrinks to fit)
-  -- and an empty winbar on top, both in the window's background. Local to
-  -- the terminal buffer, so a file opened in the window goes back to normal.
+  -- Terminals get the panels' inset: an empty sign column and winbar in the
+  -- window's background. Set per buffer, so a file opened there is normal.
   vim.api.nvim_create_autocmd({ "TermOpen", "BufWinEnter" }, {
     group = group,
     callback = function(args)
@@ -549,9 +579,7 @@ function M.setup()
       wo.winhighlight = "SignColumn:Normal,WinBar:Normal,WinBarNC:Normal"
     end,
   })
-  -- A terminal (Claude Code or a shell) is for typing into, so entering one
-  -- is entering terminal mode. The tab and window keys above work from
-  -- there; <C-\><C-n> still gets to normal mode.
+  -- Entering a terminal is entering terminal mode; <C-\><C-n> leaves it.
   vim.api.nvim_create_autocmd({ "TermOpen", "BufEnter", "WinEnter" }, {
     group = group,
     callback = function(args)
@@ -571,11 +599,13 @@ function M.setup()
     end,
   })
   status_highlights()
-  -- Anything that could have closed or moved the board or usage tab.
+  -- Anything that could have closed or moved the plan, board or usage tab.
+  -- In order, so each finds the ones before it already in place.
   vim.api.nvim_create_autocmd({ "VimEnter", "TabClosed", "TabNewEntered", "TabEnter", "WinClosed" }, {
     group = group,
     callback = function()
       vim.schedule(function()
+        plan.ensure()
         board.ensure()
         usage.ensure()
       end)

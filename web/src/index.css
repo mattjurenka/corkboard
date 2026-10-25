@@ -15,6 +15,7 @@
   --nv-working: #9ece6a;
   --nv-blocked: #f7768e;
   --nv-review: #e0af68;
+  --nv-special: #bb9af7;
   --nv-selection: color-mix(in srgb, var(--nv-fg) 20%, var(--nv-bg));
   --nv-focus: color-mix(in srgb, var(--nv-fg) 18%, var(--nv-bg));
 
@@ -42,6 +43,7 @@
   --working: var(--nv-working);
   --blocked: var(--nv-blocked);
   --review: var(--nv-review);
+  --special: var(--nv-special);
 }
 
 @theme inline {
@@ -71,6 +73,7 @@
   --color-working: var(--working);
   --color-blocked: var(--blocked);
   --color-review: var(--review);
+  --color-special: var(--special);
 
   /* Everything is text on the editor's cells: one size, one line height,
      square edges, no shadows. */

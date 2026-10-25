@@ -1,45 +1,34 @@
 -- Agents on cards. Handing a card to an agent (the board's a) queues it;
--- whenever the board changes, queued cards whose dependencies are done are
--- started, up to g:corkboard_max_agents at once (3 unset). Starting one
--- gives it a git worktree of its own on branch card/task-<n> (see
--- worktree()), and interactive Claude Code in a tab, told to work on the
--- card through the corkboard MCP. The card records the worktree and
--- branch; the terminal is the card's session while it runs.
+-- whenever the board changes, queued cards whose dependencies are done start,
+-- up to g:corkboard_max_agents at once (default 3). Each gets a git worktree
+-- on branch card/task-<n> and Claude Code in a tab, told to work on the card
+-- through the corkboard MCP.
 --
--- Sessions live in this Neovim: they end when it does (the bridge stops it
--- when the page's window closes), and a card still queued then starts
--- again the next time the board is open.
+-- Sessions belong to this Neovim and end with it; a card still queued then
+-- starts again the next time the board is open.
+
+local util = require("corkboard.util")
+local terminal = require("corkboard.terminal")
 
 local M = {}
 
 local function board() return require("corkboard.board") end
 
--- card id -> terminal buffer, for sessions still running; and cards
--- schedule() has set going that start() hasn't reached yet. live and
--- exited (below) go with sessions.
-local sessions = {}
-local starting = {}
-local live = {}
-local exited = {}
+local sessions = {} -- card id -> terminal buffer of its running session
+local starting = {} -- card ids schedule() has queued to start
+local live = {} -- terminal buffer -> working | idle | asking | permission
+local exited = {} -- card ids whose session has ended
 
-local function alive(buf)
-  return buf and vim.api.nvim_buf_is_valid(buf) and vim.fn.jobwait({ vim.bo[buf].channel }, 0)[1] == -1
-end
-
--- The card's running session's terminal, if it has one.
+-- The card's running session's terminal, if any.
 function M.session(id)
-  if alive(sessions[id]) then return sessions[id] end
-  -- Its job can end before its TermClose (on_exit in start()) runs.
+  if terminal.alive(sessions[id]) then return sessions[id] end
+  -- The job can end before its TermClose (on_exit in start()) runs.
   if sessions[id] then exited[id] = true end
   sessions[id] = nil
 end
 
--- What each session is doing, by terminal buffer, from its hooks
--- (hooks/claude-session.lua): working, idle, or permission (waiting on a
--- permission prompt). And the cards whose session has exited.
-
--- The card's session state for the board: live's, "exited", or nil when
--- it has had no session in this Neovim.
+-- The card's session state for the board: live's, "starting" before its
+-- first hook, "exited", or nil when it has had no session here.
 function M.live(id)
   local buf = M.session(id)
   if buf then return live[buf] or "starting" end
@@ -64,9 +53,9 @@ local function event_state(ev)
   })[ev.event]
 end
 
--- Each card's Claude Code sessions, kept beside the board in
--- sessions.json as { [card id] = { { id, transcript, started }, ... } }, so their
--- usage can be added up per card (corkboard.usage) after they end.
+-- Each card's sessions, in sessions.json beside the board as
+-- { [card id] = { { id, transcript, started }, ... } }, so corkboard.usage
+-- can add up their cost after they end.
 local function sessions_file() return vim.fs.joinpath(board().dir(), "sessions.json") end
 
 function M.card_sessions()
@@ -87,23 +76,18 @@ local function remember(id, session_id, transcript)
   pcall(vim.fn.writefile, { vim.json.encode(all) }, sessions_file())
 end
 
--- Go to what the card's agent wants: its session, where the question or
--- permission prompt is Claude Code's own, to answer there; the card when
--- no session runs. Going is also letting it past a budget
--- (corkboard.budget). What the page's notification for the card does.
+-- Go to what the card's agent wants: its session, where the question is
+-- Claude Code's own to answer, or the card when no session runs. Going also
+-- lets it past a budget hold (corkboard.budget).
 function M.attend(id)
   board().set(id, { attention = "", budget_hold = "" })
   local buf = M.session(id)
-  if buf then return require("corkboard.picker").focus_terminal(buf) end
-  board().show()
-  board().select(id)
-  board().open_card(id)
+  if buf then return terminal.focus(buf) end
+  board().reveal(id)
 end
 
--- The card asks while its session waits on the user: an AskUserQuestion
--- or a permission prompt. Setting attention raises the page's notification
--- (attention.ts); the session's next step clears it.
-local function asking(id, ev)
+-- What the card should say while its session waits on the user.
+local function asking(ev)
   if ev.event == "PreToolUse" and ev.tool_name == "AskUserQuestion" then
     return "asks: " .. (ev.question or "a question")
   elseif ev.event == "PermissionRequest" then
@@ -111,7 +95,7 @@ local function asking(id, ev)
   end
 end
 
--- From a session's hook.
+-- From a session's hook (hooks/claude-session.lua).
 function M.hook(ev)
   local buf = ev.buf
   if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
@@ -121,11 +105,12 @@ function M.hook(ev)
   local state = event_state(ev)
   if state then live[buf] = state end
   if not id then return end
-  local question = asking(id, ev)
+  local question = asking(ev)
   if question then
+    -- Setting attention raises the page's notification (attention.ts).
     board().set(id, { agent_state = "blocked", attention = question })
   elseif (was == "asking" or was == "permission") and state and state ~= "asking" and state ~= "permission" then
-    -- Answered (or refused), in the session.
+    -- Answered (or refused) in the session.
     local card = board().get(id)
     board().set(id, { agent_state = card.agent_state == "blocked" and "working" or card.agent_state, attention = "" })
   elseif state and state ~= was then
@@ -141,52 +126,55 @@ function M.running()
   return n
 end
 
-local function git(args, cwd)
-  local result = vim.system(vim.list_extend({ "git" }, args), { cwd = cwd, text = true }):wait()
-  return result.code == 0, vim.trim(result.stdout or ""), vim.trim(result.stderr or "")
-end
-
--- The main checkout of the project's repository, from any worktree; nil
--- outside one.
-local function repo()
-  local ok, common = git({ "rev-parse", "--path-format=absolute", "--git-common-dir" }, vim.fn.getcwd())
-  return ok and vim.fs.dirname(common) or nil
-end
-
-local worktrees = vim.fs.joinpath(
-  vim.env.XDG_DATA_HOME or vim.fs.joinpath(vim.uv.os_homedir(), ".local/share"),
-  "corkboard",
-  "worktrees"
-)
-
 -- The card's worktree and branch, made from the main checkout's HEAD the
--- first time; a card sent back from review gets the same one again.
--- Outside a repository the agent works in the project itself (both nil).
+-- first time; a card sent back from review gets the same one again. Outside
+-- a repository the agent works in the project itself (both nil).
 function M.worktree(id)
-  local root = repo()
+  local root = util.repo_root(vim.fn.getcwd())
   if not root then return nil, nil end
-  local dir = vim.fs.joinpath(worktrees, (root:gsub("^/", ""):gsub("/", "-")), id:lower())
+  local dir = util.data_dir("worktrees", util.path_key(root), id:lower())
   local branch = "card/" .. id:lower()
   if vim.fn.isdirectory(dir) == 1 then return dir, branch end
   vim.fn.mkdir(vim.fs.dirname(dir), "p")
-  local exists = git({ "rev-parse", "--verify", "--quiet", "refs/heads/" .. branch }, root)
+  local exists = util.git({ "rev-parse", "--verify", "--quiet", "refs/heads/" .. branch }, root)
   local args = exists and { "worktree", "add", dir, branch } or { "worktree", "add", "-b", branch, dir }
-  local ok, _, err = git(args, root)
+  local ok, _, err = util.git(args, root)
   if not ok then error("git worktree add: " .. err, 0) end
   return dir, branch
 end
 
--- The corkboard MCP, from this checkout of corkboard, for projects that
--- don't configure it themselves.
-local function mcp_config()
+-- A cloud board's MCP server, with a token for this card's agent only. The
+-- config holds the token, so it's a file only this user can read, not an
+-- argument every process can see. Returns its path, and what undoes it.
+local function cloud_mcp_config(id)
+  local cards = require("corkboard.cards")
+  local grant = cards.agent_token(id, "claude")
+  local dir = vim.fs.joinpath(vim.fn.stdpath("state"), "corkboard", "agents")
+  vim.fn.mkdir(dir, "p", tonumber("700", 8))
+  local path = vim.fs.joinpath(dir, util.path_key(vim.fn.getcwd()) .. "-" .. id:lower() .. ".json")
+  local config = { mcpServers = { corkboard = { type = "http", url = grant.url, headers = { Authorization = "Bearer " .. grant.token } } } }
+  local fd = assert(vim.uv.fs_open(path, "w", tonumber("600", 8)))
+  vim.uv.fs_write(fd, vim.json.encode(config))
+  vim.uv.fs_close(fd)
+  return path, function()
+    vim.uv.fs_unlink(path)
+    pcall(cards.revoke_agent_token, grant.token)
+  end
+end
+
+-- The corkboard MCP for projects that don't configure it: the Worker's for a
+-- cloud board, else this checkout's mcp/board.ts over the card files.
+-- Returns the --mcp-config value, and what to do when the agent exits.
+local function mcp_config(id)
+  if require("corkboard.cards").cloud() then return cloud_mcp_config(id) end
   local here = vim.api.nvim_get_runtime_file("lua/corkboard/agents.lua", false)[1]
   local script = vim.fs.joinpath(vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(here)))), "mcp", "board.ts")
   if vim.fn.filereadable(script) == 0 then return nil end
   return vim.json.encode({ mcpServers = { corkboard = { command = "bun", args = { script } } } })
 end
 
--- sent_back: the user sent the card back from review and is at this
--- session to say what to change.
+-- sent_back: the user sent the card back from review and is at the session
+-- to say what to change.
 local function prompt(card, branch, sent_back)
   local where = branch and ("in a git worktree of your own, on branch " .. branch .. ". Commit your work on that branch.")
     or "in the project directory."
@@ -201,50 +189,57 @@ local function prompt(card, branch, sent_back)
   }, "\n")
 end
 
--- Start an agent on the card now, whatever the limit (opts.sent_back: see
--- prompt()); with a session
--- running already, go to it.
+-- Start an agent on the card now, whatever the limit, or go to its session
+-- if one is running. opts.sent_back: see prompt().
 function M.start(id, opts)
-  if M.session(id) then return require("corkboard.picker").focus_terminal(sessions[id]) end
+  if M.session(id) then return terminal.focus(sessions[id]) end
   local card = board().get(id)
   local ok, dir, branch = pcall(M.worktree, id)
   if not ok then
     board().set(id, { agent_state = "blocked", attention = "could not make a worktree: " .. dir })
     return
   end
-  -- --mcp-config takes any number of values, so something else follows
-  -- it, and -- ends the options before the prompt.
+  -- --mcp-config takes any number of values, so -- ends the options before
+  -- the prompt.
   local args = {}
-  local config = mcp_config()
+  local made, config, cleanup = pcall(mcp_config, id)
+  if not made then
+    board().set(id, { agent_state = "blocked", attention = "could not give the agent the board: " .. config })
+    return
+  end
   if config then vim.list_extend(args, { "--mcp-config", config }) end
   vim.list_extend(args, { "--name", id .. " " .. card.title })
   vim.list_extend(args, vim.g.corkboard_agent_args or {})
   vim.list_extend(args, { "--", prompt(card, branch, opts and opts.sent_back) })
 
   local buf
-  buf = require("corkboard.picker").start_claude({
+  buf = require("corkboard.claude").start({
     args = args,
     cwd = dir,
-    -- The MCP server inherits these: who the agent is, and the board,
-    -- which a worktree outside the repository couldn't find by itself.
+    -- For the MCP server: who the agent is, and the board, which a worktree
+    -- outside the repository couldn't find by itself.
     env = { CORKBOARD_AGENT = "claude", CORKBOARD_CARD = id, CORKBOARD_BOARD = board().dir() },
     on_exit = function()
+      if cleanup then cleanup() end
       if sessions[id] == buf then
         sessions[id] = nil
         exited[id] = true
       end
       live[buf] = nil
-      -- Gone before it claimed the card: say so, rather than start it
-      -- again and again.
-      local ok_get, now = pcall(board().get, id)
-      if ok_get and now.agent_state == "queued" then
+      -- Gone before it claimed the card: say so rather than start it again
+      -- and again.
+      local found, now = pcall(board().get, id)
+      if found and now.agent_state == "queued" then
         board().set(id, { agent_state = "blocked", attention = "the agent exited before it started; queue it again to retry" })
       else
         board().push()
       end
     end,
   })
-  if not buf then return end
+  if not buf then
+    if cleanup then cleanup() end
+    return
+  end
   vim.b[buf].corkboard_card = id
   sessions[id] = buf
   exited[id] = nil
@@ -252,8 +247,7 @@ function M.start(id, opts)
 end
 
 -- Start what is queued and may run, up to the limit. Only with the page
--- attached, so that a Neovim nobody is looking at (a test, a script)
--- starts nothing.
+-- attached, so a Neovim nobody is looking at (a test, a script) starts nothing.
 function M.schedule(cards)
   if not require("corkboard").attached() then return end
   local room = (vim.g.corkboard_max_agents or 3) - M.running() - vim.tbl_count(starting)

@@ -109,6 +109,8 @@ rpc.on("corkboard.notification", ([n]: any[]) =>
   notifyClaude(n, (buf) => rpc.notify("nvim_exec_lua", "require('corkboard.picker').focus_terminal(...)", [buf])),
 );
 rpc.on("corkboard.usage", ([state]: any[]) => store.set({ views: { ...store.get().views, usage: state } }));
+rpc.on("corkboard.plan", ([state]: any[]) => store.set({ views: { ...store.get().views, plan: state } }));
+rpc.on("corkboard.plan_diff", ([state]: any[]) => store.set({ views: { ...store.get().views, "plan-diff": state } }));
 // A state without text (a markdown preview's scroll) keeps the last text.
 rpc.on("corkboard.view", ([buf, state]: any[]) => {
   const bufs = store.get().bufs;
@@ -138,7 +140,7 @@ rpc.on("corkboard.open", ([{ cwd }]: any[]) => {
 // the grid's default colors.
 rpc.on("corkboard.theme", async ([theme]: any[]) => {
   const style = document.documentElement.style;
-  for (const name of ["focus", "selection", "accent", "working", "blocked", "review"]) {
+  for (const name of ["focus", "selection", "accent", "working", "blocked", "review", "special"]) {
     if (theme[name]) style.setProperty(`--nv-${name}`, theme[name]);
   }
   const font = theme.font;

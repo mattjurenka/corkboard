@@ -9,7 +9,7 @@ export type Nvim = {
   lua: (code: string, ...args: unknown[]) => Promise<any>;
   notify: (method: string, ...params: unknown[]) => void;
   blob: (path: string, version?: unknown) => Promise<string>;
-  openFile: (path: string) => void;
+  openFile: (path: string, tab?: boolean) => void;
   // Keyboard focus back to the canvas, and so to Neovim.
   refocus: () => void;
 };
@@ -42,7 +42,7 @@ export function makeNvim(rpc: Rpc): Nvim {
     lua,
     notify: (method, ...params) => rpc.notify(method, ...params),
     blob,
-    openFile: (path) => void lua("require('corkboard').open_file(...)", path),
+    openFile: (path, tab = false) => void lua("require('corkboard').open_file(...)", path, tab),
     refocus: () => document.querySelector<HTMLCanvasElement>("#editor canvas")?.focus(),
   };
 }

@@ -1,11 +1,8 @@
--- Claude Code's hooks for a session's own events (SessionStart,
--- UserPromptSubmit, Pre/PostToolUse, PermissionRequest, Notification,
--- Stop), which
--- corkboard.picker's start_claude() gives the sessions it starts. It runs as
--- `nvim -l` and hands each event to the Neovim whose terminal the session
--- is in ($NVIM, $CORKBOARD_BUF), where corkboard.agents keeps the session's
--- live state. Anything amiss and it does nothing: a hook's failure would
--- only show up in the session, and PreToolUse waits for it.
+-- Claude Code's hook for a session's own events, set by corkboard.claude.
+-- Runs as `nvim -l` and hands each event to the Neovim whose terminal the
+-- session is in ($NVIM, $CORKBOARD_BUF), where corkboard.agents keeps the
+-- session's live state. Fails silently: a hook's error would only show up in
+-- the session, and PreToolUse waits for it.
 
 local addr = os.getenv("NVIM")
 local buf = tonumber(os.getenv("CORKBOARD_BUF") or "")

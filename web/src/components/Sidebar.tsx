@@ -2,11 +2,11 @@
 // the notifications folded at the foot (a third each when opened).
 //
 // Tabs are drawn from ext_tabline: Neovim stops drawing its own tabline and
-// sends tabline_update instead; gt/gT and :tab* still drive it. Tabs 1 and 2
-// are always the board and token usage (corkboard.board and corkboard.usage
-// keep them there), so they are labelled Board and Usage whatever window is
-// focused in them, and have no close button or number. The tabs after them
-// are numbered from 1, under a gap.
+// sends tabline_update instead; gt/gT and :tab* still drive it. Tabs 1 to 3
+// are always the day plan, the board and token usage (corkboard.plan,
+// corkboard.board and corkboard.usage keep them there), so they are labelled
+// by what they are whatever window is focused in them, and have no close
+// button or number. The tabs after them are numbered from 1, under a gap.
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -16,7 +16,7 @@ import { Activity } from "./Activity";
 import { Files } from "./Files";
 import { Notifications } from "./Notifications";
 
-const PINNED = ["Board", "Usage"];
+const PINNED = ["Day plan", "Board", "Usage"];
 
 const home = (p: string) => p.replace(/^\/home\/[^/]+(?=\/|$)/, "~");
 
@@ -69,7 +69,7 @@ function Tabs() {
             title={pinned || name || "[No Name]"}
             onClick={() => nvim.notify("nvim_set_current_tabpage", tab)}
             className={cn(
-              "group flex min-w-0 cursor-pointer items-center gap-ch pr-ch pl-2ch hover:bg-accent",
+              "group flex min-w-0 cursor-pointer items-center gap-ch py-half pr-ch pl-2ch hover:bg-accent",
               current && "bg-selection hover:bg-selection",
               i === PINNED.length - 1 && "mb-row",
             )}
@@ -101,11 +101,19 @@ function Tabs() {
 
 // File name bright, directory dimmed under it. A terminal
 // (term://<cwd>//<pid>:<cmd>) shows its program over the directory it runs in.
+// corkboard's own views by what they are rather than their agent:// names.
+const VIEW_TABS: Record<string, [string, string | null]> = {
+  "agent://plan": ["Day plan", null],
+  "agent://plan/proposal": ["Re-plan", "day plan"],
+};
+
 function TabLabel({ name }: { name: string }) {
   if (!name) return <span className="min-w-0 flex-1 truncate text-muted-foreground">[No Name]</span>;
   const term = /^term:\/\/(.*?)\/\/\d+:(.*)$/.exec(name);
   let file: string, dir: string | null;
-  if (term) {
+  if (VIEW_TABS[name]) {
+    [file, dir] = VIEW_TABS[name];
+  } else if (term) {
     file = term[2].split(" ")[0].split("/").at(-1)!;
     dir = term[1];
   } else {

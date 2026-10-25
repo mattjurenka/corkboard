@@ -1,7 +1,7 @@
 // The file browser in the sidebar's lower half: the project's folders,
 // read from Neovim one directory at a time as they are opened
-// (corkboard.list_dir). A click on a file opens it in Neovim
-// (corkboard.open_file); keyboard focus stays with the canvas.
+// (corkboard.list_dir). A click on a file opens it in a Neovim tab of its
+// own (corkboard.open_file); keyboard focus stays with the canvas.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
@@ -83,7 +83,7 @@ export function Files() {
           key={path}
           title={path}
           style={{ paddingLeft: `${1 + depth * 2}ch` }}
-          onClick={() => (entry.dir ? toggle(path) : nvim.openFile(path))}
+          onClick={() => (entry.dir ? toggle(path) : nvim.openFile(path, true))}
           className={cn(
             "flex cursor-pointer items-center gap-ch pr-ch whitespace-nowrap hover:bg-accent",
             path === current && "bg-selection hover:bg-selection",

@@ -6,3 +6,6 @@ result-*
 # old in-repo board; boards live in ~/.local/share/corkboard/boards now
 .board/
 .claude/settings.local.json
+# wrangler dev state and secrets
+.wrangler/
+.dev.vars

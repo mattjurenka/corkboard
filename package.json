@@ -7,7 +7,9 @@
     "build": "vite build web",
     "dev:web": "vite web",
     "typecheck": "tsc -p .",
-    "mcp": "bun mcp/board.ts"
+    "mcp": "bun mcp/board.ts",
+    "login": "bun bridge/cloud.ts login",
+    "test:cloud": "bun test/cloud-boards.ts"
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.0.0",

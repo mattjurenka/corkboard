@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "corkboard": {
-      "command": "bun",
-      "args": ["mcp/board.ts"]
+      "type": "http",
+      "url": "https://corkboard.matthewjurenka.workers.dev/mcp"
     }
   }
 }

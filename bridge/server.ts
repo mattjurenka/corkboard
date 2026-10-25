@@ -14,6 +14,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
+import * as boards from "./boards";
 
 const HOST = process.env.CORKBOARD_HOST ?? "127.0.0.1";
 const PORT = Number(process.env.CORKBOARD_PORT ?? 7777);
@@ -30,8 +31,10 @@ const PLUGINS = (process.env.CORKBOARD_PLUGINS ?? "").split(":").filter(Boolean)
 const NAME = process.env.CORKBOARD_NAME;
 
 // Loopback names, for the bind address and for the Host a loopback bridge
-// accepts.
-const isLoopback = (name: string) => /^(localhost|127(\.\d+){3}|::1)$/.test(name.replace(/^\[(.*)\]$/, "$1"));
+// accepts. Browsers resolve *.localhost to loopback themselves, never by
+// DNS, so names like dev.corkboard.localhost can't be rebound either.
+const isLoopback = (name: string) =>
+  /^((.+\.)?localhost|127(\.\d+){3}|::1)$/.test(name.replace(/^\[(.*)\]$/, "$1"));
 const LOCAL = isLoopback(HOST);
 
 // The token the page must send to open a socket: CORKBOARD_TOKEN, or the
@@ -103,6 +106,8 @@ type Session = {
   queued?: string[];
   closed?: boolean;
   lastError?: string;
+  // Neovim's cloud boards, made when it first asks for one (boards.ts).
+  cloud?: boards.Session;
 };
 
 // The project Neovim last opened (remember_project in corkboard/init.lua).
@@ -193,8 +198,29 @@ function spawnLocal(data: Session): NonNullable<Session["nvim"]> {
 }
 
 function toNvim(nvim: NonNullable<Session["nvim"]>, raw: string) {
-  nvim.stdin.write(encode(JSON.parse(raw), { extensionCodec }));
+  send(nvim, JSON.parse(raw));
+}
+
+function send(nvim: NonNullable<Session["nvim"]>, msg: unknown) {
+  nvim.stdin.write(encode(msg, { extensionCodec }));
   nvim.stdin.flush();
+}
+
+// Neovim's "corkboard.cloud" notifications are for the bridge, not the
+// page: answered here (boards.ts).
+const CLOUD_METHOD = "corkboard.cloud";
+
+function cloud(data: Session, nvim: NonNullable<Session["nvim"]>, params: any[]) {
+  const lua = (code: string, ...args: unknown[]) => {
+    if (!data.closed) send(nvim, [2, "nvim_exec_lua", [code, args]]);
+  };
+  data.cloud ??= new boards.Session((key, event) => lua("require('corkboard.cards').cloud_event(...)", key, event));
+  const [id, op, ...args] = params;
+  const answer = (a: object) => lua("require('corkboard.cards.cloud').answer(...)", { id, ...a });
+  data.cloud.call(op, args).then(
+    (result) => answer({ result: result ?? null }),
+    (err) => answer({ error: (err as Error).message }),
+  );
 }
 
 // Close reasons are capped at 123 bytes by the websocket spec.
@@ -203,7 +229,8 @@ const closeReason = (s: string) => new TextEncoder().encode(s).length > 120 ? s.
 async function pump(ws: Bun.ServerWebSocket<Session>, nvim: NonNullable<Session["nvim"]>) {
   try {
     for await (const msg of decodeMultiStream(nvim.stdout, { extensionCodec })) {
-      ws.send(JSON.stringify(msg));
+      if (Array.isArray(msg) && msg[0] === 2 && msg[1] === CLOUD_METHOD) cloud(ws.data, nvim, msg[2] as any[]);
+      else ws.send(JSON.stringify(msg));
     }
   } catch (err) {
     console.error("nvim stream:", err);
@@ -295,6 +322,7 @@ Bun.serve<Session, {}>({
 
     close(ws) {
       ws.data.closed = true;
+      ws.data.cloud?.close();
       ws.data.nvim?.kill();
     },
   },

@@ -6,30 +6,26 @@
 --
 -- Approving merges the card's branch into the main checkout's current
 -- branch (--no-ff, so the card stays one merge), removes the worktree and
--- the branch, and moves the card to done. Sending it back logs the comment,
--- and either types it into the agent's session if one is running, or
--- queues the card again so a new agent starts with it.
+-- the branch, and moves the card to done. Sending it back takes you to the
+-- agent's session to say what to change, starting a new one in the same
+-- worktree if none is running.
+
+local cards = require("corkboard.cards")
+local util = require("corkboard.util")
 
 local M = {}
 
 local function board() return require("corkboard.board") end
 
-local function git(args, cwd)
-  local result = vim.system(vim.list_extend({ "git" }, args), { cwd = cwd, text = true }):wait()
-  return result.code == 0, result.stdout or "", vim.trim(result.stderr or "")
-end
+local git = util.git
 
--- The main checkout, and its current branch, for the card's worktree.
+-- The main checkout, and its current branch ("" when detached), for the
+-- card's worktree.
 local function main_checkout(worktree)
-  local ok, common = git({ "rev-parse", "--path-format=absolute", "--git-common-dir" }, worktree)
-  if not ok then return nil end
-  local root = vim.fs.dirname(vim.trim(common))
+  local root = util.repo_root(worktree)
+  if not root then return nil, "" end
   local _, branch = git({ "symbolic-ref", "--short", "HEAD" }, root)
   return root, vim.trim(branch)
-end
-
-local function section_text(body, name)
-  return vim.trim((body or ""):match("<!%-%- SECTION:" .. name .. ":BEGIN %-%->\n?(.-)<!%-%- SECTION:" .. name .. ":END %-%->") or "")
 end
 
 -- The review's lines, and for diff lines the worktree file and line they
@@ -42,9 +38,9 @@ local function render(card)
   add(string.format("Review  %s  %s", card.id, card.title))
   add("A approve and merge · S send back · <CR> open file · q close")
   add("")
-  local description = section_text(card.body, "DESCRIPTION")
+  local description = cards.section(card, "DESCRIPTION")
   if description ~= "" then add("## Description\n\n" .. description .. "\n") end
-  local log = vim.split(section_text(card.body, "NOTES"), "\n- ", { plain = true })
+  local log = vim.split(cards.section(card, "NOTES"), "\n- ", { plain = true })
   if #log > 0 and log[1] ~= "" then
     add("## Latest log\n")
     for i = math.max(1, #log - 2), #log do add((i == 1 and "" or "- ") .. log[i]) end
@@ -108,6 +104,9 @@ function M.approve(id, done)
     return vim.notify("corkboard: " .. id .. "'s worktree has uncommitted changes; have the agent commit them, or send it back", vim.log.levels.WARN)
   end
   local root, main = main_checkout(wt)
+  if not root or main == "" then
+    return vim.notify("corkboard: the main checkout has no branch checked out to merge " .. id .. " into", vim.log.levels.WARN)
+  end
   vim.ui.select({ "Merge " .. branch .. " into " .. main .. " and finish " .. id, "Cancel" }, { prompt = "Approve " .. id }, function(_, i)
     if i ~= 1 then return end
     local ok, out, err = git({ "merge", "--no-ff", "-m", string.format("Merge %s: %s", id, card.title), branch }, root)
