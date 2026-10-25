@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -25,6 +26,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -59,7 +62,12 @@ class ShieldActivity : ComponentActivity() {
                 ) {
                     Spacer(Modifier.weight(2f))
                     Box(Modifier.size(80.dp).border(1.dp, Monokai.base02), contentAlignment = Alignment.Center) {
-                        Text("▌", color = Monokai.orange, fontSize = 36.sp)
+                        Image(
+                            painterResource(R.drawable.ic_lock),
+                            contentDescription = null,
+                            colorFilter = ColorFilter.tint(Monokai.orange),
+                            modifier = Modifier.size(36.dp),
+                        )
                     }
                     Text("$app is locked", fontSize = 22.sp, lineHeight = 28.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(top = 28.dp))
                     Text(

@@ -176,9 +176,18 @@ object Cloud {
         }
     }
 
+    // A token the Worker refuses before it expires (its grant revoked, say)
+    // is refreshed once; if that's refused too, token() signs out.
     suspend fun api(method: String, path: String, body: JsonElement? = null): JsonElement {
         val token = token()
-        return withContext(Dispatchers.IO) { send(method, "$ORIGIN$path", body, token) }
+        return try {
+            withContext(Dispatchers.IO) { send(method, "$ORIGIN$path", body, token) }
+        } catch (e: Failed) {
+            if (e.status != 401) throw e
+            App.store.auth?.let { App.store.auth = it.copy(expiresAt = 0) }
+            val fresh = token()
+            withContext(Dispatchers.IO) { send(method, "$ORIGIN$path", body, fresh) }
+        }
     }
 
     suspend fun plan(date: String): Plan = json.decodeFromJsonElement(api("GET", "/api/plans/$date"))
