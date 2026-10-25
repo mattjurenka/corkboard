@@ -55,21 +55,21 @@ test('hand_off asks Neovim, through hooks/handoff.lua, with the task', async ($,
   let ran: { argv: readonly string[]; stdin?: string } | undefined
   on('process.run', (_, e) => {
     ran = { argv: e.argv, stdin: e.init?.stdin }
-    const stdout = 'started Claude Code in ~/agent-ide, tab Fix it'
+    const stdout = 'started Claude Code in ~/corkboard, tab Fix it'
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   await start($, on, 'pepper')
-  const out = await $.tool.call({ tool: 'mcp__corkboard-ui__hand_off', task: 'Fix the login', project: 'agent-ide', name: 'Fix it' })
+  const out = await $.tool.call({ tool: 'mcp__corkboard-ui__hand_off', task: 'Fix the login', project: 'corkboard', name: 'Fix it' })
   expect(ran?.argv.slice(0, 4)).toEqual(['nvim', '--clean', '--headless', '-l'])
   expect(ran?.argv[4]).toMatch(/\/\.\.\/hooks\/handoff\.lua$/)
-  expect(JSON.parse(ran?.stdin ?? '{}')).toEqual({ task: 'Fix the login', project: 'agent-ide', name: 'Fix it' })
-  expect(out).toEqual({ result: 'started Claude Code in ~/agent-ide, tab Fix it' })
+  expect(JSON.parse(ran?.stdin ?? '{}')).toEqual({ task: 'Fix the login', project: 'corkboard', name: 'Fix it' })
+  expect(out).toEqual({ result: 'started Claude Code in ~/corkboard, tab Fix it' })
 })
 
 test('Pepper edits only under ~/pepper; other sessions anywhere', async ($, on) => {
   on('tool.call', () => ({ result: 'written' }))
   await start($, on, 'pepper')
-  const outside = await $.tool.call({ tool: 'Write', file_path: '/home/m/agent-ide/x.ts', content: '' })
+  const outside = await $.tool.call({ tool: 'Write', file_path: '/home/m/corkboard/x.ts', content: '' })
   expect(outside).toEqual({
     deny: 'Pepper edits only its own files, under /home/m/pepper/. Hand project work off with hand_off.',
   })
@@ -80,6 +80,6 @@ test('Pepper edits only under ~/pepper; other sessions anywhere', async ($, on) 
 test('a project session edits anywhere', async ($, on) => {
   on('tool.call', () => ({ result: 'written' }))
   await start($, on, 'project')
-  const out = await $.tool.call({ tool: 'Edit', file_path: '/home/m/agent-ide/x.ts', old_string: 'a', new_string: 'b' })
+  const out = await $.tool.call({ tool: 'Edit', file_path: '/home/m/corkboard/x.ts', old_string: 'a', new_string: 'b' })
   expect(out).toEqual({ result: 'written' })
 })

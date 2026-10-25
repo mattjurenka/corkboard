@@ -2,7 +2,7 @@ import { reset } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ownerToken, worker } from "./login";
 
-const BOARD = "home-matthew-agent-ide";
+const BOARD = "home-matthew-corkboard";
 let owner: string;
 
 const call = (token: string, method: string, path: string, body?: unknown) =>
@@ -14,7 +14,7 @@ const call = (token: string, method: string, path: string, body?: unknown) =>
 
 beforeEach(async () => {
   owner = await ownerToken();
-  await call(owner, "PUT", `/api/boards/${BOARD}`, { name: "agent-ide" });
+  await call(owner, "PUT", `/api/boards/${BOARD}`, { name: "corkboard" });
   await call(owner, "POST", `/api/boards/${BOARD}/cards`, { title: "Mine", status: "ready" });
   await call(owner, "POST", `/api/boards/${BOARD}/cards`, { title: "Someone else's", status: "ready" });
 });
@@ -177,7 +177,7 @@ describe("an OAuth client", () => {
     const tools = body.result.tools;
     expect(tools[0].name).toBe("list_boards");
     expect(tools.find((t: any) => t.name === "read_card").inputSchema.required).toEqual(["board", "id"]);
-    expect(await tool(owner, "list_boards")).toEqual([{ key: BOARD, name: "agent-ide", root: null }]);
+    expect(await tool(owner, "list_boards")).toEqual([{ key: BOARD, name: "corkboard", root: null }]);
     expect((await tool(owner, "read_card", { board: BOARD, id: "TASK-2" })).title).toBe("Someone else's");
     expect((await tool(owner, "read_card", { id: "TASK-2" })).error).toMatch(/which board/);
     expect((await tool(owner, "read_card", { board: "nope", id: "TASK-2" })).error).toMatch(/no such board/);

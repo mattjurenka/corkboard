@@ -2,13 +2,13 @@ import { reset } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ownerToken, worker } from "./login";
 
-const BOARD = "home-matthew-agent-ide";
+const BOARD = "home-matthew-corkboard";
 
 // Every test starts signed in, with one empty board, and ends with nothing.
 let owner: string;
 beforeEach(async () => {
   owner = await ownerToken();
-  await send("PUT", `/api/boards/${BOARD}`, { name: "agent-ide", root: "/home/matthew/agent-ide" });
+  await send("PUT", `/api/boards/${BOARD}`, { name: "corkboard", root: "/home/matthew/corkboard" });
   await send("PUT", "/api/boards/other", {});
 });
 afterEach(async () => {
@@ -38,15 +38,15 @@ describe("auth", () => {
 describe("boards", () => {
   it("lists the boards that were made", async () => {
     expect(await (await api("/api/boards")).json()).toEqual([
-      { key: BOARD, name: "agent-ide", root: "/home/matthew/agent-ide" },
+      { key: BOARD, name: "corkboard", root: "/home/matthew/corkboard" },
       { key: "other", name: "other", root: null },
     ]);
   });
 
   it("renames a board in place", async () => {
-    await send("PUT", `/api/boards/${BOARD}`, { name: "corkboard", root: "/home/matthew/agent-ide" });
+    await send("PUT", `/api/boards/${BOARD}`, { name: "cork", root: "/home/matthew/corkboard" });
     const boards = await (await api("/api/boards")).json<{ name: string }[]>();
-    expect(boards.map((b) => b.name)).toEqual(["corkboard", "other"]);
+    expect(boards.map((b) => b.name)).toEqual(["cork", "other"]);
   });
 
   it("404s cards on a board nobody made", async () => {

@@ -5,7 +5,7 @@ import { LEASE_MS } from "../src/board";
 import type { Env } from "../src/index";
 import { ownerToken, worker } from "./login";
 
-const BOARD = "home-matthew-agent-ide";
+const BOARD = "home-matthew-corkboard";
 let owner: string;
 
 const call = (token: string, method: string, path: string, body?: unknown) =>
@@ -21,7 +21,7 @@ const stub = () => env.BOARD.get(env.BOARD.idFromName(`sub-me@example.com/${BOAR
 
 beforeEach(async () => {
   owner = await ownerToken();
-  await call(owner, "PUT", `/api/boards/${BOARD}`, { name: "agent-ide" });
+  await call(owner, "PUT", `/api/boards/${BOARD}`, { name: "corkboard" });
   await call(owner, "POST", `/api/boards/${BOARD}/cards`, { title: "Mine", status: "ready" });
 });
 afterEach(async () => {

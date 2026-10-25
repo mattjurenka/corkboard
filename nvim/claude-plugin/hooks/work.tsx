@@ -57,7 +57,7 @@ const HAND_OFF = {
       task: { type: 'string', description: 'The task, as the first message to the new session' },
       project: {
         type: 'string',
-        description: "The project: its directory, or its folder's name (agent-ide). Left out, the window's current project",
+        description: "The project: its directory, or its folder's name (corkboard). Left out, the window's current project",
       },
       name: { type: 'string', description: 'A short name for the tab' },
     },
