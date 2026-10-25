@@ -1,0 +1,29 @@
+// corkboard's boards on Cloudflare: one Durable Object per board, its cards in
+// the object's own SQLite; one per user, listing their boards. Sign-in is
+// Google, through the OAuth provider, whose state lives in OAUTH_KV. See
+// .agent/plans/cloud-boards.md.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "corkboard",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [
+      { "name": "BOARD", "class_name": "Board" },
+      { "name": "USER", "class_name": "User" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Board"] },
+    { "tag": "v2", "new_sqlite_classes": ["User"] }
+  ],
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "b5e2d5807ec748e58a7fbf3a94385742" }],
+  "vars": {
+    "ORIGIN": "https://corkboard.matthewjurenka.workers.dev",
+    "ALLOWED_EMAIL": "matthewjurenka@gmail.com",
+    // The dayplan-512206 project's Web application client.
+    "GOOGLE_CLIENT_ID": "911829084497-iab0dt2ufoiobeot2uanudsc1tc02s8o.apps.googleusercontent.com"
+  }
+  // Secrets (wrangler secret put): GOOGLE_CLIENT_SECRET.
+}
