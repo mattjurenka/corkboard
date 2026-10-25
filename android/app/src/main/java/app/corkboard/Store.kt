@@ -15,6 +15,10 @@ class Store(context: Context) {
         get() = p.getString("auth", null)?.let { Cloud.json.decodeFromString<Auth>(it) }
         set(v) = p.edit().putString("auth", v?.let { Cloud.json.encodeToString(it) }).apply()
 
+    var pendingSignIn: PendingSignIn?
+        get() = p.getString("pendingSignIn", null)?.let { Cloud.json.decodeFromString<PendingSignIn>(it) }
+        set(v) = p.edit().putString("pendingSignIn", v?.let { Cloud.json.encodeToString(it) }).apply()
+
     var plan: Plan?
         get() = p.getString("plan", null)?.let { runCatching { Cloud.json.decodeFromString<Plan>(it) }.getOrNull() }
         set(v) = p.edit().putString("plan", v?.let { Cloud.json.encodeToString(it) }).apply()

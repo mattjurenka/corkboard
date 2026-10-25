@@ -25,9 +25,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
-import java.net.InetAddress
-import java.net.ServerSocket
-import java.net.URLDecoder
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
@@ -48,68 +45,58 @@ object Cloud {
 
     // Signing in ------------------------------------------------------------------------
 
-    // The browser comes back to a loopback port the app listens on (RFC
-    // 8252), as the bridge's does, so the Worker needs no app link or
-    // private-use scheme. Blocks until the browser comes back, up to five
-    // minutes.
-    suspend fun signIn(context: Context) = withContext(Dispatchers.IO) {
-        ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { server ->
-            server.soTimeout = 5 * 60_000
-            val redirect = "http://127.0.0.1:${server.localPort}/callback"
-            val reg = post(
+    // The browser comes back to the app's own scheme (RFC 8252's
+    // private-use URIs), which MainActivity takes, rather than a loopback
+    // port as the bridge's does: Android freezes an app in the background,
+    // and the port would go unanswered. What finishing needs is kept in the
+    // store, since Android may also stop the app while the browser is open.
+    const val REDIRECT = "app.corkboard:/oauth"
+
+    suspend fun startSignIn(context: Context) {
+        val reg = withContext(Dispatchers.IO) {
+            post(
                 "$ORIGIN/register",
                 buildJsonObject {
                     put("client_name", "corkboard phone (${android.os.Build.MODEL})")
-                    put("redirect_uris", json.encodeToJsonElement(listOf(redirect)))
+                    put("redirect_uris", json.encodeToJsonElement(listOf(REDIRECT)))
                     put("token_endpoint_auth_method", "none")
                     put("grant_types", json.encodeToJsonElement(listOf("authorization_code", "refresh_token")))
                 },
                 token = null,
             )
-            val clientId = reg.jsonObject["client_id"]!!.jsonPrimitive.content
-            val verifier = random(32)
-            val challenge = base64url(MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray()))
-            val state = random(16)
-            val url = Uri.parse("$ORIGIN/authorize").buildUpon()
-                .appendQueryParameter("response_type", "code")
-                .appendQueryParameter("client_id", clientId)
-                .appendQueryParameter("redirect_uri", redirect)
-                .appendQueryParameter("scope", "owner")
-                .appendQueryParameter("state", state)
-                .appendQueryParameter("code_challenge", challenge)
-                .appendQueryParameter("code_challenge_method", "S256")
-                .build()
-            withContext(Dispatchers.Main) { CustomTabsIntent.Builder().build().launchUrl(context, url) }
+        }
+        val pending = PendingSignIn(reg.jsonObject["client_id"]!!.jsonPrimitive.content, random(32), random(16))
+        App.store.pendingSignIn = pending
+        val challenge = base64url(MessageDigest.getInstance("SHA-256").digest(pending.verifier.toByteArray()))
+        val url = Uri.parse("$ORIGIN/authorize").buildUpon()
+            .appendQueryParameter("response_type", "code")
+            .appendQueryParameter("client_id", pending.clientId)
+            .appendQueryParameter("redirect_uri", REDIRECT)
+            .appendQueryParameter("scope", "owner")
+            .appendQueryParameter("state", pending.state)
+            .appendQueryParameter("code_challenge", challenge)
+            .appendQueryParameter("code_challenge_method", "S256")
+            .build()
+        CustomTabsIntent.Builder().build().launchUrl(context, url)
+    }
 
-            val params = server.accept().use { socket ->
-                val line = socket.getInputStream().bufferedReader().readLine() ?: ""
-                val query = line.split(" ").getOrNull(1)?.substringAfter("?", "") ?: ""
-                val params = query.split("&").filter { "=" in it }.associate {
-                    val (k, v) = it.split("=", limit = 2)
-                    k to URLDecoder.decode(v, "UTF-8")
-                }
-                val ok = params["state"] == state && params["code"] != null
-                val body = """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-                    <body style="background:#272822;color:#f8f8f2;font:15px ui-monospace,monospace;margin:4rem 16px">
-                    <p>${if (ok) "Signed in." else "Sign-in didn't finish."}</p>
-                    <p><a style="color:#fd971f" href="corkboard://signed-in">Back to corkboard</a></p>""".trimIndent()
-                socket.getOutputStream().write(
-                    ("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n" +
-                        "Content-Length: ${body.toByteArray().size}\r\n\r\n$body").toByteArray(),
-                )
-                params
-            }
-            if (params["state"] != state) throw Failed(0, "the sign-in came back for another request")
-            val code = params["code"] ?: throw Failed(0, "sign-in was cancelled (${params["error"] ?: "no code"})")
-            val t = tokens(
+    // The browser's answer: app.corkboard:/oauth?code=…&state=….
+    suspend fun finishSignIn(answer: Uri) {
+        val pending = App.store.pendingSignIn ?: throw Failed(0, "no sign-in was waiting; start again")
+        if (answer.getQueryParameter("state") != pending.state) throw Failed(0, "the sign-in came back for another request; start again")
+        val code = answer.getQueryParameter("code")
+            ?: throw Failed(0, "sign-in was cancelled (${answer.getQueryParameter("error") ?: "no code"})")
+        val t = withContext(Dispatchers.IO) {
+            tokens(
                 "grant_type" to "authorization_code",
                 "code" to code,
-                "redirect_uri" to redirect,
-                "client_id" to clientId,
-                "code_verifier" to verifier,
+                "redirect_uri" to REDIRECT,
+                "client_id" to pending.clientId,
+                "code_verifier" to pending.verifier,
             )
-            App.store.auth = t.toAuth(clientId)
         }
+        App.store.auth = t.toAuth(pending.clientId)
+        App.store.pendingSignIn = null
     }
 
     fun signOut() {

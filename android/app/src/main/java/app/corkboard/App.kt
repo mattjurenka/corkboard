@@ -49,6 +49,7 @@ object Repo {
     val chat = MutableStateFlow<List<ChatMessage>>(emptyList())
     val signedIn = MutableStateFlow(App.store.auth != null)
     val problem = MutableStateFlow<String?>(null)
+    val signInError = MutableStateFlow<String?>(null)
     // Whether /api/chat exists on this Worker yet.
     val chatReady = MutableStateFlow(true)
 

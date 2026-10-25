@@ -18,6 +18,16 @@ describe("sign-in", () => {
     expect(handle).toBeTruthy();
   });
 
+  it("signs in the phone app through its own URL scheme", async () => {
+    const { html } = await consent("owner", "app.corkboard:/oauth");
+    expect(html).toContain("app.corkboard:/oauth");
+    expect(html).not.toContain("an app on this computer");
+    google("me@example.com");
+    const { redirect, tokens } = await login({ redirect: "app.corkboard:/oauth" });
+    expect(redirect!.protocol).toBe("app.corkboard:");
+    expect(tokens!.access_token).toBeTruthy();
+  });
+
   it("goes to Google with PKCE and the allowed account as a hint", async () => {
     google("me@example.com");
     const { toGoogle } = await login();

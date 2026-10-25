@@ -16,6 +16,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var screen by mutableStateOf<Screen>(Screen.Home)
@@ -27,6 +29,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         Screen.named(intent.getStringExtra("screen"))?.let { screen = it }
+        if (savedInstanceState == null) signedIn(intent)
         setContent {
             CorkboardTheme {
                 Box(Modifier.fillMaxSize().background(Monokai.base00).safeDrawingPadding()) {
@@ -57,7 +60,23 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        signedIn(intent)
         Screen.named(intent.getStringExtra("screen"))?.let { screen = it }
+    }
+
+    // The browser, back from signing in (Cloud.REDIRECT).
+    private fun signedIn(intent: Intent) {
+        val answer = intent.data?.takeIf { it.toString().startsWith(Cloud.REDIRECT) } ?: return
+        lifecycleScope.launch {
+            try {
+                Cloud.finishSignIn(answer)
+                Repo.signInError.value = null
+                Repo.signedIn.value = true
+                Repo.follow()
+            } catch (e: Exception) {
+                Repo.signInError.value = e.message
+            }
+        }
     }
 
     override fun onResume() {

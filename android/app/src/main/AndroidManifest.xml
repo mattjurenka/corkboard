@@ -34,12 +34,12 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- The sign-in page's "Back to corkboard". -->
+            <!-- Where the browser comes back after sign-in (Cloud.REDIRECT). -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="corkboard" />
+                <data android:scheme="app.corkboard" android:path="/oauth" />
             </intent-filter>
         </activity>
 

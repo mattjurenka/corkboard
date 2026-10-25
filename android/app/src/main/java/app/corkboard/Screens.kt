@@ -89,29 +89,28 @@ fun Problem() {
 fun SignInScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var error by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
+    val error by Repo.signInError.collectAsState()
+    var opening by remember { mutableStateOf(false) }
     Page {
         Header("corkboard", "sign in")
         Column(Modifier.padding(16.dp).weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Spacer(Modifier.height(24.dp))
             Text("Sign in to corkboard", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
-            Text("Your day plan and Pepper live on corkboard's Worker. Signing in opens the browser; allow \"corkboard phone\", then come back.", color = Monokai.base04)
+            Text("Your day plan and Pepper live on corkboard's Worker. Signing in opens the browser: allow \"corkboard phone\" and sign in with Google, and it comes back here.", color = Monokai.base04)
             error?.let { Text(it, color = Monokai.orange) }
         }
         Footer {
-            Solid(if (busy) "Waiting for the browser…" else "Sign in", Modifier.weight(1f), enabled = !busy) {
-                busy = true
-                error = null
+            // Tapping again starts over, if the browser was closed.
+            Solid(if (opening) "Opening the browser…" else "Sign in", Modifier.weight(1f), enabled = !opening) {
+                opening = true
+                Repo.signInError.value = null
                 scope.launch {
                     try {
-                        Cloud.signIn(context)
-                        Repo.signedIn.value = true
-                        Repo.follow()
+                        Cloud.startSignIn(context)
                     } catch (e: Exception) {
-                        error = e.message
+                        Repo.signInError.value = e.message
                     }
-                    busy = false
+                    opening = false
                 }
             }
         }

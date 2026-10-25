@@ -53,6 +53,10 @@ data class ChatMessage(val id: Long, val at: String, val who: String, val text: 
 @Serializable
 data class Auth(val clientId: String, val access: String, val refresh: String, val expiresAt: Long)
 
+// A sign-in waiting for the browser to come back (Cloud.startSignIn).
+@Serializable
+data class PendingSignIn(val clientId: String, val verifier: String, val state: String)
+
 fun clock(m: Int) = "%02d:%02d".format(m / 60 % 24, m % 60)
 
 fun length(m: Int): String {

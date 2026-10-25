@@ -55,13 +55,13 @@ async function pkce() {
   return { verifier, challenge };
 }
 
-export async function register() {
+export async function register(redirect = REDIRECT) {
   const res = await worker("/register", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       client_name: "corkboard bridge",
-      redirect_uris: [REDIRECT],
+      redirect_uris: [redirect],
       token_endpoint_auth_method: "none",
       grant_types: ["authorization_code", "refresh_token"],
     }),
@@ -71,15 +71,15 @@ export async function register() {
 }
 
 // Up to the consent page; returns what the rest of the flow needs.
-export async function consent(scope = "owner") {
-  const clientId = await register();
+export async function consent(scope = "owner", redirect = REDIRECT) {
+  const clientId = await register(redirect);
   const { verifier, challenge } = await pkce();
   const jar = new Jar();
   const url = new URL(`${ORIGIN}/authorize`);
   url.search = new URLSearchParams({
     response_type: "code",
     client_id: clientId,
-    redirect_uri: REDIRECT,
+    redirect_uri: redirect,
     scope,
     state: "client-state",
     code_challenge: challenge,
@@ -89,12 +89,12 @@ export async function consent(scope = "owner") {
   jar.take(res);
   const html = await res.text();
   const handle = html.match(/name="handle" value="([^"]+)"/)?.[1];
-  return { res, html, handle, jar, clientId, verifier };
+  return { res, html, handle, jar, clientId, verifier, redirect };
 }
 
 // The whole flow. Returns the client's redirect, and tokens if it got a code.
-export async function login(opts: { scope?: string; decision?: string; approve?: string[] } = {}) {
-  const c = await consent(opts.scope);
+export async function login(opts: { scope?: string; decision?: string; approve?: string[]; redirect?: string } = {}) {
+  const c = await consent(opts.scope, opts.redirect);
   if (!c.handle) throw new Error(`no consent page: ${c.res.status} ${c.html}`);
   const form = new URLSearchParams({ handle: c.handle, decision: opts.decision ?? "approve" });
   for (const s of opts.approve ?? (opts.scope ?? "owner").split(" ")) form.append("scope", s);
@@ -123,7 +123,7 @@ export async function login(opts: { scope?: string; decision?: string; approve?:
     body: new URLSearchParams({
       grant_type: "authorization_code",
       code,
-      redirect_uri: REDIRECT,
+      redirect_uri: c.redirect,
       client_id: c.clientId,
       code_verifier: c.verifier,
     }),
