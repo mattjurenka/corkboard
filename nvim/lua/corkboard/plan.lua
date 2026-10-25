@@ -504,6 +504,7 @@ local PLAN_ACTIONS = {
   edit = M.edit,
   pin = M.pin,
   later = M.toggle_later,
+  claude = function() require("corkboard.plan.claude").open() end,
   open = function()
     local b = selected_block() or {}
     open_card(b.card, b.board)
@@ -563,6 +564,7 @@ function M.buffer()
     e = { "edit", "edit the block" },
     p = { "pin", "pin the block" },
     z = { "later", "show what's not today" },
+    c = { "claude", "go to Claude Code, beside the plan" },
     ["<CR>"] = { "open", "open the block's card" },
     R = { "reset", "read the plan again" },
   })
@@ -603,7 +605,19 @@ end
 -- In the day plan's window (corkboard.window == "plan"), keep the plan its
 -- first tab. Leaves focus where it was.
 function M.ensure()
-  if pinned.ensure("corkboard_plan", 1, M.buffer()) then M.load() end
+  if pinned.ensure("corkboard_plan", 1, M.buffer()) then
+    M.load()
+    -- The window opens with Claude Code beside the plan, focus on the plan.
+    -- CORKBOARD_PLAN_CLAUDE=0 leaves it out (tests).
+    if vim.env.CORKBOARD_PLAN_CLAUDE == "0" then return end
+    vim.schedule(function()
+      local plan_win = vim.fn.win_findbuf(M.buffer())[1]
+      if not plan_win then return end
+      vim.api.nvim_set_current_win(plan_win)
+      require("corkboard.plan.claude").open()
+      if vim.api.nvim_win_is_valid(plan_win) then vim.api.nvim_set_current_win(plan_win) end
+    end)
+  end
 end
 
 -- The plan's tab, in the day plan's window. Elsewhere, <leader>p and

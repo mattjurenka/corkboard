@@ -25,7 +25,7 @@ const nvim = Bun.spawn(["nvim", "--embed", "--headless", "--clean", "--cmd", `se
   stdin: "pipe",
   stdout: "pipe",
   stderr: "inherit",
-  env: { ...process.env, CORKBOARD_WINDOW: "plan", CORKBOARD_PLAN_DATE: DATE, CORKBOARD_DAYPLAN: fake },
+  env: { ...process.env, CORKBOARD_WINDOW: "plan", CORKBOARD_PLAN_DATE: DATE, CORKBOARD_DAYPLAN: fake, CORKBOARD_PLAN_CLAUDE: "0" },
 });
 const send = (m: unknown) => {
   nvim.stdin.write(encode(m));

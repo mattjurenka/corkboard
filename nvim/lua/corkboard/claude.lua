@@ -42,18 +42,24 @@ local NOTIFY_PROMPT = table.concat({
 
 -- Start Claude Code in a new tab; returns its terminal buffer, or nil when
 -- claude is not on PATH. opts: args (after corkboard's own), cwd, env,
--- on_exit(status). The tab closes with the session, unless a shell in it is
--- still running.
+-- on_exit(status), prompt (added to the system prompt after corkboard's),
+-- split (in a window to the right of the current one instead of a tab). The
+-- tab closes with the session, unless a shell in it is still running.
 function M.start(opts)
   opts = opts or {}
   if vim.fn.executable("claude") == 0 then
     vim.notify("corkboard: claude is not on PATH", vim.log.levels.ERROR)
     return nil
   end
-  vim.cmd.tabnew()
+  if opts.split then
+    vim.cmd("rightbelow vnew")
+  else
+    vim.cmd.tabnew()
+  end
   local buf = vim.api.nvim_get_current_buf()
   local tab = vim.api.nvim_get_current_tabpage()
-  local cmd = { "claude", "--settings", vim.json.encode(settings()), "--append-system-prompt", NOTIFY_PROMPT }
+  local prompt = opts.prompt and (NOTIFY_PROMPT .. "\n\n" .. opts.prompt) or NOTIFY_PROMPT
+  local cmd = { "claude", "--settings", vim.json.encode(settings()), "--append-system-prompt", prompt }
   vim.fn.jobstart(vim.list_extend(cmd, opts.args or {}), {
     term = true,
     cwd = opts.cwd,

@@ -15,6 +15,7 @@ import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import * as boards from "./boards";
+import { CLOUD } from "./cloud";
 
 const HOST = process.env.CORKBOARD_HOST ?? "127.0.0.1";
 const PORT = Number(process.env.CORKBOARD_PORT ?? 7777);
@@ -193,8 +194,9 @@ function spawnLocal(data: Session): NonNullable<Session["nvim"]> {
   const rtp = `set rtp^=${[PLUGIN_ROOT, ...PLUGINS].map((p) => p.replace(/[ \\,]/g, "\\$&")).join(",")}`;
   return Bun.spawn([NVIM, "--embed", "--cmd", rtp], {
     cwd: data.cwd,
-    // corkboard.window: which window this Neovim is for.
-    env: data.view ? { ...process.env, CORKBOARD_WINDOW: data.view } : process.env,
+    // corkboard.window: which window this Neovim is for. CORKBOARD_CLOUD:
+    // the Worker, for what Neovim starts itself (the plan's Claude Code).
+    env: { ...process.env, CORKBOARD_CLOUD: CLOUD, ...(data.view ? { CORKBOARD_WINDOW: data.view } : {}) },
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",

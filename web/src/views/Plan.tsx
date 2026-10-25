@@ -127,6 +127,7 @@ const PLAN_KEYS = [
   ["later", "z", "Not today"],
   ["open", "⏎", "Open card"],
   ["reset", "R", "Read again"],
+  ["claude", "c", "Claude"],
 ];
 
 // Half an hour is a line of the grid.

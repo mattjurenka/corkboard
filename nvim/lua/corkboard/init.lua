@@ -12,6 +12,10 @@ local M = {}
 -- plan's, which the bridge starts with CORKBOARD_WINDOW=plan (?view=plan).
 M.window = vim.env.CORKBOARD_WINDOW
 
+-- The Claude account the day plan's Claude Code is logged in to
+-- (corkboard.plan.claude). CORKBOARD_PLAN_ACCOUNT overrides it.
+M.plan_account = vim.env.CORKBOARD_PLAN_ACCOUNT or "matthewjurenka@gmail.com"
+
 local chans = {}
 -- What each channel was last sent, so unchanged state isn't sent again.
 -- shown_preview: the preview tab last sent (M.push_preview); false when
