@@ -11,38 +11,47 @@
       pluginPath = pkgs: pkgs.lib.concatStringsSep ":" [ pkgs.vimPlugins.snacks-nvim ];
     in
     {
-      devShells = forAll (pkgs: {
-        default = pkgs.mkShell {
-          packages = [ pkgs.neovim pkgs.bun pkgs.ripgrep pkgs.fd pkgs.electron ];
-          CORKBOARD_PLUGINS = pluginPath pkgs;
-        };
-
-        # The phone app (android/): `nix develop .#android`, then
-        # `gradle -p android assembleDebug`. The SDK is unfree and needs
-        # its license accepted.
-        android =
-          let
-            pkgs' = import nixpkgs {
-              system = pkgs.stdenv.hostPlatform.system;
-              config = { allowUnfree = true; android_sdk.accept_license = true; };
-            };
-            sdk = (pkgs'.androidenv.composeAndroidPackages {
-              platformVersions = [ "35" ];
-              buildToolsVersions = [ "35.0.0" ];
-              includeEmulator = false;
-              includeNDK = false;
-            }).androidsdk;
-            home = "${sdk}/libexec/android-sdk";
-          in
-          pkgs'.mkShell {
-            packages = [ sdk pkgs'.jdk17 pkgs'.gradle ];
-            ANDROID_HOME = home;
-            ANDROID_SDK_ROOT = home;
-            JAVA_HOME = pkgs'.jdk17.home;
-            # Gradle's own aapt2 from Maven is linked for other distros.
-            GRADLE_OPTS = "-Dorg.gradle.project.android.aapt2FromMavenOverride=${home}/build-tools/35.0.0/aapt2";
+      devShells = forAll (pkgs:
+        let
+          # The phone app (android/): `nix develop .#android`, then
+          # `gradle -p android assembleDebug`. The SDK is unfree and needs
+          # its license accepted. `.#android-emulator` adds an emulator and
+          # an Android 15 image, to run it without a phone.
+          pkgs' = import nixpkgs {
+            system = pkgs.stdenv.hostPlatform.system;
+            config = { allowUnfree = true; android_sdk.accept_license = true; };
           };
-      });
+          androidShell = emulator:
+            let
+              sdk = (pkgs'.androidenv.composeAndroidPackages ({
+                platformVersions = [ "35" ];
+                buildToolsVersions = [ "35.0.0" ];
+                includeNDK = false;
+                includeEmulator = emulator;
+              } // pkgs.lib.optionalAttrs emulator {
+                includeSystemImages = true;
+                systemImageTypes = [ "google_apis" ];
+                abiVersions = [ "x86_64" ];
+              })).androidsdk;
+              home = "${sdk}/libexec/android-sdk";
+            in
+            pkgs'.mkShell {
+              packages = [ sdk pkgs'.jdk17 pkgs'.gradle ];
+              ANDROID_HOME = home;
+              ANDROID_SDK_ROOT = home;
+              JAVA_HOME = pkgs'.jdk17.home;
+              # Gradle's own aapt2 from Maven is linked for other distros.
+              GRADLE_OPTS = "-Dorg.gradle.project.android.aapt2FromMavenOverride=${home}/build-tools/35.0.0/aapt2";
+            };
+        in
+        {
+          default = pkgs.mkShell {
+            packages = [ pkgs.neovim pkgs.bun pkgs.ripgrep pkgs.fd pkgs.electron ];
+            CORKBOARD_PLUGINS = pluginPath pkgs;
+          };
+          android = androidShell false;
+          android-emulator = androidShell true;
+        });
 
       # The bridge, the web page and the Neovim plugin, laid out as in the repo
       # so server.ts finds ../web and ../nvim from its own path. Exposes
