@@ -5,7 +5,11 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Bundle
 import android.provider.Settings
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -32,6 +36,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -474,8 +479,9 @@ fun ChatScreen(draft: String, back: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     val list = rememberLazyListState()
     LaunchedEffect(messages.size) { if (messages.isNotEmpty()) list.animateScrollToItem(messages.size - 1) }
+    val dictation = rememberDictation(onHeard = { text = it }, onError = { error = it })
     Page {
-        Header("pepper", if (messages.lastOrNull()?.who == "matt") "thinking…" else "chat")
+        Header("pepper", if (dictation.listening) "listening…" else if (messages.lastOrNull()?.who == "matt") "thinking…" else "chat")
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             if (!ready) item { Text("This Worker has no chat yet: deploy the cloud/ update for messages to reach Pepper.", color = Monokai.orange) }
             if (ready && messages.isEmpty()) item { Text("Nothing yet. Pepper answers here, and can change today's plan while you talk.", color = Monokai.base04) }
@@ -503,8 +509,16 @@ fun ChatScreen(draft: String, back: () -> Unit) {
                     modifier = Modifier.weight(1f),
                     maxLines = 5,
                 )
+                if (dictation.available) {
+                    Text(
+                        if (dictation.listening) "stop" else "mic",
+                        color = if (dictation.listening) Monokai.orange else Monokai.base04,
+                        modifier = Modifier.clickable(role = Role.Button) { dictation.toggle(text) }.padding(start = 12.dp, top = 8.dp, bottom = 8.dp),
+                    )
+                }
             }
             Solid("send", color = Monokai.purple, enabled = ready && text.isNotBlank()) {
+                dictation.stop()
                 val sending = text.trim()
                 text = ""
                 scope.launch {
@@ -519,6 +533,64 @@ fun ChatScreen(draft: String, back: () -> Unit) {
             }
         }
     }
+}
+
+
+// Talking instead of typing. Android's recognizer runs here rather than in
+// its "speak now" dialog, which is the Google app's window and so locked
+// while the gate is shut. What's heard goes in the field after what was
+// typed, as it's heard, to be looked over before send.
+class Dictation(val available: Boolean, val listening: Boolean, val toggle: (String) -> Unit, val stop: () -> Unit)
+
+@Composable
+private fun rememberDictation(onHeard: (String) -> Unit, onError: (String) -> Unit): Dictation {
+    val context = LocalContext.current
+    val recognizer = remember { if (SpeechRecognizer.isRecognitionAvailable(context)) SpeechRecognizer.createSpeechRecognizer(context) else null }
+    DisposableEffect(recognizer) { onDispose { recognizer?.destroy() } }
+    var listening by remember { mutableStateOf(false) }
+    var before by remember { mutableStateOf("") }
+
+    fun heard(b: Bundle?) = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { onHeard(before + it) }
+    fun listen() {
+        val r = recognizer ?: return
+        r.setRecognitionListener(object : RecognitionListener {
+            override fun onPartialResults(b: Bundle?) { heard(b) }
+            override fun onResults(b: Bundle?) { heard(b); listening = false }
+            override fun onError(e: Int) {
+                listening = false
+                // Silence, or nothing that sounded like words, isn't worth a message.
+                if (e != SpeechRecognizer.ERROR_NO_MATCH && e != SpeechRecognizer.ERROR_SPEECH_TIMEOUT && e != SpeechRecognizer.ERROR_CLIENT)
+                    onError("couldn't listen (speech error $e)")
+            }
+            override fun onReadyForSpeech(b: Bundle?) {}
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(db: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+            override fun onEvent(type: Int, b: Bundle?) {}
+        })
+        r.startListening(
+            Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true),
+        )
+        listening = true
+    }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        if (it) listen() else onError("corkboard needs the microphone to hear you")
+    }
+    val stop = { if (listening) recognizer?.stopListening(); Unit }
+
+    return Dictation(recognizer != null, listening, toggle = { typed ->
+        when {
+            listening -> stop()
+            else -> {
+                before = typed.trimEnd().let { if (it.isEmpty()) "" else "$it " }
+                if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) listen()
+                else ask.launch(Manifest.permission.RECORD_AUDIO)
+            }
+        }
+    }, stop = stop)
 }
 
 // Meditation ---------------------------------------------------------------------------
