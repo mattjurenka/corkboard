@@ -15,6 +15,7 @@ import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import * as boards from "./boards";
+import * as phone from "./phone";
 import { CLOUD } from "./cloud";
 
 const HOST = process.env.CORKBOARD_HOST ?? "127.0.0.1";
@@ -403,3 +404,6 @@ Bun.serve<Session, {}>({
 });
 
 console.log(`corkboard on http://${HOST.includes(":") ? `[${HOST}]` : HOST}:${PORT}/${TOKEN ? `#token=${TOKEN}` : ""}`);
+
+// What the phone needs from this machine (phone.ts).
+phone.start();

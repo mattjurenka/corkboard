@@ -1,16 +1,18 @@
-// One user: the boards they have, their notes (the assistant's memory) and
-// their day plans. Each board's cards live in its own Board object; this
-// lists them, so GET /api/boards is one call.
+// One user: the boards they have, their notes (the assistant's memory),
+// their day plans and their chat with Pepper. Each board's cards live in its
+// own Board object; this lists them, so GET /api/boards is one call.
 //
 // Plans change by version, like cards: a write names the version it read,
-// and a stale one gets a 409 with the plan as it is. Every plan change goes
-// to the user's live sockets (GET /api/live), which is how the day plan's
-// window hears of a proposal the moment it's made.
+// and a stale one gets a 409 with the plan as it is. Every plan change and
+// chat message goes to the user's live sockets (GET /api/live), which is how
+// the day plan's window hears of a proposal the moment it's made, and the
+// phone of Pepper's reply.
 
 import { DurableObject } from "cloudflare:workers";
 import type { BoardInfo, Result } from "./board";
 import {
   type Block,
+  type ChatMessage,
   type Note,
   type Plan,
   type Proposal,
@@ -40,6 +42,7 @@ CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
   INSERT INTO notes_fts (rowid, title, body) VALUES (new.rowid, new.title, new.body);
 END;
 CREATE TABLE IF NOT EXISTS plans (date TEXT PRIMARY KEY, doc TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS chat (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, who TEXT NOT NULL, text TEXT NOT NULL);
 `;
 
 // A search as FTS5 reads it: each word quoted, so punctuation in what someone
@@ -203,6 +206,20 @@ export class User extends DurableObject {
 
   deletePlan(date: string): void {
     this.sql.exec("DELETE FROM plans WHERE date = ?", date);
+  }
+
+  // Chat ------------------------------------------------------------------------------
+
+  // The messages after an id, oldest first; with none, the newest `limit`.
+  chat(after: number, limit: number): ChatMessage[] {
+    if (after > 0) return this.sql.exec("SELECT * FROM chat WHERE id > ? ORDER BY id LIMIT ?", after, limit).toArray() as ChatMessage[];
+    return (this.sql.exec("SELECT * FROM chat ORDER BY id DESC LIMIT ?", limit).toArray() as ChatMessage[]).reverse();
+  }
+
+  post(who: string, text: string): ChatMessage {
+    const message = this.sql.exec("INSERT INTO chat (at, who, text) VALUES (?, ?, ?) RETURNING *", now(), who, text).one() as ChatMessage;
+    this.broadcast({ type: "chat", message });
+    return message;
   }
 
   // Live ------------------------------------------------------------------------------

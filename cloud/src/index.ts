@@ -51,6 +51,11 @@ function oauth(env: Env): OAuthProvider<Env> {
     tokenEndpoint: "/token",
     clientRegistrationEndpoint: "/register",
     clientIdMetadataDocumentEnabled: true,
+    // The phone app (android/) comes back from the browser to its own
+    // scheme, app.corkboard:/oauth (RFC 8252's private-use URIs): Android
+    // freezes an app in the background, so a loopback port like the
+    // bridge's goes unanswered. PKCE keeps the code to the app that asked.
+    allowPrivateUseRedirectUris: true,
     scopesSupported: ["owner", "assistant"],
     // What an MCP client should ask for first (the bridge asks for owner).
     requiredScopes: ["assistant"],

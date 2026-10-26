@@ -19,7 +19,7 @@ import type { Result } from "./board";
 import { AGENT_STATES, type Card, type Fields, type LogEntry, PRIORITIES, STATUSES, waitingOn } from "./cards";
 import type { Env } from "./index";
 import { Invalid } from "./cards";
-import { NOTE_KINDS, OWNER_ONLY_NOTES, PEPPER_ONLY_KINDS, date, note, noteId, projects, proposal, slug, today } from "./plans";
+import { NOTE_KINDS, OWNER_ONLY_NOTES, PEPPER_ONLY_KINDS, chatText, date, note, noteId, projects, proposal, slug, today } from "./plans";
 import type { User } from "./user";
 
 export type Grant =
@@ -404,11 +404,20 @@ If you need a human decision, call block with your question and stop. If you nee
 Put follow-up work you discover in new cards with create_card (parent: the card you are on).`;
 
 // The user's own tools, for OAuth clients and Pepper, not card agents: notes
-// (the assistant's memory; the goals are Pepper's alone) and the day plan.
-// There's no tool to accept a plan; only the user does that, in corkboard.
+// (the assistant's memory; the goals are Pepper's alone), the day plan, and
+// the chat with the user, which is Pepper's alone too. There's no tool to
+// accept a plan; only the user does that, in corkboard.
 
 type UserCall = { users: DurableObjectStub<User>; grant: Grant; timeZone: string };
-type UserTool = { description: string; properties?: Record<string, object>; required?: string[]; run: (a: any, c: UserCall) => Promise<unknown> };
+type UserTool = {
+  description: string;
+  properties?: Record<string, object>;
+  required?: string[];
+  // Only for Pepper's token: to anyone else the tool doesn't exist.
+  pepper?: true;
+  run: (a: any, c: UserCall) => Promise<unknown>;
+};
+const reaches = (t: UserTool, grant: Grant) => grant.kind !== "card" && (!t.pepper || grant.kind === "pepper");
 
 const day = str("YYYY-MM-DD; today, where the user is, if left out");
 const blockSchema = {
@@ -527,6 +536,20 @@ const USER_TOOLS: Record<string, UserTool> = {
       return unwrap(await c.users.propose(d, made, a.projects === undefined ? undefined : projects(a.projects)));
     },
   },
+  chat_read: {
+    description:
+      "Read your chat with the user, oldest first: what they said to you from their phone and what you answered. after: only messages after this id; without it, the newest 100.",
+    properties: { after: { type: "integer", description: "A message id" } },
+    pepper: true,
+    run: async (a, c) => c.users.chat(Number.isInteger(a.after) && a.after > 0 ? a.after : 0, 100),
+  },
+  chat_send: {
+    description: "Say something to the user in your chat; it reaches their phone at once. Plain text, no markdown.",
+    properties: { text: str("What to say") },
+    required: ["text"],
+    pepper: true,
+    run: async (a, c) => c.users.post("pepper", chatText(a.text)),
+  },
 };
 
 // What a grant sees: a card token its board's tools, with no board argument;
@@ -560,7 +583,7 @@ function toolsFor(grant: Grant) {
         },
       },
     );
-    for (const [name, t] of Object.entries(USER_TOOLS))
+    for (const [name, t] of Object.entries(USER_TOOLS).filter(([, t]) => reaches(t, grant)))
       tools.push({ name, description: t.description, inputSchema: { type: "object", properties: ownKinds(t.properties ?? {}), required: t.required ?? [] } });
   }
   return tools;
@@ -591,7 +614,7 @@ async function createBoard(env: Env, user: string, a: any) {
 async function callTool(env: Env, user: string, grant: Grant, name: string, args: any): Promise<unknown> {
   if (name === "list_boards" && grant.kind !== "card") return env.USER.get(env.USER.idFromName(user)).boards();
   if (name === "create_board" && grant.kind !== "card") return createBoard(env, user, args);
-  if (USER_TOOLS[name] && grant.kind !== "card") {
+  if (USER_TOOLS[name] && reaches(USER_TOOLS[name], grant)) {
     try {
       return await USER_TOOLS[name].run({ ...args }, { users: env.USER.get(env.USER.idFromName(user)), grant, timeZone: env.TIMEZONE });
     } catch (e) {
