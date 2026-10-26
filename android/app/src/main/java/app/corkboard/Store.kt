@@ -48,8 +48,8 @@ class Store(context: Context) {
 
     companion object {
         // Email, and what a day can't do without: calls and texts (sign-in
-        // codes come by text), signing in, getting around, paying, and the
-        // phone's own tools.
+        // codes come by text), signing in, the VPN, getting around, paying,
+        // and the phone's own tools.
         val DEFAULT_OPEN = setOf(
             // Email
             "com.google.android.gm", "com.microsoft.office.outlook", "com.samsung.android.email.provider",
@@ -60,6 +60,8 @@ class Store(context: Context) {
             // Signing in
             "com.onepassword.android", "com.dashlane", "com.duosecurity.duomobile", "com.azure.authenticator",
             "com.yubico.yubioath", "com.google.android.apps.authenticator2",
+            // The VPN
+            "com.expressvpn.vpn",
             // Getting around
             "com.google.android.apps.maps", "com.ubercab", "com.waymo.carapp", "com.limebike", "com.pgt.veoride",
             "org.valleymetro.app", "net.sharewire.parkmobilev2", "de.kisi.android", "com.thetileapp.tile",
