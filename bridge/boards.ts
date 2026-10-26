@@ -183,6 +183,14 @@ export class Session {
         const [, id, who, note] = args;
         return ok("POST", `${board}/cards/${id}/log`, { who, note });
       }
+      // Off the board, kept; or gone for good.
+      case "archive":
+        return ok("POST", `${board}/cards/${args[1]}/archive`, {});
+      case "delete": {
+        const { status, json } = await api("DELETE", `${board}/cards/${args[1]}`);
+        if (status >= 400) throw new Error(`corkboard cloud: ${json.error ?? `HTTP ${status}`}`);
+        return null;
+      }
       // The card's agent is still running here: its claim holds.
       case "touch": {
         const [, id, agent] = args;

@@ -27,6 +27,9 @@ export type Card = {
   extra: Record<string, unknown>;
   created: string;
   updated: string;
+  // When it was archived: off the board and out of list_cards, but kept, and
+  // readable by id. null on the board.
+  archived: string | null;
   // Bumped by every change to the fields above; a write names the version it
   // read, so two editors can't silently overwrite each other.
   version: number;
@@ -39,11 +42,14 @@ export type LogEntry = { seq: number; at: string; who: string; note: string };
 export type BoardEvent =
   | { type: "card"; card: Card }
   | { type: "log"; id: string; entry: LogEntry }
-  // The whole board, with logs: after an import, which changes everything.
+  // Off the board: archived or deleted.
+  | { type: "removed"; id: string }
+  // The whole board, with logs: after an import, which changes everything,
+  // and when an archived card comes back with its log.
   | { type: "snapshot"; cards: (Card & { log?: LogEntry[] })[] };
 
-// What a create or an update may set.
-export type Fields = Partial<Omit<Card, "id" | "created" | "updated" | "version">>;
+// What a create or an update may set. Archiving is its own call.
+export type Fields = Partial<Omit<Card, "id" | "created" | "updated" | "version" | "archived">>;
 
 export class Invalid extends Error {}
 

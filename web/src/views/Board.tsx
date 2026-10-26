@@ -8,7 +8,7 @@ import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { ViewProps } from "./index";
 
-type BoardCard = {
+export type BoardCard = {
   id: string;
   title: string;
   status: string;
@@ -76,6 +76,8 @@ const KEYS = [
   ["session", "s", "Session"],
   ["review", "v", "Review"],
   ["answer", "r", "Go to question"],
+  ["archive", "x", "Archive"],
+  ["delete", "D", "Delete"],
   ["open", "⏎", "Open"],
 ];
 
@@ -162,7 +164,7 @@ export function Board({ state, win, focused, nvim }: ViewProps<BoardState>) {
   );
 }
 
-function BoardCardView({
+export function BoardCardView({
   card,
   selected,
   focused,

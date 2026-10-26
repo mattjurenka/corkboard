@@ -10,14 +10,15 @@ import { work } from './work.tsx'
 const at = { plugin: 'corkboard-ui', key: 'at' } as const
 const took = { plugin: 'corkboard-ui', key: 'took' } as const
 
-// The gutter: "14:02 │ ", the time in six columns, the rule in the seventh.
-const TIME = 6
+// The gutter: "2:02pm  │ ", the time in eight columns, the rule in the ninth.
+const TIME = 8
 const GUTTER = TIME + 2
 
 function clock(ms: number | undefined) {
   if (ms === undefined) return ''
   const d = new Date(ms)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  const h = d.getHours()
+  return `${((h + 11) % 12) + 1}:${String(d.getMinutes()).padStart(2, '0')}${h < 12 ? 'am' : 'pm'}`
 }
 
 function seconds(ms: number | undefined) {

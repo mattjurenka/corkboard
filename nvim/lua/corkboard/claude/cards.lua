@@ -1,7 +1,9 @@
--- The cards agents are on, beside a Claude Code session that has its tab to
--- itself: an HTML panel (b:corkboard_view "cards") in a window to the right
--- of the session's, one panel per session, so each marks its own card. The
--- browser draws it (web/src/views/Cards.tsx). j/k move between cards, <CR>
+-- Cards beside a Claude Code session that has its tab to itself: the ones
+-- that session works on, then the open cards ready to be picked up (ready,
+-- then backlog; no agent, nothing to wait on). An HTML panel
+-- (b:corkboard_view "cards") in a window to the right of the session's, one
+-- panel per session. The browser draws it (web/src/views/Cards.tsx). j/k
+-- move between cards, <CR>
 -- opens the selected one in the board's card float (rendered; e there edits
 -- it); s or a click goes to its session, or to what it's asking, or to the
 -- card on the board.
@@ -18,7 +20,7 @@ local M = {}
 local ORDER = { blocked = 1, working = 2, ["needs-review"] = 3, queued = 4 }
 local PIN = { blocked = "●", working = "●", ["needs-review"] = "●", queued = "○" }
 
-local cards = {} -- the cards agents are on, as corkboard.board last set them
+local cards = {} -- the open cards, as corkboard.board last set them
 local panels = {} -- Claude Code terminal buffer -> its panel buffer
 local line_card = {} -- panel buffer -> line number -> card id
 local selected = {} -- panel buffer -> the card id its cursor is on
@@ -34,23 +36,52 @@ local function is_session(buf)
   return kind ~= nil and kind ~= "pepper" and require("corkboard.terminal").alive(buf)
 end
 
+-- The panel's two lists: the cards src's session works on (the card it was
+-- started on, or any card whose session it is), blocked first; and the open
+-- cards ready to be picked up, ready before backlog.
+local function sections(src)
+  local agents = require("corkboard.agents")
+  local mine, open, index = {}, {}, {}
+  for i, c in ipairs(cards) do
+    index[c.id] = i
+    if c.id == vim.b[src].corkboard_card or agents.session(c.id) == src then
+      table.insert(mine, c)
+    elseif (c.agent or "") == "" and not c.waiting and (c.status == "ready" or c.status == "backlog") then
+      table.insert(open, c)
+    end
+  end
+  table.sort(mine, function(a, b)
+    local oa, ob = ORDER[a.agent_state] or 9, ORDER[b.agent_state] or 9
+    if oa ~= ob then return oa < ob end
+    return index[a.id] < index[b.id]
+  end)
+  local ready = vim.tbl_filter(function(c) return c.status == "ready" end, open)
+  return mine, vim.list_extend(ready, vim.tbl_filter(function(c) return c.status == "backlog" end, open))
+end
+
 local function state(src, p)
-  return { cards = cards, mine = vim.b[src].corkboard_card, selected = selected[p] }
+  local mine, open = sections(src)
+  return { mine = mine, open = open, selected = selected[p] }
 end
 
 -- The text under the HTML, one line a card.
 local function render(src, p)
-  local mine = vim.b[src].corkboard_card
-  local lines, map = { "Cards agents are on", "" }, {}
-  if #cards == 0 then table.insert(lines, "  none") end
-  for _, c in ipairs(cards) do
-    local note = table.concat(vim.tbl_filter(function(s) return s ~= "" end, {
-      c.agent_state, c.priority or "", c.session or "", c.attention or "",
-    }), " · ")
-    table.insert(lines, string.format("  %s %s  %s%s  %s", PIN[c.agent_state] or "·", c.id, c.title,
-      c.id == mine and " (this session)" or "", note))
-    map[#lines] = c.id
+  local mine, open = sections(src)
+  local lines, map = {}, {}
+  local function list(title, list, note)
+    table.insert(lines, title)
+    if #list == 0 then table.insert(lines, "  none") end
+    for _, c in ipairs(list) do
+      table.insert(lines, string.format("  %s %s  %s  %s", PIN[c.agent_state] or "·", c.id, c.title, note(c)))
+      map[#lines] = c.id
+    end
+    table.insert(lines, "")
   end
+  local function join(parts) return table.concat(vim.tbl_filter(function(s) return s ~= "" end, parts), " · ") end
+  list("This session's cards", mine, function(c)
+    return join({ c.agent_state or c.status, c.priority or "", c.session or "", c.attention or "" })
+  end)
+  list("Ready to work on", open, function(c) return join({ c.status, c.priority or "" }) end)
   line_card[p] = map
   pinned.set_lines(p, lines)
 
@@ -82,6 +113,15 @@ function M.go(id)
     local buf = agents.session(id)
     if buf then return require("corkboard.terminal").focus(buf) end
     require("corkboard.board").reveal(id)
+  end)
+end
+
+-- A click on a card: what <CR> does, the card in the board's float, with
+-- the session's tab left where it is.
+function M.open(id)
+  vim.schedule(function()
+    vim.cmd.stopinsert()
+    require("corkboard.board").open_card(id)
   end)
 end
 
@@ -221,16 +261,9 @@ function M.toggle()
   open(sessions[1])
 end
 
--- The cards agents are on, from corkboard.board.
+-- The open cards, in board order, from corkboard.board.
 function M.set(list)
   cards = vim.deepcopy(list)
-  local index = {}
-  for i, c in ipairs(cards) do index[c.id] = i end
-  table.sort(cards, function(a, b)
-    local oa, ob = ORDER[a.agent_state] or 9, ORDER[b.agent_state] or 9
-    if oa ~= ob then return oa < ob end
-    return index[a.id] < index[b.id]
-  end)
   M.push_all()
 end
 

@@ -72,6 +72,7 @@ rpc.on("corkboard.preview", ([tab]: any[]) => store.set({ previewTab: tab ?? nul
 rpc.on("corkboard.focus_tabs", () => document.querySelector<HTMLElement>("#tabs")?.focus());
 // A new commit, under `bun run dev` (bridge/server.ts).
 rpc.on("corkboard.reload", () => location.reload());
+rpc.on("corkboard.focus", ([focus]: any[]) => store.set({ focus: focus ?? null }));
 rpc.on("corkboard.files_changed",() => store.set({ filesVersion: store.get().filesVersion + 1 }));
 
 // Neovim sends a layout just before the flush that draws it. Rendering it

@@ -226,6 +226,24 @@ describe("live", () => {
     other.ws.close();
   });
 
+  it("says when a card leaves the board, and sends the board again when one comes back", async () => {
+    await send("POST", cards(), { title: "Archived" });
+    await send("POST", cards(), { title: "Deleted" });
+    await send("POST", `${cards()}/TASK-1/log`, { who: "claude", note: "kept" });
+    const l = await listen();
+    await send("POST", `${cards()}/TASK-1/archive`, {});
+    await api(`${cards()}/TASK-2`, { method: "DELETE" });
+    await send("POST", `${cards()}/TASK-1/archive`, { archived: false });
+    const events = await l.next(3);
+    expect(events.slice(0, 2)).toEqual([
+      { type: "removed", id: "TASK-1" },
+      { type: "removed", id: "TASK-2" },
+    ]);
+    expect(events[2].type).toBe("snapshot");
+    expect(events[2].cards.map((c: any) => [c.id, c.log.map((e: any) => e.note)])).toEqual([["TASK-1", ["kept"]]]);
+    l.ws.close();
+  });
+
   it("needs a token and a board", async () => {
     expect((await api(`/api/boards/${BOARD}/live`, { token: null, headers: { Upgrade: "websocket" } })).status).toBe(401);
     expect((await api(`/api/boards/typo/live`, { headers: { Upgrade: "websocket" } })).status).toBe(404);
@@ -254,6 +272,46 @@ describe("deleting a board", () => {
     // Made again, it starts empty and numbers from 1.
     await send("PUT", `/api/boards/${BOARD}`, {});
     expect((await (await send("POST", cards(), { title: "Again" })).json<any>()).id).toBe("TASK-1");
+  });
+});
+
+describe("archiving and deleting cards", () => {
+  it("archives a card off the board, keeps it readable, and puts it back", async () => {
+    await send("POST", cards(), { title: "Old" });
+    await send("POST", cards(), { title: "Waits", dependencies: ["TASK-1"] });
+    await send("PATCH", `${cards()}/TASK-1`, { version: 1, status: "done" });
+    const archived = await (await send("POST", `${cards()}/TASK-1/archive`, {})).json<any>();
+    expect(archived.archived).toMatch(/^\d{4}-\d\d-\d\dT/);
+    const listed = await (await api(cards())).json<any[]>();
+    expect(listed.map((c) => c.id)).toEqual(["TASK-2"]);
+    // Waiting on an archived card that's done is waiting on nothing.
+    expect(listed[0].waiting_on).toEqual([]);
+    expect((await (await api(`${cards()}?archived=1`)).json<any[]>()).map((c) => c.id)).toEqual(["TASK-1"]);
+    expect((await (await api(`${cards()}/TASK-1`)).json<any>()).title).toBe("Old");
+    // Read-only while archived.
+    expect((await send("PATCH", `${cards()}/TASK-1`, { version: archived.version, title: "x" })).status).toBe(409);
+    expect((await send("POST", `${cards()}/TASK-1/log`, { who: "claude", note: "x" })).status).toBe(409);
+    const back = await (await send("POST", `${cards()}/TASK-1/archive`, { archived: false })).json<any>();
+    expect(back.archived).toBeNull();
+    expect((await (await api(cards())).json<any[]>()).map((c) => c.id)).toEqual(["TASK-1", "TASK-2"]);
+  });
+
+  it("deletes a card and its log for good, and never hands out its id again", async () => {
+    await send("POST", cards(), { title: "One" });
+    await send("POST", cards(), { title: "Two" });
+    await send("POST", `${cards()}/TASK-2/log`, { who: "claude", note: "gone" });
+    expect((await api(`${cards()}/TASK-2`, { method: "DELETE" })).status).toBe(204);
+    expect((await api(`${cards()}/TASK-2`)).status).toBe(404);
+    expect((await api(`${cards()}/TASK-2`, { method: "DELETE" })).status).toBe(404);
+    expect((await (await api(`${cards()}?log=1`)).json<any[]>()).map((c) => c.id)).toEqual(["TASK-1"]);
+    expect((await (await send("POST", cards(), { title: "Three" })).json<any>()).id).toBe("TASK-3");
+  });
+
+  it("refuses bad archive bodies", async () => {
+    await send("POST", cards(), { title: "One" });
+    expect((await send("POST", `${cards()}/TASK-1/archive`, { archived: "yes" })).status).toBe(400);
+    expect((await send("POST", `${cards()}/TASK-1/archive`, { colour: "red" })).status).toBe(400);
+    expect((await send("POST", `${cards()}/TASK-9/archive`, {})).status).toBe(404);
   });
 });
 

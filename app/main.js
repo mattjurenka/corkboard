@@ -10,22 +10,24 @@
 // give it: no Node, no preload, sandboxed. Everything else (the bridge, the
 // page, Neovim) is as it was; this only draws the window.
 //
-//   electron app [--name ID] [--title NAME] URL
+//   electron app [--name ID] [--title NAME] [--one] URL
 //
 // ID names the app: its Wayland app_id / WM_CLASS, which launchers and
 // window rules go by, and its profile directory, so the installed app and
 // the dev one are apps of their own. NAME is what notifications and the
 // window list call it. Launching an app that is already running opens URL in
-// a new window of the running one.
+// a new window of the running one; with --one (the day plan's app), it
+// brings the running one's window forward instead.
 
 import { app, BrowserWindow, Menu, session, shell } from "electron";
 
 function parse(argv) {
-  const args = { name: "corkboard", title: undefined, url: undefined };
+  const args = { name: "corkboard", title: undefined, url: undefined, one: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--name") args.name = argv[++i];
     else if (a === "--title") args.title = argv[++i];
+    else if (a === "--one") args.one = true;
     else if (/^https?:\/\//.test(a)) args.url = a;
   }
   return args;
@@ -126,6 +128,11 @@ function open(url) {
 }
 
 app.on("second-instance", (_e, argv) => {
+  const [win] = BrowserWindow.getAllWindows();
+  if (args.one && win) {
+    if (win.isMinimized()) win.restore();
+    return win.focus();
+  }
   const url = parse(argv.slice(app.isPackaged ? 1 : 2)).url;
   // Only this app's own bridge: another origin's page would get this
   // profile's permissions.

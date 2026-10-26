@@ -10,6 +10,16 @@ if not (addr and buf) then return end
 local ok, input = pcall(vim.json.decode, io.read("a"))
 if not ok or type(input) ~= "table" then return end
 
+-- The card a corkboard MCP tool took or let go of: the first id in its
+-- result, which is the card's JSON when it worked (an error is plain text).
+local tool = type(input.tool_name) == "string" and input.tool_name:match("^mcp__corkboard__(.+)$")
+local card
+if input.hook_event_name == "PostToolUse" and (tool == "claim_card" or tool == "release_card" or tool == "next_card") then
+  local text = vim.F.npcall(vim.json.encode, input.tool_response) or ""
+  card = text:match('\\*"id\\*"%s*:%s*\\*"(%a+%-%d+)')
+  card = card and card:upper()
+end
+
 local chan = vim.F.npcall(vim.fn.sockconnect, "pipe", addr, { rpc = true })
 if not chan or chan == 0 then return end
 -- A notification, not a request: the session needn't wait on Neovim.
@@ -22,6 +32,8 @@ pcall(vim.rpcnotify, chan, "nvim_exec_lua", "require('corkboard.agents').hook(..
     notification_type = input.notification_type,
     message = input.message,
     tool_name = input.tool_name,
+    corkboard_tool = tool or nil,
+    card = card,
     -- AskUserQuestion's first question, for the card's attention.
     question = type(input.tool_input) == "table" and type(input.tool_input.questions) == "table"
       and type(input.tool_input.questions[1]) == "table" and input.tool_input.questions[1].question or nil,

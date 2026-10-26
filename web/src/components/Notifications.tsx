@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { store, useStore } from "@/store";
 import { HeaderButton } from "./Sidebar";
 
-const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true });
 
 export function Notifications() {
   const notes = useStore((s) => s.notifications);

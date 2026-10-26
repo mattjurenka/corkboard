@@ -59,6 +59,9 @@ export type State = {
   // The tabs and windows as the page last saw them (skeleton.ts), shown
   // loading until Neovim has put the editor back.
   skeleton: Skeleton | null;
+  // Focus mode (corkboard/focus.lua): no sidebar, and the grid this many
+  // columns wide in the middle of the page. Null when off.
+  focus: { width: number } | null;
 };
 
 let state: State = {
@@ -77,6 +80,7 @@ let state: State = {
   notifications: [],
   unread: 0,
   skeleton: loadSkeleton(),
+  focus: null,
 };
 
 const listeners = new Set<() => void>();

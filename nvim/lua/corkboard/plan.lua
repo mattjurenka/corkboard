@@ -46,7 +46,12 @@ local plan_buf, diff_buf
 local line_block, line_hunk, hunk_lines = {}, {}, {}
 local selected_hunk = 1
 
-local function clock(m) return string.format("%02d:%02d", math.floor(m / 60), m % 60) end
+-- 9:30am, as the plan shows times. hhmm is 24-hour, for the calendar.
+local function hhmm(m) return string.format("%02d:%02d", math.floor(m / 60), m % 60) end
+local function clock(m)
+  local h = math.floor(m / 60) % 24
+  return string.format("%d:%02d%s", (h + 11) % 12 + 1, m % 60, h < 12 and "am" or "pm")
+end
 
 local function length(m)
   local h, rest = math.floor(m / 60), m % 60
@@ -219,7 +224,7 @@ local function render_plan()
     table.insert(lines, "  no plan yet: Pepper proposes one (plan_propose), and it shows here")
   end
   for _, b in ipairs(day.blocks) do
-    table.insert(lines, string.format("  %s–%s  %s %-48s %s%s", clock(b.start), clock(b.stop), pin_of(b), b.title,
+    table.insert(lines, string.format("  %7s–%-7s  %s %-48s %s%s", clock(b.start), clock(b.stop), pin_of(b), b.title,
       b.tag or "", b.pinned and "  pinned" or ""))
     map[#lines] = b.id
   end
@@ -253,7 +258,7 @@ local function render_diff()
     end
     last = l.hunk
     local b = l.block
-    table.insert(text, string.format("%s %s–%s  %s %-44s %s", l.op, clock(b.start), clock(b.stop), pin_of(b), b.title,
+    table.insert(text, string.format("%s %7s–%-7s  %s %-44s %s", l.op, clock(b.start), clock(b.stop), pin_of(b), b.title,
       l.was and ("was " .. clock(l.was.start)) or ""))
     if l.hunk then map[#text] = l.hunk end
   end
@@ -331,7 +336,7 @@ end
 -- dayplan apply's blocks: what's still ahead and isn't already a calendar
 -- event, as local times on doc.date.
 local function calendar_blocks(blocks)
-  local at = function(m) return doc.date .. "T" .. (m >= 24 * 60 and "23:59" or clock(m)) end
+  local at = function(m) return doc.date .. "T" .. (m >= 24 * 60 and "23:59" or hhmm(m)) end
   -- What's past is only past today; another day's plan is written whole.
   local from = doc.date == os.date("%Y-%m-%d") and now() or 0
   local out = {}

@@ -52,12 +52,15 @@ local function remember_project()
   pcall(vim.fn.writefile, projects, projects_file)
 end
 
--- The statusline's dimmed folder, in Comment's colour. Foreground only, so it
--- suits whichever bar it is in (a terminal's is StatusLineTerm). Set again
--- after every colorscheme, which clears it.
+-- The statusline's dimmed folder, in Comment's colour, and a Claude Code
+-- session's context once it's too big, in DiagnosticWarn's. Foreground only,
+-- so they suit whichever bar they are in (a terminal's is StatusLineTerm).
+-- Set again after every colorscheme, which clears them.
 local function status_highlights()
   local dim = vim.api.nvim_get_hl(0, { name = "Comment", link = false })
   vim.api.nvim_set_hl(0, "CorkboardStatusDetail", { fg = dim.fg })
+  local warn = vim.api.nvim_get_hl(0, { name = "DiagnosticWarn", link = false })
+  vim.api.nvim_set_hl(0, "CorkboardStatusWarn", { fg = warn.fg })
 end
 
 -- Called by the browser with its own channel id after nvim_ui_attach.
@@ -76,6 +79,7 @@ function M.attach(chan)
   require("corkboard.claude.cards").push_all()
   require("corkboard.usage").push_all()
   require("corkboard.plan").push_all()
+  require("corkboard.focus").push()
   M.push_layout()
   -- Once the grid has its size, so the windows come back in proportion.
   vim.schedule(require("corkboard.restore").restore)
@@ -466,6 +470,15 @@ function M.statusline()
     table.insert(parts, "  " .. (current and "%#CorkboardStatusDetail#" or "") .. esc(detail) .. "%*")
   end
   table.insert(parts, "%=")
+  -- A Claude Code session's context, as of its last request
+  -- (corkboard.agents), warning past the point where it's worth starting
+  -- fresh.
+  local context = vim.b[buf].corkboard_context
+  if context then
+    local over = context >= require("corkboard.agents").context_limit()
+    local text = string.format("%dk context%s ", math.floor(context / 1000 + 0.5), over and " · /clear?" or "")
+    table.insert(parts, (over and "%#CorkboardStatusWarn#" or "") .. text .. "%*")
+  end
   if pos then table.insert(parts, "%l:%c ") end
   return table.concat(parts)
 end
@@ -583,6 +596,7 @@ function M.setup()
   require("corkboard.viewer").setup()
   require("corkboard.claude.cards").setup()
   require("corkboard.restore").setup()
+  require("corkboard.focus").setup()
 
   local picker = require("corkboard.picker")
   if picker.setup() then

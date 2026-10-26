@@ -4,11 +4,14 @@
 //   GET   /api/boards                        the user's boards
 //   PUT   /api/boards/:board                 make or rename a board: { name, root? }
 //   DELETE /api/boards/:board                the board and all its cards, for good
-//   GET   /api/boards/:board/cards           the board, in order, with waiting_on; ?log=1 adds logs
+//   GET   /api/boards/:board/cards           the board, in order, with waiting_on; ?log=1 adds logs;
+//                                            ?archived=1 lists the archived cards instead
 //   GET   /api/boards/:board/live            WebSocket: a BoardEvent per write
 //   POST  /api/boards/:board/cards           create: fields, title required
 //   GET   /api/boards/:board/cards/:id       one card, with its log
 //   PATCH /api/boards/:board/cards/:id       { version, ...fields }; 409 + the card on a stale version
+//   DELETE /api/boards/:board/cards/:id      the card and its log, for good; its id is never reused
+//   POST  /api/boards/:board/cards/:id/archive  { archived? }: off the board (default) or back on
 //   POST  /api/boards/:board/cards/:id/log   { who, note }
 //   POST  /api/boards/:board/cards/:id/lease { agent }: the agent is alive; { until } or null (board.ts's touch)
 //   POST  /api/boards/:board/import          { cards: [...] } with their ids, times and logs; empty boards only
@@ -45,7 +48,7 @@ function reply<T>(result: Result<T>, status = 200): Response {
 // A board key is a local project path with / as - (corkboard's path_key).
 const BOARD_KEY = /^[A-Za-z0-9._-]{1,128}$/;
 
-const ROUTE = /^\/api\/boards(?:\/([^/]+)(?:\/cards(?:\/([^/]+)(?:\/(log|lease))?)?|\/(live|import))?)?$/;
+const ROUTE = /^\/api\/boards(?:\/([^/]+)(?:\/cards(?:\/([^/]+)(?:\/(log|lease|archive))?)?|\/(live|import))?)?$/;
 
 async function body(request: Request): Promise<Record<string, unknown>> {
   let value: unknown;
@@ -101,7 +104,10 @@ async function route(request: Request, env: Env, user: string): Promise<Response
     return json(info);
   }
   if (!rawId) {
-    if (method === "GET") return reply(await board.list(new URL(request.url).searchParams.get("log") === "1"));
+    if (method === "GET") {
+      const params = new URL(request.url).searchParams;
+      return reply(await board.list(params.get("log") === "1", params.get("archived") === "1"));
+    }
     if (method === "POST") return reply(await board.create(fields(await body(request))), 201);
     return error(405, "method not allowed");
   }
@@ -117,7 +123,18 @@ async function route(request: Request, env: Env, user: string): Promise<Response
     if (typeof agent !== "string" || !agent.trim()) throw new Invalid("agent must be the agent's name");
     return reply(await board.touch(id, agent.trim()));
   }
+  if (sub === "archive") {
+    if (method !== "POST") return error(405, "method not allowed");
+    const { archived = true, ...rest } = await body(request);
+    if (Object.keys(rest).length) throw new Invalid(`unknown field ${Object.keys(rest)[0]}`);
+    if (typeof archived !== "boolean") throw new Invalid("archived must be true or false");
+    return reply(await board.archive(id, archived));
+  }
   if (method === "GET") return reply(await board.get(id));
+  if (method === "DELETE") {
+    const r = await board.remove(id);
+    return r.ok ? new Response(null, { status: 204 }) : reply(r);
+  }
   if (method === "PATCH") {
     const { version, ...rest } = await body(request);
     if (!Number.isInteger(version)) return error(400, "version must be the integer version you read");

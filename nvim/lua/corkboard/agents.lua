@@ -95,6 +95,87 @@ local function asking(ev)
   end
 end
 
+-- Past this, a session's context is worth starting fresh (/clear, or a new
+-- session with a handoff in the card's log): every request re-reads it all.
+-- g:corkboard_context_limit, in tokens.
+function M.context_limit() return vim.g.corkboard_context_limit or 200000 end
+
+-- The context of a session's last request: its input, cache writes and
+-- cache reads, from the last main-thread assistant record in the
+-- transcript. Only the file's end is read, so a long session costs no more.
+local TAIL = 512 * 1024
+local function last_context(path)
+  local fd = path and vim.uv.fs_open(vim.fn.expand(path), "r", 0)
+  if not fd then return nil end
+  local size = vim.uv.fs_fstat(fd).size
+  local text = vim.uv.fs_read(fd, math.min(size, TAIL), math.max(0, size - TAIL)) or ""
+  vim.uv.fs_close(fd)
+  local lines = vim.split(text, "\n", { plain = true, trimempty = true })
+  for i = #lines, 1, -1 do
+    local line = lines[i]
+    if line:find('"type":"assistant"', 1, true) and line:find('"usage"', 1, true) then
+      local record = vim.F.npcall(vim.json.decode, line)
+      local usage = record and not record.isSidechain and type(record.message) == "table" and record.message.usage
+      if type(usage) == "table" then
+        return (usage.input_tokens or 0) + (usage.cache_creation_input_tokens or 0) + (usage.cache_read_input_tokens or 0)
+      end
+    end
+  end
+end
+
+-- After each request (and when a session starts afresh, as after /clear):
+-- the session's context for its status line, and a word once when it
+-- passes the limit.
+local function track_context(buf, ev)
+  if ev.event == "SessionStart" then vim.b[buf].corkboard_context = nil end
+  if ev.event ~= "Stop" and ev.event ~= "PostToolUse" then return vim.cmd.redrawstatus({ bang = true }) end
+  local was = vim.b[buf].corkboard_context
+  local now = last_context(ev.transcript_path)
+  if not now then return end
+  vim.b[buf].corkboard_context = now
+  local limit = M.context_limit()
+  if now >= limit and (was or 0) < limit then
+    vim.notify(string.format(
+      "corkboard: this Claude session's context is %dk. If the task has changed or it's past %dk, /clear or start a new session, with a short handoff in the card's log.",
+      math.floor(now / 1000 + 0.5), math.floor(limit / 1000)), vim.log.levels.WARN)
+  end
+  vim.cmd.redrawstatus({ bang = true })
+end
+
+-- When a session's card is done, the session starts afresh for the next
+-- task: corkboard types /clear into it, once it's between turns, and it
+-- leaves the card. g:corkboard_clear_when_done = false keeps sessions as
+-- they are.
+local clearing = {} -- terminal buffer -> the done card it waits to be cleared of
+
+local function between_turns(buf) return live[buf] == nil or live[buf] == "idle" end
+
+local function clear(buf)
+  local id = clearing[buf]
+  clearing[buf] = nil
+  if not (id and terminal.alive(buf)) then return end
+  if vim.b[buf].corkboard_card == id then M.link(buf, nil) end
+  local chan = vim.bo[buf].channel
+  vim.api.nvim_chan_send(chan, "/clear")
+  -- Claude Code opens its command menu on the /; Enter once it has.
+  vim.defer_fn(function()
+    if terminal.alive(buf) then vim.api.nvim_chan_send(chan, "\r") end
+  end, 200)
+  vim.notify("corkboard: " .. id .. " is done, so its session was cleared for the next task")
+end
+
+-- Whenever the board changes.
+function M.finished(cards)
+  if vim.g.corkboard_clear_when_done == false then return end
+  for _, c in ipairs(cards) do
+    local buf = c.status == "done" and M.session(c.id)
+    if buf and not clearing[buf] then
+      clearing[buf] = c.id
+      if between_turns(buf) then vim.schedule(function() clear(buf) end) end
+    end
+  end
+end
+
 -- From a session's hook (hooks/claude-session.lua).
 function M.hook(ev)
   local buf = ev.buf
@@ -106,9 +187,21 @@ function M.hook(ev)
     vim.b[buf].corkboard_claude_transcript = ev.transcript_path
   end
   if ev.event == "SessionStart" and id and ev.session_id then remember(id, ev.session_id, ev.transcript_path) end
+  -- A session corkboard didn't start on a card took one (claim_card,
+  -- next_card) or let it go (release_card) through the corkboard MCP.
+  if ev.card and ev.corkboard_tool == "release_card" then
+    if id == ev.card then M.link(buf, nil) end
+    id = vim.b[buf].corkboard_card
+  elseif ev.card and id ~= ev.card then
+    M.link(buf, ev.card)
+    id = ev.card
+  end
+  track_context(buf, ev)
   local was = live[buf]
   local state = event_state(ev)
   if state then live[buf] = state end
+  -- Its card was done while it was mid-turn.
+  if clearing[buf] and between_turns(buf) then return vim.schedule(function() clear(buf) end) end
   if not id then return end
   local question = asking(ev)
   if question then
@@ -146,6 +239,32 @@ local function beat()
       if found and card.agent then cards.touch(id, card.agent) end
     end
   end
+end
+
+local function keep_alive()
+  if heartbeat then return end
+  heartbeat = assert(vim.uv.new_timer())
+  heartbeat:start(HEARTBEAT_MS, HEARTBEAT_MS, vim.schedule_wrap(beat))
+end
+
+-- Make buf's session the one working on card id (nil: on none), as a
+-- session started on the card is: its card in the panel beside it, s on the
+-- board going to it, and its claim kept alive.
+function M.link(buf, id)
+  local was = vim.b[buf].corkboard_card
+  if was and sessions[was] == buf then sessions[was] = nil end
+  vim.b[buf].corkboard_card = id
+  -- Not started on it, so corkboard.restore resumes it where it was and
+  -- links it again, rather than as the card's agent in its worktree.
+  vim.b[buf].corkboard_linked = id ~= nil or nil
+  if id then
+    sessions[id] = buf
+    exited[id] = nil
+    keep_alive()
+  end
+  board().push()
+  -- The board's state may not have changed, but the panel's has.
+  require("corkboard.claude.cards").push_all()
 end
 
 -- The card's worktree and branch, made from the main checkout's HEAD the
@@ -273,10 +392,7 @@ function M.start(id, opts)
   vim.b[buf].corkboard_card = id
   sessions[id] = buf
   exited[id] = nil
-  if not heartbeat then
-    heartbeat = assert(vim.uv.new_timer())
-    heartbeat:start(HEARTBEAT_MS, HEARTBEAT_MS, vim.schedule_wrap(beat))
-  end
+  keep_alive()
   board().set(id, { agent = card.agent or "claude", worktree = dir or "", branch = branch or "" })
 end
 

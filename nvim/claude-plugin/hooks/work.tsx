@@ -17,8 +17,10 @@ const minute = atom({ plugin: 'corkboard-ui', key: 'minute' } as const, 0)
 // How often the file is looked at.
 const POLL = 1500
 
+// 9:30am.
 function clock(m: number) {
-  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+  const h = Math.floor(m / 60) % 24
+  return `${((h + 11) % 12) + 1}:${String(m % 60).padStart(2, '0')}${h < 12 ? 'am' : 'pm'}`
 }
 
 function minuteOf(ms: number) {

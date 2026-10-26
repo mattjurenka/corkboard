@@ -183,6 +183,32 @@ describe("an OAuth client", () => {
     expect((await tool(owner, "read_card", { board: "nope", id: "TASK-2" })).error).toMatch(/no such board/);
   });
 
+  it("archives cards nobody is working on, which a card agent can't", async () => {
+    expect((await tool(await cardToken(), "archive_card", { id: "TASK-1", note: "x" })).error).toMatch(/unknown tool/);
+    await tool(await cardToken("TASK-1"), "claim_card", { id: "TASK-1" });
+    expect((await tool(owner, "archive_card", { board: BOARD, id: "TASK-1", note: "x" })).error).toMatch(/release it first/);
+    const done = await tool(owner, "archive_card", { board: BOARD, id: "TASK-2", note: "not wanted" });
+    expect(done.id).toBe("TASK-2");
+    expect((await tool(owner, "list_cards", { board: BOARD })).map((c: any) => c.id)).toEqual(["TASK-1"]);
+    const read = await tool(owner, "read_card", { board: BOARD, id: "TASK-2" });
+    expect(read.archived).toBeTruthy();
+    expect(read.log).toMatch(/archived: not wanted/);
+  });
+
+  it("makes boards, which a card agent can't", async () => {
+    expect((await tool(await cardToken(), "create_board", { name: "x" })).error).toMatch(/unknown tool/);
+    expect(await tool(owner, "create_board", { name: "Pepper", root: "/home/matthew/pepper/" })).toEqual({
+      key: "home-matthew-pepper",
+      name: "Pepper",
+      root: "/home/matthew/pepper",
+    });
+    expect(await tool(owner, "create_board", { name: "House: the move" })).toEqual({ key: "house-the-move", name: "House: the move", root: null });
+    expect((await tool(owner, "create_board", { name: "again", root: "/home/matthew/corkboard" })).error).toMatch(/already a board/);
+    expect((await tool(owner, "create_board", { name: "x", root: "pepper" })).error).toMatch(/absolute/);
+    expect((await tool(owner, "list_boards")).map((b: any) => b.key)).toEqual(["house-the-move", "home-matthew-pepper", BOARD]);
+    expect((await tool(owner, "create_card", { board: "house-the-move", title: "Book the van" })).id).toBe("TASK-1");
+  });
+
   it("makes a card that asks for the user, which a card agent can't", async () => {
     const made = await tool(owner, "create_card", { board: BOARD, title: "Fix the login", status: "ready", attention: "Pepper made this\nfor you" });
     expect((await card(made.id)).attention).toBe("Pepper made this for you");

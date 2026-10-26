@@ -14,6 +14,8 @@ export type Result<T> = { ok: true; value: T } | { ok: false; status: number; er
 const ok = <T>(value: T): Result<T> => ({ ok: true, value });
 const fail = (status: number, error: string, card?: Card): Result<never> => ({ ok: false, status, error, card });
 const NO_BOARD = fail(404, "no such board; PUT /api/boards/:board to make it");
+// An archived card is read-only until it's put back on the board.
+const ARCHIVED = (id: string) => fail(409, `card ${id} is archived; put it back on the board first`);
 
 type Row = Record<string, SqlStorageValue>;
 
@@ -34,6 +36,7 @@ CREATE TABLE IF NOT EXISTS cards (
   extra TEXT NOT NULL DEFAULT '{}',
   created TEXT NOT NULL,
   updated TEXT NOT NULL,
+  archived TEXT,
   version INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS log (
@@ -53,7 +56,9 @@ CREATE TABLE IF NOT EXISTS leases (
 CREATE TABLE IF NOT EXISTS meta (
   one INTEGER PRIMARY KEY CHECK (one = 1),
   name TEXT NOT NULL,
-  root TEXT
+  root TEXT,
+  -- The highest card number the board has had, deleted cards included.
+  last_n INTEGER NOT NULL DEFAULT 0
 );
 `;
 
@@ -86,6 +91,7 @@ function card(row: Row): Card {
     extra: JSON.parse(row.extra as string),
     created: row.created as string,
     updated: row.updated as string,
+    archived: (row.archived as string | null) ?? null,
     version: row.version as number,
   };
 }
@@ -101,9 +107,12 @@ export class Board extends DurableObject {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     this.sql.exec(SCHEMA);
-    // Boards made before cards had a priority.
+    // Boards made before cards had a priority, or could be archived or deleted.
     const columns = this.sql.exec("SELECT name FROM pragma_table_info('cards')").toArray();
     if (!columns.some((c) => c.name === "priority")) this.sql.exec("ALTER TABLE cards ADD COLUMN priority TEXT");
+    if (!columns.some((c) => c.name === "archived")) this.sql.exec("ALTER TABLE cards ADD COLUMN archived TEXT");
+    const meta = this.sql.exec("SELECT name FROM pragma_table_info('meta')").toArray();
+    if (!meta.some((c) => c.name === "last_n")) this.sql.exec("ALTER TABLE meta ADD COLUMN last_n INTEGER NOT NULL DEFAULT 0");
   }
 
   // A board exists once it has been named (PUT /api/boards/:key); until then
@@ -146,22 +155,27 @@ export class Board extends DurableObject {
     }
   }
 
-  // In board order: high priority first and low last (none is medium), then
-  // by ordinal, unordered cards last, then by number. With
-  // log, each card carries its log too: a whole copy of the board at once,
-  // which is what a live copy starts from.
-  list(log = false): Result<(Card & { waiting_on: string[]; log?: LogEntry[] })[]> {
+  // The cards on the board, in board order: high priority first and low last
+  // (none is medium), then by ordinal, unordered cards last, then by number.
+  // With log, each card carries its log too: a whole copy of the board at
+  // once, which is what a live copy starts from. With archived, the archived
+  // cards instead, newest first. Waiting counts archived cards too, so a
+  // card that waits on an archived one that's done isn't stuck.
+  list(log = false, archived = false): Result<(Card & { waiting_on: string[]; log?: LogEntry[] })[]> {
     if (!this.exists()) return NO_BOARD;
     // For cards that were working before boards had leases, which no write
     // has armed the alarm for yet.
     this.arm();
-    const cards = this.sql
+    const all = this.sql
       .exec(
         "SELECT * FROM cards ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END, ordinal IS NULL, ordinal, n",
       )
       .toArray()
       .map(card);
-    return ok(cards.map((c) => ({ ...c, waiting_on: waitingOn(c, cards), ...(log ? { log: this.logOf(c.id) } : {}) })));
+    const cards = archived
+      ? all.filter((c) => c.archived).sort((a, b) => b.archived!.localeCompare(a.archived!))
+      : all.filter((c) => !c.archived);
+    return ok(cards.map((c) => ({ ...c, waiting_on: waitingOn(c, all), ...(log ? { log: this.logOf(c.id) } : {}) })));
   }
 
   get(id: string): Result<Card & { log: LogEntry[] }> {
@@ -221,12 +235,16 @@ export class Board extends DurableObject {
     return ok(cards.length);
   }
 
-  // Numbered one past the highest id the board has had, so ids are never
-  // reused.
+  // Numbered one past the highest id the board has had, deleted cards
+  // included, so ids are never reused.
   create(f: Fields): Result<Card> {
     if (!this.exists()) return NO_BOARD;
     if (!f.title) return fail(400, "a card needs a title");
-    const n = ((this.sql.exec("SELECT max(n) AS n FROM cards").one().n as number | null) ?? 0) + 1;
+    const n =
+      Math.max(
+        (this.sql.exec("SELECT max(n) AS n FROM cards").one().n as number | null) ?? 0,
+        this.sql.exec("SELECT last_n FROM meta").one().last_n as number,
+      ) + 1;
     const id = `TASK-${n}`;
     const t = now();
     const values: Record<string, unknown> = { status: "backlog", ...f, id, n, created: t, updated: t };
@@ -247,9 +265,45 @@ export class Board extends DurableObject {
     if (!this.exists()) return NO_BOARD;
     const current = this.find(id);
     if (!current) return fail(404, `no card ${id}`);
+    if (current.archived) return ARCHIVED(id);
     if (current.version !== version) return fail(409, `card ${id} is at version ${current.version}, not ${version}`, current);
     if (!Object.keys(f).length) return fail(400, "nothing to change");
     return ok(this.write(id, f));
+  }
+
+  // Off the board (archived true) or back on it. Archiving drops its lease:
+  // nobody works on an archived card. Live copies hear it's gone, or get
+  // the whole board again, which brings the card back with its log.
+  archive(id: string, archived: boolean): Result<Card> {
+    if (!this.exists()) return NO_BOARD;
+    const current = this.find(id);
+    if (!current) return fail(404, `no card ${id}`);
+    if (!!current.archived === archived) return ok(current);
+    this.sql.exec("UPDATE cards SET archived = ?, updated = ?, version = version + 1 WHERE id = ?", archived ? now() : null, now(), id);
+    if (archived) {
+      this.sql.exec("DELETE FROM leases WHERE card_id = ?", id);
+      this.broadcast({ type: "removed", id });
+    } else {
+      const all = this.list(true);
+      if (all.ok) this.broadcast({ type: "snapshot", cards: all.value });
+    }
+    this.arm();
+    return ok(this.find(id)!);
+  }
+
+  // Gone for good: the card, its log and its lease. Its number stays taken.
+  remove(id: string): Result<null> {
+    if (!this.exists()) return NO_BOARD;
+    const current = this.find(id);
+    if (!current) return fail(404, `no card ${id}`);
+    const n = this.sql.exec("SELECT n FROM cards WHERE id = ?", id).one().n as number;
+    this.sql.exec("UPDATE meta SET last_n = max(last_n, ?)", n);
+    this.sql.exec("DELETE FROM log WHERE card_id = ?", id);
+    this.sql.exec("DELETE FROM leases WHERE card_id = ?", id);
+    this.sql.exec("DELETE FROM cards WHERE id = ?", id);
+    if (!current.archived) this.broadcast({ type: "removed", id });
+    this.arm();
+    return ok(null);
   }
 
   private write(id: string, f: Fields): Card {
@@ -273,7 +327,7 @@ export class Board extends DurableObject {
   // budget guard (which is waiting on the user, as blocked cards are).
   private working(): Card[] {
     return this.sql
-      .exec("SELECT * FROM cards WHERE agent_state = 'working' AND agent IS NOT NULL")
+      .exec("SELECT * FROM cards WHERE agent_state = 'working' AND agent IS NOT NULL AND archived IS NULL")
       .toArray()
       .map(card)
       .filter((c) => !c.extra.budget_hold);
@@ -300,7 +354,7 @@ export class Board extends DurableObject {
     if (!this.exists()) return NO_BOARD;
     const c = this.find(id);
     if (!c) return fail(404, `no card ${id}`);
-    if (c.agent !== agent) return ok(null);
+    if (c.agent !== agent || c.archived) return ok(null);
     const lease = this.sql.exec("SELECT lapsed FROM leases WHERE card_id = ? AND agent = ?", id, agent).toArray()[0];
     if (c.agent_state === "blocked" && lease?.lapsed) {
       this.write(id, { agent_state: "working", attention: null });
@@ -344,7 +398,9 @@ export class Board extends DurableObject {
   // an agent logging progress never conflicts with an edit in the UI.
   appendLog(id: string, who: string, note: string): Result<LogEntry> {
     if (!this.exists()) return NO_BOARD;
-    if (!this.find(id)) return fail(404, `no card ${id}`);
+    const c = this.find(id);
+    if (!c) return fail(404, `no card ${id}`);
+    if (c.archived) return ARCHIVED(id);
     const at = now();
     const { seq } = this.sql
       .exec("INSERT INTO log (card_id, at, who, note) VALUES (?, ?, ?, ?) RETURNING seq", id, at, who, note)

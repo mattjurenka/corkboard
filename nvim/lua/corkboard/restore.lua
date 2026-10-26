@@ -35,7 +35,13 @@ local function leaf(win)
     l.cwd = name:match("^term://(.-)//%d+:")
     if b.corkboard_claude then
       if not b.corkboard_claude_session then return nil end
-      l.type, l.session, l.card = "claude", b.corkboard_claude_session, b.corkboard_card
+      l.type, l.session = "claude", b.corkboard_claude_session
+      -- A card it was started on, or one it took later (agents.link).
+      if b.corkboard_linked then
+        l.linked = b.corkboard_card
+      else
+        l.card = b.corkboard_card
+      end
       l.transcript = b.corkboard_claude_transcript
     else
       l.type = "terminal"
@@ -76,7 +82,8 @@ function M.state()
     for key in pairs(PINNED) do
       pinned = pinned or vim.t[tab][key] == true
     end
-    if not pinned then
+    -- Focus mode's tab is a second look at a window kept in another tab.
+    if not pinned and not vim.t[tab].corkboard_focus then
       local t = tree(vim.fn.winlayout(vim.api.nvim_tabpage_get_number(tab)))
       if t then table.insert(tabs, { layout = t, terminal = vim.t[tab].corkboard_terminal_tab or nil }) end
     end
@@ -133,7 +140,9 @@ local function fill(win, l)
       if ok and card then require("corkboard.agents").start(l.card, { resume = session, here = true }) end
     else
       local cwd = l.cwd and vim.fn.expand(l.cwd)
-      require("corkboard.claude").start({ cwd = cwd, args = session and { "--resume", session } or nil, here = true })
+      local buf = require("corkboard.claude").start({ cwd = cwd, args = session and { "--resume", session } or nil, here = true })
+      local ok, card = pcall(require("corkboard.board").get, l.linked or "")
+      if buf and l.linked and ok and card and card.status ~= "done" then require("corkboard.agents").link(buf, l.linked) end
     end
   end
 end

@@ -14,16 +14,22 @@ export function App() {
   const status = useStore((s) => s.status);
   // The day plan's window is the plan alone.
   const plan = useStore((s) => s.view === "plan");
+  // Focus mode (corkboard/focus.lua) has no sidebar either, and centres the
+  // editor at its width; Neovim's grid shrinks to fit, as for any resize.
+  // The pixel spare keeps rounding from losing the last column.
+  const focus = useStore((s) => s.focus);
+  const bare = plan || !!focus;
+  const gutter = focus ? `max(0px, calc((100% - var(--cell-w) * ${focus.width} - 1px) / 2))` : undefined;
   return (
     // 32 cells, or less in a narrow window: never more than 30% of it, nor
     // under 18 cells.
     <div
       className={cn(
         "relative h-full",
-        plan ? "[--sidebar-width:0px]" : "[--sidebar-width:min(calc(var(--cell-w)*32),max(calc(var(--cell-w)*18),30vw))]",
+        bare ? "[--sidebar-width:0px]" : "[--sidebar-width:min(calc(var(--cell-w)*32),max(calc(var(--cell-w)*18),30vw))]",
       )}
     >
-      {!plan && <Sidebar />}
+      {!bare && <Sidebar />}
       {/* Installed as an app, the page draws where the title bar was
           (window-controls-overlay in the manifest), all but the window
           buttons. The sidebar runs to the top; over the editor, the bar's
@@ -31,7 +37,9 @@ export function App() {
           (outside the window buttons' strip, which would cover it). Zero
           in a browser tab. */}
       <div className="absolute top-0 right-0 left-(--sidebar-width) box-content h-[env(titlebar-area-height,0px)] border-b-[length:min(1px,env(titlebar-area-height,0px))] [-webkit-app-region:drag] [app-region:drag]" />
-      <div id="editor" className="absolute top-[calc(env(titlebar-area-height,0px)+min(1px,env(titlebar-area-height,0px)))] right-0 bottom-0 left-(--sidebar-width)">
+      <div id="editor" className="absolute top-[calc(env(titlebar-area-height,0px)+min(1px,env(titlebar-area-height,0px)))] right-0 bottom-0 left-(--sidebar-width)"
+        style={focus ? { left: gutter, right: gutter } : undefined}
+      >
         <canvas tabIndex={0} className="block outline-none" />
         <Panels />
         <Scrollbars />

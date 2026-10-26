@@ -145,19 +145,28 @@ local function state()
   }
 end
 
--- The cards agents are on, beside the Claude Code sessions
--- (corkboard.claude.cards).
-local AT_WORK = { queued = true, working = true, blocked = true, ["needs-review"] = true }
-
 local function push_state()
   local s = state()
   local key = vim.json.encode(s)
   if key == last_state then return end
   last_state = key
   require("corkboard").notify("corkboard.board", s)
+  -- The open cards, in board order, for the panels beside the Claude Code
+  -- sessions (corkboard.claude.cards).
   require("corkboard.claude.cards").set(vim.tbl_map(function(c)
-    return { id = c.id, title = c.title, priority = c.priority, agent_state = c.agent_state, attention = c.attention, session = c.session }
-  end, vim.tbl_filter(function(c) return AT_WORK[c.agent_state] end, s.cards)))
+    return {
+      id = c.id,
+      title = c.title,
+      status = c.status,
+      priority = c.priority,
+      agent = c.agent,
+      agent_state = c.agent_state,
+      attention = c.attention,
+      session = c.session,
+      waiting = c.waiting,
+      cost = c.cost,
+    }
+  end, vim.tbl_filter(function(c) return c.status ~= "done" end, s.cards)))
 end
 
 local function render_text()
@@ -228,7 +237,7 @@ end
 -- over the same text, kept up with the card file. e edits it in place (or
 -- straight from the board): the title is the first line, as a heading, and
 -- the description the rest; :w writes them into the card file. q closes it,
--- saving edits.
+-- saving edits; rendered, so do <CR> and <Esc>.
 
 local card_win
 local rendered -- the rendered float: { buf, id }
@@ -286,7 +295,9 @@ local function rendered_buffer(id)
   vim.bo[b].bufhidden = "wipe"
   vim.b[b].corkboard_view = "markdown"
   rendered = { buf = b, id = id }
-  vim.keymap.set("n", "q", "<Cmd>close<CR>", { buffer = b, nowait = true, desc = "board: close card" })
+  for _, lhs in ipairs({ "q", "<CR>", "<Esc>" }) do
+    vim.keymap.set("n", lhs, "<Cmd>close<CR>", { buffer = b, nowait = true, desc = "board: close card" })
+  end
   vim.keymap.set("n", "e", function() M.open_card(id, { edit = true }) end, { buffer = b, nowait = true, desc = "board: edit card" })
   vim.api.nvim_create_autocmd("BufWipeout", {
     buffer = b,
@@ -319,6 +330,12 @@ function M.open_card(id, opts)
   local b = (opts and opts.edit and card_buffer or rendered_buffer)(id)
   local title = { title = " " .. id .. " ", title_pos = "center" }
 
+  -- A float left open in another tab is closed, not gone to: the card opens
+  -- in this tab.
+  if card_win and vim.api.nvim_win_is_valid(card_win) and vim.api.nvim_win_get_tabpage(card_win) ~= vim.api.nvim_get_current_tabpage() then
+    vim.api.nvim_win_call(card_win, function() vim.cmd("silent update") end)
+    vim.api.nvim_win_close(card_win, true)
+  end
   if card_win and vim.api.nvim_win_is_valid(card_win) then
     -- Save the card being replaced rather than drop its edits.
     vim.api.nvim_win_call(card_win, function() vim.cmd("silent update") end)
@@ -364,6 +381,17 @@ local function move(id, by)
   if status then M.set(id, { status = status }) end
 end
 
+-- Archive or delete the card, and close its float if it's showing.
+local function remove(id, op)
+  local ok, err = pcall(cards[op], id)
+  if not ok then return vim.notify(tostring(err), vim.log.levels.ERROR) end
+  if rendered and rendered.id == id and card_win and vim.api.nvim_win_is_valid(card_win) then
+    pcall(vim.api.nvim_win_close, card_win, true)
+  end
+  vim.notify("corkboard: " .. (op == "archive" and "archived " or "deleted ") .. id)
+  M.push()
+end
+
 -- On the card under the cursor; also what the HTML buttons call.
 local actions = {
   left = function(id) move(id, -1) end,
@@ -399,6 +427,16 @@ local actions = {
   end,
   answer = function(id)
     if id then require("corkboard.agents").attend(id) end
+  end,
+  archive = function(id)
+    if id then remove(id, "archive") end
+  end,
+  -- For good, so it asks first.
+  delete = function(id)
+    if not id then return end
+    vim.ui.select({ "Delete", "Keep" }, { prompt = "Delete " .. id .. " and its log for good? " }, function(choice)
+      if choice == "Delete" then remove(id, "delete") end
+    end)
   end,
   open = function(id)
     if id then M.open_card(id) end
@@ -456,6 +494,8 @@ local function buffer()
     r = { act("answer"), "go to what the agent is asking" },
     ["<CR>"] = { act("open"), "open card" },
     e = { act("edit"), "edit card" },
+    x = { act("archive"), "archive card" },
+    D = { act("delete"), "delete card" },
     R = { act("refresh"), "refresh" },
   }, function() return line_card end, function(id)
     if id == selected then return end
@@ -517,6 +557,7 @@ function M.push()
   push_state()
   push_rendered()
   require("corkboard.agents").schedule(shown)
+  require("corkboard.agents").finished(shown)
   require("corkboard.budget").check(shown, costs)
 end
 

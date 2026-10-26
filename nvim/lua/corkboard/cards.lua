@@ -438,6 +438,14 @@ for _, name in ipairs({ "list", "get", "change", "set", "create", "log" }) do
   end
 end
 
+-- Card files have no archive or delete here; the Worker's boards do.
+for _, name in ipairs({ "archive", "delete" }) do
+  M[name] = function(id)
+    if not cloud.enabled() then error("corkboard: " .. name .. " needs cloud boards", 0) end
+    return cloud[name](id)
+  end
+end
+
 M.cloud = cloud.enabled
 M.cloud_event = cloud.event
 M.agent_token = cloud.agent_token

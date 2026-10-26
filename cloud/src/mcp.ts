@@ -36,6 +36,7 @@ type Stub = {
   update(id: string, f: Fields, version: number): Promise<Result<Card>>;
   appendLog(id: string, who: string, note: string): Promise<Result<LogEntry>>;
   touch(id: string, agent: string): Promise<Result<{ until: number } | null>>;
+  archive(id: string, archived: boolean): Promise<Result<Card>>;
 };
 
 class ToolError extends Error {}
@@ -323,6 +324,21 @@ const TOOLS: Record<string, Tool> = {
         }),
       ),
   },
+  // No card token may: an agent doesn't take its own or anyone's card off
+  // the board. Deleting for good is the user's alone (the REST API).
+  archive_card: {
+    description:
+      "Take a card off the board: it leaves the board and list_cards but is kept, and read_card still reads it. For cards that are finished with or no longer wanted. It must not be held by an agent at work.",
+    properties: { id, note: str("Why it's being archived; goes in its log") },
+    required: ["id", "note"],
+    run: async (a, c) => {
+      const card = unwrap(await c.board.get(a.id));
+      if (card.agent && card.agent_state && ["queued", "working", "blocked"].includes(card.agent_state))
+        throw new ToolError(`card ${a.id} is ${card.agent_state} with ${card.agent}; release it first`);
+      unwrap(await c.board.appendLog(a.id, c.me, `archived: ${String(a.note).trim()}`));
+      return brief(c, unwrap(await c.board.archive(a.id, true)));
+    },
+  },
   write_description: {
     description: "Replace a card's description. Its log is kept as it is; add to the log with the log tool.",
     properties: { id, description: str("The new description, markdown") },
@@ -527,19 +543,54 @@ function toolsFor(grant: Grant) {
       return { name, description: t.description, inputSchema: { type: "object", properties, required } };
     });
   if (grant.kind !== "card") {
-    tools.unshift({
-      name: "list_boards",
-      description: "List the boards: their keys (for every other tool's board argument), names and project paths.",
-      inputSchema: { type: "object", properties: {}, required: [] },
-    });
+    tools.unshift(
+      {
+        name: "list_boards",
+        description: "List the boards: their keys (for every other tool's board argument), names and project paths.",
+        inputSchema: { type: "object", properties: {}, required: [] },
+      },
+      {
+        name: "create_board",
+        description:
+          "Make a new board. With root (a project's absolute path on the user's machine) it's that project's board, the one corkboard shows there; without one it's a board of its own, for work that isn't in a repository. Returns its key, for every other tool's board argument.",
+        inputSchema: {
+          type: "object",
+          properties: { name: str("What it's called, one line"), root: str("The project's absolute path, like /home/matthew/corkboard") },
+          required: ["name"],
+        },
+      },
+    );
     for (const [name, t] of Object.entries(USER_TOOLS))
       tools.push({ name, description: t.description, inputSchema: { type: "object", properties: ownKinds(t.properties ?? {}), required: t.required ?? [] } });
   }
   return tools;
 }
 
+// The key is the one corkboard looks for: a project's path with / as -
+// (util.path_key), or for a board with no project, its name as a slug. An
+// existing board is refused, not renamed: renaming is the user's (PUT).
+async function createBoard(env: Env, user: string, a: any) {
+  if (typeof a.name !== "string" || !a.name.trim()) throw new ToolError("give the board a name");
+  const name = a.name.trim().slice(0, 200);
+  let root: string | null = null;
+  if (a.root !== undefined && a.root !== null && a.root !== "") {
+    root = String(a.root).trim().replace(/\/+$/, "");
+    if (!root.startsWith("/") || root.split("/").includes("..")) throw new ToolError("root must be an absolute path");
+  }
+  const key = root ? root.replace(/^\//, "").replace(/\//g, "-") : slug(name);
+  if (!/^[A-Za-z0-9._-]{1,128}$/.test(key)) throw new ToolError(`can't make a board key from ${root ?? name}`);
+  const users = env.USER.get(env.USER.idFromName(user));
+  const was = (await users.boards()).find((b) => b.key === key);
+  if (was) throw new ToolError(`there's already a board ${key}, ${was.name}`);
+  const info = { key, name, root };
+  await env.BOARD.get(env.BOARD.idFromName(`${user}/${key}`)).describe(name, root);
+  await users.remember(info);
+  return info;
+}
+
 async function callTool(env: Env, user: string, grant: Grant, name: string, args: any): Promise<unknown> {
   if (name === "list_boards" && grant.kind !== "card") return env.USER.get(env.USER.idFromName(user)).boards();
+  if (name === "create_board" && grant.kind !== "card") return createBoard(env, user, args);
   if (USER_TOOLS[name] && grant.kind !== "card") {
     try {
       return await USER_TOOLS[name].run({ ...args }, { users: env.USER.get(env.USER.idFromName(user)), grant, timeZone: env.TIMEZONE });

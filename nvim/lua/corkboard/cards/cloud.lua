@@ -127,6 +127,8 @@ function M.event(k, event)
     put_card(copy, event.card)
   elseif event.type == "log" then
     put_entry(copy, event.id, event.entry)
+  elseif event.type == "removed" then
+    copy.cards[event.id], copy.logs[event.id] = nil, nil
   end
   if pending then return end
   pending = true
@@ -294,6 +296,20 @@ function M.create(title, status, body)
   copy.logs[card.id] = copy.logs[card.id] or {}
   return card.id
 end
+
+-- Off the board but kept (archive), or gone for good (delete). Out of the
+-- copy at once; the board's "removed" event says so to every other copy.
+local function remove(op)
+  return function(id)
+    id = id:upper()
+    local k = key()
+    local copy = copy_of(k)
+    request(op, k, id)
+    copy.cards[id], copy.logs[id] = nil, nil
+  end
+end
+M.archive = remove("archive")
+M.delete = remove("delete")
 
 -- Any of the bridge's operations, for corkboard.plan's plan_* ones.
 M.call = request

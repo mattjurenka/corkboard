@@ -112,7 +112,8 @@ vim.api.nvim_create_autocmd("WinResized", {
 })
 
 -- Open it to the right of the plan, or go to it if it's open. Starting
--- waits on the guest for its token, so a second press meanwhile does nothing.
+-- waits on the guest for its token (up to 90s for sshd on a cold boot), so a
+-- second press meanwhile only says so.
 function M.open()
   if M.alive() then
     local win = vim.fn.win_findbuf(buf)[1]
@@ -122,10 +123,14 @@ function M.open()
     fit()
     return
   end
+  vim.notify("corkboard: starting Pepper (waiting for pepper-vm)")
   if starting then return end
   starting = true
   hand_token(function(cleanup)
     starting = false
+    -- Focus may have moved while it waited; the split goes beside the plan.
+    local plan_win = vim.fn.win_findbuf(require("corkboard.plan").buffer())[1]
+    if plan_win then vim.api.nvim_set_current_win(plan_win) end
     buf = require("corkboard.claude").start({
       split = true,
       via = VIA,

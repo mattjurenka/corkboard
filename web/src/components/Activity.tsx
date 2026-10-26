@@ -13,7 +13,7 @@ type Entry = { time: string; agent: string; id: string; title: string; text: str
 function when(iso: string) {
   const d = new Date(iso);
   return d.toDateString() === new Date().toDateString()
-    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true })
     : d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 

@@ -53,7 +53,12 @@ const VAR: Record<string, string> = {
   blocked: "var(--blocked)",
 };
 
-const clock = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+// 9:30am; hour marks as 9am.
+function clock(m: number) {
+  const h = Math.floor(m / 60) % 24;
+  return `${((h + 11) % 12) + 1}:${String(m % 60).padStart(2, "0")}${h < 12 ? "am" : "pm"}`;
+}
+const hour = (h: number) => `${((h % 24) + 11) % 12 + 1}${h % 24 < 12 ? "am" : "pm"}`;
 
 function length(m: number) {
   const h = Math.floor(m / 60), rest = m % 60;
@@ -172,7 +177,7 @@ export function Plan({ state, win, focused, nvim }: ViewProps<PlanState>) {
                   className="absolute right-0 left-0 flex border-t border-dotted border-[color-mix(in_srgb,var(--border)_60%,transparent)]"
                   style={{ top: rows(h * 60) }}
                 >
-                  <span className="-mt-half w-[7ch] flex-none bg-background pl-ch text-muted-foreground">{clock(h * 60)}</span>
+                  <span className="-mt-half w-[7ch] flex-none bg-background pl-ch text-muted-foreground">{hour(h)}</span>
                 </div>
               ))}
               {state.blocks.map((b) => (
