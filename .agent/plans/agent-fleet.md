@@ -208,6 +208,34 @@ and the two hosts (`omni-laptop` imports `fleetHost`, a new `pepper-droplet` imp
 4. **The queue.** `spawns` in the Worker, the `spawn_agent` and `spawn_status` MCP tools, spawn
    tokens, the approval rule, and fleetd on the Worker's WebSocket. Done when a spawn made from
    the phone runs on the laptop.
+
+   **Built 2026-10-27; waits on a deploy and a live run.** `cloud/src/fleet.ts`: spawns and each
+   environment's templates in the user's object (`user.ts`), `/api/spawns` and
+   `/api/fleet/environments` (owner only), and the MCP tools `spawn_agent`, `spawn_status`,
+   `spawn_stop` for owner and assistant grants, so the phone's claude.ai connector can spawn.
+   `fleet/fleetd/queue.ts` is fleetd's side, signed in as the bridge is (`bridge/cloud.ts`, now in
+   the `fleet` package). Tested: `cloud/test/fleet.test.ts` (9), `fleet/fleetd/queue.test.ts`
+   against a stand-in Worker, and the slot guest builds. How it works, and where it differs from
+   the above:
+   - fleetd `PUT`s its manifest's templates as its environment; the Worker applies the rule from
+     those, so it needs no Nix. A spawn goes to the first environment that runs its template, or
+     the one named.
+   - Every spawn makes a card, on the board named or a `fleet` board made on first use, with the
+     agent `<template>-<id>` queued on it. A project board's root is the repo the agent works
+     in, and its commits are fetched back as `fleet/<id>` there without asking.
+   - No WebSocket of its own: fleetd listens on `/api/live`, which now also carries
+     `{ type: "spawn" }`, and looks every minute besides. Claims and reports are REST.
+   - The spawn token is minted at claim, a card token for the spawn's card, handed to the guest
+     as `/mnt/share/mcp.json` (corkboard's MCP server, `--mcp-config`) and revoked when the spawn
+     ends. The Worker's host is in every slot's egress (`mkFleet`'s `corkboardHost`).
+   - The Worker logs each state on the card; done moves it to review, failed raises attention.
+   - Approval is `POST /api/spawns/:id/approve` or `corkboard-fleet approve <id>`; no button in
+     corkboard yet. A brain's spawn is reachable only from code until step 6 (the rule is tested
+     there).
+   - The CLI's `spawn` stays local, not through the Worker: `corkboard-fleet queue` shows the
+     Worker's, `list` this machine's (claimed ones included).
+   - A brain template's spawn gets no brain token yet, so its hooks have no memory; the memory
+     plan's step 4 adds it to the claim.
 5. **The cloud environment.** The droplet on NixOS with `fleetCloud`; OCI outputs for `oci`
    capabilities; the egress proxy pod. Pepper's resident agent moves there; `pepper-vm` on the
    laptop is retired. The token mint that writes `/var/lib/pepper/corkboard-token` writes a
