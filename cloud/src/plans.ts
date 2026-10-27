@@ -157,7 +157,7 @@ export function projects(v: unknown): Plan["projects"] {
 // Notes --------------------------------------------------------------------------------
 
 export const NOTE_KINDS = ["goal", "day", "decision", "project", "person", "review", "memory", "draft"] as const;
-export type Note = { id: string; kind: (typeof NOTE_KINDS)[number]; title: string; body: string; created: string; updated: string };
+export type Note = { id: string; kind: (typeof NOTE_KINDS)[number]; title: string; body: string; created: string; updated: string; version?: number };
 
 // Only the owner writes these: the assistant's identity and rules.
 export const OWNER_ONLY_NOTES = new Set(["soul"]);

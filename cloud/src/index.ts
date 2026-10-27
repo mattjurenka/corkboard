@@ -1,20 +1,23 @@
 // The corkboard Worker. The OAuth provider owns the token, registration and
-// discovery endpoints; /api/* reaches api.ts only with a valid access token;
-// everything else (the sign-in pages) is auth.ts.
+// discovery endpoints; /api/*, /mcp and /memory/* reach api.ts only with a
+// valid access token; everything else (the sign-in pages) is auth.ts.
 
 import { OAuthProvider, type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import { api, tokenKey } from "./api";
 import { auth } from "./auth";
 import type { Board } from "./board";
 import type { Grant } from "./mcp";
+import type { Memory } from "./memory";
 import type { User } from "./user";
 
 export { Board } from "./board";
+export { Memory } from "./memory";
 export { User } from "./user";
 
 export type Env = {
   BOARD: DurableObjectNamespace<Board>;
   USER: DurableObjectNamespace<User>;
+  MEMORY: DurableObjectNamespace<Memory>;
   OAUTH_KV: KVNamespace;
   OAUTH_PROVIDER: OAuthHelpers;
   // The Worker's own origin, no trailing slash: the token audience and
@@ -42,7 +45,7 @@ let provider: OAuthProvider<Env> | undefined;
 
 function oauth(env: Env): OAuthProvider<Env> {
   provider ??= new OAuthProvider<Env>({
-    apiRoute: ["/api/", "/mcp"],
+    apiRoute: ["/api/", "/mcp", "/memory/"],
     // The provider passes OAuthResourceContext, which its handler type
     // declares as a plain ExecutionContext.
     apiHandler: api as unknown as Required<Pick<ExportedHandler<Env>, "fetch">>,

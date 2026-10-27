@@ -21,6 +21,8 @@
       };
       lib.fleet = {
         mkPlan = import ./fleet/plan.nix;
+        # Claude Code hooks that give a guest's sessions its brain's memory.
+        memoryHooks = import ./fleet/memory-hooks.nix;
         inherit (import ./fleet/lib.nix { inherit (nixpkgs) lib; }) mkFleet capabilities;
       };
 

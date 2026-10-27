@@ -1,5 +1,5 @@
-// One user: the boards they have, their notes (the assistant's memory),
-// their day plans and their chat with Pepper. Each board's cards live in its
+// One user: the boards they have, their day plans and their chat with
+// Pepper. (Their notes were here; they are Pepper's brain now, memory.ts.) Each board's cards live in its
 // own Board object; this lists them, so GET /api/boards is one call.
 //
 // Plans change by version, like cards: a write names the version it read,
@@ -45,15 +45,6 @@ CREATE TABLE IF NOT EXISTS plans (date TEXT PRIMARY KEY, doc TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS chat (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, who TEXT NOT NULL, text TEXT NOT NULL);
 `;
 
-// A search as FTS5 reads it: each word quoted, so punctuation in what someone
-// typed is a word and not query syntax; all of them must match.
-const ftsQuery = (q: string) =>
-  q
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((w) => `"${w.replace(/"/g, '""')}"`)
-    .join(" ");
-
 export class User extends DurableObject {
   private sql: SqlStorage;
 
@@ -84,59 +75,10 @@ export class User extends DurableObject {
 
   // Notes -----------------------------------------------------------------------------
 
-  private findNote(id: string): Note | undefined {
-    return this.sql.exec("SELECT * FROM notes WHERE id = ?", id).toArray()[0] as Note | undefined;
-  }
-
-  // Without a query: the newest first. With one: the best matches, each with
-  // a snippet around what matched. Never a note of the hidden kinds.
-  notes(query: string | undefined, kind: string | undefined, limit: number, hidden: readonly string[] = []) {
-    const q = query?.trim() ? ftsQuery(query) : "";
-    const where: string[] = [];
-    const args: string[] = [];
-    if (kind) where.push("n.kind = ?"), args.push(kind);
-    if (hidden.length) where.push(`n.kind NOT IN (${hidden.map(() => "?").join(", ")})`), args.push(...hidden);
-    if (!q) {
-      const cond = where.length ? ` WHERE ${where.join(" AND ")}` : "";
-      return this.sql.exec(`SELECT n.id, n.kind, n.title, n.updated FROM notes n${cond} ORDER BY n.updated DESC LIMIT ?`, ...args, limit).toArray();
-    }
-    const select = `SELECT n.id, n.kind, n.title, n.updated, snippet(notes_fts, 1, '[', ']', '…', 16) AS snippet
-      FROM notes_fts JOIN notes n ON n.rowid = notes_fts.rowid WHERE notes_fts MATCH ?`;
-    const cond = where.map((w) => ` AND ${w}`).join("");
-    return this.sql.exec(`${select}${cond} ORDER BY rank LIMIT ?`, q, ...args, limit).toArray();
-  }
-
-  note(id: string): Result<Note> {
-    const n = this.findNote(id);
-    return n ? ok(n) : fail(404, `no note ${id}`);
-  }
-
-  putNote(id: string, n: Pick<Note, "kind" | "title" | "body">): Note {
-    const t = now();
-    this.sql.exec(
-      `INSERT INTO notes (id, kind, title, body, created, updated) VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT (id) DO UPDATE SET kind = excluded.kind, title = excluded.title, body = excluded.body, updated = excluded.updated`,
-      id,
-      n.kind,
-      n.title,
-      n.body,
-      t,
-      t,
-    );
-    return this.findNote(id)!;
-  }
-
-  // One line added to a note, as "- <time> <who>: <text>": a day's log, say.
-  appendNote(id: string, who: string, text: string): Result<Note> {
-    const n = this.findNote(id);
-    if (!n) return fail(404, `no note ${id}; write it first`);
-    const line = `- ${now()} ${who}: ${text.trim().replace(/\n/g, "\n  ")}`;
-    this.sql.exec("UPDATE notes SET body = ?, updated = ? WHERE id = ?", n.body.replace(/\n*$/, "") + (n.body.trim() ? "\n" : "") + line + "\n", now(), id);
-    return ok(this.findNote(id)!);
-  }
-
-  deleteNote(id: string): void {
-    this.sql.exec("DELETE FROM notes WHERE id = ?", id);
+  // The notes as they were before they moved to Pepper's brain (memory.ts),
+  // for its first open(). Kept here, and no longer written.
+  exportNotes(): Note[] {
+    return this.sql.exec("SELECT * FROM notes ORDER BY id").toArray() as Note[];
   }
 
   // Plans -----------------------------------------------------------------------------

@@ -20,6 +20,7 @@ import { AGENT_STATES, type Card, type Fields, type LogEntry, PRIORITIES, STATUS
 import type { Env } from "./index";
 import { Invalid } from "./cards";
 import { NOTE_KINDS, OWNER_ONLY_NOTES, PEPPER_ONLY_KINDS, chatText, date, note, noteId, projects, proposal, slug, today } from "./plans";
+import type { Memory } from "./memory";
 import type { User } from "./user";
 
 export type Grant =
@@ -403,12 +404,23 @@ If you need a human decision, call block with your question and stop. If you nee
 (log in, approve, test on a device), call request_user_action; both notify them on their desktop. When done, call submit_for_review.
 Put follow-up work you discover in new cards with create_card (parent: the card you are on).`;
 
-// The user's own tools, for OAuth clients and Pepper, not card agents: notes
-// (the assistant's memory; the goals are Pepper's alone), the day plan, and
-// the chat with the user, which is Pepper's alone too. There's no tool to
-// accept a plan; only the user does that, in corkboard.
+// The user's own tools, for OAuth clients and Pepper, not card agents: the
+// brain's memory (its notes, log and recall; the goals are Pepper's alone),
+// the day plan, and the chat with the user, which is Pepper's alone too.
+// There's no tool to accept a plan; only the user does that, in corkboard.
 
-type UserCall = { users: DurableObjectStub<User>; grant: Grant; timeZone: string };
+// Whose memory a grant works in. Every grant but a card's is Pepper's
+// today, as the notes were; the work brain joins with its own grant (the
+// memory plan's step 2).
+export const brainOf = (grant: Grant) => (grant.kind === "card" ? undefined : "pepper");
+
+export async function memoryOf(env: Env, user: string, brain: string) {
+  const memory = env.MEMORY.get(env.MEMORY.idFromName(`${user}/${brain}`));
+  await memory.open(user, brain);
+  return memory;
+}
+
+type UserCall = { users: DurableObjectStub<User>; memory: DurableObjectStub<Memory>; grant: Grant; timeZone: string };
 type UserTool = {
   description: string;
   properties?: Record<string, object>;
@@ -454,7 +466,7 @@ const hidden = (grant: Grant) => (grant.kind === "pepper" ? [] : PEPPER_ONLY_KIN
 const kinds = (grant: Grant) => NOTE_KINDS.filter((k) => !hidden(grant).includes(k));
 
 async function visible(id: string, c: UserCall) {
-  const n = unwrap(await c.users.note(id));
+  const n = unwrap(await c.memory.note(id));
   if (hidden(c.grant).includes(n.kind)) throw new ToolError(`no note ${id}`);
   return n;
 }
@@ -463,7 +475,7 @@ async function visible(id: string, c: UserCall) {
 async function unhidden(id: string, kind: unknown, c: UserCall) {
   const hide = hidden(c.grant);
   if (hide.includes(kind as string)) throw new ToolError(`kind must be one of ${kinds(c.grant).join(", ")}`);
-  const was = await c.users.note(id);
+  const was = await c.memory.note(id);
   if (was.ok && hide.includes(was.value.kind)) throw new ToolError(`the id ${id} is taken; choose another`);
 }
 
@@ -472,7 +484,7 @@ const USER_TOOLS: Record<string, UserTool> = {
     description:
       "Search your notes: day records, decisions, projects, people, reviews, memory, drafts, and whatever else kind lists. With no query, the newest. Every word must match.",
     properties: { query: str("Words to find"), kind: { type: "string", enum: NOTE_KINDS }, limit: { type: "integer", description: "At most this many (default 20)" } },
-    run: async (a, c) => c.users.notes(a.query ? String(a.query) : undefined, a.kind, Math.min(Number(a.limit) || 20, 100), hidden(c.grant)),
+    run: async (a, c) => c.memory.notes(a.query ? String(a.query) : undefined, a.kind, Math.min(Number(a.limit) || 20, 100), hidden(c.grant)),
   },
   note_read: {
     description: "Read a note.",
@@ -481,19 +493,22 @@ const USER_TOOLS: Record<string, UserTool> = {
     run: async (a, c) => visible(noteId(String(a.id)), c),
   },
   note_write: {
-    description: "Write a note, replacing it if it exists. Without an id, one is made from the title. Returns the note, with its id.",
+    description:
+      "Write a note, replacing it if it exists. Without an id, one is made from the title. Returns the note, with its id and version. Pass the version you read to be refused if someone changed it since (0 for a note that must not exist yet).",
     properties: {
       id: str("lowercase-and-dashes; from the title if left out"),
       kind: { type: "string", enum: NOTE_KINDS },
       title: str("One line"),
       body: str("Markdown"),
+      version: { type: "integer", description: "The note's version as you read it" },
     },
     required: ["kind", "title", "body"],
     run: async (a, c) => {
       const id = noteId(a.id ? String(a.id) : slug(String(a.title ?? "")));
       writable(id, c.grant);
       await unhidden(id, a.kind, c);
-      return c.users.putNote(id, note(a));
+      if (a.version !== undefined && (!Number.isInteger(a.version) || a.version < 0)) throw new ToolError("version must be the note's version, from note_read");
+      return unwrap(await c.memory.putNote(id, note(a), a.version));
     },
   },
   note_append: {
@@ -505,7 +520,43 @@ const USER_TOOLS: Record<string, UserTool> = {
       writable(id, c.grant);
       await visible(id, c);
       if (typeof a.text !== "string" || !a.text.trim()) throw new ToolError("say what to add");
-      return unwrap(await c.users.appendNote(id, c.grant.agent, a.text));
+      return unwrap(await c.memory.appendNote(id, c.grant.agent, a.text));
+    },
+  },
+  memory_context: {
+    description:
+      "What you start a session with: who you are and who the user is, the last few days' log and day records, and what you've learned. Your session start hook already loads it; call this after a long session to see it again.",
+    properties: { budget: { type: "integer", description: "At most this many characters (default 24000)" } },
+    run: async (a, c) => c.memory.context(Math.min(Math.max(Number(a.budget) || 24_000, 1000), 200_000), hidden(c.grant)),
+  },
+  memory_recall: {
+    description:
+      "Search everything you remember, notes and log alike, for any of the words; the best matches first, each with a snippet. Read a whole note with note_read.",
+    properties: { query: str("What you're trying to remember, in words it would be written in"), limit: { type: "integer", description: "At most this many (default 15)" } },
+    required: ["query"],
+    run: async (a, c) => {
+      if (typeof a.query !== "string" || !a.query.trim()) throw new ToolError("say what to recall");
+      return c.memory.recall(a.query, Math.min(Number(a.limit) || 15, 50), hidden(c.grant));
+    },
+  },
+  memory_remember: {
+    description:
+      "Write a line in today's log: something that happened, was decided or was learned, in a sentence or two that will make sense on its own later. Every agent of yours shares the log.",
+    properties: { text: str("What to remember") },
+    required: ["text"],
+    run: async (a, c) => {
+      if (typeof a.text !== "string" || !a.text.trim()) throw new ToolError("say what to remember");
+      if (a.text.length > 4000) throw new ToolError("keep it under 4000 characters; a longer record is a note");
+      return c.memory.remember(c.grant.agent, a.text);
+    },
+  },
+  memory_grep: {
+    description: "Every line in your notes and log that contains this text, case ignored, newest notes first. For when you know the exact words.",
+    properties: { text: str("The text to find"), limit: { type: "integer", description: "At most this many lines (default 50)" } },
+    required: ["text"],
+    run: async (a, c) => {
+      if (typeof a.text !== "string" || !a.text.trim()) throw new ToolError("say what to find");
+      return c.memory.grep(a.text.trim(), Math.min(Number(a.limit) || 50, 200), hidden(c.grant));
     },
   },
   plan_read: {
@@ -616,7 +667,8 @@ async function callTool(env: Env, user: string, grant: Grant, name: string, args
   if (name === "create_board" && grant.kind !== "card") return createBoard(env, user, args);
   if (USER_TOOLS[name] && reaches(USER_TOOLS[name], grant)) {
     try {
-      return await USER_TOOLS[name].run({ ...args }, { users: env.USER.get(env.USER.idFromName(user)), grant, timeZone: env.TIMEZONE });
+      const memory = await memoryOf(env, user, brainOf(grant)!);
+      return await USER_TOOLS[name].run({ ...args }, { users: env.USER.get(env.USER.idFromName(user)), memory, grant, timeZone: env.TIMEZONE });
     } catch (e) {
       if (e instanceof Invalid) throw new ToolError(e.message);
       throw e;

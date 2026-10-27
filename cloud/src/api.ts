@@ -20,7 +20,7 @@
 //   GET   /api/chat                          the chat with Pepper, oldest first: ?after=id, else the newest 100
 //   POST  /api/chat                          { text }: the user says something to Pepper
 //   GET   /api/notes                        ?q= to search, ?kind=, ?limit=
-//   GET, PUT, DELETE /api/notes/:id          PUT { kind, title, body }
+//   GET, PUT, DELETE /api/notes/:id          PUT { kind, title, body, version? }: Pepper's brain's notes
 //   GET, DELETE /api/plans/:date             the day and any proposal (an empty plan if none); gone for good
 //   POST  /api/plans/:date/say               { text }: what to change, for the next proposal
 //   POST  /api/plans/:date/accept            { version, blocks }: the proposal, as the user left it
@@ -32,20 +32,27 @@
 //
 // All of it needs the owner scope. /mcp (mcp.ts) is behind the same token
 // check, and takes owner and assistant tokens, card tokens and Pepper's.
+//
+// A brain's memory (memory.ts), for its sessions' hooks, with any token but
+// a card's; the brain is the token's:
+//   GET   /memory/context                    Markdown: what a session starts with; ?budget= characters
+//   POST  /memory/episodes                   { session, trigger?, transcript }: a session's transcript
+//   GET   /memory/episodes                   ?pending=1 for those not yet consolidated, ?limit=
+//   GET   /memory/episodes/:id               { id, transcript }
 
 import { insufficientScope, type OAuthResourceContext } from "@cloudflare/workers-oauth-provider";
 import { Invalid, cardId, fields, imported, logEntry } from "./cards";
 import type { Result } from "./board";
 import { CARD_TOKEN, type Env, type Props } from "./index";
-import { type Grant, mcp } from "./mcp";
-import { blocks, chatText, date, note, noteId } from "./plans";
+import { type Grant, brainOf, mcp, memoryOf } from "./mcp";
+import { PEPPER_ONLY_KINDS, blocks, chatText, date, note, noteId } from "./plans";
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const error = (status: number, message: string, extra: object = {}) => json({ error: message, ...extra }, status);
 
 function reply<T>(result: Result<T>, status = 200): Response {
   if (result.ok) return json(result.value, status);
-  return error(result.status, result.error, result.card ? { card: result.card } : result.plan ? { plan: result.plan } : {});
+  return error(result.status, result.error, result.card ? { card: result.card } : result.plan ? { plan: result.plan } : result.note ? { note: result.note } : {});
 }
 
 // A board key is a local project path with / as - (corkboard's path_key).
@@ -147,24 +154,57 @@ async function route(request: Request, env: Env, user: string): Promise<Response
 }
 
 type Users = DurableObjectStub<import("./user").User>;
+type Memories = DurableObjectStub<import("./memory").Memory>;
 
-async function notes(request: Request, users: Users): Promise<Response> {
+async function notes(request: Request, memory: Memories): Promise<Response> {
   const url = new URL(request.url);
   const id = url.pathname.match(/^\/api\/notes(?:\/([^/]+))?$/);
   if (!id) return error(404, "not found");
   if (!id[1]) {
     if (request.method !== "GET") return error(405, "method not allowed");
     const limit = Math.min(Number(url.searchParams.get("limit") ?? 50) || 50, 200);
-    return json(await users.notes(url.searchParams.get("q") ?? undefined, url.searchParams.get("kind") ?? undefined, limit));
+    return json(await memory.notes(url.searchParams.get("q") ?? undefined, url.searchParams.get("kind") ?? undefined, limit));
   }
   const key = noteId(id[1]);
-  if (request.method === "GET") return reply(await users.note(key));
-  if (request.method === "PUT") return json(await users.putNote(key, note(await body(request))));
+  if (request.method === "GET") return reply(await memory.note(key));
+  if (request.method === "PUT") {
+    const input = await body(request);
+    if (input.version !== undefined && (!Number.isInteger(input.version) || (input.version as number) < 0)) throw new Invalid("version must be the note's version");
+    return reply(await memory.putNote(key, note(input), input.version as number | undefined));
+  }
   if (request.method === "DELETE") {
-    await users.deleteNote(key);
+    await memory.deleteNote(key);
     return new Response(null, { status: 204 });
   }
   return error(405, "method not allowed");
+}
+
+// What a brain's hooks call (memory.ts), with any token but a card's: the
+// context a session starts with, and the transcript it ends with.
+async function memoryRoutes(request: Request, memory: Memories, grant: Grant): Promise<Response> {
+  const url = new URL(request.url);
+  const hide = grant.kind === "pepper" ? [] : PEPPER_ONLY_KINDS;
+  if (url.pathname === "/memory/context" && request.method === "GET") {
+    const budget = Math.min(Math.max(Number(url.searchParams.get("budget")) || 24_000, 1000), 200_000);
+    return new Response(await memory.context(budget, hide), { headers: { "Content-Type": "text/markdown; charset=utf-8" } });
+  }
+  if (url.pathname === "/memory/episodes") {
+    if (request.method === "GET") {
+      const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 200);
+      return json(await memory.episodes(limit, url.searchParams.get("pending") === "1"));
+    }
+    if (request.method !== "POST") return error(405, "method not allowed");
+    const input = await body(request);
+    const session = typeof input.session === "string" ? input.session.trim() : "";
+    if (!session || session.length > 200) throw new Invalid("session must be the session's id");
+    if (typeof input.transcript !== "string" || !input.transcript) throw new Invalid("transcript must be the session's transcript");
+    const trigger = typeof input.trigger === "string" && /^[a-z-]{1,40}$/.test(input.trigger) ? input.trigger : "end";
+    const r = await memory.addEpisode({ session, agent: grant.agent, trigger, transcript: input.transcript });
+    return r.ok ? json(r.value, r.value.added ? 201 : 200) : reply(r);
+  }
+  const one = url.pathname.match(/^\/memory\/episodes\/([0-9a-f]{32})$/);
+  if (one && request.method === "GET") return reply(await memory.episode(one[1]));
+  return error(404, "not found");
 }
 
 async function chat(request: Request, users: Users): Promise<Response> {
@@ -263,13 +303,24 @@ export const api = {
       if (!grant) return insufficientScope(ctx.auth, ["assistant"]);
       return mcp(request, env, ctx.props.userId, grant);
     }
+    if (path.startsWith("/memory/")) {
+      const grant = grantOf(ctx);
+      const brain = grant && brainOf(grant);
+      if (!grant || !brain) return insufficientScope(ctx.auth, ["assistant"]);
+      try {
+        return await memoryRoutes(request, await memoryOf(env, ctx.props.userId, brain), grant);
+      } catch (e) {
+        if (e instanceof Invalid) return error(400, e.message);
+        throw e;
+      }
+    }
     // A card token is only for the MCP server.
     if (ctx.props.grant || !ctx.auth.scope.includes("owner")) return insufficientScope(ctx.auth, ["owner"]);
     try {
       if (path.startsWith("/api/tokens")) return await tokens(request, env, ctx.props);
       const users = env.USER.get(env.USER.idFromName(ctx.props.userId));
       if (path === "/api/live") return users.fetch(request);
-      if (path.startsWith("/api/notes")) return await notes(request, users);
+      if (path.startsWith("/api/notes")) return await notes(request, await memoryOf(env, ctx.props.userId, "pepper"));
       if (path.startsWith("/api/plans/")) return await plans(request, users);
       if (path === "/api/chat") return await chat(request, users);
       return await route(request, env, ctx.props.userId);

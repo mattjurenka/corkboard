@@ -14,12 +14,15 @@
   "durable_objects": {
     "bindings": [
       { "name": "BOARD", "class_name": "Board" },
-      { "name": "USER", "class_name": "User" }
+      { "name": "USER", "class_name": "User" },
+      // One per user and brain: its memory (src/memory.ts).
+      { "name": "MEMORY", "class_name": "Memory" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Board"] },
-    { "tag": "v2", "new_sqlite_classes": ["User"] }
+    { "tag": "v2", "new_sqlite_classes": ["User"] },
+    { "tag": "v3", "new_sqlite_classes": ["Memory"] }
   ],
   "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "b5e2d5807ec748e58a7fbf3a94385742" }],
   "vars": {
