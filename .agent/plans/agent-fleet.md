@@ -174,7 +174,9 @@ and the two hosts (`omni-laptop` imports `fleetHost`, a new `pepper-droplet` imp
    host, no Worker yet. Done when `corkboard fleet spawn coding "run the tests in ~/x"` boots a
    slot, and a second spawn past the memory budget waits.
 
-   **Built 2026-10-27; live test waits on a switch.** Slots are `agent-0`/`agent-1`
+   **Done 2026-10-27.** Live: a `coding` spawn on the personal account fixed a failing test in
+   a scratch repo in under five minutes and its commit came back by `fetch`; a second spawn
+   waited on the budget with `agent-1` free, then took `agent-0` when the first ended. Slots are `agent-0`/`agent-1`
    (`my.agentVms.instances.<n>.slot`), system units nothing starts but fleetd, which may by a
    polkit rule. A slot's launcher builds `nixosConfigurations."<template>@<slot>"`
    (`fleet/guest/slot.nix` + the template) on an empty disk; the guest reads
