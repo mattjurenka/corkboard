@@ -13,9 +13,17 @@
     {
       # The agent VMs (fleet/, and .agent/plans/agent-fleet.md). A host that
       # runs them imports `fleetHost` and sets `my.agentVms`; `mkPlan` makes
-      # the address plan each VM and the host share.
+      # the address plan each VM and the host share; `mkFleet` turns brains,
+      # capabilities, environments and templates into checked guests.
       nixosModules.fleetHost = ./fleet/host/host.nix;
-      lib.fleet.mkPlan = import ./fleet/plan.nix;
+      lib.fleet = {
+        mkPlan = import ./fleet/plan.nix;
+        inherit (import ./fleet/lib.nix { inherit (nixpkgs) lib; }) mkFleet;
+      };
+
+      checks = forAll (pkgs: {
+        fleet = import ./fleet/tests.nix { inherit pkgs; inherit (pkgs) lib; };
+      });
 
       devShells = forAll (pkgs:
         let

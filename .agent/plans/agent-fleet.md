@@ -155,6 +155,21 @@ and the two hosts (`omni-laptop` imports `fleetHost`, a new `pepper-droplet` imp
    check. Re-express today's three guests as templates that build the *same* guests:
    `work` = work brain + `coding` + `valheim`, `pepper`, `browser` (claude-vm). Split
    `gpu.nix` / `valheim-client.nix` out of brain-vm into capabilities on the way.
+
+   **Done 2026-10-27.** `fleet/lib.nix` (`lib.fleet.mkFleet`), tested by `fleet/tests.nix`
+   (`nix flake check`, 12 cases). nixosconfig's `modules/features/fleet.nix` declares brains
+   `work` and `pepper`, capabilities `gpu`, `valheim`, `wallet-browser`, `desktop`, environment
+   `local`, and templates `brain-vm`, `pepper-vm`, `claude-vm` (no brain), which replace the
+   three guests' `default.nix`. Pepper's allowlist is now the pepper brain's egress, and
+   omni-laptop's `allowedDomains` reads it from the template. All four toplevels are the same
+   derivations as before. How it differs from the above:
+   - Templates take `modules` of their own, first in a guest's list: `claude-vm` has no brain
+     but has a base config.
+   - Guests keep their own `memorySize`/`cores`; the fleet only asserts they meet the
+     capabilities' minimums. Valheim's 16 GiB is declared in step 7, when it leaves brain-vm,
+     which runs it at 10 GiB today (declaring it now fails the build, as it should).
+   - No `coding` capability yet: brain-vm's toolchain is still inside `brainVmConfiguration`.
+     It comes out in step 3, for the slots.
 3. **Slots and local fleetd.** The slot pool, `corkboard fleet spawn|list|attach|stop` on the
    host, no Worker yet. Done when `corkboard fleet spawn coding "run the tests in ~/x"` boots a
    slot, and a second spawn past the memory budget waits.
