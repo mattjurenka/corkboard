@@ -22,6 +22,7 @@ import { AGENT_STATES, type Card, type Fields, type LogEntry, PRIORITIES, STATUS
 import type { Env } from "./index";
 import { Invalid } from "./cards";
 import { BRAIN_ONLY_KINDS, NOTE_KINDS, OWNER_ONLY_NOTES, chatText, date, note, noteId, projects, proposal, slug, today } from "./plans";
+import { range } from "./dates";
 import type { Brain, Memory } from "./memory";
 import type { User } from "./user";
 
@@ -553,6 +554,26 @@ const USER_TOOLS: Record<string, UserTool> = {
       if (typeof a.text !== "string" || !a.text.trim()) throw new ToolError("say what to remember");
       if (a.text.length > 4000) throw new ToolError("keep it under 4000 characters; a longer record is a note");
       return c.memory.remember(c.grant.agent, a.text);
+    },
+  },
+  memory_log: {
+    description:
+      'The log for some days, oldest first: when as words ("yesterday", "last week", "last Tuesday", "Oct 24", "3 days ago") or from and to as YYYY-MM-DD. The dates are worked out for you; don\'t do date arithmetic yourself.',
+    properties: {
+      when: str("Which days, in words"),
+      from: str("YYYY-MM-DD"),
+      to: str("YYYY-MM-DD; from, if left out"),
+    },
+    run: async (a, c) => {
+      let from: string, to: string;
+      if (a.from) [from, to] = [date(a.from), a.to ? date(a.to) : date(a.from)];
+      else {
+        const r = range(String(a.when ?? "today"), today(c.timeZone));
+        if (!r) throw new ToolError(`can't tell which days "${a.when}" means; say from and to`);
+        [from, to] = [r.from, r.to];
+      }
+      if (to < from) throw new ToolError("to is before from");
+      return { from, to, entries: await c.memory.entries(from, to) };
     },
   },
   memory_grep: {

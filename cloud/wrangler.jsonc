@@ -24,6 +24,10 @@
     { "tag": "v2", "new_sqlite_classes": ["User"] },
     { "tag": "v3", "new_sqlite_classes": ["Memory"] }
   ],
+  // Recall by meaning: embeddings from Workers AI, in one index with a
+  // namespace per brain (src/memory.ts).
+  "ai": { "binding": "AI" },
+  "vectorize": [{ "binding": "VECTORS", "index_name": "corkboard-memory" }],
   "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "b5e2d5807ec748e58a7fbf3a94385742" }],
   "vars": {
     "ORIGIN": "https://corkboard.matthewjurenka.workers.dev",

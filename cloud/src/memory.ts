@@ -21,6 +21,8 @@ import { DurableObject } from "cloudflare:workers";
 import type { Result } from "./board";
 import type { Env } from "./index";
 import { DAY_STARTS_HOUR, type Note, type NoteInput, today } from "./plans";
+import { range } from "./dates";
+import { chunks, embed, namespaceOf, sha, vectorId } from "./vectors";
 
 // The brains there are: a memory is one of these.
 export const BRAINS = ["pepper", "work"] as const;
@@ -69,6 +71,8 @@ CREATE TABLE IF NOT EXISTS episodes (
   at TEXT NOT NULL, bytes INTEGER NOT NULL, parts INTEGER NOT NULL, consolidated INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS episode_parts (episode TEXT NOT NULL, seq INTEGER NOT NULL, text TEXT NOT NULL, PRIMARY KEY (episode, seq));
+CREATE TABLE IF NOT EXISTS vector_queue (item TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS vectors (item TEXT PRIMARY KEY, hash TEXT NOT NULL, chunks INTEGER NOT NULL);
 `;
 
 // A search as FTS5 reads it: each word quoted, so punctuation is a word and
@@ -114,7 +118,7 @@ export class Memory extends DurableObject<Env> {
   // this is, and for Pepper's brain, the user's notes brought over once.
   // Nothing else runs here until that's done.
   async open(user: string, brain: string): Promise<void> {
-    if (this.meta("brain")) return;
+    if (this.meta("brain")) return this.backfill();
     await this.ctx.blockConcurrencyWhile(async () => {
       if (this.meta("brain")) return;
       if (brain === "pepper") {
@@ -133,6 +137,7 @@ export class Memory extends DurableObject<Env> {
       this.setMeta("user", user);
       this.setMeta("brain", brain);
     });
+    this.backfill();
   }
 
   private today() {
@@ -190,6 +195,7 @@ export class Memory extends DurableObject<Env> {
       t,
       t,
     );
+    this.dirty(`note:${id}`);
     return ok(this.findNote(id)!);
   }
 
@@ -204,19 +210,23 @@ export class Memory extends DurableObject<Env> {
       now(),
       id,
     );
+    this.dirty(`note:${id}`);
     return ok(this.findNote(id)!);
   }
 
   deleteNote(id: string): void {
     this.sql.exec("DELETE FROM notes WHERE id = ?", id);
+    this.dirty(`note:${id}`);
   }
 
   // Entries ---------------------------------------------------------------------------
 
   remember(who: string, text: string): Entry {
-    return this.sql
+    const e = this.sql
       .exec("INSERT INTO entries (at, day, who, text) VALUES (?, ?, ?, ?) RETURNING *", now(), this.today(), who, text.trim())
       .one() as Entry;
+    this.dirty(`entry:${e.id}`);
+    return e;
   }
 
   // Entries written elsewhere first (a vault's daily logs), each with its own
@@ -226,10 +236,13 @@ export class Memory extends DurableObject<Env> {
     // Counted, not taken from rowsWritten, which an ignored insert adds to too.
     const count = () => this.sql.exec("SELECT count(*) AS n FROM entries").one().n as number;
     const was = count();
+    const last = (this.sql.exec("SELECT coalesce(max(id), 0) AS n FROM entries").one().n as number);
     this.ctx.storage.transactionSync(() => {
       for (const e of list)
         this.sql.exec("INSERT OR IGNORE INTO entries (at, day, who, text, key) VALUES (?, ?, ?, ?, ?)", e.at, e.day, e.who, e.text, e.key);
+      this.sql.exec("INSERT OR IGNORE INTO vector_queue (item) SELECT 'entry:' || id FROM entries WHERE id > ?", last);
     });
+    this.wake();
     return count() - was;
   }
 
@@ -238,13 +251,147 @@ export class Memory extends DurableObject<Env> {
     return this.sql.exec("SELECT * FROM entries WHERE day BETWEEN ? AND ? ORDER BY id", from, to).toArray() as Entry[];
   }
 
+  // Vectors ---------------------------------------------------------------------------
+  //
+  // What changed waits in vector_queue, as "note:<id>" or "entry:<id>", and
+  // the object's alarm embeds it after the write has been answered, so no
+  // write waits on Workers AI. `vectors` says what each item was last
+  // embedded from (a hash) and in how many chunks, so an unchanged item is
+  // skipped and a shorter one's old chunks are removed.
+
+  private vectorsOn() {
+    return this.env.MEMORY_VECTORS !== "off" && !!this.env.AI && !!this.env.VECTORS;
+  }
+
+  private dirty(item: string) {
+    this.sql.exec("INSERT OR IGNORE INTO vector_queue (item) VALUES (?)", item);
+    this.wake();
+  }
+
+  private wake() {
+    if (!this.vectorsOn()) return;
+    void this.ctx.storage.getAlarm().then((a) => {
+      if (a === null) return this.ctx.storage.setAlarm(Date.now() + 2000);
+    });
+  }
+
+  // Everything, once: a memory made before vectors, or one just opened.
+  private backfill() {
+    if (!this.vectorsOn() || this.meta("vectors") === "1") return;
+    this.sql.exec("INSERT OR IGNORE INTO vector_queue (item) SELECT 'note:' || id FROM notes");
+    this.sql.exec("INSERT OR IGNORE INTO vector_queue (item) SELECT 'entry:' || id FROM entries");
+    this.setMeta("vectors", "1");
+    this.wake();
+  }
+
+  private async namespace() {
+    return namespaceOf(this.meta("user") ?? "", this.meta("brain") ?? "");
+  }
+
+  // What an item is embedded as, or null for one that's gone.
+  private embeddable(item: string): string[] | null {
+    const [type, id] = [item.slice(0, item.indexOf(":")), item.slice(item.indexOf(":") + 1)];
+    if (type === "note") {
+      const n = this.findNote(id);
+      return n ? chunks(n.title, n.body) : null;
+    }
+    const e = this.sql.exec("SELECT day, who, text FROM entries WHERE id = ?", Number(id)).toArray()[0];
+    return e ? [`${e.day} ${e.who}: ${e.text}`.slice(0, 6000)] : null;
+  }
+
+  async alarm() {
+    if (!this.vectorsOn()) return;
+    const items = this.sql.exec("SELECT item FROM vector_queue LIMIT 40").toArray().map((r) => r.item as string);
+    if (!items.length) return;
+    const ns = await this.namespace();
+    const upserts: VectorizeVector[] = [];
+    const removed: string[] = [];
+    const texts: string[] = [];
+    const done: { item: string; hash: string; chunks: number }[] = [];
+    for (const item of items) {
+      const was = this.sql.exec("SELECT hash, chunks FROM vectors WHERE item = ?", item).toArray()[0] as { hash: string; chunks: number } | undefined;
+      const pieces = this.embeddable(item);
+      const hash = pieces ? await sha(pieces.join("\u0000")) : "";
+      if (was && was.hash === hash) continue;
+      const count = pieces?.length ?? 0;
+      for (let i = count; i < (was?.chunks ?? 0); i++) removed.push(await vectorId(ns, item, i));
+      for (let i = 0; i < count; i++) {
+        upserts.push({ id: await vectorId(ns, item, i), values: [], namespace: ns, metadata: { item, chunk: i } });
+        texts.push(pieces![i]);
+      }
+      done.push({ item, hash, chunks: count });
+    }
+    if (texts.length) {
+      const vectors = await embed(this.env.AI, texts);
+      upserts.forEach((u, i) => (u.values = vectors[i]));
+      for (let i = 0; i < upserts.length; i += 500) await this.env.VECTORS.upsert(upserts.slice(i, i + 500));
+    }
+    if (removed.length) await this.env.VECTORS.deleteByIds(removed);
+    this.ctx.storage.transactionSync(() => {
+      for (const d of done) {
+        if (d.chunks) this.sql.exec("INSERT INTO vectors (item, hash, chunks) VALUES (?, ?, ?) ON CONFLICT (item) DO UPDATE SET hash = excluded.hash, chunks = excluded.chunks", d.item, d.hash, d.chunks);
+        else this.sql.exec("DELETE FROM vectors WHERE item = ?", d.item);
+      }
+      for (const item of items) this.sql.exec("DELETE FROM vector_queue WHERE item = ?", item);
+    });
+    if (this.sql.exec("SELECT 1 FROM vector_queue LIMIT 1").toArray().length) await this.ctx.storage.setAlarm(Date.now() + 500);
+  }
+
+  // How many items wait to be embedded, and how many are: for a sync to
+  // report, and to see the backfill through.
+  vectorState() {
+    return {
+      on: this.vectorsOn(),
+      queued: this.sql.exec("SELECT count(*) AS n FROM vector_queue").one().n as number,
+      embedded: this.sql.exec("SELECT count(*) AS n FROM vectors").one().n as number,
+    };
+  }
+
+  // The items nearest the question's meaning, best first, one hit each.
+  private async nearest(query: string, hidden: readonly string[]): Promise<Hit[]> {
+    if (!this.vectorsOn()) return [];
+    try {
+      const [vector] = await embed(this.env.AI, [query]);
+      const r = await this.env.VECTORS.query(vector, { topK: 40, namespace: await this.namespace(), returnMetadata: "all" });
+      const seen = new Set<string>();
+      const hits: Hit[] = [];
+      for (const m of r.matches) {
+        const item = String(m.metadata?.item ?? "");
+        if (!item || seen.has(item)) continue;
+        seen.add(item);
+        const hit = this.hitFor(item, hidden);
+        if (hit) hits.push(hit);
+      }
+      return hits;
+    } catch (e) {
+      // Recall still answers from the words when Workers AI or Vectorize
+      // doesn't.
+      console.error("memory: vector recall failed:", e);
+      return [];
+    }
+  }
+
+  private hitFor(item: string, hidden: readonly string[]): Hit | null {
+    const id = item.slice(item.indexOf(":") + 1);
+    if (item.startsWith("note:")) {
+      const n = this.findNote(id);
+      if (!n || hidden.includes(n.kind)) return null;
+      return { type: "note", id: n.id, kind: n.kind, title: n.title, at: n.updated, snippet: n.body.slice(0, 240).replace(/\s+/g, " ") };
+    }
+    const e = this.sql.exec("SELECT * FROM entries WHERE id = ?", Number(id)).toArray()[0] as Entry | undefined;
+    return e ? { type: "entry", id: String(e.id), title: `${e.day} ${e.who}`, day: e.day, at: e.at, snippet: e.text.slice(0, 240) } : null;
+  }
+
   // Recall ----------------------------------------------------------------------------
 
-  // Notes and entries that match any of the words, the two lists merged by
-  // reciprocal rank fusion (each hit scores 1/(60 + its rank) in its list),
-  // the newer first on a tie. Vectors join as a third list later (the plan's
-  // step 3).
-  recall(query: string, limit: number, hidden: readonly string[] = []): Hit[] {
+  // What the question is about, from up to four lists merged by reciprocal
+  // rank fusion (each hit scores weight/(60 + its rank) in each list), the
+  // newer first on a tie:
+  //   notes and entries that contain any of its words (FTS, stemmed),
+  //   whatever is nearest its meaning (vectors),
+  //   and, when it names a day ("yesterday", "last Tuesday", "Oct 24"),
+  //   that day's entries, worked out here rather than by a model.
+  async recall(query: string, limit: number, hidden: readonly string[] = []): Promise<Hit[]> {
     const q = ftsQuery(query, true);
     if (!q) return [];
     const h = notIn("n.kind", hidden);
@@ -265,12 +412,24 @@ export class Memory extends DurableObject<Env> {
       )
       .toArray()
       .map((r: any) => ({ type: "entry" as const, id: String(r.id), title: `${r.day} ${r.who}`, day: r.day, at: r.at, snippet: r.snippet }));
+    // The day the question names, its entries in order: those with its words
+    // first, then the rest of the day.
+    const days = range(query, this.today());
+    const onDays = days
+      ? (this.entries(days.from, days.to)
+          .map((e) => ({ e, words: query.toLowerCase().split(/\W+/).filter((w) => w.length > 3 && e.text.toLowerCase().includes(w)).length }))
+          .sort((a, b) => b.words - a.words || b.e.id - a.e.id)
+          .slice(0, 50)
+          .map(({ e }) => this.hitFor(`entry:${e.id}`, hidden)!) as Hit[])
+      : [];
+    const near = await this.nearest(query, hidden);
     const score = new Map<string, { hit: Hit; score: number }>();
-    for (const list of [notes, entries])
+    const lists: [Hit[], number][] = [[notes as Hit[], 1], [entries as Hit[], 1], [near, 1], [onDays, 1.5]];
+    for (const [list, weight] of lists)
       list.forEach((hit, rank) => {
         const key = `${hit.type}:${hit.id}`;
-        const s = score.get(key) ?? { hit: hit as Hit, score: 0 };
-        s.score += 1 / (60 + rank);
+        const s = score.get(key) ?? { hit, score: 0 };
+        s.score += weight / (60 + rank);
         score.set(key, s);
       });
     return [...score.values()]

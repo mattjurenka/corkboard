@@ -128,6 +128,15 @@ being the source of truth and becomes a working copy.
    brain's `goal` notes are its own agents' alone, and in their context after the long-term memory.
 3. **Vectors and fusion.** Vectorize per brain, Workers AI embeddings, RRF over FTS + key + vector,
    deterministic dates. Retire second-brain's `memory_index.py`/`memory_search.py`.
+
+   **Built 2026-10-27; waits on a deploy.** `cloud/src/vectors.ts`: `/baai/bge-m3` embeddings of
+   notes in ~1500-character chunks (each titled) and of entries, in the Vectorize index
+   `corkboard-memory`, a namespace per brain. Writes queue their item; the object's alarm embeds it
+   after the write is answered, skipping what hasn't changed. Recall fuses FTS on notes, FTS on
+   entries, vectors, and the entries of any day the question names (`cloud/src/dates.ts`, weight
+   1.5); `memory_log` reads a range of days from words or dates. `GET /api/memory/vectors` shows
+   the backfill. second-brain's own index stays until brain-vm reaches `brain:work`.
+
 4. **The consolidator.** Extraction into typed memories with supersession, the daily rollup into
    MEMORY, on the brain's account via the fleet queue. Retire `memory_flush.py` and
    `memory-reflect`.

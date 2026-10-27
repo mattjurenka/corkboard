@@ -187,3 +187,20 @@ describe("a sync", () => {
     expect((await put({ path: "../etc/passwd" })).status).toBe(400);
   });
 });
+
+describe("dates", () => {
+  it("are worked out for the log and for recall", async () => {
+    await call(owner, "POST", "/api/memory/entries", {
+      entries: [
+        { day: "2026-10-20", at: "2026-10-20T17:00:00Z", who: "pepper", text: "Long run, 12k.", key: "r" },
+        { day: "2026-10-21", at: "2026-10-21T17:00:00Z", who: "pepper", text: "Rest day.", key: "s" },
+      ],
+    });
+    const log = await tool(assistant, "memory_log", { from: "2026-10-20", to: "2026-10-21" });
+    expect(log.entries.map((e: any) => e.text)).toEqual(["Long run, 12k.", "Rest day."]);
+    expect((await tool(assistant, "memory_log", { when: "sometime" })).error).toMatch(/can't tell/);
+    // Nothing on 20 Oct says "happened"; the date finds it.
+    const hits = await tool(assistant, "memory_recall", { query: "what happened on 2026-10-20" });
+    expect(hits.map((h: any) => h.snippet)).toContain("Long run, 12k.");
+  });
+});

@@ -12,6 +12,8 @@ export default defineConfig({
           TIMEZONE: "America/Phoenix",
           GOOGLE_CLIENT_ID: "google-client",
           GOOGLE_CLIENT_SECRET: "google-secret",
+          // Workers AI and Vectorize are remote; these tests stay local.
+          MEMORY_VECTORS: "off",
         },
       },
     }),

@@ -23,6 +23,7 @@
 //   GET, PUT, DELETE /api/notes/:id          PUT { kind, title, body, path?, version? }
 //   POST  /api/memory/entries                { entries: [{ day, at, who, text, key }] }: a log written
 //                                            elsewhere, each entry added once
+//   GET   /api/memory/vectors                { on, queued, embedded }: how far embedding has got
 //                                            (notes and entries are Pepper's brain's, or ?brain='s)
 //   GET, DELETE /api/plans/:date             the day and any proposal (an empty plan if none); gone for good
 //   POST  /api/plans/:date/say               { text }: what to change, for the next proposal
@@ -356,6 +357,7 @@ export const api = {
       const brain = brainNamed(new URL(request.url).searchParams.get("brain") ?? "pepper");
       if (path.startsWith("/api/notes")) return await notes(request, await memoryOf(env, ctx.props.userId, brain));
       if (path === "/api/memory/entries") return await importEntries(request, await memoryOf(env, ctx.props.userId, brain));
+      if (path === "/api/memory/vectors") return json(await (await memoryOf(env, ctx.props.userId, brain)).vectorState());
       if (path.startsWith("/api/plans/")) return await plans(request, users);
       if (path === "/api/chat") return await chat(request, users);
       return await route(request, env, ctx.props.userId);

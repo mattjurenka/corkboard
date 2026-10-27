@@ -18,6 +18,11 @@ export type Env = {
   BOARD: DurableObjectNamespace<Board>;
   USER: DurableObjectNamespace<User>;
   MEMORY: DurableObjectNamespace<Memory>;
+  // Recall by meaning (src/vectors.ts): embeddings, and the index they're
+  // kept in. MEMORY_VECTORS "off" does without both (the tests).
+  AI: Ai;
+  VECTORS: VectorizeIndex;
+  MEMORY_VECTORS?: string;
   OAUTH_KV: KVNamespace;
   OAUTH_PROVIDER: OAuthHelpers;
   // The Worker's own origin, no trailing slash: the token audience and
