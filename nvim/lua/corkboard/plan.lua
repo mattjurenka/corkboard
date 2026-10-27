@@ -22,9 +22,14 @@ local M = {}
 
 local function cloud() return require("corkboard.cards.cloud") end
 
+-- The day turns over at 4am, not midnight, as dayplan's does: until then it
+-- is still the day planned yesterday.
+local DAY_STARTS_HOUR = 4
+local function this_day() return os.date("%Y-%m-%d", os.time() - DAY_STARTS_HOUR * 3600) end
+
 -- The plan's date: today, or CORKBOARD_PLAN_DATE for tests, which must not
 -- touch today's.
-local function today() return vim.env.CORKBOARD_PLAN_DATE or os.date("%Y-%m-%d") end
+local function today() return vim.env.CORKBOARD_PLAN_DATE or this_day() end
 
 -- What writes the calendar; CORKBOARD_DAYPLAN in tests, which must not.
 local DAYPLAN = vim.env.CORKBOARD_DAYPLAN or "dayplan"
@@ -59,9 +64,10 @@ local function length(m)
   return rest == 0 and (h .. "h") or string.format("%dh%02d", h, rest)
 end
 
+-- Minutes since the midnight that began this_day(), so past 1440 before 4am.
 local function now()
   local d = os.date("*t")
-  return d.hour * 60 + d.min
+  return d.hour * 60 + d.min + (d.hour < DAY_STARTS_HOUR and 24 * 60 or 0)
 end
 
 local function find(blocks, id)
@@ -147,7 +153,7 @@ local function plan_state()
     if b.kind == "fixed" then fixed = fixed + 1 end
   end
   return {
-    date = os.date("%a %d %b"),
+    date = os.date("%a %d %b", os.time() - DAY_STARTS_HOUR * 3600),
     now = now(),
     problem = problem,
     projects = projects,
@@ -338,7 +344,7 @@ end
 local function calendar_blocks(blocks)
   local at = function(m) return doc.date .. "T" .. (m >= 24 * 60 and "23:59" or hhmm(m)) end
   -- What's past is only past today; another day's plan is written whole.
-  local from = doc.date == os.date("%Y-%m-%d") and now() or 0
+  local from = doc.date == this_day() and now() or 0
   local out = {}
   for _, b in ipairs(blocks) do
     if b.kind ~= "fixed" and b.stop > from then

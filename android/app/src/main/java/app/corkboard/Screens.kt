@@ -211,7 +211,7 @@ fun LockedScreen(go: (Screen) -> Unit) {
     val med = seconds(Meditation.running()) { Meditation.elapsed() }
     var confirm by remember { mutableStateOf(false) }
     Page {
-        Header("corkboard", java.time.LocalDate.now().let { "%ta %<td %<tb".format(it).lowercase() })
+        Header("corkboard", java.time.LocalDate.parse(today()).let { "%ta %<td %<tb".format(it).lowercase() })
         Problem()
         SettingsOff(go)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
@@ -277,7 +277,7 @@ fun NowScreen(go: (Screen) -> Unit) {
     val block = Now.current(plan, minute)
     val emergency = App.store.emergencyUntil > System.currentTimeMillis() && !(Gate.planned() && Gate.meditated())
     Page {
-        Header("corkboard", java.time.LocalDate.now().let { "%ta %<td %<tb".format(it).lowercase() })
+        Header("corkboard", java.time.LocalDate.parse(today()).let { "%ta %<td %<tb".format(it).lowercase() })
         Problem()
         SettingsOff(go)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {

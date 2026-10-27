@@ -52,7 +52,8 @@ Use corkboard's notes for what happened on earlier days and for his goals (kind 
 You don't do coding or project work yourself: for that, make a card on the project's board with create_card (status
 ready, a description a fresh session can act on, attention set to one line), and tell him its id.`;
 
-const today = () => new Intl.DateTimeFormat("en-CA").format(new Date());
+// The plan's day, which turns over at 4am (cloud/src/plans.ts).
+const today = () => new Intl.DateTimeFormat("en-CA").format(new Date(Date.now() - 4 * 3600_000));
 
 function load(): State | undefined {
   try {

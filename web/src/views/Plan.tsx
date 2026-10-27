@@ -74,11 +74,12 @@ function colorOf(projects: Project[], key?: string) {
 
 const pinOf = (kind: Kind) => (kind === "fixed" ? "◇" : kind === "off" ? "·" : "●");
 
-// The time of day in minutes, kept current.
+// The time of day in minutes, kept current: since the midnight that began
+// the plan's day, which turns over at 4am (plan.lua), so past 1440 before.
 function useNow() {
   const get = () => {
     const d = new Date();
-    return d.getHours() * 60 + d.getMinutes();
+    return d.getHours() * 60 + d.getMinutes() + (d.getHours() < 4 ? 24 * 60 : 0);
   };
   const [now, setNow] = useState(get);
   useEffect(() => {

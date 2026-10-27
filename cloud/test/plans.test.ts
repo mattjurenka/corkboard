@@ -157,7 +157,7 @@ describe("plans", () => {
   });
 
   it("defaults to today where the user is", async () => {
-    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Phoenix" }).format(new Date());
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Phoenix" }).format(new Date(Date.now() - 4 * 3600_000));
     expect((await tool(assistant, "plan_read")).date).toBe(today);
   });
 

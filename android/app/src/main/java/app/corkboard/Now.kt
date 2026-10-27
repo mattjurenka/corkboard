@@ -24,7 +24,7 @@ object Now {
 
     // Epoch millis of a minute today.
     fun at(minute: Int): Long =
-        LocalDate.now().atTime(LocalTime.MIDNIGHT).plusMinutes(minute.toLong()).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        LocalDate.parse(today()).atTime(LocalTime.MIDNIGHT).plusMinutes(minute.toLong()).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 }
 
 object Notifications {

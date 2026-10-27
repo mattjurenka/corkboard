@@ -74,7 +74,11 @@ export function date(v: unknown): string {
 }
 
 // Today where the user is, for tools that default to it.
-export const today = (timeZone: string) => new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date());
+// The day turns over at 4am, not midnight, as dayplan's does: until then it
+// is still the day planned yesterday.
+export const DAY_STARTS_HOUR = 4;
+export const today = (timeZone: string) =>
+  new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date(Date.now() - DAY_STARTS_HOUR * 3600_000));
 
 const text = (name: string, v: unknown, max = 500) => {
   if (typeof v !== "string" || !v.trim()) throw new Invalid(`${name} must be a non-empty string`);

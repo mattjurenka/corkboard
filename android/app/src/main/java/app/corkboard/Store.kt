@@ -3,6 +3,7 @@ package app.corkboard
 import android.content.Context
 import kotlinx.serialization.encodeToString
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.LocalTime
 
 // What the phone keeps between runs, in its private preferences: the
@@ -77,6 +78,11 @@ class Store(context: Context) {
     }
 }
 
-fun today(): String = LocalDate.now().toString()
+// The day turns over at 4am, not midnight, as dayplan's does on the
+// laptop: until then it is still the day planned yesterday.
+const val DAY_STARTS_HOUR = 4
 
-fun minuteNow(): Int = LocalTime.now().let { it.hour * 60 + it.minute }
+fun today(): String = LocalDateTime.now().minusHours(DAY_STARTS_HOUR.toLong()).toLocalDate().toString()
+
+// Minutes since the midnight that began today(), so past 1440 before 4am.
+fun minuteNow(): Int = LocalTime.now().let { it.hour * 60 + it.minute + if (it.hour < DAY_STARTS_HOUR) 24 * 60 else 0 }
