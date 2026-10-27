@@ -72,6 +72,9 @@ let
     , ownerUid ? null
       # The installing flake's, so guests are built from its nixpkgs.
     , nixosSystem ? null
+      # corkboard's Worker: every spawned agent reports to its card there,
+      # with its spawn token.
+    , corkboardHost ? "corkboard.matthewjurenka.workers.dev"
     }:
     let
       caps = lib.mapAttrs capability capabilities;
@@ -193,9 +196,9 @@ let
         (lib.filterAttrs (_: t: runsAsVm t && !t.spawnable) resolved)
       // slotGuests;
 
-      # Every host a slot may need to reach: the union of the spawnable
-      # templates' egress, for the slots' allowlist.
-      slotEgress = unique (concatMap (t: t.egress) (lib.attrValues (lib.filterAttrs (_: t: t.spawnable) resolved)));
+      # Every host a slot may need to reach: corkboard's Worker and the
+      # union of the spawnable templates' egress, for the slots' allowlist.
+      slotEgress = unique ([ corkboardHost ] ++ concatMap (t: t.egress) (lib.attrValues (lib.filterAttrs (_: t: t.spawnable) resolved)));
     };
 
   # Capabilities corkboard provides, for an installing flake to use as they

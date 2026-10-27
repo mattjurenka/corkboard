@@ -34,6 +34,7 @@
 //   POST  /api/tokens/pepper                 a token for Pepper's session: the goals, besides what assistant sees
 //   POST  /api/tokens/brain                  { brain }: a token for another brain's agents, in its memory
 //   POST  /api/tokens/revoke                 { token }
+//   /api/spawns, /api/fleet/environments     the fleet's queue (fleet.ts)
 //
 // All of it needs the owner scope. /mcp (mcp.ts) is behind the same token
 // check, and takes owner and assistant tokens, card tokens and Pepper's.
@@ -52,6 +53,7 @@ import { CARD_TOKEN, type Env, type Props } from "./index";
 import { type Grant, brainOf, hiddenFor, mcp, memoryOf } from "./mcp";
 import { blocks, chatText, date, note, noteId } from "./plans";
 import { BRAINS, type Brain } from "./memory";
+import { fleetRoutes } from "./fleet";
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const error = (status: number, message: string, extra: object = {}) => json({ error: message, ...extra }, status);
@@ -286,13 +288,15 @@ const hex = (buf: ArrayBuffer) => [...new Uint8Array(buf)].map((b) => b.toString
 export const tokenKey = async (token: string) =>
   `card-token:${hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))}`;
 
-async function mint(env: Env, props: Props, grant: NonNullable<Props["grant"]>): Promise<Response> {
+async function mintToken(env: Env, props: Props, grant: NonNullable<Props["grant"]>) {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   const token = CARD_TOKEN + btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   const minted: Props = { userId: props.userId, email: props.email, grant };
   await env.OAUTH_KV.put(await tokenKey(token), JSON.stringify(minted), { expirationTtl: CARD_TOKEN_TTL });
-  return json({ token, expires_at: new Date(Date.now() + CARD_TOKEN_TTL * 1000).toISOString() }, 201);
+  return { token, expires_at: new Date(Date.now() + CARD_TOKEN_TTL * 1000).toISOString() };
 }
+
+const mint = async (env: Env, props: Props, grant: NonNullable<Props["grant"]>) => json(await mintToken(env, props, grant), 201);
 
 async function tokens(request: Request, env: Env, props: Props): Promise<Response> {
   const path = new URL(request.url).pathname;
@@ -352,6 +356,7 @@ export const api = {
     if (ctx.props.grant || !ctx.auth.scope.includes("owner")) return insufficientScope(ctx.auth, ["owner"]);
     try {
       if (path.startsWith("/api/tokens")) return await tokens(request, env, ctx.props);
+      if (path.startsWith("/api/spawns") || path.startsWith("/api/fleet/")) return await fleetRoutes(request, env, ctx.props, () => body(request), mintToken);
       const users = env.USER.get(env.USER.idFromName(ctx.props.userId));
       if (path === "/api/live") return users.fetch(request);
       const brain = brainNamed(new URL(request.url).searchParams.get("brain") ?? "pepper");

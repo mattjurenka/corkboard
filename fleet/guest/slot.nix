@@ -12,6 +12,9 @@
 #   /mnt/share/task.md       the prompt
 #   /mnt/share/claude-token  the OAuth token of the account it runs as
 #   /mnt/share/repo.bundle   optional: a git bundle of the repo to work in
+#   /mnt/share/mcp.json      optional: corkboard's MCP server, with the spawn
+#                            token for the agent's card (a spawn from the
+#                            Worker's queue)
 #
 #   /mnt/outbox/result.json  Claude Code's `--output-format json`
 #   /mnt/outbox/work.bundle  the commits it made, if it was given a repo
@@ -69,8 +72,11 @@ let
       fi
       cd "$work"
 
+      mcp=()
+      if [ -f /mnt/share/mcp.json ]; then mcp=(--mcp-config /mnt/share/mcp.json); fi
+
       status=0
-      claude -p "$(cat /mnt/share/task.md)" \
+      claude -p "$(cat /mnt/share/task.md)" "''${mcp[@]}" \
         --output-format json \
         --dangerously-skip-permissions \
         > "$out/result.json" || status=$?

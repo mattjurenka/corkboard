@@ -1,5 +1,5 @@
-// One user: the boards they have, their day plans and their chat with
-// Pepper. (Their notes were here; they are Pepper's brain now, memory.ts.) Each board's cards live in its
+// One user: the boards they have, their day plans, their chat with
+// Pepper, and their fleet's spawns (fleet.ts). (Their notes were here; they are Pepper's brain now, memory.ts.) Each board's cards live in its
 // own Board object; this lists them, so GET /api/boards is one call.
 //
 // Plans change by version, like cards: a write names the version it read,
@@ -10,6 +10,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import type { BoardInfo, Result } from "./board";
+import { type Environment, type Spawn, type SpawnReport, FINAL, type SpawnState } from "./fleet";
 import {
   type Block,
   type ChatMessage,
@@ -21,6 +22,7 @@ import {
 
 const ok = <T>(value: T): Result<T> => ({ ok: true, value });
 const fail = (status: number, error: string, plan?: Plan): Result<never> => ({ ok: false, status, error, plan });
+const refuse = (status: number, error: string): Result<never> => ({ ok: false, status, error });
 
 const now = () => new Date().toISOString().replace(/\.\d+Z$/, "Z");
 
@@ -43,6 +45,8 @@ CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
 END;
 CREATE TABLE IF NOT EXISTS plans (date TEXT PRIMARY KEY, doc TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS chat (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, who TEXT NOT NULL, text TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS environments (name TEXT PRIMARY KEY, doc TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS spawns (id TEXT PRIMARY KEY, created TEXT NOT NULL, doc TEXT NOT NULL);
 `;
 
 export class User extends DurableObject {
@@ -162,6 +166,91 @@ export class User extends DurableObject {
     const message = this.sql.exec("INSERT INTO chat (at, who, text) VALUES (?, ?, ?) RETURNING *", now(), who, text).one() as ChatMessage;
     this.broadcast({ type: "chat", message });
     return message;
+  }
+
+  // Fleet -----------------------------------------------------------------------------
+  //
+  // Where agents run, as each environment's fleetd last said, and every
+  // spawn. The states only move forward: pending-approval → queued →
+  // running → done, failed or stopped. Each change goes to the live sockets,
+  // which is how fleetd hears of a spawn the moment it's made.
+
+  putEnvironment(e: Environment): void {
+    this.sql.exec("INSERT INTO environments (name, doc) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET doc = excluded.doc", e.name, JSON.stringify(e));
+  }
+
+  environments(): Environment[] {
+    return this.sql.exec("SELECT doc FROM environments ORDER BY name").toArray().map((r) => JSON.parse(r.doc as string));
+  }
+
+  spawn(id: string): Spawn | undefined {
+    const row = this.sql.exec("SELECT doc FROM spawns WHERE id = ?", id).toArray()[0];
+    return row ? JSON.parse(row.doc as string) : undefined;
+  }
+
+  // The newest first; environment and states narrow it.
+  spawns(environment?: string, states?: SpawnState[], limit = 50): Spawn[] {
+    return this.sql
+      .exec("SELECT doc FROM spawns ORDER BY created DESC, id DESC")
+      .toArray()
+      .map((r) => JSON.parse(r.doc as string) as Spawn)
+      .filter((s) => (!environment || s.environment === environment) && (!states?.length || states.includes(s.state)))
+      .slice(0, limit);
+  }
+
+  private saveSpawn(s: Spawn): Spawn {
+    this.sql.exec("INSERT INTO spawns (id, created, doc) VALUES (?, ?, ?) ON CONFLICT (id) DO UPDATE SET doc = excluded.doc", s.id, s.created, JSON.stringify(s));
+    this.broadcast({ type: "spawn", spawn: s });
+    return s;
+  }
+
+  addSpawn(s: Spawn): Spawn {
+    return this.saveSpawn(s);
+  }
+
+  approveSpawn(id: string): Result<Spawn> {
+    const s = this.spawn(id);
+    if (!s) return refuse(404, `no spawn ${id}`);
+    if (s.state !== "pending-approval") return refuse(409, `spawn ${id} is ${s.state}, not waiting for approval`);
+    return ok(this.saveSpawn({ ...s, state: "queued", approved: now() }));
+  }
+
+  // fleetd taking a queued spawn to run. Claiming one it already claimed is
+  // fine (it lost the answer); another environment's isn't.
+  claimSpawn(id: string, environment: string): Result<Spawn> {
+    const s = this.spawn(id);
+    if (!s) return refuse(404, `no spawn ${id}`);
+    if (s.environment !== environment) return refuse(409, `spawn ${id} runs in ${s.environment}, not ${environment}`);
+    if (s.state !== "queued") return refuse(409, `spawn ${id} is ${s.state}, not queued`);
+    return ok(s.claimed ? s : this.saveSpawn({ ...s, claimed: now() }));
+  }
+
+  // What fleetd says happened. A spawn that's over stays as it ended.
+  reportSpawn(id: string, r: SpawnReport): Result<Spawn> {
+    const s = this.spawn(id);
+    if (!s) return refuse(404, `no spawn ${id}`);
+    if (s.state === r.state) return ok(s);
+    if (FINAL.includes(s.state)) return refuse(409, `spawn ${id} is already ${s.state}`);
+    if (r.state === "running" && s.state !== "queued") return refuse(409, `spawn ${id} is ${s.state}, not queued`);
+    if (r.state === "queued" || r.state === "pending-approval") return refuse(400, "a spawn goes back to no earlier state");
+    const at = now();
+    return ok(
+      this.saveSpawn({
+        ...s,
+        ...r,
+        ...(r.state === "running" ? { started: at } : { ended: at }),
+      }),
+    );
+  }
+
+  // Before it runs, a stop ends it; once it runs, fleetd stops its slot and
+  // reports it stopped.
+  stopSpawn(id: string): Result<Spawn> {
+    const s = this.spawn(id);
+    if (!s) return refuse(404, `no spawn ${id}`);
+    if (FINAL.includes(s.state)) return refuse(409, `spawn ${id} is already ${s.state}`);
+    if (s.state === "running") return ok(this.saveSpawn({ ...s, stopRequested: true }));
+    return ok(this.saveSpawn({ ...s, state: "stopped", ended: now() }));
   }
 
   // Live ------------------------------------------------------------------------------

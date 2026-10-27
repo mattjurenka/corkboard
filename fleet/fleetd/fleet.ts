@@ -4,9 +4,10 @@
 //
 // A spawn is a file, ~/.local/state/corkboard/fleet/spawns/<id>.json, and
 // what its agent handed back is the directory of the same name. The CLI
-// writes queued spawns; fleetd is the only thing that moves them on.
+// writes queued spawns, and so does fleetd for those it claims from the
+// Worker's queue (queue.ts); fleetd is the only thing that moves them on.
 
-import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -33,8 +34,8 @@ export type Spawn = {
   task: string;
   // A repo on this machine to work in; its commits come back as a bundle.
   repo?: string;
-  // Who asked: "user" for the CLI. A brain's spawn of a template that needs
-  // approval waits for it (the Worker's queue, step 4); the CLI's never does.
+  // Who asked: "user", or a brain. A brain's spawn of a template that needs
+  // approval waited for it in the Worker's queue; the CLI's never does.
   by: string;
   // The Claude account it runs as (accountFor), whose token it is handed.
   account: string;
@@ -46,6 +47,13 @@ export type Spawn = {
   exit?: number;
   error?: string;
   stopRequested?: boolean;
+  // From the Worker's queue: its card, and the spawn token for it (emptied
+  // once it's revoked, at the end).
+  remote?: { board: string; card: string; agent: string; token: string };
+  // The last state the Worker was told of.
+  reported?: State;
+  // The branch its commits were fetched into, in its repo.
+  fetched?: string;
 };
 
 export const MANIFEST = process.env.CORKBOARD_FLEET_MANIFEST ?? "/etc/corkboard/fleet.json";
@@ -85,6 +93,17 @@ export function write(s: Spawn) {
   const path = join(SPAWNS, `${s.id}.json`);
   writeFileSync(`${path}.tmp`, JSON.stringify(s, null, 2) + "\n");
   renameSync(`${path}.tmp`, path);
+}
+
+// What the agent answered, from Claude Code's JSON output.
+export function answer(s: Spawn): string | undefined {
+  const f = join(SPAWNS, s.id, "result.json");
+  if (!existsSync(f)) return undefined;
+  try {
+    return JSON.parse(readFileSync(f, "utf8")).result;
+  } catch {
+    return readFileSync(f, "utf8");
+  }
 }
 
 export const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 5);

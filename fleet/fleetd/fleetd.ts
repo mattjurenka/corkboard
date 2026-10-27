@@ -6,11 +6,15 @@
 // Starting one: the template goes in the slot's state dir (its launcher
 // reads it), the task, its account's Claude Code token and the repo
 // bundle in its share, then `systemctl start`. The guest runs the task and
-// powers off, which ends the unit.
+// powers off, which ends the unit. A spawn from the Worker's queue
+// (queue.ts) also gets corkboard's MCP server with its spawn token, and is
+// told which card is its own.
 
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { manifest, schedule, SPAWNS, spawns, tokenFor, write, type Manifest, type Spawn } from "./fleet";
+import { Queue } from "./queue";
+import { CLOUD } from "../../bridge/cloud";
 
 const now = () => new Date().toISOString();
 
@@ -39,8 +43,12 @@ async function start(m: Manifest, s: Spawn, slot: string) {
   if (!existsSync(token)) throw new Error(`no token for the ${s.account} account at ${token} (claude setup-token, signed in as it, then save it there)`);
   empty(sl.shareDir);
   empty(sl.outboxDir);
-  writeFileSync(join(sl.shareDir, "task.md"), s.task);
+  writeFileSync(join(sl.shareDir, "task.md"), s.remote ? s.task + cardNote(s) : s.task);
   copyFileSync(token, join(sl.shareDir, "claude-token"));
+  if (s.remote?.token) {
+    const mcp = { mcpServers: { corkboard: { type: "http", url: `${CLOUD}/mcp`, headers: { Authorization: `Bearer ${s.remote.token}` } } } };
+    writeFileSync(join(sl.shareDir, "mcp.json"), JSON.stringify(mcp, null, 2) + "\n", { mode: 0o600 });
+  }
   if (s.repo) {
     const b = await run(["git", "-C", s.repo, "bundle", "create", join(sl.shareDir, "repo.bundle"), "HEAD", "--branches"]);
     if (!b.ok) throw new Error(`couldn't bundle ${s.repo}: ${b.out}`);
@@ -49,6 +57,12 @@ async function start(m: Manifest, s: Spawn, slot: string) {
   const r = await run(["systemctl", "start", "--no-block", sl.unit]);
   if (!r.ok) throw new Error(`couldn't start ${sl.unit}: ${r.out}`);
 }
+
+const cardNote = (s: Spawn) => `
+
+---
+This task is corkboard card ${s.remote!.card} on the ${s.remote!.board} board, and you are its agent, ${s.remote!.agent}. The corkboard MCP server is connected for it: claim_card it first, log progress there as you go, use block or request_user_action if you need the user, and submit_for_review when you're done. Your final answer is posted to the card too.
+`;
 
 // Its outbox, into the spawn's own directory, before the slot is reused.
 function collect(m: Manifest, s: Spawn) {
@@ -98,7 +112,10 @@ async function tick() {
 }
 
 console.log("fleetd: watching", SPAWNS);
+const queue = new Queue();
+queue.start();
 for (;;) {
   await tick().catch((e) => console.error("fleetd:", e));
+  await queue.step();
   await Bun.sleep(2000);
 }

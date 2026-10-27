@@ -7,10 +7,13 @@
 //   corkboard-fleet stop <id>
 //   corkboard-fleet fetch <id>         its commits, as branch fleet/<id> in its repo
 //   corkboard-fleet templates
+//   corkboard-fleet queue              the Worker's spawns, wherever they run
+//   corkboard-fleet approve <id>       a brain's spawn that holds credentials
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { accountFor, manifest, newId, read, schedule, SPAWNS, spawns, write, type Spawn } from "./fleet";
+import { CLOUD, token } from "../../bridge/cloud";
+import { accountFor, answer, manifest, newId, read, schedule, SPAWNS, spawns, write, type Spawn } from "./fleet";
 
 const die = (msg: string): never => {
   console.error(msg);
@@ -19,17 +22,14 @@ const die = (msg: string): never => {
 
 const [cmd, ...args] = process.argv.slice(2);
 
-const need = (id?: string): Spawn => (id && read(id)) || die(`no spawn ${id ?? "(none given)"}; see corkboard-fleet list`);
+async function cloud(method: string, path: string) {
+  const res = await fetch(`${CLOUD}${path}`, { method, headers: { Authorization: `Bearer ${await token().catch((e) => die(e.message))}` } });
+  const json = (await res.json().catch(() => ({}))) as any;
+  if (!res.ok) die(json.error ?? `HTTP ${res.status}`);
+  return json;
+}
 
-const answer = (s: Spawn): string | undefined => {
-  const f = join(SPAWNS, s.id, "result.json");
-  if (!existsSync(f)) return undefined;
-  try {
-    return JSON.parse(readFileSync(f, "utf8")).result;
-  } catch {
-    return readFileSync(f, "utf8");
-  }
-};
+const need = (id?: string): Spawn => (id && read(id)) || die(`no spawn ${id ?? "(none given)"}; see corkboard-fleet list`);
 
 switch (cmd) {
   case "spawn": {
@@ -107,6 +107,20 @@ switch (cmd) {
     break;
   }
 
+  case "queue": {
+    const rows = ((await cloud("GET", "/api/spawns?limit=30")) as any[]).map((s) => [s.id, s.state, s.template, s.environment, s.by, `${s.board}/${s.card}`, s.created.slice(5, 16).replace("T", " "), s.task.split("\n")[0].slice(0, 50)]);
+    const widths = rows.reduce((w, r) => r.map((c: string, i: number) => Math.max(w[i] ?? 0, c.length)), [] as number[]);
+    for (const r of rows) console.log(r.map((c: string, i: number) => c.padEnd(widths[i])).join("  ").trimEnd());
+    break;
+  }
+
+  case "approve": {
+    if (!args[0]) die("which spawn? corkboard-fleet queue lists them");
+    const s = await cloud("POST", `/api/spawns/${args[0]}/approve`);
+    console.log(`${s.id} approved: ${s.template}, queued for ${s.environment}`);
+    break;
+  }
+
   default:
-    die("corkboard-fleet spawn|list|show|attach|stop|fetch|templates");
+    die("corkboard-fleet spawn|list|show|attach|stop|fetch|templates|queue|approve");
 }

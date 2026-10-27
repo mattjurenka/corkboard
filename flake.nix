@@ -174,23 +174,26 @@
           meta.mainProgram = "corkboard-app";
         };
 
-        # fleetd and corkboard-fleet (fleet/fleetd), run by bun. No
-        # dependencies beyond bun's own.
+        # fleetd and corkboard-fleet (fleet/fleetd), run by bun, laid out as
+        # in the repo: both sign in to the Worker as the bridge does
+        # (bridge/cloud.ts). No dependencies beyond bun's own.
         fleet = pkgs.stdenvNoCC.mkDerivation {
           pname = "corkboard-fleet";
           version = "0.1.0";
           src = pkgs.lib.fileset.toSource {
             root = ./.;
-            fileset = pkgs.lib.fileset.unions [ ./fleet/fleetd/fleet.ts ./fleet/fleetd/fleetd.ts ./fleet/fleetd/cli.ts ];
+            fileset = pkgs.lib.fileset.unions [ ./fleet/fleetd/fleet.ts ./fleet/fleetd/fleetd.ts ./fleet/fleetd/cli.ts ./fleet/fleetd/queue.ts ./bridge/cloud.ts ];
           };
           nativeBuildInputs = [ pkgs.makeWrapper ];
           installPhase = ''
-            mkdir -p $out/share/corkboard-fleet
-            cp fleet/fleetd/*.ts $out/share/corkboard-fleet/
+            share=$out/share/corkboard-fleet
+            mkdir -p $share/fleet/fleetd $share/bridge
+            cp fleet/fleetd/*.ts $share/fleet/fleetd/
+            cp bridge/cloud.ts $share/bridge/
             makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-fleetd \
-              --add-flags $out/share/corkboard-fleet/fleetd.ts
+              --add-flags $share/fleet/fleetd/fleetd.ts
             makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-fleet \
-              --add-flags $out/share/corkboard-fleet/cli.ts
+              --add-flags $share/fleet/fleetd/cli.ts
           '';
           meta.mainProgram = "corkboard-fleet";
         };

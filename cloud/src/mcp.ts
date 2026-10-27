@@ -25,6 +25,7 @@ import { BRAIN_ONLY_KINDS, NOTE_KINDS, OWNER_ONLY_NOTES, chatText, date, note, n
 import { range } from "./dates";
 import type { Brain, Memory } from "./memory";
 import type { User } from "./user";
+import { Refused, spawn, status, stop } from "./fleet";
 
 export type Grant =
   | { kind: "card"; board: string; card: string; agent: string }
@@ -410,7 +411,9 @@ Put follow-up work you discover in new cards with create_card (parent: the card 
 
 // The user's own tools, for OAuth clients and Pepper, not card agents: the
 // brain's memory (its notes, log and recall; its goals are its own agents'),
-// the day plan, and the chat with the user, which is Pepper's alone too.
+// the day plan, the chat with the user, which is Pepper's alone too, and
+// the fleet (fleet.ts), which is the user's alone until Pepper spawns
+// (agent-fleet.md, step 6).
 // There's no tool to accept a plan; only the user does that, in corkboard.
 
 // Whose memory a grant works in: a brain token's brain, and Pepper's for
@@ -428,16 +431,19 @@ export async function memoryOf(env: Env, user: string, brain: Brain) {
   return memory;
 }
 
-type UserCall = { users: DurableObjectStub<User>; memory: DurableObjectStub<Memory>; grant: Grant; timeZone: string };
+type UserCall = { env: Env; user: string; users: DurableObjectStub<User>; memory: DurableObjectStub<Memory>; grant: Grant; timeZone: string };
 type UserTool = {
   description: string;
   properties?: Record<string, object>;
   required?: string[];
   // Only for Pepper's token: to anyone else the tool doesn't exist.
   pepper?: true;
+  // Only for the user's own clients (owner and assistant).
+  user?: true;
   run: (a: any, c: UserCall) => Promise<unknown>;
 };
-const reaches = (t: UserTool, grant: Grant) => grant.kind !== "card" && (!t.pepper || grant.kind === "pepper");
+const reaches = (t: UserTool, grant: Grant) =>
+  grant.kind !== "card" && (!t.pepper || grant.kind === "pepper") && (!t.user || grant.kind === "owner" || grant.kind === "assistant");
 
 const day = str("YYYY-MM-DD; today, where the user is, if left out");
 const blockSchema = {
@@ -627,6 +633,32 @@ const USER_TOOLS: Record<string, UserTool> = {
     pepper: true,
     run: async (a, c) => c.users.post("pepper", chatText(a.text)),
   },
+  spawn_agent: {
+    description:
+      "Start an agent on a task, in a VM of its own: a coding agent to fix something, a brain's agent to work with its memory. It gets a card of its own (on the board you name, or Fleet), works through it and leaves its answer there; with a board that is a project, it works in that project's repo and its commits come back as the branch fleet/<id>. spawn_status lists the templates and where they run. It may wait for room on the machine; it doesn't wait for you.",
+    properties: {
+      template: str("A template's name, from spawn_status"),
+      task: str("What the agent should do, in full: it knows only this and its repo"),
+      environment: str("Where to run it; the first that has the template, if left out"),
+      board: str("The board's key, from list_boards: its card goes there, and a project board's repo is what it works in"),
+    },
+    required: ["template", "task"],
+    user: true,
+    run: async (a, c) => spawn(c.env, c.user, "user", a),
+  },
+  spawn_status: {
+    description: "One spawned agent: its state, its card, and its answer when done. Without an id, the newest spawns, and the templates each environment can run.",
+    properties: { id: str("The spawn's id") },
+    user: true,
+    run: async (a, c) => status(c.env, c.user, a.id ? String(a.id) : undefined),
+  },
+  spawn_stop: {
+    description: "Stop a spawned agent: before it runs it never will; while it runs its VM is stopped.",
+    properties: { id: str("The spawn's id") },
+    required: ["id"],
+    user: true,
+    run: async (a, c) => stop(c.env, c.user, String(a.id)),
+  },
 };
 
 // What a grant sees: a card token its board's tools, with no board argument;
@@ -694,9 +726,9 @@ async function callTool(env: Env, user: string, grant: Grant, name: string, args
   if (USER_TOOLS[name] && reaches(USER_TOOLS[name], grant)) {
     try {
       const memory = await memoryOf(env, user, brainOf(grant)!);
-      return await USER_TOOLS[name].run({ ...args }, { users: env.USER.get(env.USER.idFromName(user)), memory, grant, timeZone: env.TIMEZONE });
+      return await USER_TOOLS[name].run({ ...args }, { env, user, users: env.USER.get(env.USER.idFromName(user)), memory, grant, timeZone: env.TIMEZONE });
     } catch (e) {
-      if (e instanceof Invalid) throw new ToolError(e.message);
+      if (e instanceof Invalid || e instanceof Refused) throw new ToolError(e.message);
       throw e;
     }
   }
