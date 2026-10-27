@@ -79,7 +79,7 @@ function M.setup()
   vim.keymap.set("n", "<leader>z", M.toggle, { desc = "corkboard: focus mode" })
   vim.api.nvim_create_user_command("AgentFocus", M.toggle, { desc = "corkboard: focus mode" })
   local group = vim.api.nvim_create_augroup("corkboard.focus", {})
-  -- Closing the focus tab (<C-q>, :q) or the window it's about ends it.
+  -- Closing the focus tab (<A-q>, :q) or the window it's about ends it.
   vim.api.nvim_create_autocmd({ "TabClosed", "WinClosed" }, {
     group = group,
     callback = function()

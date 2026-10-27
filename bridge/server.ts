@@ -14,6 +14,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
+import * as away from "./away";
 import * as boards from "./boards";
 import * as phone from "./phone";
 import { CLOUD } from "./cloud";
@@ -115,6 +116,8 @@ type Session = {
   cloud?: boards.Session;
   // "plan": the day plan's window (?view=plan), of which there's one.
   view?: "plan";
+  // What away mode knows it by (away.ts).
+  page?: away.Page;
 };
 
 // The project Neovim last opened (remember_project in corkboard/init.lua).
@@ -237,6 +240,18 @@ function cloud(data: Session, nvim: NonNullable<Session["nvim"]>, params: any[])
   );
 }
 
+// "corkboard.away", from Neovim or the page, is for the bridge too: away
+// mode spans every page (away.ts). Neovim reports its sessions and enters
+// it; the page stays away or leaves.
+const AWAY_METHOD = "corkboard.away";
+
+function awayFrom(data: Session, [op, ...args]: any[]) {
+  if (!data.page) return;
+  if (op === "report") away.report(data.page, args[0] ?? []);
+  else if (op === "enter") away.enter(data.page);
+  else away.command(data.page, op, args);
+}
+
 // Close reasons are capped at 123 bytes by the websocket spec.
 const closeReason = (s: string) => new TextEncoder().encode(s).length > 120 ? s.slice(0, 100) + "…" : s;
 
@@ -244,6 +259,7 @@ async function pump(ws: Bun.ServerWebSocket<Session>, nvim: NonNullable<Session[
   try {
     for await (const msg of decodeMultiStream(nvim.stdout, { extensionCodec })) {
       if (Array.isArray(msg) && msg[0] === 2 && msg[1] === CLOUD_METHOD) cloud(ws.data, nvim, msg[2] as any[]);
+      else if (Array.isArray(msg) && msg[0] === 2 && msg[1] === AWAY_METHOD) awayFrom(ws.data, msg[2] as any[]);
       else ws.send(JSON.stringify(msg));
     }
   } catch (err) {
@@ -365,6 +381,14 @@ Bun.serve<Session, {}>({
     open(ws) {
       if (ws.data.error) return ws.close(4000, closeReason(ws.data.error));
       pages.add(ws);
+      ws.data.page = {
+        host: ws.data.host,
+        notify: (method, ...params) => ws.send(JSON.stringify([2, method, params])),
+        exec: (code, ...args) => {
+          if (ws.data.nvim && !ws.data.closed) send(ws.data.nvim, [2, "nvim_exec_lua", [code, args]]);
+        },
+      };
+      away.opened(ws.data.page);
       // One day plan at a time: a new plan window takes over from the old.
       if (ws.data.view === "plan") {
         planWindow?.close(4002, "the day plan opened in another window");
@@ -389,13 +413,16 @@ Bun.serve<Session, {}>({
     },
 
     message(ws, raw) {
-      if (ws.data.nvim) toNvim(ws.data.nvim, String(raw));
-      else ws.data.queued?.push(String(raw));
+      const text = String(raw);
+      if (text.startsWith(`[2,"${AWAY_METHOD}"`)) return awayFrom(ws.data, JSON.parse(text)[2]);
+      if (ws.data.nvim) toNvim(ws.data.nvim, text);
+      else ws.data.queued?.push(text);
     },
 
     close(ws) {
       if (planWindow === ws) planWindow = undefined;
       pages.delete(ws);
+      if (ws.data.page) away.closed(ws.data.page);
       ws.data.closed = true;
       ws.data.cloud?.close();
       ws.data.nvim?.kill();

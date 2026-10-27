@@ -515,7 +515,7 @@ local function settle(wins)
   return true, discard
 end
 
--- <C-q>: close the current window, or its tab when it is the last one, after
+-- <A-q>: close the current window, or its tab when it is the last one, after
 -- asking about unsaved changes. The board stays, since ensure() would only
 -- bring it back.
 function M.close()
@@ -597,6 +597,7 @@ function M.setup()
   require("corkboard.claude.cards").setup()
   require("corkboard.restore").setup()
   require("corkboard.focus").setup()
+  require("corkboard.away").setup()
 
   local picker = require("corkboard.picker")
   if picker.setup() then
@@ -656,7 +657,7 @@ function M.setup()
       M.notify("corkboard.focus_tabs")
     end
   end, { desc = "corkboard: window h, or the tabs" })
-  vim.keymap.set({ "n", "t" }, "<C-q>", M.close, { desc = "corkboard: close window or tab" })
+  vim.keymap.set({ "n", "i", "t" }, "<A-q>", M.close, { desc = "corkboard: close window or tab" })
 
   vim.api.nvim_set_decoration_provider(vim.api.nvim_create_namespace("corkboard.layout"), {
     on_end = M.push_layout,

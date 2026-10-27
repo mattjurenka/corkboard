@@ -89,6 +89,12 @@ export function notifyClaude(n: { message: string; cwd?: string; sent: boolean; 
   );
 }
 
+// Away mode took you to a session in this window, but you picked it in
+// another, and a page can't bring its own window up: clicking this does.
+export function notifyBack() {
+  record({ title: "corkboard", body: "The session you picked from away mode is in this window." }, true);
+}
+
 export function clearNotifications() {
   store.set({ notifications: [], unread: 0 });
 }

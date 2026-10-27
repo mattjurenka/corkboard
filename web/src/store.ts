@@ -33,6 +33,21 @@ export type Scroll = { bars: Bar[]; floats: Rect[] };
 
 export type Tab = { tab: Ext; name: string };
 
+// Away mode, from the bridge (bridge/away.ts): every page's Claude Code
+// sessions, each on page (the bridge's id for it) in terminal buf. at: when
+// it came to its state, on the bridge's clock, whose time now is. ready is
+// finished while you were away; idle, before.
+export type AwaySession = {
+  page: number;
+  buf: number;
+  project: string;
+  name: string;
+  detail?: string;
+  at: number;
+  state: "working" | "needs" | "ready" | "idle";
+};
+export type Away = { since: number; now: number; wake: string | null; sessions: AwaySession[] };
+
 export type State = {
   host: string | null;
   // "plan" in the day plan's window (?view=plan), which has no sidebar.
@@ -62,6 +77,8 @@ export type State = {
   // Focus mode (corkboard/focus.lua): no sidebar, and the grid this many
   // columns wide in the middle of the page. Null when off.
   focus: { width: number } | null;
+  // Away mode, while it's on.
+  away: Away | null;
 };
 
 let state: State = {
@@ -81,6 +98,7 @@ let state: State = {
   unread: 0,
   skeleton: loadSkeleton(),
   focus: null,
+  away: null,
 };
 
 const listeners = new Set<() => void>();

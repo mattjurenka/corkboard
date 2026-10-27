@@ -115,6 +115,13 @@
   @media (prefers-reduced-motion: reduce) { animation: none; }
 }
 
+/* Away mode's working sessions: slower, and dimmer at the bottom. */
+@keyframes breathe { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+@utility animate-breathe {
+  animation: breathe 8s ease-in-out infinite;
+  @media (prefers-reduced-motion: reduce) { animation: none; }
+}
+
 /* A checkerboard behind an image's transparency. */
 @utility checkerboard {
   background: repeating-conic-gradient(var(--muted) 0 25%, var(--background) 0 50%) 0 0 / 16px 16px;

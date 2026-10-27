@@ -3,6 +3,7 @@
 // React; main.tsx finds it after the first render.
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Away } from "@/components/Away";
 import { Panels } from "@/components/Panels";
 import { Scrollbars } from "@/components/Scrollbars";
 import { Sidebar } from "@/components/Sidebar";
@@ -53,6 +54,7 @@ export function App() {
           <AlertDescription className="block text-foreground">{status}</AlertDescription>
         </Alert>
       )}
+      <Away />
     </div>
   );
 }

@@ -27,6 +27,10 @@ function M.session(id)
   sessions[id] = nil
 end
 
+-- A Claude Code terminal's state, from its hooks: nil before the first, and
+-- for a session run somewhere else (corkboard.claude's via), which has none.
+function M.state(buf) return live[buf] end
+
 -- The card's session state for the board: live's, "starting" before its
 -- first hook, "exited", or nil when it has had no session here.
 function M.live(id)
@@ -199,7 +203,14 @@ function M.hook(ev)
   track_context(buf, ev)
   local was = live[buf]
   local state = event_state(ev)
-  if state then live[buf] = state end
+  if state then
+    live[buf] = state
+    -- What it waits on, for away mode: a Notification that it still does
+    -- doesn't say.
+    local waiting = state == "asking" or state == "permission"
+    vim.b[buf].corkboard_asking = waiting and (asking(ev) or vim.b[buf].corkboard_asking) or nil
+    require("corkboard.away").report()
+  end
   -- Its card was done while it was mid-turn.
   if clearing[buf] and between_turns(buf) then return vim.schedule(function() clear(buf) end) end
   if not id then return end

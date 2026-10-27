@@ -68,6 +68,12 @@ function M.start(opts)
   local tab = vim.api.nvim_get_current_tabpage()
   -- What it is, for corkboard.claude.cards, which opens beside it.
   vim.b[buf].corkboard_claude = opts.kind or "project"
+  -- Its --name, for away mode's list (corkboard.away).
+  local args = opts.args or {}
+  for i, arg in ipairs(args) do
+    if arg == "--" then break end
+    if arg == "--name" then vim.b[buf].corkboard_name = args[i + 1] end
+  end
   -- Elsewhere, its PushNotifications have no hook to bring them here.
   local parts = opts.via and {} or { NOTIFY_PROMPT }
   if opts.prompt then table.insert(parts, opts.prompt) end
@@ -100,6 +106,7 @@ function M.start(opts)
       local status = vim.v.event.status
       vim.schedule(function()
         if opts.on_exit then opts.on_exit(status) end
+        require("corkboard.away").report()
         if vim.api.nvim_tabpage_is_valid(tab) and require("corkboard.terminal").alive(vim.t[tab].corkboard_terminal) then return end
         -- The buffer and its output go with the tab, so say why.
         if status ~= 0 then vim.notify("corkboard: claude exited with status " .. status, vim.log.levels.WARN) end

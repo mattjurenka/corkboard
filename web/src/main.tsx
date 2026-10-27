@@ -7,7 +7,8 @@ import { attachInput } from "./nvim/input.js";
 import { Rpc } from "./nvim/rpc.js";
 import { makeNvim, NvimContext } from "./nvim/context";
 import { store } from "./store";
-import { askPermissionOnGesture, notifyAttention, notifyClaude } from "./attention";
+import { askPermissionOnGesture, notifyAttention, notifyBack, notifyClaude } from "./attention";
+import { chime } from "./chime";
 import { openPlan } from "./planWindow";
 import { save as saveSkeleton } from "./skeleton";
 
@@ -119,7 +120,17 @@ rpc.on("corkboard.board", ([state]: any[]) => {
 rpc.on("corkboard.notification", ([n]: any[]) =>
   notifyClaude(n, (buf) => rpc.notify("nvim_exec_lua", "require('corkboard.picker').focus_terminal(...)", [buf])),
 );
-rpc.on("corkboard.usage", ([state]: any[]) => store.set({ views: { ...store.get().views, usage: state } }));
+// Away mode, from the bridge (bridge/away.ts). away_return: you picked a
+// session in this page's Neovim, from this page or another one.
+// A bridge older than away mode passes Neovim's own "corkboard.away" (its
+// "enter") through to here, which is not a state.
+rpc.on("corkboard.away", ([away]: any[]) => store.set({ away: typeof away === "object" ? away : null }));
+rpc.on("corkboard.chime", () => chime());
+rpc.on("corkboard.away_return", ([here]: any[]) => {
+  if (!here) notifyBack();
+  canvas.focus();
+});
+rpc.on("corkboard.usage",([state]: any[]) => store.set({ views: { ...store.get().views, usage: state } }));
 rpc.on("corkboard.plan", ([state]: any[]) => store.set({ views: { ...store.get().views, plan: state } }));
 rpc.on("corkboard.plan_diff", ([state]: any[]) => store.set({ views: { ...store.get().views, "plan-diff": state } }));
 // A state without text (a markdown preview's scroll) keeps the last text.
