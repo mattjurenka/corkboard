@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -479,7 +480,7 @@ fun ChatScreen(draft: String, back: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     val list = rememberLazyListState()
     LaunchedEffect(messages.size) { if (messages.isNotEmpty()) list.animateScrollToItem(messages.size - 1) }
-    val dictation = rememberDictation(onHeard = { text = it }, onError = { error = it })
+    val dictation = rememberDictation(onHeard = { text = it; error = null }, onError = { error = it })
     Page {
         Header("pepper", if (dictation.listening) "listening…" else if (messages.lastOrNull()?.who == "matt") "thinking…" else "chat")
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -545,24 +546,37 @@ class Dictation(val available: Boolean, val listening: Boolean, val toggle: (Str
 @Composable
 private fun rememberDictation(onHeard: (String) -> Unit, onError: (String) -> Unit): Dictation {
     val context = LocalContext.current
-    val recognizer = remember { if (SpeechRecognizer.isRecognitionAvailable(context)) SpeechRecognizer.createSpeechRecognizer(context) else null }
+    // The on-device recognizer (Android System Intelligence) where there is
+    // one: the default here, Speech Services', heard speech and returned none.
+    val recognizer = remember {
+        when {
+            SpeechRecognizer.isOnDeviceRecognitionAvailable(context) -> SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+            SpeechRecognizer.isRecognitionAvailable(context) -> SpeechRecognizer.createSpeechRecognizer(context)
+            else -> null
+        }
+    }
     DisposableEffect(recognizer) { onDispose { recognizer?.destroy() } }
     var listening by remember { mutableStateOf(false) }
     var before by remember { mutableStateOf("") }
 
-    fun heard(b: Bundle?) = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { onHeard(before + it) }
+    fun heard(b: Bundle?) = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+        ?.also { Log.d("corkboard", "heard: $it") }?.takeIf { it.isNotBlank() }?.let { onHeard(before + it) }
     fun listen() {
         val r = recognizer ?: return
         r.setRecognitionListener(object : RecognitionListener {
             override fun onPartialResults(b: Bundle?) { heard(b) }
             override fun onResults(b: Bundle?) { heard(b); listening = false }
             override fun onError(e: Int) {
+                Log.d("corkboard", "speech error $e")
                 listening = false
-                // Silence, or nothing that sounded like words, isn't worth a message.
-                if (e != SpeechRecognizer.ERROR_NO_MATCH && e != SpeechRecognizer.ERROR_SPEECH_TIMEOUT && e != SpeechRecognizer.ERROR_CLIENT)
-                    onError("couldn't listen (speech error $e)")
+                when (e) {
+                    // Stopped by hand, before anything was said.
+                    SpeechRecognizer.ERROR_CLIENT -> {}
+                    SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> onError("didn't catch any words")
+                    else -> onError("couldn't listen (speech error $e)")
+                }
             }
-            override fun onReadyForSpeech(b: Bundle?) {}
+            override fun onReadyForSpeech(b: Bundle?) { Log.d("corkboard", "listening, on-device: ${SpeechRecognizer.isOnDeviceRecognitionAvailable(context)}") }
             override fun onBeginningOfSpeech() {}
             override fun onRmsChanged(db: Float) {}
             override fun onBufferReceived(buffer: ByteArray?) {}
