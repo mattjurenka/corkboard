@@ -81,6 +81,27 @@ let
         bad = { capabilities = [ "valheim" ]; environments = [ "cloud" ]; };
       }).templates.good;
 
+    # A spawnable template is a guest per slot, `<template>@<slot>`, and not
+    # one of its own.
+    spawnableTemplatesGetOneGuestPerSlot =
+      builtins.attrNames (mkFleet (base // {
+        nixosSystem = args: args;
+        slots = { agent-0 = { }; agent-1 = { }; };
+        templates = {
+          c = { capabilities = [ "coding" ]; environments = [ "local" ]; spawnable = true; };
+          resident = { capabilities = [ "coding" ]; environments = [ "local" ]; };
+        };
+      })).nixosConfigurations == [ "c@agent-0" "c@agent-1" "resident" ];
+
+    slotEgressIsEverySpawnableTemplates =
+      (mkFleet (base // {
+        templates = {
+          c = { capabilities = [ "coding" ]; environments = [ "local" ]; spawnable = true; };
+          p = { brain = "pepper"; environments = [ "local" ]; spawnable = true; };
+          notSpawned = { brain = "pepper"; capabilities = [ "coding" ]; environments = [ "local" ]; };
+        };
+      })).slotEgress == [ "github.com" "api.anthropic.com" ];
+
     onlyVmTemplatesGetGuests =
       builtins.attrNames (fleet {
         here = { capabilities = [ "coding" ]; environments = [ "local" ]; };

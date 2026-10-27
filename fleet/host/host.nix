@@ -552,6 +552,65 @@ let
       '';
     };
 
+  # A slot's launcher. The guest is whichever template fleetd claimed the
+  # slot for, written into ${stateDir}/template before it starts the unit,
+  # and is built as `nixosConfigurations."<template>@<slot>"`: the template's
+  # modules on this slot's addresses. Every spawn starts from an empty disk,
+  # so nothing one task leaves behind is there for the next.
+  slotLauncherFor = name:
+    let vm = plans.${name}; in
+    pkgs.writeShellApplication {
+      name = "${name}-run";
+      runtimeInputs = [ config.nix.package pkgs.coreutils ];
+      text = ''
+        template=$(cat ${vm.stateDir}/template 2>/dev/null || true)
+        known=(${lib.escapeShellArgs spawnable})
+        ok=""
+        for t in "''${known[@]}"; do
+          if [ "$t" = "$template" ]; then ok=1; fi
+        done
+        if [ -z "$ok" ]; then
+          echo "${name}: no spawnable template in ${vm.stateDir}/template (got '$template')." >&2
+          echo "Spawnable here: ${lib.concatStringsSep ", " spawnable}" >&2
+          exit 1
+        fi
+
+        export TMPDIR=${vm.runDir}
+        export USE_TMPDIR=1
+        mkdir -p "$TMPDIR"
+        rm -f ${vm.spiceSocket} ${lib.concatStringsSep " " vm.consoleSockets} "$TMPDIR"/store.img ${vm.diskImage}
+
+        runner=$(nix build --no-link --print-out-paths \
+          "${cfg.flake}#nixosConfigurations.\"$template@${name}\".config.system.build.vm")
+        exec "$runner"/bin/run-${name}-vm "$@"
+      '';
+    };
+
+  spawnable = lib.attrNames (lib.filterAttrs (_: t: t.spawnable or false) cfg.templates);
+
+  # What fleetd and corkboard-fleet read: the slots, the VMs that are always
+  # there (they count against the budget while they run), the templates a
+  # slot can take, and the budget itself.
+  manifest = {
+    inherit (cfg) flake owner memoryBudget;
+    slots = lib.mapAttrs
+      (name: inst:
+        let vm = plans.${name}; in {
+          inherit (vm) guestAddress stateDir shareDir outboxDir;
+          unit = "${name}.service";
+        })
+      (lib.filterAttrs (_: inst: inst.slot) active);
+    residents = lib.mapAttrs
+      (name: inst: {
+        unit = "${name}.service";
+        memory = inst.memoryMax;
+      })
+      (lib.filterAttrs (_: inst: inst.headless && !inst.slot) active);
+    templates = lib.mapAttrs
+      (_: t: { inherit (t) memory cores needsApproval brain capNames; })
+      (lib.filterAttrs (_: t: t.spawnable or false) cfg.templates);
+  };
+
   # Installs the disk a `ownsDisk` guest boots: one `make-disk-image`
   # build, one `qemu-img convert`, one resize, and the VM has a filesystem
   # of its own that nothing on the host owns a layer of.
@@ -1129,6 +1188,46 @@ let
         + lib.concatMapStrings
           (d: "^([A-Za-z0-9_-]+\\.)*${escapeDots d}$\n")
           inst.allowedDomainSuffixes);
+
+  # One filtering proxy per allowlisted VM, bound to that VM's gateway
+  # address so it is unreachable from anywhere else -- this machine's LAN,
+  # and every other VM. A unit of our own rather than services.tinyproxy,
+  # which is a singleton: slots each need one (since 2026-10-27).
+  proxyConfigFor = name: inst:
+    let
+      vm = plans.${name};
+      # As services.tinyproxy writes it: `Key value`, a list as repeated
+      # keys, booleans as yes/no, paths quoted.
+      format = pkgs.formats.keyValue {
+        listsAsDuplicateKeys = true;
+        mkKeyValue = k: v:
+          "${k} ${
+            if v == true then "yes"
+            else if v == false then "no"
+            else if lib.types.path.check v then ''"${v}"''
+            else lib.generators.mkValueStringDefault { } v}";
+      };
+    in
+    format.generate "${name}-proxy.conf" {
+      Port = vm.proxyPort;
+      Listen = vm.hostAddress;
+      Allow = [ vm.guestAddress ];
+      Timeout = 600;
+
+      # The filter file is the complete set of reachable hosts, not a
+      # list of exceptions.
+      FilterDefaultDeny = true;
+      FilterExtended = true;
+      FilterURLs = false;
+      Filter = filterFileFor name inst;
+
+      # Without this, CONNECT is a general-purpose TCP tunnel to any
+      # port on an allowlisted host. 443 is all that is wanted.
+      ConnectPort = [ 443 ];
+
+      DisableViaHeader = true;
+      LogLevel = "Notice";
+    };
 in
 {
   imports = [ ./options.nix ];
@@ -1148,19 +1247,6 @@ in
           my.agentVms: an instance with egress = "allowlist" and no
           allowedDomains or allowedDomainSuffixes can reach nothing at all.
           List the hosts it needs.
-        '';
-      }
-      {
-        # The proxy uses the upstream services.tinyproxy module, which is a
-        # singleton. Supporting a second allowlisted VM means replacing it
-        # with a per-instance unit -- worth doing then, not speculatively
-        # now.
-        assertion = lib.length (lib.attrNames allowlisted) <= 1;
-        message = ''
-          my.agentVms: only one instance may use egress = "allowlist" on a
-          host, because the filtering proxy is a single tinyproxy service.
-          To run two, replace services.tinyproxy in
-          modules/features/agent-vm/host.nix with a per-instance unit.
         '';
       }
       {
@@ -1255,38 +1341,12 @@ in
         })
       allowlisted;
 
-    # One filtering proxy, bound to the allowlisted VM's gateway address so
-    # it is unreachable from anywhere else -- including this machine's LAN.
-    services.tinyproxy = lib.mkIf (allowlisted != { }) (
-      let
-        name = lib.head (lib.attrNames allowlisted);
-        inst = allowlisted.${name};
-        vm = plans.${name};
-      in
-      {
-        enable = true;
-        settings = {
-          Port = vm.proxyPort;
-          Listen = vm.hostAddress;
-          Allow = [ vm.guestAddress ];
-          Timeout = 600;
-
-          # The filter file is the complete set of reachable hosts, not a
-          # list of exceptions.
-          FilterDefaultDeny = true;
-          FilterExtended = true;
-          FilterURLs = false;
-          Filter = filterFileFor name inst;
-
-          # Without this, CONNECT is a general-purpose TCP tunnel to any
-          # port on an allowlisted host. 443 is all that is wanted.
-          ConnectPort = [ 443 ];
-
-          DisableViaHeader = true;
-          LogLevel = "Notice";
-        };
-      }
-    );
+    # The proxies' own user; their units are in systemd.services below.
+    users.users.tinyproxy = lib.mkIf (allowlisted != { }) {
+      group = "tinyproxy";
+      isSystemUser = true;
+    };
+    users.groups.tinyproxy = lib.mkIf (allowlisted != { }) { };
 
     # The resolver that makes a routed exception usable, and an allowlist in
     # its own right: every domain some exception names is forwarded to
@@ -1337,6 +1397,26 @@ in
     );
 
     systemd.services = lib.mkMerge [
+      (lib.mapAttrs'
+        (name: inst: lib.nameValuePair "${name}-proxy" {
+          description = "Filtering proxy for ${name}";
+          wantedBy = [ "multi-user.target" ];
+          # It listens on the gateway address, which the network unit adds.
+          after = [ "${name}-net.service" ];
+          requires = [ "${name}-net.service" ];
+          serviceConfig = {
+            User = "tinyproxy";
+            Group = "tinyproxy";
+            Type = "simple";
+            ExecStart = "${lib.getExe pkgs.tinyproxy} -d -c ${proxyConfigFor name inst}";
+            ExecReload = "${pkgs.coreutils}/bin/kill -SIGHUP $MAINPID";
+            KillSignal = "SIGINT";
+            TimeoutStopSec = "30s";
+            Restart = "on-failure";
+          };
+        })
+        allowlisted)
+
       # Rules and tap device, one unit per VM.
       (lib.mapAttrs'
         (name: inst:
@@ -1373,12 +1453,15 @@ in
         active)
 
       # Headless VMs run as a service; interactive ones are started by hand.
+      # A slot is a service too, but nothing starts it except fleetd (see the
+      # polkit rule below), and it runs once: the guest powers off when its
+      # task is done, and a failure is the spawn's to report, not to retry.
       (lib.mapAttrs'
         (name: inst:
           let vm = plans.${name}; in
           lib.nameValuePair name {
-            description = "Agent VM ${name}";
-            wantedBy = [ "multi-user.target" ];
+            description = if inst.slot then "Agent slot ${name}" else "Agent VM ${name}";
+            wantedBy = lib.optional (!inst.slot) "multi-user.target";
             after = [ "${name}-net.service" ];
             requires = [ "${name}-net.service" ];
             serviceConfig = {
@@ -1388,9 +1471,9 @@ in
               # ExecStart runs `nix build` first, so Type=simple is
               # deliberate: systemd considers the unit started immediately
               # and a cold build cannot trip a start timeout.
-              ExecStart = lib.getExe (launcherFor name inst);
+              ExecStart = lib.getExe (if inst.slot then slotLauncherFor name else launcherFor name inst);
               WorkingDirectory = vm.runDir;
-              Restart = "on-failure";
+              Restart = if inst.slot then "no" else "on-failure";
               RestartSec = "10s";
 
               # The host's share of the machine, defended from the guest.
@@ -1441,7 +1524,7 @@ in
               IOWeight = 20;
             };
           })
-        (lib.filterAttrs (_: inst: inst.headless) active))
+        (lib.filterAttrs (_: inst: inst.headless || inst.slot) active))
 
       # The build that produces a guest, as opposed to the guest itself.
       # The weights above only cover QEMU, and `nix build` is not where the
@@ -1483,14 +1566,50 @@ in
         }))
     ];
 
+    # fleetd runs as the owner and starts and stops the slots, which are
+    # system units (like every VM here, so `<name>-ssh` and the journal
+    # work the same). This lets the owner do that to those units and no
+    # others, without a password.
+    security.polkit.extraConfig = lib.mkIf (manifest.slots != { }) ''
+      polkit.addRule(function (action, subject) {
+        var slots = ${builtins.toJSON (lib.mapAttrsToList (_: s: s.unit) manifest.slots)};
+        if (action.id == "org.freedesktop.systemd1.manage-units"
+            && subject.user == ${builtins.toJSON cfg.owner}
+            && slots.indexOf(action.lookup("unit")) >= 0) {
+          return polkit.Result.YES;
+        }
+      });
+    '';
+
+    environment.etc."corkboard/fleet.json" = lib.mkIf (manifest.slots != { }) {
+      text = builtins.toJSON manifest;
+    };
+
+    # The queue: spawns wait here until a slot is free and the budget has
+    # room, and it collects what each one hands back.
+    systemd.user.services.corkboard-fleetd = lib.mkIf (manifest.slots != { } && cfg.package != null) {
+      description = "corkboard fleet: starts agents in slots";
+      wantedBy = [ "default.target" ];
+      unitConfig.ConditionUser = cfg.owner;
+      path = [ pkgs.systemd pkgs.git pkgs.coreutils ];
+      serviceConfig = {
+        ExecStart = "${cfg.package}/bin/corkboard-fleetd";
+        Restart = "on-failure";
+        RestartSec = "5s";
+      };
+    };
+
     environment.systemPackages =
-      (lib.mapAttrsToList launcherFor active)
+      lib.optional (manifest.slots != { } && cfg.package != null) cfg.package
+      # A slot has no launcher of its own to type: fleetd starts it.
+      ++
+      (lib.mapAttrsToList launcherFor (lib.filterAttrs (_: inst: !inst.slot) active))
       # A viewer only means something for a VM with a screen.
       ++ (lib.mapAttrsToList (name: _: viewerFor name)
-        (lib.filterAttrs (_: inst: !inst.headless) active))
+        (lib.filterAttrs (_: inst: !inst.headless && !inst.slot) active))
       # ...and a console only for one without.
       ++ (lib.mapAttrsToList (name: _: consoleFor name)
-        (lib.filterAttrs (_: inst: inst.headless) active))
+        (lib.filterAttrs (_: inst: inst.headless || inst.slot) active))
       # A guest that runs sshd gets the nicer way in as well. Not instead
       # of the console: see the option, and `sshFor`.
       ++ (lib.mapAttrsToList (name: _: sshFor name)

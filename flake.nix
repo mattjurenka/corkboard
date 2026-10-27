@@ -15,10 +15,13 @@
       # runs them imports `fleetHost` and sets `my.agentVms`; `mkPlan` makes
       # the address plan each VM and the host share; `mkFleet` turns brains,
       # capabilities, environments and templates into checked guests.
-      nixosModules.fleetHost = ./fleet/host/host.nix;
+      nixosModules.fleetHost = { pkgs, lib, ... }: {
+        imports = [ ./fleet/host/host.nix ];
+        my.agentVms.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.fleet;
+      };
       lib.fleet = {
         mkPlan = import ./fleet/plan.nix;
-        inherit (import ./fleet/lib.nix { inherit (nixpkgs) lib; }) mkFleet;
+        inherit (import ./fleet/lib.nix { inherit (nixpkgs) lib; }) mkFleet capabilities;
       };
 
       checks = forAll (pkgs: {
@@ -164,6 +167,27 @@
               --add-flags $out/share/corkboard-app
           '';
           meta.mainProgram = "corkboard-app";
+        };
+
+        # fleetd and corkboard-fleet (fleet/fleetd), run by bun. No
+        # dependencies beyond bun's own.
+        fleet = pkgs.stdenvNoCC.mkDerivation {
+          pname = "corkboard-fleet";
+          version = "0.1.0";
+          src = pkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = pkgs.lib.fileset.unions [ ./fleet/fleetd/fleet.ts ./fleet/fleetd/fleetd.ts ./fleet/fleetd/cli.ts ];
+          };
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          installPhase = ''
+            mkdir -p $out/share/corkboard-fleet
+            cp fleet/fleetd/*.ts $out/share/corkboard-fleet/
+            makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-fleetd \
+              --add-flags $out/share/corkboard-fleet/fleetd.ts
+            makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-fleet \
+              --add-flags $out/share/corkboard-fleet/cli.ts
+          '';
+          meta.mainProgram = "corkboard-fleet";
         };
 
         # The Neovim plugin alone, for a Neovim the bridge runs on another

@@ -22,6 +22,36 @@
       '';
     };
 
+    templates = lib.mkOption {
+      type = lib.types.attrsOf lib.types.raw;
+      default = { };
+      description = ''
+        The fleet's resolved templates (`mkFleet`'s `templates`). Those with
+        `spawnable` are what a slot can be started as; fleetd reads their
+        sizes and approval rule from /etc/corkboard/fleet.json.
+      '';
+    };
+
+    memoryBudget = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = null;
+      example = 16384;
+      description = ''
+        MiB the agents here may have between them: every running headless
+        VM's `memoryMax`, plus each running slot's template. fleetd leaves a
+        spawn queued rather than start it past this. Null for no limit.
+      '';
+    };
+
+    package = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      description = ''
+        corkboard's fleet tools (`corkboard-fleetd`, `corkboard-fleet`).
+        Set by the flake's `nixosModules.fleetHost`.
+      '';
+    };
+
     owner = lib.mkOption {
       type = lib.types.str;
       default = "matthew";
@@ -165,6 +195,17 @@
               proxy's `ConnectPort`, and still a *name* allowlist -- the
               proxy resolves the name itself and the guest never chooses an
               address.
+            '';
+          };
+
+          slot = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = ''
+              A slot for spawned agents: a system unit nothing starts but
+              fleetd, which boots whichever spawnable template it claimed the
+              slot for, on an empty disk, once. Plan it like any other VM; its
+              egress has to cover every spawnable template's.
             '';
           };
 

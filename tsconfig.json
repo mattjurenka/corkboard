@@ -12,5 +12,5 @@
     "types": ["bun", "vite/client"],
     "paths": { "@/*": ["./web/src/*"] }
   },
-  "include": ["web/src", "web/vite.config.ts", "mcp"]
+  "include": ["web/src", "web/vite.config.ts", "mcp", "fleet/fleetd"]
 }

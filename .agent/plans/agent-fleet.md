@@ -173,6 +173,29 @@ and the two hosts (`omni-laptop` imports `fleetHost`, a new `pepper-droplet` imp
 3. **Slots and local fleetd.** The slot pool, `corkboard fleet spawn|list|attach|stop` on the
    host, no Worker yet. Done when `corkboard fleet spawn coding "run the tests in ~/x"` boots a
    slot, and a second spawn past the memory budget waits.
+
+   **Built 2026-10-27; live test waits on a switch.** Slots are `agent-0`/`agent-1`
+   (`my.agentVms.instances.<n>.slot`), system units nothing starts but fleetd, which may by a
+   polkit rule. A slot's launcher builds `nixosConfigurations."<template>@<slot>"`
+   (`fleet/guest/slot.nix` + the template) on an empty disk; the guest reads
+   `/mnt/share/{task.md,claude-token,repo.bundle}`, runs `claude -p`, writes
+   `/mnt/outbox/{result.json,work.bundle,exit}` and powers off. `fleet/fleetd/` is fleetd and
+   `corkboard-fleet` (spawn, list, show, attach, stop, fetch, templates) — the CLI is
+   `corkboard-fleet`, not `corkboard fleet`. Proxies are one unit per allowlisted VM now
+   (`<name>-proxy`), not `services.tinyproxy`. Tested: `bun test fleet/fleetd` (scheduling),
+   `nix flake check` (14), and fleetd + CLI end to end against a stand-in `systemctl`. Decided
+   on the way:
+   - Slots' egress is the union of every spawnable template's (`slotEgress`), because the
+     proxy's filter is fixed at host build time. Per-spawn egress needs a filter fleetd can
+     swap, later.
+   - An agent's Claude Code login is an OAuth token (`claude setup-token`) at
+     `~/.local/state/corkboard/fleet/claude-token`, copied into each spawn's share. It is the
+     agent's runtime, not a brain's credential, so it doesn't count for approval, but the
+     agent can read it.
+   - The budget counts residents at their `memoryMax` while up, and each slot at its
+     template's memory + 512 MiB. omni-laptop's is 21 GiB: one coding agent beside brain-vm and
+     pepper-vm; a second waits.
+   - The guest's store has a writable layer on its disk, so `nix build` works inside.
 4. **The queue.** `spawns` in the Worker, the `spawn_agent` and `spawn_status` MCP tools, spawn
    tokens, the approval rule, and fleetd on the Worker's WebSocket. Done when a spawn made from
    the phone runs on the laptop.

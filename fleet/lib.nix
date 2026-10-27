@@ -17,6 +17,8 @@ let
     # Minimums, in MiB and vCPUs. A template takes the largest.
     memory = c.memory or 0;
     cores = c.cores or 0;
+    # MiB of disk, for a guest whose disk the fleet sizes (a slot's).
+    disk = c.disk or 0;
     # What the environment must provide: "gpu", "display", "kvm", ...
     needs = c.needs or [ ];
     # Other capabilities this one is no use without.
@@ -52,6 +54,10 @@ let
     , capabilities ? { }
     , environments ? { }
     , templates ? { }
+      # Slots for spawnable templates, as `mkPlan` plans keyed by name, and
+      # modules every slot guest gets (its login keys, say).
+    , slots ? { }
+    , slotModules ? [ ]
       # The installing flake's, so guests are built from its nixpkgs.
     , nixosSystem ? null
     }:
@@ -93,6 +99,9 @@ let
           needs = unique (concatMap (c: c.needs) cs);
           memory = foldl' max (t.memory or 0) (map (c: c.memory) cs);
           cores = foldl' max (t.cores or 0) (map (c: c.cores) cs);
+          disk = foldl' max (t.disk or 0) (map (c: c.disk) cs);
+          # Started on demand in a slot, rather than a VM of its own.
+          spawnable = t.spawnable or false;
           egress = unique (fromBrain (b: b.egress) ++ concatMap (c: c.egress) cs);
           # The approval rule: a template with no credentials runs whoever
           # asks; one with any needs the user's yes when a brain asks.
@@ -143,6 +152,17 @@ let
       };
 
       runsAsVm = t: lib.any (e: (envs.${e}.kind or null) == "vm") t.environments;
+
+      # A spawnable template on a slot: the slot's guest, then the template.
+      # Named `<template>@<slot>`, which the slot's launcher builds.
+      slotGuests = lib.concatMapAttrs
+        (_: t: lib.mapAttrs'
+          (slot: plan: lib.nameValuePair "${t.name}@${slot}" (checked (nixosSystem {
+            modules = [ (import ./guest/slot.nix { inherit plan; template = t; }) ]
+              ++ slotModules ++ t.modules ++ [ (guestCheck t) ];
+          })))
+          slots)
+        (lib.filterAttrs (_: t: t.spawnable && runsAsVm t) resolved);
     in
     {
       templates = lib.mapAttrs (_: checked) resolved;
@@ -151,9 +171,38 @@ let
 
       nixosConfigurations = lib.mapAttrs
         (_: t: checked (nixosSystem { modules = t.modules ++ [ (guestCheck t) ]; }))
-        (lib.filterAttrs (_: runsAsVm) resolved);
+        (lib.filterAttrs (_: t: runsAsVm t && !t.spawnable) resolved)
+      // slotGuests;
+
+      # Every host a slot may need to reach: the union of the spawnable
+      # templates' egress, for the slots' allowlist.
+      slotEgress = unique (concatMap (t: t.egress) (lib.attrValues (lib.filterAttrs (_: t: t.spawnable) resolved)));
     };
+
+  # Capabilities corkboard provides, for an installing flake to use as they
+  # are or extend.
+  capabilities = {
+    coding = {
+      modules = [ ./caps/coding.nix ];
+      memory = 4096;
+      cores = 2;
+      disk = 32768;
+      egress = [
+        "cache.nixos.org"
+        "channels.nixos.org"
+        "github.com"
+        "api.github.com"
+        "codeload.github.com"
+        "objects.githubusercontent.com"
+        "raw.githubusercontent.com"
+        "registry.npmjs.org"
+        "pypi.org"
+        "files.pythonhosted.org"
+      ];
+      targets = [ "vm" "oci" ];
+    };
+  };
 in
 {
-  inherit mkFleet;
+  inherit mkFleet capabilities;
 }
