@@ -105,7 +105,7 @@ being the source of truth and becomes a working copy.
    notes migrate into `brain:pepper` docs. Done when Pepper's day-plan session starts with its
    context loaded and its transcript arrives as an episode.
 
-   **Built 2026-10-27; waits on a deploy.** `cloud/src/memory.ts` (class `Memory`, one per
+   **Deployed 2026-10-27.** `cloud/src/memory.ts` (class `Memory`, one per
    `<user>/<brain>`), its tools in `mcp.ts` (`memory_context`, `memory_recall`, `memory_remember`,
    `memory_grep`; `note_*` now on the brain, and `note_write` takes a `version`), and
    `/memory/context` and `/memory/episodes` in `api.ts` for hooks. Pepper's notes move over on
@@ -129,7 +129,7 @@ being the source of truth and becomes a working copy.
 3. **Vectors and fusion.** Vectorize per brain, Workers AI embeddings, RRF over FTS + key + vector,
    deterministic dates. Retire second-brain's `memory_index.py`/`memory_search.py`.
 
-   **Built 2026-10-27; waits on a deploy.** `cloud/src/vectors.ts`: `/baai/bge-m3` embeddings of
+   **Deployed 2026-10-27; the backfill is unchecked.** `cloud/src/vectors.ts`: `@cf/baai/bge-m3` embeddings of
    notes in ~1500-character chunks (each titled) and of entries, in the Vectorize index
    `corkboard-memory`, a namespace per brain. Writes queue their item; the object's alarm embeds it
    after the write is answered, skipping what hasn't changed. Recall fuses FTS on notes, FTS on
