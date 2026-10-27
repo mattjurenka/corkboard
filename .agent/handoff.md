@@ -57,15 +57,8 @@ was switched after the accounts change and again after the memory hooks; the Wor
 
 ## Unfinished: check these first
 
-1. **The vector backfill hasn't been checked.** Opening a memory queues every item, and the
-   alarm embeds 40 at a time. Check with the owner token (bridge sign-in):
-   `curl -H "Authorization: Bearer $(bun bridge/cloud.ts token)" "$CLOUD/api/memory/vectors?brain=work"`
-   until `queued` is 0, then try a recall that shares no words with its answer. For example, as a
-   work brain token, `memory_recall "moving money privately between my own wallets"` should find
-   `decisions-2026-10-24-private-transfers-through-husher`. If the alarm fails, `wrangler tail`
-   shows why; `embed()`'s response shape (`{ data }`) and `VECTORS.query`'s `namespace` option
-   are the untested parts. The user stopped a polling loop for this, so poll briefly, not in a
-   long background loop.
+1. ~~The vector backfill~~: done 2026-10-27. Work's backfill was stuck on bge-m3's per-call token
+   limit (texts × longest); `embed()` now batches for it, and both brains are fully embedded.
 2. **pepper-vm's hooks haven't run live.** After a day-plan Pepper session, `GET
    /memory/episodes?brain=…` (owner) or as Pepper should list its transcript, and the session
    should have opened with its goals.

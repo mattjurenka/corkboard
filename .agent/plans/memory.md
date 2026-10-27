@@ -129,13 +129,19 @@ being the source of truth and becomes a working copy.
 3. **Vectors and fusion.** Vectorize per brain, Workers AI embeddings, RRF over FTS + key + vector,
    deterministic dates. Retire second-brain's `memory_index.py`/`memory_search.py`.
 
-   **Deployed 2026-10-27; the backfill is unchecked.** `cloud/src/vectors.ts`: `@cf/baai/bge-m3` embeddings of
+   **Deployed and backfilled 2026-10-27.** `cloud/src/vectors.ts`: `@cf/baai/bge-m3` embeddings of
    notes in ~1500-character chunks (each titled) and of entries, in the Vectorize index
    `corkboard-memory`, a namespace per brain. Writes queue their item; the object's alarm embeds it
    after the write is answered, skipping what hasn't changed. Recall fuses FTS on notes, FTS on
    entries, vectors, and the entries of any day the question names (`cloud/src/dates.ts`, weight
    1.5); `memory_log` reads a range of days from words or dates. `GET /api/memory/vectors` shows
-   the backfill. second-brain's own index stays until brain-vm reaches `brain:work`.
+   the backfill, and the alarm's time, and restarts an alarm a minute overdue. second-brain's own
+   index stays until brain-vm reaches `brain:work`.
+
+   bge-m3 takes 60000 tokens a call and pads every text to the longest, so `embed()` batches on
+   texts × longest characters; batching on count alone stopped the work brain's backfill at its
+   first batch of long log entries. All 2328 of its items are embedded, and recall finds the
+   Husher decision from "shifting funds confidentially across accounts I control".
 
 4. **The consolidator.** Extraction into typed memories with supersession, the daily rollup into
    MEMORY, on the brain's account via the fleet queue. Retire `memory_flush.py` and

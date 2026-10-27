@@ -321,12 +321,19 @@ export class Memory extends DurableObject<Env> {
       }
       done.push({ item, hash, chunks: count });
     }
-    if (texts.length) {
-      const vectors = await embed(this.env.AI, texts);
-      upserts.forEach((u, i) => (u.values = vectors[i]));
-      for (let i = 0; i < upserts.length; i += 500) await this.env.VECTORS.upsert(upserts.slice(i, i + 500));
+    // A failure is thrown so the alarm retries, but logged first, since
+    // after its last retry nothing else says why the queue stopped.
+    try {
+      if (texts.length) {
+        const vectors = await embed(this.env.AI, texts);
+        upserts.forEach((u, i) => (u.values = vectors[i]));
+        for (let i = 0; i < upserts.length; i += 500) await this.env.VECTORS.upsert(upserts.slice(i, i + 500));
+      }
+      if (removed.length) await this.env.VECTORS.deleteByIds(removed);
+    } catch (e) {
+      console.error(`vectors: ${ns}: ${items.length} items, ${texts.length} texts, longest ${Math.max(0, ...texts.map((t) => t.length))}: ${e instanceof Error ? e.stack ?? e.message : e}`);
+      throw e;
     }
-    if (removed.length) await this.env.VECTORS.deleteByIds(removed);
     this.ctx.storage.transactionSync(() => {
       for (const d of done) {
         if (d.chunks) this.sql.exec("INSERT INTO vectors (item, hash, chunks) VALUES (?, ?, ?) ON CONFLICT (item) DO UPDATE SET hash = excluded.hash, chunks = excluded.chunks", d.item, d.hash, d.chunks);
@@ -338,12 +345,21 @@ export class Memory extends DurableObject<Env> {
   }
 
   // How many items wait to be embedded, and how many are: for a sync to
-  // report, and to see the backfill through.
-  vectorState() {
+  // report, and to see the backfill through. Asking wakes a queue whose
+  // alarm has given up.
+  async vectorState() {
+    const queued = this.sql.exec("SELECT count(*) AS n FROM vector_queue").one().n as number;
+    let alarm = await this.ctx.storage.getAlarm();
+    // An alarm a minute overdue is one that isn't going to run.
+    if (queued && this.vectorsOn() && (alarm === null || alarm < Date.now() - 60_000)) {
+      await this.ctx.storage.setAlarm(Date.now() + 1000);
+      alarm = await this.ctx.storage.getAlarm();
+    }
     return {
       on: this.vectorsOn(),
-      queued: this.sql.exec("SELECT count(*) AS n FROM vector_queue").one().n as number,
+      queued,
       embedded: this.sql.exec("SELECT count(*) AS n FROM vectors").one().n as number,
+      alarm: alarm === null ? null : new Date(alarm).toISOString(),
     };
   }
 

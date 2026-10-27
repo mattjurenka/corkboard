@@ -8,8 +8,11 @@ export const MODEL = "@cf/baai/bge-m3";
 // the part that matches rather than diluted into one vector.
 const CHUNK = 1500;
 const OVERLAP = 200;
-// Texts per Workers AI call.
+// Texts per Workers AI call, and a bound on their size: bge-m3 takes 60000
+// tokens a call, counting every text as long as the longest (it pads them),
+// and English runs well under a token a character.
 const BATCH = 50;
+const BATCH_CHARS = 60_000;
 
 // A note in pieces of about CHUNK characters, cut at paragraphs where it can,
 // each after the first starting a little before the last one ended. Every
@@ -36,9 +39,15 @@ export function chunks(title: string, body: string): string[] {
 
 export async function embed(ai: Ai, texts: string[]): Promise<number[][]> {
   const out: number[][] = [];
-  for (let i = 0; i < texts.length; i += BATCH) {
-    const r = (await ai.run(MODEL, { text: texts.slice(i, i + BATCH) })) as { data: number[][] };
+  for (let i = 0; i < texts.length; ) {
+    let j = i + 1;
+    for (let longest = texts[i].length; j < texts.length && j - i < BATCH; j++) {
+      longest = Math.max(longest, texts[j].length);
+      if ((j - i + 1) * longest > BATCH_CHARS) break;
+    }
+    const r = (await ai.run(MODEL, { text: texts.slice(i, j) })) as { data: number[][] };
     out.push(...r.data);
+    i = j;
   }
   return out;
 }
