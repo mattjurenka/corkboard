@@ -209,7 +209,11 @@ and the two hosts (`omni-laptop` imports `fleetHost`, a new `pepper-droplet` imp
    tokens, the approval rule, and fleetd on the Worker's WebSocket. Done when a spawn made from
    the phone runs on the laptop.
 
-   **Built 2026-10-27; waits on a deploy and a live run.** `cloud/src/fleet.ts`: spawns and each
+   **Deployed 2026-10-27; live from the Worker, not yet from the phone.** A `spawn_agent` call
+   (owner token, as the connector makes it) was claimed by fleetd within a second, ran in
+   `agent-0`, claimed its card, logged on it and submitted it for review through its spawn token;
+   fleetd reported it done with its answer, and the token was revoked. About 7 minutes, most of it
+   the slot building its store image. Left: the same from the phone's claude.ai connector. `cloud/src/fleet.ts`: spawns and each
    environment's templates in the user's object (`user.ts`), `/api/spawns` and
    `/api/fleet/environments` (owner only), and the MCP tools `spawn_agent`, `spawn_status`,
    `spawn_stop` for owner and assistant grants, so the phone's claude.ai connector can spawn.

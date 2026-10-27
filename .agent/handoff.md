@@ -25,7 +25,8 @@ was switched after the accounts change and again after the memory hooks; the Wor
 - **Brain shares:** `work-coding` mounts `~/second-brain/vault` read-write at `/mnt/vault`. That
   vault was built for **one writer** (see "Risks"). `work-coding` has never been run.
 - Slot guests' `claude` user is uid 1002 (`mkFleet`'s `ownerUid`), or virtiofs refuses writes.
-- **Next:** step 4, the queue in the Worker (`spawns`, `spawn_agent` MCP tool, spawn tokens,
+- **Step 4 deployed and run live** (see the plan); only the phone test is left.
+- **Was next:** step 4, the queue in the Worker (`spawns`, `spawn_agent` MCP tool, spawn tokens,
   approval, fleetd on a WebSocket). The memory plan's step 4 needs it.
 
 ### Memory (memory.md): steps 1–3 deployed
@@ -59,7 +60,8 @@ was switched after the accounts change and again after the memory hooks; the Wor
 
 1. ~~The vector backfill~~: done 2026-10-27. Work's backfill was stuck on bge-m3's per-call token
    limit (texts × longest); `embed()` now batches for it, and both brains are fully embedded.
-2. **pepper-vm's hooks haven't run live.** After a day-plan Pepper session, `GET
+2. **pepper-vm's hooks haven't run live.** (Restarted 2026-10-27 15:27; its managed settings now have
+   them, and before that it was still on a system without.) After a day-plan Pepper session, `GET
    /memory/episodes?brain=…` (owner) or as Pepper should list its transcript, and the session
    should have opened with its goals.
 3. Tests: `cd cloud && bun run test` (109 pass; "something prevents Vite server from exiting"
