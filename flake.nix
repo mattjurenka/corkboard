@@ -11,6 +11,12 @@
       pluginPath = pkgs: pkgs.lib.concatStringsSep ":" [ pkgs.vimPlugins.snacks-nvim ];
     in
     {
+      # The agent VMs (fleet/, and .agent/plans/agent-fleet.md). A host that
+      # runs them imports `fleetHost` and sets `my.agentVms`; `mkPlan` makes
+      # the address plan each VM and the host share.
+      nixosModules.fleetHost = ./fleet/host/host.nix;
+      lib.fleet.mkPlan = import ./fleet/plan.nix;
+
       devShells = forAll (pkgs:
         let
           # The phone app (android/): `nix develop .#android`, then
