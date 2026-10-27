@@ -605,6 +605,7 @@ function M.setup()
     -- any mode. <C-f> replaces page down (<C-d> remains) and, in a terminal,
     -- readline's forward-char.
     vim.keymap.set({ "n", "i", "t" }, "<C-Space>", picker.tools, { desc = "corkboard: tools" })
+    vim.keymap.set({ "n", "i", "t" }, "<M-Space>", picker.tools, { desc = "corkboard: tools" })
     vim.keymap.set({ "n", "i", "t" }, "<C-S-p>", picker.tools, { desc = "corkboard: tools" })
     vim.keymap.set({ "n", "i", "t" }, "<C-f>", picker.files, { desc = "corkboard: find file" })
     vim.keymap.set({ "n", "i", "t" }, "<C-`>", require("corkboard.terminal").toggle, { desc = "corkboard: terminal" })

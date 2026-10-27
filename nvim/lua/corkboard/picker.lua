@@ -52,7 +52,7 @@ local function projects()
   })
 end
 
--- The tool picker (<C-Space>). Each runs in the window it was opened from.
+-- The tool picker (<C-Space>, <M-Space>). Each runs in the window it was opened from.
 local tools = {
   {
     text = "New buffer",
@@ -76,10 +76,36 @@ local tools = {
   { text = "Reload window", hint = "F5", run = function() require("corkboard.restore").reload() end },
 }
 
+local function run(main, item)
+  vim.schedule(function()
+    if vim.api.nvim_win_is_valid(main) then vim.api.nvim_set_current_win(main) end
+    item.run(main)
+  end)
+end
+
+-- On the page the tools are a window of the page's (web/src/components/
+-- Tools.tsx), which calls run() with the one chosen; in a bare Neovim, a
+-- snacks picker.
+local opened_from
+
+function M.run(i)
+  if tools[i] and opened_from then run(opened_from, tools[i]) end
+end
+
 function M.tools()
   -- Not picker.main: snacks skips the board's scratch buffer when it picks a
   -- main window, and would choose a terminal instead.
   local main = vim.api.nvim_get_current_win()
+  local corkboard = require("corkboard")
+  if corkboard.attached() then
+    opened_from = main
+    local leader = vim.g.mapleader or "\\"
+    corkboard.notify("corkboard.tools", {
+      leader = leader == " " and "Space" or leader,
+      tools = vim.tbl_map(function(t) return { text = t.text, hint = t.hint } end, tools),
+    })
+    return
+  end
   Snacks.picker.pick({
     source = "corkboard_tools",
     -- Copies: snacks keeps match state on the items.
@@ -90,11 +116,7 @@ function M.tools()
     layout = { preset = "select" },
     confirm = function(picker, item)
       picker:close()
-      if not item then return end
-      vim.schedule(function()
-        if vim.api.nvim_win_is_valid(main) then vim.api.nvim_set_current_win(main) end
-        item.run(main)
-      end)
+      if item then run(main, item) end
     end,
   })
 end

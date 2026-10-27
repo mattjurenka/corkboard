@@ -125,6 +125,7 @@ rpc.on("corkboard.notification", ([n]: any[]) =>
 // A bridge older than away mode passes Neovim's own "corkboard.away" (its
 // "enter") through to here, which is not a state.
 rpc.on("corkboard.away", ([away]: any[]) => store.set({ away: typeof away === "object" ? away : null }));
+rpc.on("corkboard.tools", ([tools]: any[]) => store.set({ tools }));
 rpc.on("corkboard.chime", () => chime());
 rpc.on("corkboard.away_return", ([here]: any[]) => {
   if (!here) notifyBack();

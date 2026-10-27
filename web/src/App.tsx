@@ -8,6 +8,7 @@ import { Panels } from "@/components/Panels";
 import { Scrollbars } from "@/components/Scrollbars";
 import { Sidebar } from "@/components/Sidebar";
 import { Skeleton } from "@/components/Skeleton";
+import { Tools } from "@/components/Tools";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/store";
 
@@ -54,6 +55,7 @@ export function App() {
           <AlertDescription className="block text-foreground">{status}</AlertDescription>
         </Alert>
       )}
+      <Tools />
       <Away />
     </div>
   );

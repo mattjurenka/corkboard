@@ -79,6 +79,8 @@ export type State = {
   focus: { width: number } | null;
   // Away mode, while it's on.
   away: Away | null;
+  // The tool picker (corkboard.picker.tools), while it's open.
+  tools: { leader: string; tools: { text: string; hint: string }[] } | null;
 };
 
 let state: State = {
@@ -99,6 +101,7 @@ let state: State = {
   skeleton: loadSkeleton(),
   focus: null,
   away: null,
+  tools: null,
 };
 
 const listeners = new Set<() => void>();
