@@ -20,7 +20,10 @@
 //   GET   /api/chat                          the chat with Pepper, oldest first: ?after=id, else the newest 100
 //   POST  /api/chat                          { text }: the user says something to Pepper
 //   GET   /api/notes                        ?q= to search, ?kind=, ?limit=
-//   GET, PUT, DELETE /api/notes/:id          PUT { kind, title, body, version? }: Pepper's brain's notes
+//   GET, PUT, DELETE /api/notes/:id          PUT { kind, title, body, path?, version? }
+//   POST  /api/memory/entries                { entries: [{ day, at, who, text, key }] }: a log written
+//                                            elsewhere, each entry added once
+//                                            (notes and entries are Pepper's brain's, or ?brain='s)
 //   GET, DELETE /api/plans/:date             the day and any proposal (an empty plan if none); gone for good
 //   POST  /api/plans/:date/say               { text }: what to change, for the next proposal
 //   POST  /api/plans/:date/accept            { version, blocks }: the proposal, as the user left it
@@ -28,6 +31,7 @@
 //   PUT   /api/plans/:date/day               { version, blocks }: the day, edited
 //   POST  /api/tokens                        a card token for an agent: { board, card, agent }
 //   POST  /api/tokens/pepper                 a token for Pepper's session: the goals, besides what assistant sees
+//   POST  /api/tokens/brain                  { brain }: a token for another brain's agents, in its memory
 //   POST  /api/tokens/revoke                 { token }
 //
 // All of it needs the owner scope. /mcp (mcp.ts) is behind the same token
@@ -44,8 +48,9 @@ import { insufficientScope, type OAuthResourceContext } from "@cloudflare/worker
 import { Invalid, cardId, fields, imported, logEntry } from "./cards";
 import type { Result } from "./board";
 import { CARD_TOKEN, type Env, type Props } from "./index";
-import { type Grant, brainOf, mcp, memoryOf } from "./mcp";
-import { PEPPER_ONLY_KINDS, blocks, chatText, date, note, noteId } from "./plans";
+import { type Grant, brainOf, hiddenFor, mcp, memoryOf } from "./mcp";
+import { blocks, chatText, date, note, noteId } from "./plans";
+import { BRAINS, type Brain } from "./memory";
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const error = (status: number, message: string, extra: object = {}) => json({ error: message, ...extra }, status);
@@ -179,11 +184,34 @@ async function notes(request: Request, memory: Memories): Promise<Response> {
   return error(405, "method not allowed");
 }
 
+function brainNamed(v: unknown): Brain {
+  if (!BRAINS.includes(v as Brain)) throw new Invalid(`brain must be one of ${BRAINS.join(", ")}`);
+  return v as Brain;
+}
+
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+// A brain's log as written elsewhere (a vault's daily files, bridge/
+// memory-sync.ts): entries with their own times and keys, added once each.
+async function importEntries(request: Request, memory: Memories): Promise<Response> {
+  if (request.method !== "POST") return error(405, "method not allowed");
+  const input = await body(request);
+  if (!Array.isArray(input.entries) || input.entries.length > 2000) throw new Invalid("entries must be a list of at most 2000");
+  const entries = input.entries.map((e: any, i: number) => {
+    if (typeof e?.day !== "string" || !DAY.test(e.day)) throw new Invalid(`entries[${i}].day must be YYYY-MM-DD`);
+    if (typeof e.at !== "string" || Number.isNaN(Date.parse(e.at))) throw new Invalid(`entries[${i}].at must be a time`);
+    if (typeof e.key !== "string" || !e.key || e.key.length > 200) throw new Invalid(`entries[${i}].key must be the entry's key`);
+    if (typeof e.text !== "string" || !e.text.trim() || e.text.length > 20_000) throw new Invalid(`entries[${i}].text must be the entry, at most 20000 characters`);
+    return { day: e.day, at: e.at, key: e.key, text: e.text.trim(), who: typeof e.who === "string" && e.who.trim() ? e.who.trim().slice(0, 80) : "import" };
+  });
+  return json({ added: await memory.addEntries(entries) });
+}
+
 // What a brain's hooks call (memory.ts), with any token but a card's: the
 // context a session starts with, and the transcript it ends with.
 async function memoryRoutes(request: Request, memory: Memories, grant: Grant): Promise<Response> {
   const url = new URL(request.url);
-  const hide = grant.kind === "pepper" ? [] : PEPPER_ONLY_KINDS;
+  const hide = hiddenFor(grant);
   if (url.pathname === "/memory/context" && request.method === "GET") {
     const budget = Math.min(Math.max(Number(url.searchParams.get("budget")) || 24_000, 1000), 200_000);
     return new Response(await memory.context(budget, hide), { headers: { "Content-Type": "text/markdown; charset=utf-8" } });
@@ -275,6 +303,11 @@ async function tokens(request: Request, env: Env, props: Props): Promise<Respons
     return new Response(null, { status: 204 });
   }
   if (path === "/api/tokens/pepper") return mint(env, props, { kind: "pepper", agent: "pepper" });
+  if (path === "/api/tokens/brain") {
+    const brain = brainNamed(input.brain);
+    if (brain === "pepper") throw new Invalid("Pepper's token is /api/tokens/pepper");
+    return mint(env, props, { kind: "brain", brain, agent: brain });
+  }
   if (path !== "/api/tokens") return error(404, "not found");
   const { board: key, card: rawCard, agent } = input;
   if (typeof key !== "string" || !BOARD_KEY.test(key)) throw new Invalid("board must be a board key");
@@ -320,7 +353,9 @@ export const api = {
       if (path.startsWith("/api/tokens")) return await tokens(request, env, ctx.props);
       const users = env.USER.get(env.USER.idFromName(ctx.props.userId));
       if (path === "/api/live") return users.fetch(request);
-      if (path.startsWith("/api/notes")) return await notes(request, await memoryOf(env, ctx.props.userId, "pepper"));
+      const brain = brainNamed(new URL(request.url).searchParams.get("brain") ?? "pepper");
+      if (path.startsWith("/api/notes")) return await notes(request, await memoryOf(env, ctx.props.userId, brain));
+      if (path === "/api/memory/entries") return await importEntries(request, await memoryOf(env, ctx.props.userId, brain));
       if (path.startsWith("/api/plans/")) return await plans(request, users);
       if (path === "/api/chat") return await chat(request, users);
       return await route(request, env, ctx.props.userId);

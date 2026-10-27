@@ -156,15 +156,16 @@ export function projects(v: unknown): Plan["projects"] {
 
 // Notes --------------------------------------------------------------------------------
 
-export const NOTE_KINDS = ["goal", "day", "decision", "project", "person", "review", "memory", "draft"] as const;
-export type Note = { id: string; kind: (typeof NOTE_KINDS)[number]; title: string; body: string; created: string; updated: string; version?: number };
+export const NOTE_KINDS = ["goal", "day", "decision", "project", "person", "review", "memory", "draft", "research", "reference"] as const;
+export type Note = { id: string; kind: (typeof NOTE_KINDS)[number]; title: string; body: string; created: string; updated: string; version?: number; path?: string | null };
 
 // Only the owner writes these: the assistant's identity and rules.
 export const OWNER_ONLY_NOTES = new Set(["soul"]);
 
-// Kinds only Pepper's token (the pepper grant) sees over MCP: to any other
-// client they don't exist. The user sees them in corkboard, through /api.
-export const PEPPER_ONLY_KINDS: readonly string[] = ["goal"];
+// Kinds only a brain's own agents see over MCP (Pepper's token for Pepper's
+// brain, a brain token for its brain): to any other client they don't exist.
+// A brain's goals are its own. The user sees them in corkboard, through /api.
+export const BRAIN_ONLY_KINDS: readonly string[] = ["goal"];
 
 export function noteId(v: unknown): string {
   if (typeof v !== "string" || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(v)) throw new Invalid("a note id is lowercase letters, digits and -, like goals-2026");
@@ -175,11 +176,17 @@ export function noteId(v: unknown): string {
 export const slug = (title: string) =>
   title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "note";
 
-export function note(input: Record<string, unknown>): Pick<Note, "kind" | "title" | "body"> {
+export type NoteInput = Pick<Note, "kind" | "title" | "body"> & { path?: string };
+
+// path: where the note lives as a file, relative to its brain's vault (an
+// imported or mirrored note); left out, a note keeps the path it had.
+export function note(input: Record<string, unknown>): NoteInput {
   if (!NOTE_KINDS.includes(input.kind as Note["kind"])) throw new Invalid(`kind must be one of ${NOTE_KINDS.join(", ")}`);
   if (typeof input.body !== "string") throw new Invalid("body must be a string");
   if (input.body.length > 200_000) throw new Invalid("body is longer than 200000 characters");
-  return { kind: input.kind as Note["kind"], title: text("title", input.title, 200), body: input.body };
+  const path = optional("path", input.path, 300);
+  if (path && (path.startsWith("/") || path.split("/").includes(".."))) throw new Invalid("path must be relative to the vault");
+  return { kind: input.kind as Note["kind"], title: text("title", input.title, 200), body: input.body, ...(path ? { path } : {}) };
 }
 
 // Chat ---------------------------------------------------------------------------------

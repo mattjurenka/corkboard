@@ -117,6 +117,15 @@ being the source of truth and becomes a working copy.
    `daily/` becomes entries; second-brain's hooks call the Worker instead of writing files.
    brain-vm keeps its local index until step 3. Done when a brain-vm session and a `work-coding`
    spawn both log the same day with nothing lost.
+
+   **Done 2026-10-27, as a one-way sync.** `bridge/memory-sync.ts` (`corkboard-memory-sync work
+   ~/second-brain/vault`, a 15-minute user timer on omni-laptop) sends the vault's Markdown as
+   `brain:work` notes (id from the path, kind from the folder, the path kept) and each daily-log
+   bullet as an entry with its own time and a stable key; unchanged notes and known entries are left
+   as they are. First run: 71 notes, 2257 entries. The vault stays the truth until step 5, so
+   second-brain's hooks still write files; brain-vm and slots reach `brain:work` once they hold a
+   brain token (`POST /api/tokens/brain`), which nothing hands them yet. Goals became per-brain: a
+   brain's `goal` notes are its own agents' alone, and in their context after the long-term memory.
 3. **Vectors and fusion.** Vectorize per brain, Workers AI embeddings, RRF over FTS + key + vector,
    deterministic dates. Retire second-brain's `memory_index.py`/`memory_search.py`.
 4. **The consolidator.** Extraction into typed memories with supersession, the daily rollup into

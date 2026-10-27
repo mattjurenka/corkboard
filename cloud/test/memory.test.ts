@@ -85,6 +85,16 @@ describe("the log and recall", () => {
     expect((await tool(assistant, "memory_context", { budget: 1000 })).length).toBeLessThanOrEqual(1100);
   });
 
+  it("puts the goals in the context of those who may see them, after the long-term memory", async () => {
+    await call(owner, "PUT", "/api/notes/memory", { kind: "memory", title: "MEMORY.md", body: "Curated: Matt ships on Fridays." });
+    await call(owner, "PUT", "/api/notes/goal-run", { kind: "goal", title: "Run", body: "A marathon in spring." });
+    await tool(assistant, "memory_remember", { text: "Ran 5k today." });
+    const pepper = await (await call(await pepperToken(), "GET", "/memory/context")).text();
+    expect(pepper.indexOf("Curated")).toBeLessThan(pepper.indexOf("A marathon"));
+    expect(pepper.indexOf("A marathon")).toBeLessThan(pepper.indexOf("Ran 5k"));
+    expect(await tool(assistant, "memory_context", {})).not.toMatch(/marathon/);
+  });
+
   it("keeps the goals out of everything but Pepper's", async () => {
     await call(owner, "PUT", "/api/notes/goals", { kind: "goal", title: "Goals", body: "Run a marathon in spring." });
     await call(owner, "PUT", "/api/notes/learned", { kind: "memory", title: "Learned", body: "Marathon training starts in January." });
@@ -128,5 +138,52 @@ describe("episodes", () => {
     await call(owner, "POST", "/api/boards/b/cards", { title: "T" });
     const { token } = await (await call(owner, "POST", "/api/tokens", { board: "b", card: "TASK-1", agent: "a" })).json<any>();
     expect((await call(token, "GET", "/memory/context")).status).toBe(403);
+  });
+});
+
+describe("brains", () => {
+  const brainToken = async (brain: string) => call(owner, "POST", "/api/tokens/brain", { brain });
+
+  it("each have their own memory, and their goals are their own agents'", async () => {
+    const work = (await (await brainToken("work")).json<any>()).token as string;
+    await call(owner, "PUT", "/api/notes/goals?brain=work", { kind: "goal", title: "Ship", body: "Launch the lending portal." });
+    await call(owner, "PUT", "/api/notes/stack?brain=work", { kind: "reference", title: "Stack", body: "SST on AWS." });
+    await call(owner, "PUT", "/api/notes/goal-fitness", { kind: "goal", title: "Fitness", body: "Three sessions a week." });
+    expect((await tool(work, "note_read", { id: "goals" })).body).toBe("Launch the lending portal.");
+    expect((await tool(work, "note_read", { id: "goal-fitness" })).error).toMatch(/no note/);
+    expect((await tool(assistant, "note_read", { id: "stack" })).error).toMatch(/no note/);
+    expect((await tool(assistant, "note_read", { id: "goal-fitness" })).error).toMatch(/no note/);
+    const pepper = await pepperToken();
+    expect((await tool(pepper, "note_read", { id: "goal-fitness" })).body).toBe("Three sessions a week.");
+    expect(await (await call(work, "GET", "/memory/context")).text()).toMatch(/^# Memory: work/);
+  });
+
+  it("are named, and Pepper's token is Pepper's own", async () => {
+    expect((await brainToken("pepper")).status).toBe(400);
+    expect((await brainToken("nobody")).status).toBe(400);
+    expect((await call(owner, "GET", "/api/notes?brain=nobody")).status).toBe(400);
+  });
+});
+
+describe("a sync", () => {
+  it("adds each entry once, on its own day", async () => {
+    const entries = [
+      { day: "2026-10-26", at: "2026-10-26T17:00:00Z", who: "brain-vm", text: "Shipped PR 191.", key: "a" },
+      { day: "2026-10-26", at: "2026-10-26T18:00:00Z", who: "brain-vm", text: "Asked about aws logs.", key: "b" },
+    ];
+    expect((await (await call(owner, "POST", "/api/memory/entries?brain=work", { entries })).json<any>()).added).toBe(2);
+    expect((await (await call(owner, "POST", "/api/memory/entries?brain=work", { entries })).json<any>()).added).toBe(0);
+    const work = (await (await call(owner, "POST", "/api/tokens/brain", { brain: "work" })).json<any>()).token as string;
+    expect((await tool(work, "memory_recall", { query: "PR 191" }))[0].day).toBe("2026-10-26");
+    expect((await call(owner, "POST", "/api/memory/entries?brain=work", { entries: [{ day: "26 Oct", at: "x", text: "y", key: "c" }] })).status).toBe(400);
+  });
+
+  it("of an unchanged note leaves it be, and keeps where it came from", async () => {
+    const put = (body: object) => call(owner, "PUT", "/api/notes/decisions-x?brain=work", { kind: "decision", title: "X", body: "Because.", ...body });
+    expect((await (await put({ path: "Decisions/x.md" })).json<any>()).version).toBe(1);
+    expect((await (await put({ path: "Decisions/x.md" })).json<any>()).version).toBe(1);
+    const changed = await (await put({ body: "Because, still." })).json<any>();
+    expect([changed.version, changed.path]).toEqual([2, "Decisions/x.md"]);
+    expect((await put({ path: "../etc/passwd" })).status).toBe(400);
   });
 });

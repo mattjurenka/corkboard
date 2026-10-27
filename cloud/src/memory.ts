@@ -20,7 +20,11 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Result } from "./board";
 import type { Env } from "./index";
-import { DAY_STARTS_HOUR, type Note, today } from "./plans";
+import { DAY_STARTS_HOUR, type Note, type NoteInput, today } from "./plans";
+
+// The brains there are: a memory is one of these.
+export const BRAINS = ["pepper", "work"] as const;
+export type Brain = (typeof BRAINS)[number];
 
 const ok = <T>(value: T): Result<T> => ({ ok: true, value });
 const fail = (status: number, error: string, note?: Note): Result<never> => ({ ok: false, status, error, note });
@@ -91,6 +95,11 @@ export class Memory extends DurableObject<Env> {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     this.sql.exec(SCHEMA);
+    // Columns added since the first objects were made.
+    const has = (table: string, column: string) => this.sql.exec(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`, table, column).toArray().length > 0;
+    if (!has("notes", "path")) this.sql.exec("ALTER TABLE notes ADD COLUMN path TEXT");
+    if (!has("entries", "key")) this.sql.exec("ALTER TABLE entries ADD COLUMN key TEXT");
+    this.sql.exec("CREATE UNIQUE INDEX IF NOT EXISTS entries_key ON entries (key)");
   }
 
   private meta(key: string): string | undefined {
@@ -161,20 +170,23 @@ export class Memory extends DurableObject<Env> {
 
   // Written whole. With a version, only over that version: a stale one gets
   // a 409 and the note as it is, so two writers can't lose each other's
-  // changes. Without one, whatever is there is replaced.
-  putNote(id: string, n: Pick<Note, "kind" | "title" | "body">, version?: number): Result<Note> {
+  // changes. Without one, whatever is there is replaced. A write that
+  // changes nothing (a sync of an unchanged file) leaves it as it was.
+  putNote(id: string, n: NoteInput, version?: number): Result<Note> {
     const was = this.findNote(id);
     if (version !== undefined && (was?.version ?? 0) !== version)
       return fail(409, `note ${id} is at version ${was?.version ?? 0}, not ${version}`, was);
+    if (was && was.kind === n.kind && was.title === n.title && was.body === n.body && (n.path === undefined || n.path === was.path)) return ok(was);
     const t = now();
     this.sql.exec(
-      `INSERT INTO notes (id, kind, title, body, created, updated) VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO notes (id, kind, title, body, path, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (id) DO UPDATE SET kind = excluded.kind, title = excluded.title, body = excluded.body,
-         updated = excluded.updated, version = version + 1`,
+         path = coalesce(excluded.path, path), updated = excluded.updated, version = version + 1`,
       id,
       n.kind,
       n.title,
       n.body,
+      n.path ?? null,
       t,
       t,
     );
@@ -205,6 +217,20 @@ export class Memory extends DurableObject<Env> {
     return this.sql
       .exec("INSERT INTO entries (at, day, who, text) VALUES (?, ?, ?, ?) RETURNING *", now(), this.today(), who, text.trim())
       .one() as Entry;
+  }
+
+  // Entries written elsewhere first (a vault's daily logs), each with its own
+  // time and day and a key that is the same each time it's sent, so a sync
+  // adds only what's new. Returns how many were.
+  addEntries(list: { at: string; day: string; who: string; text: string; key: string }[]): number {
+    // Counted, not taken from rowsWritten, which an ignored insert adds to too.
+    const count = () => this.sql.exec("SELECT count(*) AS n FROM entries").one().n as number;
+    const was = count();
+    this.ctx.storage.transactionSync(() => {
+      for (const e of list)
+        this.sql.exec("INSERT OR IGNORE INTO entries (at, day, who, text, key) VALUES (?, ?, ?, ?, ?)", e.at, e.day, e.who, e.text, e.key);
+    });
+    return count() - was;
   }
 
   // A day's entries, or the days from `from` to `to`, oldest first.
@@ -318,15 +344,18 @@ export class Memory extends DurableObject<Env> {
   // Context ---------------------------------------------------------------------------
 
   // What a session of the brain starts with, as Markdown, within `budget`
-  // characters: who it is (the soul, the user), what it has learned (memory
-  // notes, newest first), the last days' records and log. Recent days go
-  // first when it's too long; what doesn't fit is a recall away.
+  // characters, in this order: who it is and who it works for (the soul, the
+  // user), its long-term memory (the note `memory`), its goals (to those who
+  // may see them), the last days' log (newest day first) and day records,
+  // then the other memory notes, newest first. What doesn't fit is cut from
+  // the end, and is a recall away.
   context(budget: number, hidden: readonly string[] = [], days = 3): string {
     const d = this.today();
     const h = notIn("kind", hidden);
     const pick = (sql: string, ...args: unknown[]) => this.sql.exec(sql, ...args).toArray() as unknown as Note[];
-    const core = pick(`SELECT * FROM notes WHERE id IN ('soul', 'user')${h.sql} ORDER BY id = 'user'`, ...h.args);
-    const learned = pick(`SELECT * FROM notes WHERE kind = 'memory' AND id NOT IN ('soul', 'user')${h.sql} ORDER BY updated DESC`, ...h.args);
+    const core = pick(`SELECT * FROM notes WHERE id IN ('soul', 'user', 'memory')${h.sql} ORDER BY CASE id WHEN 'soul' THEN 0 WHEN 'user' THEN 1 ELSE 2 END`, ...h.args);
+    const goals = pick(`SELECT * FROM notes WHERE kind = 'goal'${h.sql} ORDER BY id`, ...h.args);
+    const learned = pick(`SELECT * FROM notes WHERE kind = 'memory' AND id NOT IN ('soul', 'user', 'memory')${h.sql} ORDER BY updated DESC`, ...h.args);
     const dayNotes = pick(`SELECT * FROM notes WHERE kind = 'day' AND id IN (?, ?)${h.sql} ORDER BY id DESC`, `day-${d}`, `day-${before(d, 1)}`, ...h.args);
     const log = this.entries(before(d, days - 1), d);
 
@@ -338,14 +367,16 @@ export class Memory extends DurableObject<Env> {
       sections.push(t);
       left -= t.length;
     };
+    const clock = new Intl.DateTimeFormat("en-GB", { timeZone: this.env.TIMEZONE, hour: "2-digit", minute: "2-digit" });
     const asNote = (n: Note) => `## ${n.title} (${n.id})\n\n${n.body.trim()}\n`;
     core.forEach((n) => add(asNote(n)));
+    goals.forEach((n) => add(asNote(n)));
     if (log.length) {
       const byDay = new Map<string, Entry[]>();
       for (const e of log) byDay.set(e.day, [...(byDay.get(e.day) ?? []), e]);
       const text = [...byDay]
         .reverse()
-        .map(([day, es]) => `### ${day}\n\n${es.map((e) => `- ${e.at.slice(11, 16)} ${e.who}: ${e.text.replace(/\n/g, "\n  ")}`).join("\n")}\n`)
+        .map(([day, es]) => `### ${day}\n\n${es.map((e) => `- ${clock.format(new Date(e.at))} ${e.who}: ${e.text.replace(/\n/g, "\n  ")}`).join("\n")}\n`)
         .join("\n");
       add(`## Log, newest day first (day turns over at ${DAY_STARTS_HOUR}am)\n\n${text}`);
     }

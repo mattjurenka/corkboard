@@ -145,6 +145,9 @@
               --add-flags $share/bridge/server.ts \
               --suffix PATH : ${pkgs.lib.makeBinPath [ pkgs.neovim pkgs.bun pkgs.ripgrep pkgs.fd ]} \
               --suffix CORKBOARD_PLUGINS : ${pluginPath pkgs}
+            # A brain's vault into its memory in the Worker (bridge/memory-sync.ts).
+            makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-memory-sync \
+              --add-flags $share/bridge/memory-sync.ts
           '';
           meta.mainProgram = "corkboard-bridge";
         };

@@ -14,18 +14,21 @@
 //   assistant
 //   pepper     a token corkboard made for Pepper's session (POST
 //              /api/tokens/pepper): what assistant sees, and the goals too
+//   brain      a token for another brain's agents (POST /api/tokens/brain):
+//              that brain's memory, its goals included, instead of Pepper's
 
 import type { Result } from "./board";
 import { AGENT_STATES, type Card, type Fields, type LogEntry, PRIORITIES, STATUSES, waitingOn } from "./cards";
 import type { Env } from "./index";
 import { Invalid } from "./cards";
-import { NOTE_KINDS, OWNER_ONLY_NOTES, PEPPER_ONLY_KINDS, chatText, date, note, noteId, projects, proposal, slug, today } from "./plans";
-import type { Memory } from "./memory";
+import { BRAIN_ONLY_KINDS, NOTE_KINDS, OWNER_ONLY_NOTES, chatText, date, note, noteId, projects, proposal, slug, today } from "./plans";
+import type { Brain, Memory } from "./memory";
 import type { User } from "./user";
 
 export type Grant =
   | { kind: "card"; board: string; card: string; agent: string }
   | { kind: "pepper"; agent: string }
+  | { kind: "brain"; brain: Exclude<Brain, "pepper">; agent: string }
   | { kind: "owner" | "assistant"; agent: string };
 
 // The board's methods as this file calls them. Typed by hand: through
@@ -405,16 +408,20 @@ If you need a human decision, call block with your question and stop. If you nee
 Put follow-up work you discover in new cards with create_card (parent: the card you are on).`;
 
 // The user's own tools, for OAuth clients and Pepper, not card agents: the
-// brain's memory (its notes, log and recall; the goals are Pepper's alone),
+// brain's memory (its notes, log and recall; its goals are its own agents'),
 // the day plan, and the chat with the user, which is Pepper's alone too.
 // There's no tool to accept a plan; only the user does that, in corkboard.
 
-// Whose memory a grant works in. Every grant but a card's is Pepper's
-// today, as the notes were; the work brain joins with its own grant (the
-// memory plan's step 2).
-export const brainOf = (grant: Grant) => (grant.kind === "card" ? undefined : "pepper");
+// Whose memory a grant works in: a brain token's brain, and Pepper's for
+// every other grant but a card's, as the notes were.
+export const brainOf = (grant: Grant): Brain | undefined => (grant.kind === "card" ? undefined : grant.kind === "brain" ? grant.brain : "pepper");
 
-export async function memoryOf(env: Env, user: string, brain: string) {
+// The note kinds a grant can't see in its brain: the goals, to all but the
+// brain's own agents (Pepper's token, or the brain's). To it, those notes
+// don't exist.
+export const hiddenFor = (grant: Grant) => (grant.kind === "pepper" || grant.kind === "brain" ? [] : BRAIN_ONLY_KINDS);
+
+export async function memoryOf(env: Env, user: string, brain: Brain) {
   const memory = env.MEMORY.get(env.MEMORY.idFromName(`${user}/${brain}`));
   await memory.open(user, brain);
   return memory;
@@ -460,9 +467,7 @@ function writable(id: string, grant: Grant) {
   if (OWNER_ONLY_NOTES.has(id) && grant.kind !== "owner") throw new ToolError(`only the user writes the ${id} note`);
 }
 
-// The note kinds a grant can't see (the goals, to all but Pepper): to it,
-// those notes don't exist.
-const hidden = (grant: Grant) => (grant.kind === "pepper" ? [] : PEPPER_ONLY_KINDS);
+const hidden = hiddenFor;
 const kinds = (grant: Grant) => NOTE_KINDS.filter((k) => !hidden(grant).includes(k));
 
 async function visible(id: string, c: UserCall) {

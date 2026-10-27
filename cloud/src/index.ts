@@ -34,7 +34,7 @@ export type Env = {
 // What a token carries about its user. Encrypted in KV by the provider. A
 // card token (POST /api/tokens) or Pepper's (/api/tokens/pepper) also
 // carries its grant.
-export type Props = { userId: string; email: string; grant?: Extract<Grant, { kind: "card" | "pepper" }> };
+export type Props = { userId: string; email: string; grant?: Extract<Grant, { kind: "card" | "pepper" | "brain" }> };
 
 // Card and Pepper tokens start with this, so they're told from OAuth tokens
 // at a glance.
