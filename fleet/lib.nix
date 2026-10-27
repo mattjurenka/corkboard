@@ -38,6 +38,14 @@ let
     modules = b.modules or [ ];
     egress = b.egress or [ ];
     credentials = b.credentials or [ ];
+    # The Claude account its agents run as: a name, whose token the host
+    # keeps (fleetd). Every agent of the brain shares it, and so its limits.
+    account = b.account or null;
+    # Its memory, as virtiofs shares every spawned agent of the brain mounts,
+    # keyed by name: { source; target; writable ? false; description ? ""; }.
+    # Shared, so what one agent writes the others see. Resident guests
+    # declare their own shares.
+    shares = lib.mapAttrs (_: s: { writable = false; description = ""; } // s) (b.shares or { });
   };
 
   environment = name: e: {
@@ -58,6 +66,10 @@ let
       # modules every slot guest gets (its login keys, say).
     , slots ? { }
     , slotModules ? [ ]
+      # The host user who runs the slots (fleet/host's `owner`). virtiofs
+      # passes uids through, so the guest's user has to be this uid to write
+      # to the outbox or a brain's memory.
+    , ownerUid ? null
       # The installing flake's, so guests are built from its nixpkgs.
     , nixosSystem ? null
     }:
@@ -95,6 +107,10 @@ let
           # Null for an agent that works for the user directly and holds
           # nothing of a brain's.
           brain = t.brain or null;
+          # The brain's account and memory. A template with no brain runs as
+          # whichever account spawned it (fleetd).
+          account = if b == null then null else b.account;
+          shares = if b == null then { } else b.shares;
           environments = t.environments or [ ];
           needs = unique (concatMap (c: c.needs) cs);
           memory = foldl' max (t.memory or 0) (map (c: c.memory) cs);
@@ -158,7 +174,7 @@ let
       slotGuests = lib.concatMapAttrs
         (_: t: lib.mapAttrs'
           (slot: plan: lib.nameValuePair "${t.name}@${slot}" (checked (nixosSystem {
-            modules = [ (import ./guest/slot.nix { inherit plan; template = t; }) ]
+            modules = [ (import ./guest/slot.nix { inherit plan ownerUid; template = t; }) ]
               ++ slotModules ++ t.modules ++ [ (guestCheck t) ];
           })))
           slots)
@@ -167,6 +183,9 @@ let
     {
       templates = lib.mapAttrs (_: checked) resolved;
       environments = envs;
+      # Each brain's account, for fleetd: a brain's spawn of a template with
+      # no brain of its own runs as the brain's account.
+      brains = lib.mapAttrs (_: b: { inherit (b) account; }) brains';
       inherit errors;
 
       nixosConfigurations = lib.mapAttrs

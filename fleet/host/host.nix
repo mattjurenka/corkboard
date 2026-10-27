@@ -592,7 +592,7 @@ let
   # there (they count against the budget while they run), the templates a
   # slot can take, and the budget itself.
   manifest = {
-    inherit (cfg) flake owner memoryBudget;
+    inherit (cfg) flake owner memoryBudget brains defaultAccount;
     slots = lib.mapAttrs
       (name: inst:
         let vm = plans.${name}; in {
@@ -607,7 +607,7 @@ let
       })
       (lib.filterAttrs (_: inst: inst.headless && !inst.slot) active);
     templates = lib.mapAttrs
-      (_: t: { inherit (t) memory cores needsApproval brain capNames; })
+      (_: t: { inherit (t) memory cores needsApproval brain account capNames; })
       (lib.filterAttrs (_: t: t.spawnable or false) cfg.templates);
   };
 

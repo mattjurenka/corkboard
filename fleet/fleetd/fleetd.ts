@@ -4,13 +4,13 @@
 // may start and stop by a polkit rule.
 //
 // Starting one: the template goes in the slot's state dir (its launcher
-// reads it), the task, a Claude Code token and the repo bundle in its
-// share, then `systemctl start`. The guest runs the task and powers off,
-// which ends the unit.
+// reads it), the task, its account's Claude Code token and the repo
+// bundle in its share, then `systemctl start`. The guest runs the task and
+// powers off, which ends the unit.
 
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CLAUDE_TOKEN, manifest, schedule, SPAWNS, spawns, write, type Manifest, type Spawn } from "./fleet";
+import { manifest, schedule, SPAWNS, spawns, tokenFor, write, type Manifest, type Spawn } from "./fleet";
 
 const now = () => new Date().toISOString();
 
@@ -35,11 +35,12 @@ function empty(dir: string) {
 
 async function start(m: Manifest, s: Spawn, slot: string) {
   const sl = m.slots[slot];
-  if (!existsSync(CLAUDE_TOKEN)) throw new Error(`no Claude Code token at ${CLAUDE_TOKEN} (claude setup-token, then save it there)`);
+  const token = tokenFor(s.account);
+  if (!existsSync(token)) throw new Error(`no token for the ${s.account} account at ${token} (claude setup-token, signed in as it, then save it there)`);
   empty(sl.shareDir);
   empty(sl.outboxDir);
   writeFileSync(join(sl.shareDir, "task.md"), s.task);
-  copyFileSync(CLAUDE_TOKEN, join(sl.shareDir, "claude-token"));
+  copyFileSync(token, join(sl.shareDir, "claude-token"));
   if (s.repo) {
     const b = await run(["git", "-C", s.repo, "bundle", "create", join(sl.shareDir, "repo.bundle"), "HEAD", "--branches"]);
     if (!b.ok) throw new Error(`couldn't bundle ${s.repo}: ${b.out}`);

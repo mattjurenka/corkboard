@@ -1,7 +1,7 @@
 // fleetd's scheduling: which queued spawns start, given slots, residents and
 // the memory budget.   bun test fleet/fleetd
 import { expect, test } from "bun:test";
-import { OVERHEAD, schedule, type Manifest, type Spawn } from "./fleet";
+import { accountFor, OVERHEAD, schedule, type Manifest, type Spawn } from "./fleet";
 
 const slot = (n: number) => ({ guestAddress: `10.${80 + n}.0.2`, stateDir: "", shareDir: "", outboxDir: "", unit: `agent-${n}.service` });
 
@@ -12,14 +12,17 @@ const m = (budget: number | null): Manifest => ({
   slots: { "agent-0": slot(0), "agent-1": slot(1) },
   residents: { "brain-vm": { unit: "brain-vm.service", memory: 14336 } },
   templates: {
-    coding: { memory: 4096, cores: 2, needsApproval: false, brain: null, capNames: ["coding"] },
-    big: { memory: 12288, cores: 4, needsApproval: false, brain: null, capNames: [] },
+    coding: { memory: 4096, cores: 2, needsApproval: false, brain: null, account: null, capNames: ["coding"] },
+    big: { memory: 12288, cores: 4, needsApproval: false, brain: null, account: null, capNames: [] },
+    "work-coding": { memory: 4096, cores: 2, needsApproval: true, brain: "work", account: "work", capNames: ["coding"] },
   },
+  brains: { work: { account: "work" }, pepper: { account: "personal" } },
+  defaultAccount: "personal",
 });
 
 let n = 0;
 const spawn = (template: string, state: Spawn["state"] = "queued", slot?: string): Spawn => ({
-  id: `s${++n}`, template, task: "t", by: "user", state, slot, created: `2026-10-27T00:00:0${n}Z`,
+  id: `s${++n}`, template, task: "t", by: "user", account: "personal", state, slot, created: `2026-10-27T00:00:0${n}Z`,
 });
 
 test("queued spawns take free slots in order", () => {
@@ -64,4 +67,30 @@ test("an unknown template fails, and doesn't hold up the queue", () => {
 test("a slot whose unit is still up isn't free, even with no spawn on it", () => {
   const s = spawn("coding");
   expect(schedule(m(null), [s], new Set(["agent-0.service"])).start).toEqual([{ id: s.id, slot: "agent-1" }]);
+});
+
+// Which account a spawn runs as.
+
+test("a brain's template runs as the brain's account, whoever spawns it", () => {
+  expect(accountFor(m(null), "work-coding", "user")).toBe("work");
+  expect(accountFor(m(null), "work-coding", "pepper")).toBe("work");
+});
+
+test("and can't be made to run as another", () => {
+  expect(() => accountFor(m(null), "work-coding", "user", "personal")).toThrow("runs as work");
+});
+
+test("a brainless template runs as the brain that spawned it", () => {
+  expect(accountFor(m(null), "coding", "pepper")).toBe("personal");
+  expect(accountFor(m(null), "coding", "work")).toBe("work");
+});
+
+test("or, spawned by the user, as asked, else the default", () => {
+  expect(accountFor(m(null), "coding", "user", "work")).toBe("work");
+  expect(accountFor(m(null), "coding", "user")).toBe("personal");
+  expect(() => accountFor({ ...m(null), defaultAccount: null }, "coding", "user")).toThrow("which account?");
+});
+
+test("an account is a plain name, never a path", () => {
+  expect(() => accountFor(m(null), "coding", "user", "../../.ssh/id_ed25519")).toThrow("no account");
 });

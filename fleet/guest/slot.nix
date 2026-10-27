@@ -10,16 +10,19 @@
 # and a writable outbox it collects once the slot stops.
 #
 #   /mnt/share/task.md       the prompt
-#   /mnt/share/claude-token  a Claude Code OAuth token (`claude setup-token`)
+#   /mnt/share/claude-token  the OAuth token of the account it runs as
 #   /mnt/share/repo.bundle   optional: a git bundle of the repo to work in
 #
 #   /mnt/outbox/result.json  Claude Code's `--output-format json`
 #   /mnt/outbox/work.bundle  the commits it made, if it was given a repo
 #   /mnt/outbox/exit         its exit status
 #
+# A template with a brain also mounts the brain's memory (its `shares`),
+# writable where the brain says, and the same for every agent of it.
+#
 # Egress is the slot's allowlist, through the filtering proxy on its
 # gateway; there is no resolver and no route, as for Pepper.
-{ plan, template }:
+{ plan, template, ownerUid ? null }:
 { pkgs, lib, modulesPath, ... }:
 let
   vm = plan;
@@ -103,10 +106,10 @@ in
     writableStore = true;
     writableStoreUseTmpfs = false;
 
-    sharedDirectories = lib.mkForce {
+    sharedDirectories = lib.mkForce ({
       share = { source = vm.shareDir; target = "/mnt/share"; writable = false; };
       outbox = { source = vm.outboxDir; target = "/mnt/outbox"; writable = true; };
-    };
+    } // lib.mapAttrs (_: s: { inherit (s) source target writable; }) template.shares);
 
     diskImage = vm.diskImage;
     diskSize = lib.mkDefault (lib.max 8192 template.disk);
@@ -211,6 +214,17 @@ in
   systemd.globalEnvironment = env;
   environment.sessionVariables = env;
   environment.etc."claude-code/managed-settings.json".text = builtins.toJSON { env = claudeCodeEnv; };
+  # Where its brain's memory is, read as managed memory by every session.
+  environment.etc."claude-code/CLAUDE.md" = lib.mkIf (template.shares != { }) {
+    text = ''
+      # Your brain's memory
+
+      You work for the `${template.brain}` brain. Its memory is mounted here,
+      shared with its other agents, so what you write there they will see:
+
+      ${lib.concatStrings (lib.mapAttrsToList (n: s: "- `${s.target}`${lib.optionalString (!s.writable) " (read-only)"}: ${if s.description != "" then s.description else n}\n") template.shares)}
+    '';
+  };
 
   programs.git = {
     enable = true;
@@ -222,6 +236,8 @@ in
   # come from the installing flake (mkFleet's `slotModules`).
   users.users.claude = {
     isNormalUser = true;
+    # The host owner's uid, so its writes through virtiofs are allowed.
+    uid = lib.mkIf (ownerUid != null) ownerUid;
     description = "Spawned agent";
     group = "users";
     password = "claude";

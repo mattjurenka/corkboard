@@ -18,7 +18,11 @@ export type Manifest = {
   slots: Record<string, { guestAddress: string; stateDir: string; shareDir: string; outboxDir: string; unit: string }>;
   // VMs that are always there: they count against the budget while up.
   residents: Record<string, { unit: string; memory: number | null }>;
-  templates: Record<string, { memory: number; cores: number; needsApproval: boolean; brain: string | null; capNames: string[] }>;
+  templates: Record<string, { memory: number; cores: number; needsApproval: boolean; brain: string | null; account: string | null; capNames: string[] }>;
+  // Each brain's Claude account, and the one a brainless template runs as
+  // when the user spawns it without saying.
+  brains: Record<string, { account: string | null }>;
+  defaultAccount: string | null;
 };
 
 export type State = "queued" | "running" | "done" | "failed" | "stopped";
@@ -32,6 +36,8 @@ export type Spawn = {
   // Who asked: "user" for the CLI. A brain's spawn of a template that needs
   // approval waits for it (the Worker's queue, step 4); the CLI's never does.
   by: string;
+  // The Claude account it runs as (accountFor), whose token it is handed.
+  account: string;
   state: State;
   created: string;
   slot?: string;
@@ -45,8 +51,10 @@ export type Spawn = {
 export const MANIFEST = process.env.CORKBOARD_FLEET_MANIFEST ?? "/etc/corkboard/fleet.json";
 export const STATE = process.env.CORKBOARD_FLEET_STATE ?? join(homedir(), ".local/state/corkboard/fleet");
 export const SPAWNS = join(STATE, "spawns");
-// A Claude Code OAuth token from `claude setup-token`, handed to each agent.
-export const CLAUDE_TOKEN = join(STATE, "claude-token");
+// One Claude Code OAuth token per account, from `claude setup-token`, at
+// accounts/<name>. An agent is handed its account's.
+export const ACCOUNTS = join(STATE, "accounts");
+export const tokenFor = (account: string) => join(ACCOUNTS, account);
 
 // QEMU's own allocations on top of the guest's RAM, per running slot.
 export const OVERHEAD = 512;
@@ -124,4 +132,22 @@ export function schedule(m: Manifest, all: Spawn[], active: Set<string>): Plan {
     used += need;
   }
   return plan;
+}
+
+// The account a spawn runs as. A brain's template runs as the brain's
+// account, and nothing else: its agents share the brain's memory, so they
+// share its account too. A brainless one runs as what was asked for, or
+// the account of the brain that spawned it, or the host's default.
+export function accountFor(m: Manifest, template: string, by: string, asked?: string): string {
+  const t = m.templates[template];
+  if (t?.brain) {
+    if (!t.account) throw new Error(`the ${t.brain} brain has no account`);
+    if (asked && asked !== t.account) throw new Error(`${template} is the ${t.brain} brain's, which runs as ${t.account}`);
+    return t.account;
+  }
+  const account = asked ?? (by === "user" ? m.defaultAccount : m.brains[by]?.account);
+  if (!account) throw new Error(`which account? --account <name> (there is no default)`);
+  // A file name under ACCOUNTS.
+  if (!/^[\w-]+$/.test(account)) throw new Error(`no account ${account}`);
+  return account;
 }

@@ -196,6 +196,13 @@ and the two hosts (`omni-laptop` imports `fleetHost`, a new `pepper-droplet` imp
      template's memory + 512 MiB. omni-laptop's is 21 GiB: one coding agent beside brain-vm and
      pepper-vm; a second waits.
    - The guest's store has a writable layer on its disk, so `nix build` works inside.
+   - **Accounts (2026-10-27).** Each brain names a Claude account (`pepper` → `personal`,
+     `work` → `work`), a token at `~/.local/state/corkboard/fleet/accounts/<name>`. A
+     brain's template always runs as the brain's account; a brainless one runs as the brain
+     that spawned it, or `--account`, or the host's `defaultAccount`. A brain's `shares` (the
+     work vault) are mounted, shared and writable, in every agent of it spawned in a slot;
+     `work-coding` and `pepper-coding` are the first such templates. Slot guests' `claude` is
+     the owner's uid, or virtiofs refuses the writes (the outbox's too).
 4. **The queue.** `spawns` in the Worker, the `spawn_agent` and `spawn_status` MCP tools, spawn
    tokens, the approval rule, and fleetd on the Worker's WebSocket. Done when a spawn made from
    the phone runs on the laptop.

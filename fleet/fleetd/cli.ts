@@ -1,6 +1,6 @@
 // corkboard-fleet: spawn agents into this machine's slots, and see them.
 //
-//   corkboard-fleet spawn <template> [--repo DIR] <task...>
+//   corkboard-fleet spawn <template> [--repo DIR] [--account NAME] <task...>
 //   corkboard-fleet list
 //   corkboard-fleet show <id>          its state, and its answer when done
 //   corkboard-fleet attach <id>        a shell in its slot while it runs
@@ -10,7 +10,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { manifest, newId, read, schedule, SPAWNS, spawns, write, type Spawn } from "./fleet";
+import { accountFor, manifest, newId, read, schedule, SPAWNS, spawns, write, type Spawn } from "./fleet";
 
 const die = (msg: string): never => {
   console.error(msg);
@@ -35,16 +35,24 @@ switch (cmd) {
   case "spawn": {
     const [template, ...rest] = args;
     let repo: string | undefined;
+    let asked: string | undefined;
     const words: string[] = [];
     for (let i = 0; i < rest.length; i++) {
       if (rest[i] === "--repo") repo = resolve(rest[++i] ?? die("--repo needs a directory"));
+      else if (rest[i] === "--account") asked = rest[++i] ?? die("--account needs a name");
       else words.push(rest[i]);
     }
     const m = manifest();
     if (!template || !m.templates[template]) die(`spawnable here: ${Object.keys(m.templates).join(", ")}`);
     if (!words.length) die("what should it do? corkboard-fleet spawn <template> <task...>");
     if (repo && !existsSync(join(repo, ".git"))) die(`${repo} is not a git repo`);
-    const s: Spawn = { id: newId(), template, task: words.join(" "), repo, by: "user", state: "queued", created: new Date().toISOString() };
+    let account = "";
+    try {
+      account = accountFor(m, template, "user", asked);
+    } catch (e: any) {
+      die(e.message);
+    }
+    const s: Spawn = { id: newId(), template, task: words.join(" "), repo, by: "user", account, state: "queued", created: new Date().toISOString() };
     write(s);
     const waiting = schedule(m, spawns(), new Set()).waiting;
     console.log(s.id + (waiting?.id === s.id ? `  (queued: ${waiting.reason})` : ""));
@@ -52,7 +60,7 @@ switch (cmd) {
   }
 
   case "list": {
-    const rows = spawns().map((s) => [s.id, s.state, s.template, s.slot ?? "", s.created.slice(5, 16).replace("T", " "), s.task.slice(0, 50)]);
+    const rows = spawns().map((s) => [s.id, s.state, s.template, s.account, s.slot ?? "", s.created.slice(5, 16).replace("T", " "), s.task.slice(0, 50)]);
     const widths = rows.reduce((w, r) => r.map((c, i) => Math.max(w[i] ?? 0, c.length)), [] as number[]);
     for (const r of rows) console.log(r.map((c, i) => c.padEnd(widths[i])).join("  ").trimEnd());
     break;
@@ -95,7 +103,7 @@ switch (cmd) {
 
   case "templates": {
     for (const [name, t] of Object.entries(manifest().templates))
-      console.log(`${name}  ${t.memory} MiB, ${t.cores} cores, ${t.capNames.join(" ") || "-"}${t.needsApproval ? "  (holds credentials)" : ""}`);
+      console.log(`${name}  ${t.memory} MiB, ${t.cores} cores, ${t.capNames.join(" ") || "-"}${t.brain ? `, ${t.brain} brain as ${t.account}` : ""}${t.needsApproval ? "  (holds credentials)" : ""}`);
     break;
   }
 

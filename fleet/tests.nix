@@ -7,7 +7,11 @@ let
 
   base = {
     brains = {
-      pepper = { egress = [ "api.anthropic.com" ]; credentials = [ "google" ]; };
+      pepper = { egress = [ "api.anthropic.com" ]; credentials = [ "google" ]; account = "personal"; };
+      work = {
+        account = "work";
+        shares.vault = { source = "/home/me/vault"; target = "/mnt/vault"; writable = true; };
+      };
     };
     capabilities = {
       coding = { memory = 4096; cores = 2; egress = [ "github.com" ]; targets = [ "vm" "oci" ]; };
@@ -101,6 +105,20 @@ let
           notSpawned = { brain = "pepper"; capabilities = [ "coding" ]; environments = [ "local" ]; };
         };
       })).slotEgress == [ "github.com" "api.anthropic.com" ];
+
+    # A brain's templates run as its account and mount its memory; a
+    # brainless one has neither of its own.
+    brainAccountAndSharesComeWithIt =
+      let t = (fleet { w = { brain = "work"; capabilities = [ "coding" ]; environments = [ "local" ]; }; }).templates.w; in
+      t.account == "work"
+      && t.shares == { vault = { source = "/home/me/vault"; target = "/mnt/vault"; writable = true; description = ""; }; };
+
+    brainlessHasNoAccount =
+      let t = (fleet { c = { capabilities = [ "coding" ]; environments = [ "local" ]; }; }).templates.c; in
+      t.account == null && t.shares == { };
+
+    brainsListTheirAccounts =
+      (fleet { }).brains == { pepper.account = "personal"; work.account = "work"; };
 
     onlyVmTemplatesGetGuests =
       builtins.attrNames (fleet {
