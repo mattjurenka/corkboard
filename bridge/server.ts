@@ -229,7 +229,8 @@ function cloud(data: Session, nvim: NonNullable<Session["nvim"]>, params: any[])
   };
   data.cloud ??= new boards.Session((key, event) =>
     key === boards.USER
-      ? lua("require('corkboard.plan').cloud_event(...)", event)
+      ? // The day plan's window follows it for the plan, a project's for the fleet view.
+        lua("require(require('corkboard').window == 'plan' and 'corkboard.plan' or 'corkboard.fleet').cloud_event(...)", event)
       : lua("require('corkboard.cards').cloud_event(...)", key, event),
   );
   const [id, op, ...args] = params;

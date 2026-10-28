@@ -2,12 +2,13 @@
 // the notifications folded at the foot (a third each when opened).
 //
 // Tabs are drawn from ext_tabline: Neovim stops drawing its own tabline and
-// sends tabline_update instead; gt/gT and :tab* still drive it. Tabs 1 and 2
-// are always the board and token usage (corkboard.board and corkboard.usage
-// keep them there), so they are labelled Board and Usage whatever window is
-// focused in them, and have no close button. The tabs after them come under
-// a gap. All are numbered as Neovim does, for Alt+<n>. The day plan
-// has a window of its own, opened from the project's header (planWindow.ts).
+// sends tabline_update instead; gt/gT and :tab* still drive it. Tabs 1 to 3
+// are always the board, token usage and the fleet (corkboard.board, .usage and
+// .fleet keep them there), so they are labelled Board, Usage and Fleet
+// whatever window is focused in them, and have no close button. The tabs
+// after them come under a gap. All are numbered as Neovim does, for Alt+<n>.
+// The day plan has a window of its own, opened from the project's header
+// (planWindow.ts).
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -20,7 +21,7 @@ import { Files } from "./Files";
 import { Notifications } from "./Notifications";
 import { openPlan } from "@/planWindow";
 
-const PINNED = ["Board", "Usage"];
+const PINNED = ["Board", "Usage", "Fleet"];
 
 const home = (p: string) => p.replace(/^\/home\/[^/]+(?=\/|$)/, "~");
 

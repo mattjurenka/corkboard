@@ -122,6 +122,7 @@ export class Session {
   // op and args as cards/cloud.lua sends them.
   async call(op: string, args: any[]): Promise<unknown> {
     if (op.startsWith("plan_")) return this.plan(op, args);
+    if (op.startsWith("fleet_")) return this.fleet(op, args);
     // Pepper's session (plan/claude.lua): the one token that sees the goals.
     if (op === "pepper_token") {
       const res = await fetch(`${CLOUD}/api/tokens/pepper`, {
@@ -218,6 +219,41 @@ export class Session {
         });
         return null;
       }
+      default:
+        throw new Error(`corkboard cloud: no operation ${op}`);
+    }
+  }
+
+  // The fleet view (fleet.lua): each environment and what runs there, the
+  // spawns not over yet and the last few that are, and the user's socket,
+  // which says when any of it changes.
+  private async fleet(op: string, args: any[]): Promise<unknown> {
+    const send = async (method: string, path: string) => {
+      const res = await fetch(`${CLOUD}/api${path}`, {
+        method,
+        headers: { Authorization: `Bearer ${await token()}`, ...(method === "POST" ? { "Content-Type": "application/json" } : {}) },
+        body: method === "POST" ? "{}" : undefined,
+      });
+      const json = (await res.json().catch(() => ({}))) as any;
+      if (!res.ok) throw new Error(`corkboard cloud: ${json.error ?? `HTTP ${res.status}`}`);
+      return json;
+    };
+    switch (op) {
+      case "fleet_subscribe":
+        await follow(USER, this.listener);
+        this.keys.add(USER);
+        return null;
+      case "fleet_get": {
+        const [environments, open, over] = await Promise.all([
+          send("GET", "/fleet/environments"),
+          send("GET", "/spawns?state=pending-approval,queued,running&limit=50"),
+          send("GET", "/spawns?state=done,failed,stopped&limit=8"),
+        ]);
+        return { environments, spawns: [...open, ...over] };
+      }
+      case "fleet_approve":
+      case "fleet_stop":
+        return send("POST", `/spawns/${encodeURIComponent(args[0])}/${op === "fleet_approve" ? "approve" : "stop"}`);
       default:
         throw new Error(`corkboard cloud: no operation ${op}`);
     }

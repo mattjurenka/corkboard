@@ -132,6 +132,7 @@ rpc.on("corkboard.away_return", ([here]: any[]) => {
   canvas.focus();
 });
 rpc.on("corkboard.usage",([state]: any[]) => store.set({ views: { ...store.get().views, usage: state } }));
+rpc.on("corkboard.fleet", ([state]: any[]) => store.set({ views: { ...store.get().views, fleet: state } }));
 rpc.on("corkboard.plan", ([state]: any[]) => store.set({ views: { ...store.get().views, plan: state } }));
 rpc.on("corkboard.plan_diff", ([state]: any[]) => store.set({ views: { ...store.get().views, "plan-diff": state } }));
 // A state without text (a markdown preview's scroll) keeps the last text.

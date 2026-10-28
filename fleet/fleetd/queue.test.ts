@@ -87,8 +87,9 @@ test("says what it runs, and claims what's queued for it as a spawn of its own",
   add({ id: "aaaaaa1", board: "proj" });
   add({ id: "aaaaaa2", template: "coding", by: "pepper" });
   add({ id: "aaaaaa3", state: "pending-approval" });
-  await queue.step();
+  await queue.step(new Set());
   expect(Object.keys(environment.templates)).toEqual(["coding", "work-coding"]);
+  expect(environment.running).toEqual({ budget: null, used: 0, residents: [], slots: [] });
   const a = fleet.read("aaaaaa1")!;
   expect(a).toMatchObject({ state: "queued", by: "user", account: "personal", repo, remote: { board: "proj", card: "TASK-1", agent: "coding-aaaaaa1", token: "cbc_aaaaaa1" } });
   // A brain's brainless spawn runs as the brain's account.

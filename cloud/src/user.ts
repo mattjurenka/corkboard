@@ -175,8 +175,16 @@ export class User extends DurableObject {
   // running → done, failed or stopped. Each change goes to the live sockets,
   // which is how fleetd hears of a spawn the moment it's made.
 
-  putEnvironment(e: Environment): void {
+  // A change in what runs there goes to the live sockets too (the fleet
+  // view); one that only says fleetd is still there doesn't.
+  putEnvironment(e: Environment): Environment {
+    const row = this.sql.exec("SELECT doc FROM environments WHERE name = ?", e.name).toArray()[0];
+    const before = row ? (JSON.parse(row.doc as string) as Environment) : undefined;
+    // A fleetd that says nothing of what's running keeps what it last said.
+    if (!e.running && before?.running) e = { ...e, running: before.running };
     this.sql.exec("INSERT INTO environments (name, doc) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET doc = excluded.doc", e.name, JSON.stringify(e));
+    if (JSON.stringify({ ...before, seen: "" }) !== JSON.stringify({ ...e, seen: "" })) this.broadcast({ type: "fleet", environment: e });
+    return e;
   }
 
   environments(): Environment[] {

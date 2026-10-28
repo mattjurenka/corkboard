@@ -1,7 +1,7 @@
 // fleetd's scheduling: which queued spawns start, given slots, residents and
 // the memory budget.   bun test fleet/fleetd
 import { expect, test } from "bun:test";
-import { accountFor, OVERHEAD, schedule, type Manifest, type Spawn } from "./fleet";
+import { accountFor, occupancy, OVERHEAD, schedule, type Manifest, type Spawn } from "./fleet";
 
 const slot = (n: number) => ({ guestAddress: `10.${80 + n}.0.2`, stateDir: "", shareDir: "", outboxDir: "", unit: `agent-${n}.service` });
 
@@ -93,4 +93,19 @@ test("or, spawned by the user, as asked, else the default", () => {
 
 test("an account is a plain name, never a path", () => {
   expect(() => accountFor(m(null), "coding", "user", "../../.ssh/id_ed25519")).toThrow("no account");
+});
+
+test("what's up: residents while their unit is, and each slot's spawn", () => {
+  const a = spawn("coding", "running", "agent-1");
+  const o = occupancy({ ...m(21504), residents: { "brain-vm": { unit: "brain-vm.service", memory: 14336, brain: "work" } } }, [a, spawn("coding")], new Set(["brain-vm.service"]));
+  expect(o).toEqual({
+    budget: 21504,
+    used: 14336 + 4096 + OVERHEAD,
+    residents: [{ name: "brain-vm", brain: "work", memory: 14336, up: true }],
+    slots: [
+      { name: "agent-0", spawn: null, template: null, memory: null },
+      { name: "agent-1", spawn: a.id, template: "coding", memory: 4096 + OVERHEAD },
+    ],
+  });
+  expect(occupancy(m(null), [], new Set()).residents[0]).toMatchObject({ brain: null, up: false });
 });

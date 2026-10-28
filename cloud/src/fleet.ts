@@ -2,7 +2,7 @@
 // whoever asked, is a row in the user's object (user.ts) tied to a card, and
 // each environment's fleetd (fleet/fleetd) claims the ones for it.
 //
-//   PUT   /api/fleet/environments/:name      { templates }: what fleetd there can run
+//   PUT   /api/fleet/environments/:name      { templates, running? }: what fleetd there can run, and runs
 //   GET   /api/fleet/environments            each environment and its templates
 //   GET   /api/spawns                        newest first: ?environment=, ?state=a,b, ?limit=
 //   POST  /api/spawns                        { template, task, environment?, board? }: the user's
@@ -35,7 +35,15 @@ export const FINAL: readonly SpawnState[] = ["done", "failed", "stopped"];
 // What a template is, as its environment's fleetd describes it (the host's
 // manifest, from mkFleet): enough to place a spawn and apply the rule.
 export type Template = { brain: string | null; needsApproval: boolean; memory: number; cores: number; capNames: string[] };
-export type Environment = { name: string; templates: Record<string, Template>; seen: string };
+// What's up there, as fleetd last saw it: the VMs that are always there,
+// each slot and the spawn in it, and the memory budget they share (MiB).
+export type Running = {
+  budget: number | null;
+  used: number;
+  residents: { name: string; brain: string | null; memory: number | null; up: boolean }[];
+  slots: { name: string; spawn: string | null; template: string | null; memory: number | null }[];
+};
+export type Environment = { name: string; templates: Record<string, Template>; seen: string; running?: Running };
 
 export type Spawn = {
   id: string;
@@ -240,6 +248,21 @@ function template(name: string, v: unknown): Template {
   };
 }
 
+function running(v: unknown): Running {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) throw new Invalid("running must be an object");
+  const r = v as Record<string, unknown>;
+  const num = (x: unknown) => (Number.isFinite(x) ? (x as number) : null);
+  const name = (x: unknown) => (typeof x === "string" && NAME.test(x) ? x : null);
+  const id = (x: unknown) => (typeof x === "string" && ID.test(x) ? x : null);
+  const list = (x: unknown) => (Array.isArray(x) ? x.slice(0, 64) : []).map((i) => (i ?? {}) as Record<string, unknown>);
+  return {
+    budget: num(r.budget),
+    used: num(r.used) ?? 0,
+    residents: list(r.residents).flatMap((i) => (name(i.name) ? [{ name: name(i.name)!, brain: name(i.brain), memory: num(i.memory), up: i.up === true }] : [])),
+    slots: list(r.slots).flatMap((i) => (name(i.name) ? [{ name: name(i.name)!, spawn: id(i.spawn), template: name(i.template), memory: num(i.memory) }] : [])),
+  };
+}
+
 export async function fleetRoutes(request: Request, env: Env, props: Props, body: () => Promise<Record<string, unknown>>, mint: Mint): Promise<Response> {
   const url = new URL(request.url);
   const user = props.userId;
@@ -260,8 +283,8 @@ export async function fleetRoutes(request: Request, env: Env, props: Props, body
         }),
       );
       const environment: Environment = { name: e[1], templates, seen: now() };
-      await u.putEnvironment(environment);
-      return json(environment);
+      if (input.running !== undefined) environment.running = running(input.running);
+      return json(await u.putEnvironment(environment));
     }
 
     const m = url.pathname.match(/^\/api\/spawns(?:\/([^/]+)(?:\/(approve|stop|claim|report))?)?$/);
@@ -307,6 +330,7 @@ export async function status(env: Env, user: string, id?: string) {
   const environments = (await u.environments()).map((e) => ({
     name: e.name,
     seen: e.seen,
+    running: e.running,
     templates: Object.entries(e.templates).map(([name, t]) => ({ name, brain: t.brain, holdsCredentials: t.needsApproval, memory: t.memory, capabilities: t.capNames })),
   }));
   return { environments, spawns: (await u.spawns(undefined, [], 20)).map(({ task, ...s }) => ({ ...s, task: task.slice(0, 200) })) };

@@ -604,6 +604,7 @@ let
       (name: inst: {
         unit = "${name}.service";
         memory = inst.memoryMax;
+        brain = cfg.templates.${name}.brain or null;
       })
       (lib.filterAttrs (_: inst: inst.headless && !inst.slot) active);
     templates = lib.mapAttrs

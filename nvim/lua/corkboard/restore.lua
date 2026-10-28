@@ -7,13 +7,13 @@
 --
 -- Files reopen where the cursor was; shells start again in their directory;
 -- Claude Code sessions, a card's agent's too, are resumed. The pinned tabs
--- (board, usage, the day plan) make themselves, and the panels that open
+-- (board, usage, the fleet, the day plan) make themselves, and the panels that open
 -- beside something (a markdown preview, a session's cards) open with it, so
 -- neither is kept. Neither is Pepper, whom the day plan's window brings.
 
 local M = {}
 
-local PINNED = { corkboard_board = true, corkboard_usage = true, corkboard_plan = true }
+local PINNED = { corkboard_board = true, corkboard_usage = true, corkboard_fleet = true, corkboard_plan = true }
 
 local function path()
   if require("corkboard").window == "plan" then return require("corkboard.util").data_dir("plan", "editor.json") end

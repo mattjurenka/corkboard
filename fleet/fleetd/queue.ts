@@ -12,7 +12,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { CLOUD, token } from "../../bridge/cloud";
-import { accountFor, answer, manifest, read, SPAWNS, spawns, write, type Manifest, type Spawn, type State } from "./fleet";
+import { accountFor, answer, manifest, occupancy, read, SPAWNS, spawns, write, type Manifest, type Occupancy, type Spawn, type State } from "./fleet";
 
 export const ENVIRONMENT = process.env.CORKBOARD_FLEET_ENVIRONMENT ?? "local";
 const LOOK_EVERY = 60_000;
@@ -50,6 +50,9 @@ export class Queue {
   private retry = 1000;
   private ping?: ReturnType<typeof setInterval>;
   private offline?: string;
+  // What runs here, and what the Worker was last told of it.
+  private running?: Occupancy;
+  private told?: string;
 
   start() {
     void this.connect();
@@ -89,10 +92,13 @@ export class Queue {
     this.offline = problem;
   }
 
-  // After fleetd's tick: what changed here goes up, and what's new there
-  // comes down.
-  async step() {
+  // After fleetd's tick, with the units that are up: what changed here goes
+  // up, and what's new there comes down. A change in what runs here is told
+  // at once, for the fleet view.
+  async step(active?: Set<string>) {
     try {
+      if (active) this.running = occupancy(manifest(), spawns(), active);
+      if (this.running && JSON.stringify(this.running) !== this.told) this.dirty = true;
       await this.report();
       if (this.dirty || Date.now() - this.lastLook > LOOK_EVERY) {
         this.dirty = false;
@@ -109,7 +115,9 @@ export class Queue {
   // claimed, and a stop asked for there passed on here.
   private async look() {
     const m = manifest();
-    await ok("PUT", `/api/fleet/environments/${ENVIRONMENT}`, { templates: m.templates });
+    const running = this.running;
+    await ok("PUT", `/api/fleet/environments/${ENVIRONMENT}`, { templates: m.templates, running });
+    this.told = JSON.stringify(running);
     const listed = (await ok("GET", `/api/spawns?environment=${ENVIRONMENT}&state=queued,running,stopped&limit=100`)) as Remote[];
     for (const r of listed) {
       const here = read(r.id);

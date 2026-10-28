@@ -78,6 +78,7 @@ function M.attach(chan)
   require("corkboard.viewer").push_all()
   require("corkboard.claude.cards").push_all()
   require("corkboard.usage").push_all()
+  require("corkboard.fleet").push_all()
   require("corkboard.plan").push_all()
   require("corkboard.focus").push()
   M.push_layout()
@@ -589,6 +590,8 @@ function M.setup()
   local usage = require("corkboard.usage")
   vim.keymap.set("n", "<leader>u", usage.show, { desc = "corkboard: token usage" })
   vim.api.nvim_create_user_command("AgentUsage", usage.show, { desc = "corkboard: token usage" })
+  local fleet = require("corkboard.fleet")
+  vim.api.nvim_create_user_command("AgentFleet", fleet.show, { desc = "corkboard: the fleet" })
   local plan = require("corkboard.plan")
   vim.keymap.set("n", "<leader>p", M.open_plan, { desc = "corkboard: day plan" })
   vim.api.nvim_create_user_command("AgentPlan", M.open_plan, { desc = "corkboard: day plan" })
@@ -628,7 +631,7 @@ function M.setup()
   end
 
   -- Alt+1 to 9 go to that tab, as the sidebar numbers them: the
-  -- board, usage, then the agents.
+  -- board, usage, the fleet, then the agents.
   for i = 1, 9 do
     vim.keymap.set({ "n", "i", "t" }, ("<A-%d>"):format(i), function()
       if i <= vim.fn.tabpagenr("$") then vim.cmd.tabnext(i) end
@@ -714,7 +717,7 @@ function M.setup()
   })
   status_highlights()
   -- Anything that could have closed or moved a pinned tab: the plan in the
-  -- day plan's window, else the board and usage, in order, so each finds the
+  -- day plan's window, else the board, usage and the fleet, in order, so each finds the
   -- ones before it already in place.
   vim.api.nvim_create_autocmd({ "VimEnter", "TabClosed", "TabNewEntered", "TabEnter", "WinClosed" }, {
     group = group,
@@ -723,6 +726,7 @@ function M.setup()
         if M.window == "plan" then return plan.ensure() end
         board.ensure()
         usage.ensure()
+        fleet.ensure()
       end)
     end,
   })

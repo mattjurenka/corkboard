@@ -116,6 +116,6 @@ const queue = new Queue();
 queue.start();
 for (;;) {
   await tick().catch((e) => console.error("fleetd:", e));
-  await queue.step();
+  await queue.step(await activeUnits(manifest()).catch(() => undefined));
   await Bun.sleep(2000);
 }

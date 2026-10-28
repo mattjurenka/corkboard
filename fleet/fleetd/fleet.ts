@@ -18,7 +18,7 @@ export type Manifest = {
   memoryBudget: number | null;
   slots: Record<string, { guestAddress: string; stateDir: string; shareDir: string; outboxDir: string; unit: string }>;
   // VMs that are always there: they count against the budget while up.
-  residents: Record<string, { unit: string; memory: number | null }>;
+  residents: Record<string, { unit: string; memory: number | null; brain?: string | null }>;
   templates: Record<string, { memory: number; cores: number; needsApproval: boolean; brain: string | null; account: string | null; capNames: string[] }>;
   // Each brain's Claude account, and the one a brainless template runs as
   // when the user spawns it without saying.
@@ -115,15 +115,40 @@ export type Plan = {
   waiting?: { id: string; reason: string };
 };
 
+// What's up, as the Worker's fleet view shows it: each resident VM, each
+// slot and the spawn in it, and the memory they take of the budget. A
+// resident counts at its memoryMax while up, a slot at its template's
+// memory and OVERHEAD.
+export type Occupancy = {
+  budget: number | null;
+  used: number;
+  residents: { name: string; brain: string | null; memory: number | null; up: boolean }[];
+  slots: { name: string; spawn: string | null; template: string | null; memory: number | null }[];
+};
+
+export function occupancy(m: Manifest, all: Spawn[], active: Set<string>): Occupancy {
+  const residents = Object.entries(m.residents).map(([name, r]) => ({ name, brain: r.brain ?? null, memory: r.memory, up: active.has(r.unit) }));
+  const slots = Object.keys(m.slots).map((name) => {
+    const s = all.find((x) => x.state === "running" && x.slot === name);
+    const t = s && m.templates[s.template];
+    return { name, spawn: s?.id ?? null, template: s?.template ?? null, memory: s ? (t?.memory ?? 0) + OVERHEAD : null };
+  });
+  // A running spawn whose slot left the manifest still takes its memory.
+  const lost = all.filter((s) => s.state === "running" && !m.slots[s.slot!]);
+  const used =
+    residents.reduce((n, r) => n + (r.up ? r.memory ?? 0 : 0), 0) +
+    slots.reduce((n, s) => n + (s.memory ?? 0), 0) +
+    lost.reduce((n, s) => n + (m.templates[s.template]?.memory ?? 0) + OVERHEAD, 0);
+  return { budget: m.memoryBudget, used, residents, slots };
+}
+
 // Which queued spawns to start, given what is running. In order: a spawn
 // that doesn't fit waits, and so does everything behind it, so a big spawn
 // is never starved by small ones.
 export function schedule(m: Manifest, all: Spawn[], active: Set<string>): Plan {
   const plan: Plan = { start: [], fail: [] };
   const running = all.filter((s) => s.state === "running");
-  let used =
-    Object.values(m.residents).reduce((n, r) => n + (active.has(r.unit) ? r.memory ?? 0 : 0), 0) +
-    running.reduce((n, s) => n + (m.templates[s.template]?.memory ?? 0) + OVERHEAD, 0);
+  let used = occupancy(m, all, active).used;
   const busy = new Set(running.map((s) => s.slot));
   const free = Object.keys(m.slots).filter((name) => !busy.has(name) && !active.has(m.slots[name].unit));
 

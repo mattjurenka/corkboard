@@ -145,6 +145,30 @@ describe("fleetd's side", () => {
   });
 });
 
+describe("what's running", () => {
+  const RUNNING = {
+    budget: 21504,
+    used: 20992,
+    residents: [{ name: "brain-vm", brain: "work", memory: 14336, up: true }, { name: "pepper-vm", brain: "pepper", memory: 2048, up: false }],
+    slots: [{ name: "agent-0", spawn: "abc123def", template: "coding", memory: 4608 }, { name: "agent-1", spawn: null, template: null, memory: null }],
+  };
+
+  it("is kept as fleetd last said, through a look that doesn't say", async () => {
+    expect((await send("PUT", "/api/fleet/environments/local", { templates: TEMPLATES, running: RUNNING })).status).toBe(200);
+    expect((await send("PUT", "/api/fleet/environments/local", { templates: TEMPLATES })).status).toBe(200);
+    const [local] = (await send("GET", "/api/fleet/environments")).body;
+    expect(local.running).toEqual(RUNNING);
+    expect((await tool(owner, "spawn_status")).environments[0].running).toEqual(RUNNING);
+  });
+
+  it("drops what isn't a name", async () => {
+    const running = { ...RUNNING, residents: [{ name: "../x", up: true }, ...RUNNING.residents] };
+    const { body } = await send("PUT", "/api/fleet/environments/local", { templates: TEMPLATES, running });
+    expect(body.running.residents.map((r: any) => r.name)).toEqual(["brain-vm", "pepper-vm"]);
+    expect((await send("PUT", "/api/fleet/environments/local", { templates: TEMPLATES, running: [] })).status).toBe(400);
+  });
+});
+
 describe("the MCP tools", () => {
   it("spawn and report for the user's clients, and aren't Pepper's yet", async () => {
     const s = await tool(owner, "spawn_agent", { template: "coding", task: "look into the flaky test", board: BOARD });
