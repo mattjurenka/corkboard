@@ -12,7 +12,7 @@
 // CORKBOARD_CLOUD: the Worker's origin.
 
 import { createHash, randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 
@@ -130,17 +130,52 @@ export async function login(): Promise<void> {
   }
 }
 
+// One refresh at a time, across every process that shares auth.json (the
+// bridges, fleetd, memory-sync). Refresh tokens rotate, and the Worker keeps
+// only the newest two: two processes refreshing the same token at once (as
+// the bridge and fleetd do at boot) leave the file with whichever was saved
+// last, which the other refresh may already have made worthless.
+async function refreshing<T>(fn: () => Promise<T>): Promise<T> {
+  const lock = `${AUTH}.lock`;
+  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
+  for (;;) {
+    try {
+      closeSync(openSync(lock, "wx", 0o600));
+      break;
+    } catch (e: any) {
+      if (e.code !== "EEXIST") throw e;
+      // Left by a process that died mid-refresh.
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > 30_000) rmSync(lock, { force: true });
+      } catch {}
+      await Bun.sleep(100);
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    rmSync(lock, { force: true });
+  }
+}
+
+const fresh = (auth: Auth) => auth.expires_at - 60_000 > Date.now();
+
 // A current access token, refreshed when it's within a minute of expiring.
 // Refresh tokens rotate, so each refresh is saved before it's used.
 export async function token(): Promise<string> {
   const auth = load();
   if (!auth) throw new Error(`corkboard: not signed in to ${CLOUD}; run bun bridge/cloud.ts login`);
-  if (auth.expires_at - 60_000 > Date.now()) return auth.access_token;
-  const t = await tokens({ grant_type: "refresh_token", refresh_token: auth.refresh_token, client_id: auth.client_id }).catch((e) => {
-    throw new Error(`${e.message}; run bun bridge/cloud.ts login`);
+  if (fresh(auth)) return auth.access_token;
+  return refreshing(async () => {
+    // Another process may have refreshed while this one waited.
+    const now = load() ?? auth;
+    if (fresh(now)) return now.access_token;
+    const t = await tokens({ grant_type: "refresh_token", refresh_token: now.refresh_token, client_id: now.client_id }).catch((e) => {
+      throw new Error(`${e.message}; run bun bridge/cloud.ts login`);
+    });
+    save({ ...now, access_token: t.access_token, refresh_token: t.refresh_token, expires_at: Date.now() + t.expires_in * 1000 });
+    return t.access_token;
   });
-  save({ ...auth, access_token: t.access_token, refresh_token: t.refresh_token, expires_at: Date.now() + t.expires_in * 1000 });
-  return t.access_token;
 }
 
 if (import.meta.main) {
