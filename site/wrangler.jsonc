@@ -1,0 +1,10 @@
+// The coming-soon page at corkboard.fyi: static files only, separate from
+// the portal Worker (cloud/) so deploying one never touches the other.
+{
+  "$schema": "../cloud/node_modules/wrangler/config-schema.json",
+  "name": "corkboard-site",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  "routes": [{ "pattern": "corkboard.fyi", "custom_domain": true }],
+  "assets": { "directory": "./public" }
+}

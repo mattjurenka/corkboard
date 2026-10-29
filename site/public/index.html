@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>corkboard</title>
+<meta name="description" content="Every Claude Code session you're running, as a card on one board. Opening soon.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='2' y='2' width='60' height='60' rx='12' fill='%238a5a33'/%3E%3Crect x='7' y='7' width='50' height='50' rx='7' fill='%23d4a373'/%3E%3Ccircle cx='32' cy='30' r='12' fill='%23e0475b'/%3E%3Ccircle cx='28' cy='26' r='4' fill='%23fff' opacity='.55'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Martian+Mono:wdth,wght@75..112.5,300..800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --cork: #33241a;
+    --cork-deep: #261a12;
+    --grain: #4a3424;
+    --paper: #f6efe1;
+    --dim: #b39a80;
+    --pin: #e0475b;
+    --working: #9ece6a;
+    --blocked: #f7768e;
+    --review: #e0af68;
+    --todo: #8f7a66;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
+    --wide: "Martian Mono", var(--mono);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    min-height: 100svh;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    background-color: var(--cork);
+    /* Cork granules: two offset dot lattices at odd pitches so they never line up. */
+    background-image:
+      radial-gradient(circle at 30% 40%, var(--grain) 0 1.2px, transparent 1.6px),
+      radial-gradient(circle at 70% 60%, var(--cork-deep) 0 1px, transparent 1.4px);
+    background-size: 23px 19px, 31px 29px;
+    color: var(--paper);
+    font: 15px/1.6 var(--mono);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--review); outline-offset: 3px; }
+
+  .wrap { width: min(100% - 32px, 1040px); margin-inline: auto; }
+
+  header.wrap {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding-block: 28px;
+  }
+  .mark {
+    font-family: var(--wide);
+    font-variation-settings: "wdth" 112.5;
+    font-weight: 700;
+    font-size: 17px;
+    letter-spacing: -0.01em;
+    text-decoration: none;
+  }
+  .mark .pin { color: var(--pin); margin-right: 0.5ch; }
+
+  .key { text-decoration: none; color: var(--dim); }
+  .key kbd { font: inherit; color: var(--paper); }
+  .key:hover, .key:focus-visible { color: var(--paper); }
+
+  main.wrap { padding-block: 6vh 64px; }
+
+  h1 {
+    margin: 0;
+    max-width: 15ch;
+    font-family: var(--wide);
+    font-variation-settings: "wdth" 112.5;
+    font-weight: 800;
+    font-size: clamp(34px, 6.4vw, 72px);
+    line-height: 1.12;
+    letter-spacing: -0.035em;
+  }
+
+  .lede {
+    max-width: 58ch;
+    margin: 28px 0 0;
+    color: var(--dim);
+  }
+  .lede b { font-weight: 400; }
+  .lede .working { color: var(--working); }
+  .lede .blocked { color: var(--blocked); }
+  .lede .review { color: var(--review); }
+
+  .board {
+    margin: 56px 0 0;
+    padding: 20px 0;
+    font: 14px/1.3 var(--mono);
+    white-space: pre;
+    overflow: hidden;
+    color: var(--dim);
+    min-height: 15em;
+  }
+  .board .b-working { color: var(--working); }
+  .board .b-blocked { color: var(--blocked); }
+  .board .b-review { color: var(--review); }
+  .board .b-todo { color: var(--todo); }
+  .board .title { color: var(--paper); }
+  .board .moved { background: color-mix(in srgb, var(--paper) 16%, transparent); }
+
+  footer {
+    position: sticky;
+    bottom: 0;
+    font: 14px/1 var(--mono);
+    background: var(--cork-deep);
+    border-top: 1px solid var(--grain);
+  }
+  footer .wrap {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding-block: 10px;
+  }
+  .mode { color: var(--cork-deep); background: var(--review); padding: 2px 1ch; font-weight: 700; }
+  footer .domain { color: var(--dim); }
+
+  @media (max-width: 560px) {
+    header.wrap { padding-block: 20px; }
+    .board { font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+  <header class="wrap">
+    <a class="mark" href="/"><span class="pin" aria-hidden="true">●</span>corkboard</a>
+    <a class="key" href="https://portal.corkboard.fyi" accesskey="s"><kbd>s</kbd> sign in</a>
+  </header>
+
+  <main class="wrap">
+    <h1>Every agent you're running, pinned to one board.</h1>
+    <p class="lede">
+      corkboard turns each Claude Code session into a card. One look tells you which are
+      <b class="working">working</b>, which are <b class="blocked">blocked on you</b>, and which are
+      <b class="review">ready for review</b>, in Neovim, the browser or on your phone.
+    </p>
+    <div class="board" id="board" role="img" aria-label="A corkboard with cards moving from todo to working, blocked and review"></div>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <span class="mode">-- SOON --</span>
+      <span class="domain">corkboard.fyi opens soon</span>
+    </div>
+  </footer>
+
+<script>
+(() => {
+  const el = document.getElementById("board");
+  const COLS = [
+    { key: "todo", name: "todo" },
+    { key: "working", name: "working" },
+    { key: "blocked", name: "blocked" },
+    { key: "review", name: "review" },
+  ];
+  const ROWS = 4;
+  const backlog = [
+    "fix token refresh race", "fleet view per environment", "android away screen",
+    "move worker to new account", "plan: drag to reschedule", "pinned cards in nvim",
+    "pepper morning brief", "phone push on blocked", "usage graph by board",
+    "spawn agent on droplet", "import local boards", "handoff between sessions",
+  ];
+  let next = 0;
+  const take = () => backlog[next++ % backlog.length];
+  const lanes = {
+    todo: [take(), take(), take()],
+    working: [take(), take()],
+    blocked: [take()],
+    review: [take()],
+  };
+  let moved = null;
+
+  const esc = s => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+  const fit = (s, n) => s.length > n ? s.slice(0, n - 1) + "…" : s.padEnd(n);
+
+  function charWidth() {
+    const probe = document.createElement("span");
+    probe.textContent = "0".repeat(50);
+    el.appendChild(probe);
+    const w = probe.getBoundingClientRect().width / 50;
+    probe.remove();
+    return w || 8.4;
+  }
+
+  function render() {
+    const chars = Math.floor(el.clientWidth / charWidth());
+    const shown = chars < 56 ? COLS.slice(1, 3) : COLS;
+    const gap = 1;
+    const w = Math.max(18, Math.floor((chars - gap * (shown.length - 1)) / shown.length));
+    const inner = w - 2;
+    const lines = [];
+
+    lines.push(shown.map(c => {
+      const label = ` ${c.name} ${lanes[c.key].length} `;
+      return `<span class="b-${c.key}">┌─${label}${"─".repeat(Math.max(0, inner - label.length - 1))}┐</span>`;
+    }).join(" ".repeat(gap)));
+
+    for (let r = 0; r < ROWS; r++) {
+      lines.push(shown.map(c => {
+        const t = lanes[c.key][r];
+        const box = s => `<span class="b-${c.key}">│</span>${s}<span class="b-${c.key}">│</span>`;
+        if (!t) return box(" ".repeat(inner));
+        const cls = t === moved ? "title moved" : "title";
+        return box(` <span class="b-${c.key}">●</span> <span class="${cls}">${esc(fit(t, inner - 4))}</span> `);
+      }).join(" ".repeat(gap)));
+    }
+
+    lines.push(shown.map(c => `<span class="b-${c.key}">└${"─".repeat(inner)}┘</span>`).join(" ".repeat(gap)));
+    el.innerHTML = lines.join("\n");
+  }
+
+  // One card advances per tick, taking the moves in turn so no lane piles up;
+  // a finished working card is blocked on you about a third of the time.
+  const moves = [
+    () => lanes.todo.length && lanes.working.length < ROWS && [lanes.todo, lanes.working],
+    () => lanes.working.length && [lanes.working, Math.random() < 0.35 && lanes.blocked.length < 2 ? lanes.blocked : lanes.review],
+    () => lanes.blocked.length && [lanes.blocked, lanes.working],
+    () => lanes.review.length && [lanes.review, null],
+  ];
+  let turn = 0;
+  function step() {
+    for (let i = 0; i < moves.length; i++) {
+      const m = moves[turn++ % moves.length]();
+      if (!m) continue;
+      const [from, to] = m;
+      if (to && to.length >= ROWS) continue;
+      const card = from.shift();
+      if (to) { to.push(card); moved = card; }
+      else { lanes.todo.push(take()); moved = lanes.todo.at(-1); }
+      break;
+    }
+    render();
+  }
+
+  render();
+  document.fonts?.ready.then(render);
+  addEventListener("resize", render);
+
+  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) setInterval(step, 2200);
+
+  addEventListener("keydown", e => {
+    if (e.key === "s" && !e.metaKey && !e.ctrlKey && !e.altKey && e.target === document.body)
+      location.href = "https://portal.corkboard.fyi";
+  });
+})();
+</script>
+</body>
+</html>
