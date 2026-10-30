@@ -2,7 +2,10 @@
 // main.tsx.
 
 import { createContext, useContext } from "react";
-import type { Rpc } from "./rpc.js";
+import type { Rpc as WsRpc } from "./rpc.js";
+
+// What either connection (rpc.js, or wasm/rpc.ts) is to the page.
+export type Rpc = Pick<WsRpc, "on" | "request" | "notify">;
 
 export type Nvim = {
   rpc: Rpc;

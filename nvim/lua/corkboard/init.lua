@@ -16,7 +16,7 @@ local chans = {}
 -- What each channel was last sent, so unchanged state isn't sent again.
 -- shown_preview: the preview tab last sent (M.push_preview); false when
 -- the page has been sent nothing.
-local last_layout, last_scroll, last_context
+local last_layout, last_scroll, last_context, last_labels
 local shown_preview = false
 
 -- The last project opened, which the bridge opens when a page names no
@@ -39,15 +39,17 @@ function M.recent_projects()
   return vim.tbl_filter(function(dir) return vim.fn.isdirectory(dir) == 1 end, lines)
 end
 
--- Home is where corkboard lands without a project, so it is not one.
+-- Home is where corkboard lands without a project, so it is not one. A
+-- subdirectory or worktree is remembered as its repository.
 local function remember_project()
   local cwd = vim.fn.getcwd(-1, -1)
   if cwd == vim.uv.os_homedir() then return end
+  local root = require("corkboard.util").project_root(cwd)
   vim.fn.mkdir(vim.fs.dirname(last_project_file), "p")
-  pcall(vim.fn.writefile, { cwd }, last_project_file)
-  local projects = { cwd }
+  pcall(vim.fn.writefile, { root }, last_project_file)
+  local projects = { root }
   for _, dir in ipairs(M.recent_projects()) do
-    if dir ~= cwd and #projects < max_projects then table.insert(projects, dir) end
+    if dir ~= root and #projects < max_projects then table.insert(projects, dir) end
   end
   pcall(vim.fn.writefile, projects, projects_file)
 end
@@ -71,7 +73,7 @@ function M.attach(chan)
   status_highlights()
   M.push_theme()
   -- The new channel has seen nothing yet.
-  last_context, last_layout, last_scroll, shown_preview = nil, nil, nil, false
+  last_context, last_layout, last_scroll, last_labels, shown_preview = nil, nil, nil, nil, false
   vim.schedule(M.push_preview)
   M.push_context()
   require("corkboard.board").push_all()
@@ -89,10 +91,29 @@ end
 -- Whether a page is attached.
 function M.attached() return next(chans) ~= nil end
 
+-- What another window sent this one to do (corkboard.open's run, from the
+-- bridge): require(mod)[fn](...), once the editor is put back, which would
+-- move off it.
+function M.handoff(mod, fn, ...)
+  local args, deadline = vim.F.pack_len(...), vim.uv.now() + 10000
+  local function go()
+    if not require("corkboard.restore").restored() and vim.uv.now() < deadline then return vim.defer_fn(go, 50) end
+    require(mod)[fn](vim.F.unpack_len(args))
+  end
+  go()
+end
+
 function M.notify(method, ...)
   for chan in pairs(chans) do
     if not pcall(vim.rpcnotify, chan, method, ...) then chans[chan] = nil end
   end
+end
+
+-- A toast in the page's corner: kind is "pending", "done" or "error"; the
+-- same id again replaces it. With no page, only how it ended, as a message.
+function M.toast(id, kind, text)
+  if M.attached() then return M.notify("corkboard.toast", { id = id, kind = kind, text = text }) end
+  if kind ~= "pending" then vim.notify("corkboard: " .. text, kind == "error" and vim.log.levels.WARN or nil) end
 end
 
 -- The window's rectangle in grid cells, border included.
@@ -188,6 +209,31 @@ function M.push_layout()
     last_scroll = key
     M.notify("corkboard.scroll", scroll)
   end
+  local labels = M.tab_labels()
+  key = vim.json.encode(labels)
+  if key ~= last_labels then
+    last_labels = key
+    M.notify("corkboard.tab_labels", labels)
+  end
+end
+
+-- Names for the page's tabs where the buffer's own reads badly: a Claude
+-- Code session's is the tmux command that runs it. With its kind (project,
+-- card or pepper), which the page marks, and its state from its hooks
+-- (corkboard.agents), which the page animates while working. By tab handle;
+-- the page names the rest from their buffers.
+function M.tab_labels()
+  local labels = vim.empty_dict()
+  for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+    local buf = vim.api.nvim_win_get_buf(vim.api.nvim_tabpage_get_win(tab))
+    local kind = vim.b[buf].corkboard_claude
+    if kind then labels[tostring(tab)] = {
+        title = require("corkboard.claude").title(buf),
+        kind = kind,
+        state = require("corkboard.agents").state(buf),
+      } end
+  end
+  return labels
 end
 
 -- For the browser's scrollbars: each split in the tab showing text, as its
@@ -270,11 +316,12 @@ function M.push_theme()
   })
 end
 
--- The project (the cwd) and the current window's file, for the sidebar.
+-- The cwd and the current window's file, for the sidebar, and the project
+-- (the global cwd), which the bridge knows the window by.
 function M.push_context()
   local buf = vim.api.nvim_get_current_buf()
   local file = (vim.bo[buf].buftype == "" or vim.b[buf].corkboard_file) and vim.api.nvim_buf_get_name(buf) or ""
-  local context = { cwd = vim.fn.getcwd(), file = file ~= "" and file or nil }
+  local context = { cwd = vim.fn.getcwd(), project = vim.fn.getcwd(-1, -1), file = file ~= "" and file or nil }
   local key = vim.json.encode(context)
   if key == last_context then return end
   last_context = key
@@ -449,6 +496,10 @@ function M.statusline()
     title, detail, pos = "Day plan", os.date("%a %d %b"), false
   elseif vim.b[buf].corkboard_view == "plan-diff" then
     title, detail, pos = "Re-plan", "A accept · q keep old", false
+  elseif vim.b[buf].corkboard_view == "plan-goals" then
+    title, detail, pos = "Goals", nil, false
+  elseif vim.b[buf].corkboard_view == "plan-priority" then
+    title, detail, pos = "Priority", nil, false
   elseif vim.b[buf].corkboard_view == "markdown" then
     local src = vim.b[buf].corkboard_source
     local file = src and vim.api.nvim_buf_is_valid(src) and vim.api.nvim_buf_get_name(src) or ""
@@ -559,11 +610,10 @@ local function clip_copy(lines, regtype)
 end
 local function clip_paste() return { clip.lines, clip.regtype } end
 
--- To the tab a step away, if there is one: no wrapping at the ends.
+-- To the tab a step away, round from one end to the other.
 local function tab_step(step)
-  local i = vim.fn.tabpagenr() + step
-  if i < 1 or i > vim.fn.tabpagenr("$") then return end
-  vim.cmd.tabnext(i)
+  local n = vim.fn.tabpagenr("$")
+  vim.cmd.tabnext((vim.fn.tabpagenr() - 1 + step) % n + 1)
 end
 
 function M.setup()
@@ -622,7 +672,7 @@ function M.setup()
   -- Replaces <C-t>'s tag-stack pop.
   vim.keymap.set("n", "<C-t>", "<Cmd>tabnew<CR>", { desc = "corkboard: new tab" })
   -- Ctrl+Tab and Ctrl+Shift+Tab, or Ctrl+Shift+j and k, go down and up the
-  -- tabs from any mode, stopping at the first and last; plain Tab stays the
+  -- tabs from any mode, round from the last to the first; plain Tab stays the
   -- program's (completion, Claude Code's mode cycling).
   for lhs, step in pairs({ ["<C-Tab>"] = 1, ["<C-S-Tab>"] = -1, ["<C-S-j>"] = 1, ["<C-S-k>"] = -1 }) do
     vim.keymap.set({ "n", "i", "t" }, lhs, function() tab_step(step) end, {
@@ -640,11 +690,25 @@ function M.setup()
 
   -- Alt+h/j/k/l moves between the tab's windows, from insert and terminal
   -- mode too, leaving Ctrl+h/j/k/l to Vim and the terminal's programs.
-  vim.keymap.set({ "n", "i", "t" }, "<A-l>", "<Cmd>wincmd l<CR>", { desc = "corkboard: window l" })
+  -- Alt and the arrow that goes the same way does the same.
+  local function alt(dir, fn, opts)
+    for _, key in ipairs({ dir, require("corkboard.pinned").ARROWS[dir] }) do
+      vim.keymap.set({ "n", "i", "t" }, "<A-" .. key .. ">", fn, opts)
+    end
+  end
+  -- Left and right go round: the page's list of tabs sits left of the
+  -- leftmost window, so from the rightmost (not a float) Alt+l goes there.
+  alt("l", function()
+    local win = vim.api.nvim_get_current_win()
+    vim.cmd.wincmd("l")
+    if vim.api.nvim_get_current_win() == win and vim.api.nvim_win_get_config(win).relative == "" then
+      M.notify("corkboard.focus_tabs")
+    end
+  end, { desc = "corkboard: window l, or round to the tabs" })
   -- With no window below or above (and not from a float), Alt+j/k go on
   -- to the next or previous tab.
   for dir, step in pairs({ j = 1, k = -1 }) do
-    vim.keymap.set({ "n", "i", "t" }, "<A-" .. dir .. ">", function()
+    alt(dir, function()
       local win = vim.api.nvim_get_current_win()
       vim.cmd.wincmd(dir)
       if vim.api.nvim_get_current_win() == win and vim.api.nvim_win_get_config(win).relative == "" then
@@ -653,8 +717,9 @@ function M.setup()
     end, { desc = "corkboard: window " .. dir .. ", or the " .. (step > 0 and "next" or "previous") .. " tab" })
   end
   -- From the leftmost window (not a float), Alt+h goes on to the page's
-  -- list of tabs (corkboard.focus_tabs), where Alt+j/k change tab.
-  vim.keymap.set({ "n", "i", "t" }, "<A-h>", function()
+  -- list of tabs (corkboard.focus_tabs), where j/k change tab and Alt+j
+  -- goes on down to the files.
+  alt("h", function()
     local win = vim.api.nvim_get_current_win()
     vim.cmd.wincmd("h")
     if vim.api.nvim_get_current_win() == win and vim.api.nvim_win_get_config(win).relative == "" then
@@ -670,7 +735,8 @@ function M.setup()
   vim.api.nvim_create_autocmd("DirChanged", { group = group, callback = board.push })
   -- Where to reach this Neovim, for Pepper's hand_off (hooks/handoff.lua).
   local function announce()
-    require("corkboard.live").set("nvim", { server = vim.v.servername, window = M.window or "main", cwd = vim.fn.getcwd(-1, -1) })
+    local cwd = vim.fn.getcwd(-1, -1)
+    require("corkboard.live").set("nvim", { server = require("corkboard.util").server(), window = M.window or "main", cwd = cwd, root = require("corkboard.util").project_root(cwd) })
   end
   announce()
   vim.api.nvim_create_autocmd("DirChanged", { group = group, callback = announce })

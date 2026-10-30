@@ -1,4 +1,5 @@
-// Bridges a browser websocket to `nvim --embed`.
+// Bridges a browser websocket to `nvim --embed`; or, with ?wasm, to the
+// Neovim the page runs itself (wasm.ts), for which this is the machine.
 //
 // Neovim speaks msgpack-RPC on stdio; the browser speaks the same messages
 // as JSON over the socket. Neovim's ext types (Buffer, Window, Tabpage) cross
@@ -10,18 +11,31 @@
 
 import { decodeMultiStream, decode, encode, ExtensionCodec } from "@msgpack/msgpack";
 import type { Subprocess } from "bun";
-import { randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import * as away from "./away";
 import * as boards from "./boards";
 import * as phone from "./phone";
-import { CLOUD } from "./cloud";
+import * as remote from "./remote";
+import * as wasm from "./wasm";
+import { CLOUD, token } from "./cloud";
 
 const HOST = process.env.CORKBOARD_HOST ?? "127.0.0.1";
 const PORT = Number(process.env.CORKBOARD_PORT ?? 7777);
 const NVIM = process.env.CORKBOARD_NVIM ?? "nvim";
+// Neovim compiled to wasm (~/neovim-wasm's nvim-wasm-web: nvim.js, .wasm,
+// .data), for pages opened with ?wasm. Served at /wasm/<version>/, which
+// changes when it does, so the browser keeps its 28 MB for good.
+const NVIM_WASM = process.env.CORKBOARD_NVIM_WASM;
+const WASM_VERSION = NVIM_WASM && createHash("sha256").update(realpathSync(NVIM_WASM)).digest("hex").slice(0, 16);
+// CORKBOARD_WASM=1: every page runs its Neovim itself unless it asks not to
+// (?wasm=0): the bridge only its machine. For a bridge far from its pages
+// (the droplet's workspace), whose Neovim is then near the person using it.
+const WASM_DEFAULT = !!NVIM_WASM && process.env.CORKBOARD_WASM === "1";
+// Whether a page's URL has it run Neovim itself.
+const inPage = (url: URL) => (url.searchParams.has("wasm") ? url.searchParams.get("wasm") !== "0" : false);
 // The page as `bun run build` writes it (web/dist).
 const WEB_ROOT = new URL("../web/dist/", import.meta.url).pathname;
 // `bun run dev` (--dev): build the page again each time it loads, so a
@@ -42,6 +56,10 @@ const NAME = process.env.CORKBOARD_NAME;
 const isLoopback = (name: string) =>
   /^((.+\.)?localhost|127(\.\d+){3}|::1)$/.test(name.replace(/^\[(.*)\]$/, "$1"));
 const LOCAL = isLoopback(HOST);
+// Behind a proxy (Caddy on the droplet), the page's origin is the proxy's
+// public one, e.g. https://valheim.jurenka.software:8443: the socket opens
+// for that origin only, whatever Host the proxy sends, and wants a token.
+const ORIGIN = process.env.CORKBOARD_ORIGIN;
 
 // The token the page must send to open a socket: CORKBOARD_TOKEN, or the
 // contents of CORKBOARD_TOKEN_FILE (made there on first start, so it stays
@@ -53,7 +71,7 @@ function readToken(): string {
   if (process.env.CORKBOARD_TOKEN) return process.env.CORKBOARD_TOKEN;
   const file = process.env.CORKBOARD_TOKEN_FILE;
   if (file && existsSync(file)) return readFileSync(file, "utf8").trim();
-  if (!file && LOCAL) return "";
+  if (!file && LOCAL && !ORIGIN) return "";
   const token = randomBytes(24).toString("hex");
   if (file) writeFileSync(file, token + "\n", { mode: 0o600 });
   return token;
@@ -61,7 +79,7 @@ function readToken(): string {
 const TOKEN = readToken();
 // It goes in Sec-WebSocket-Protocol, which allows only these.
 if (TOKEN && !/^[\w.~-]+$/.test(TOKEN)) throw new Error("CORKBOARD_TOKEN: use letters, digits and . _ ~ - only");
-if (!LOCAL && !TOKEN) throw new Error(`refusing to bind ${HOST} without a token`);
+if ((!LOCAL || ORIGIN) && !TOKEN) throw new Error(`refusing to bind ${HOST} without a token`);
 const TOKEN_PROTOCOL = "corkboard.token.";
 
 const sameToken = (given: string) => {
@@ -77,6 +95,7 @@ const sameToken = (given: string) => {
 function refuse(req: Request): string | undefined {
   const host = req.headers.get("host") ?? "";
   const origin = req.headers.get("origin");
+  if (ORIGIN) return origin === ORIGIN ? undefined : `wrong origin: ${origin}`;
   if (LOCAL && !isLoopback(new URL(`http://${host}`).hostname)) return `wrong host: ${host}`;
   if (!origin || URL.parse(origin)?.host !== host) return `wrong origin: ${origin}`;
 }
@@ -118,6 +137,13 @@ type Session = {
   view?: "plan";
   // What away mode knows it by (away.ts).
   page?: away.Page;
+  // Its Neovim's project (its global cwd), as it last said.
+  project?: string;
+  // ?wasm: Neovim is the page's, and this its machine.
+  wasm?: boolean;
+  wasmHost?: wasm.Host;
+  // How to reach the page's Neovim, when it is the page's.
+  toPage?: (msg: unknown) => void;
 };
 
 // The project Neovim last opened (remember_project in corkboard/init.lua).
@@ -143,6 +169,76 @@ function resolveCwd(raw: string | null): { cwd: string; error?: string } {
     if (statSync(cwd).isDirectory()) return { cwd };
   } catch {}
   return { cwd, error: `no such directory: ${cwd}` };
+}
+
+// The portal's way in (cloud/src/portal.ts): a ticket the Worker made for
+// one board on this bridge, redeemed there as this bridge, for where the
+// board's clone is here, or else the remotes to clone it from into ~/src.
+// Then the page, with this bridge's token, at that project.
+const plain = (status: number, text: string) => new Response(text + "\n", { status, headers: { "content-type": "text/plain; charset=utf-8" } });
+const isDir = (path: string) => {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+};
+const cloning = new Map<string, Promise<string | undefined>>();
+
+async function open(ticket: string): Promise<Response> {
+  const bridge = remote.self();
+  if (!bridge) return plain(503, "this bridge isn't following the Worker (CORKBOARD_REMOTE_SESSIONS=0)");
+  let res: Response;
+  try {
+    res = await fetch(`${CLOUD}/api/workspace/redeem`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${await token()}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ bridge, ticket }),
+    });
+  } catch (err: any) {
+    return plain(503, `couldn't reach ${CLOUD}: ${err.message}`);
+  }
+  const board = (await res.json().catch(() => ({}))) as { error?: string; key: string; name: string; root: string | null; remotes: string[] };
+  if (!res.ok) return plain(res.status, board.error ?? `HTTP ${res.status}`);
+  let cwd = board.root && isDir(board.root) ? board.root : undefined;
+  if (!cwd) {
+    cwd = join(homedir(), "src", (board.name || board.key).replace(/[^\w.-]+/g, "-").replace(/^[.-]+/, "") || board.key);
+    if (!isDir(join(cwd, ".git"))) {
+      if (!cloning.has(cwd)) cloning.set(cwd, clone(board.remotes, cwd, board.key).finally(() => cloning.delete(cwd!)));
+      const failed = await cloning.get(cwd);
+      if (failed) return plain(502, failed);
+    }
+  }
+  return new Response(null, { status: 302, headers: { Location: `/?cwd=${encodeURIComponent(cwd)}${TOKEN ? `#token=${TOKEN}` : ""}` } });
+}
+
+// Each remote in turn, a GitHub one over https first (gh's credentials),
+// until one clones. What went wrong, if none did. The clone is pinned to the
+// board (util.lua's pinned_board): one added in the portal has no first commit
+// to be found by until a clone of it is opened.
+async function clone(remotes: string[], dest: string, board: string): Promise<string | undefined> {
+  const urls = remotes.flatMap((u) => {
+    const scp = u.match(/^git@github\.com:(.+)$/);
+    return scp ? [`https://github.com/${scp[1]}`, u] : [u];
+  });
+  if (!urls.length) return "that board has no remotes to clone it from";
+  const errors: string[] = [];
+  for (const url of urls) {
+    const proc = Bun.spawn(["git", "clone", "--quiet", url, dest], {
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "pipe",
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new" },
+    });
+    const timer = setTimeout(() => proc.kill(), 5 * 60_000);
+    const [err, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited]).finally(() => clearTimeout(timer));
+    if (code === 0) {
+      await Bun.spawn(["git", "-C", dest, "config", "corkboard.board", board], { stdin: "ignore", stdout: "ignore", stderr: "ignore" }).exited;
+      return;
+    }
+    errors.push(`${url}: ${err.trim() || `exit ${code}`}`);
+  }
+  return `couldn't clone it:\n${errors.join("\n")}`;
 }
 
 // A page's ?host=, checked against REMOTES. The cwd is the far side's to
@@ -219,19 +315,33 @@ function send(nvim: NonNullable<Session["nvim"]>, msg: unknown) {
   nvim.stdin.flush();
 }
 
+// To a session's Neovim: here on stdin, or in the page by way of its socket.
+// [9, msg] is the page's to hand on to its Neovim.
+function deliver(data: Session, msg: unknown) {
+  if (data.closed) return;
+  if (data.toPage) data.toPage([9, msg]);
+  else if (data.nvim) send(data.nvim, msg);
+}
+
+// Bytes in JSON, for the page to turn back into bytes ([9, ...] messages).
+// The value as it was, before a Buffer's toJSON had it.
+function toJson(this: any, key: string, value: unknown) {
+  const raw = this[key];
+  return raw instanceof Uint8Array ? { $b: Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength).toString("base64") } : value;
+}
+
 // Neovim's "corkboard.cloud" notifications are for the bridge, not the
 // page: answered here (boards.ts).
 const CLOUD_METHOD = "corkboard.cloud";
 
-function cloud(data: Session, nvim: NonNullable<Session["nvim"]>, params: any[]) {
-  const lua = (code: string, ...args: unknown[]) => {
-    if (!data.closed) send(nvim, [2, "nvim_exec_lua", [code, args]]);
-  };
+function cloud(data: Session, params: any[]) {
+  const lua = (code: string, ...args: unknown[]) => deliver(data, [2, "nvim_exec_lua", [code, args]]);
   data.cloud ??= new boards.Session((key, event) =>
     key === boards.USER
       ? // The day plan's window follows it for the plan, a project's for the fleet view.
         lua("require(require('corkboard').window == 'plan' and 'corkboard.plan' or 'corkboard.fleet').cloud_event(...)", event)
       : lua("require('corkboard.cards').cloud_event(...)", key, event),
+    () => away.list(data.page),
   );
   const [id, op, ...args] = params;
   const answer = (a: object) => lua("require('corkboard.cards.cloud').answer(...)", { id, ...a });
@@ -256,12 +366,27 @@ function awayFrom(data: Session, [op, ...args]: any[]) {
 // Close reasons are capped at 123 bytes by the websocket spec.
 const closeReason = (s: string) => new TextEncoder().encode(s).length > 120 ? s.slice(0, 100) + "…" : s;
 
+// What Neovim tells the bridge rather than the page: true when that's all
+// msg was. The page's own Neovim's come by way of the page.
+function fromNvim(ws: Bun.ServerWebSocket<Session>, msg: unknown): boolean {
+  if (!Array.isArray(msg) || msg[0] !== 2) return false;
+  const params = msg[2] as any[];
+  if (msg[1] === CLOUD_METHOD) cloud(ws.data, params);
+  else if (msg[1] === AWAY_METHOD) awayFrom(ws.data, params);
+  else if (msg[1] === OPEN_METHOD) {
+    const [{ cwd, run }] = params as [{ cwd: string; run?: Run }];
+    openWindow(ws, cwd, run);
+  } else {
+    if (msg[1] === "corkboard.context") arrived(ws, params[0]);
+    return false;
+  }
+  return true;
+}
+
 async function pump(ws: Bun.ServerWebSocket<Session>, nvim: NonNullable<Session["nvim"]>) {
   try {
     for await (const msg of decodeMultiStream(nvim.stdout, { extensionCodec })) {
-      if (Array.isArray(msg) && msg[0] === 2 && msg[1] === CLOUD_METHOD) cloud(ws.data, nvim, msg[2] as any[]);
-      else if (Array.isArray(msg) && msg[0] === 2 && msg[1] === AWAY_METHOD) awayFrom(ws.data, msg[2] as any[]);
-      else ws.send(JSON.stringify(msg));
+      if (!fromNvim(ws, msg)) ws.send(JSON.stringify(msg));
     }
   } catch (err) {
     console.error("nvim stream:", err);
@@ -307,6 +432,66 @@ function build() {
   return building;
 }
 
+// One window per project on each machine. A project asked for again (Neovim's
+// corkboard.open: the projects picker, the day plan, the fleet view; the
+// page's corkboard.window: Open project) brings its window forward rather
+// than opening another; one with no window yet opens in a new one from the
+// window that asked (corkboard.open in main.tsx). run, from Neovim, is what
+// to do there once it's up: [module, function, ...args], which handoff in
+// corkboard/init.lua calls.
+const OPEN_METHOD = "corkboard.open";
+const WINDOW_METHOD = "corkboard.window";
+type Run = [string, string, ...unknown[]];
+// What to run in the windows asked for, when each says it's there.
+const opening = new Map<string, { at: number; runs: Run[] }>();
+const OPENING_MS = 60 * 1000;
+
+const trimSlash = (dir: string) => (dir.length > 1 ? dir.replace(/\/+$/, "") : dir);
+const windowKey = (host: string | undefined, project: string) => `${host ?? ""}\0${project}`;
+const notifyPage = (ws: Bun.ServerWebSocket<Session>, method: string, ...params: unknown[]) =>
+  ws.send(JSON.stringify([2, method, params]));
+const handoff = (ws: Bun.ServerWebSocket<Session>, run: Run) => ws.data.page?.exec("require('corkboard').handoff(...)", ...run);
+
+function windowOf(host: string | undefined, project: string) {
+  for (const ws of pages) if (!ws.data.view && ws.data.host === host && ws.data.project === project) return ws;
+}
+
+function openWindow(from: Bun.ServerWebSocket<Session>, cwd: string, run?: Run) {
+  const project = trimSlash(cwd);
+  const there = windowOf(from.data.host, project);
+  if (there) {
+    if (run) handoff(there, run);
+    if (there !== from) notifyPage(there, "corkboard.front");
+    return;
+  }
+  const key = windowKey(from.data.host, project);
+  const was = opening.get(key);
+  const runs = was && Date.now() - was.at < OPENING_MS ? was.runs : [];
+  opening.set(key, { at: Date.now(), runs: run ? [...runs, run] : runs });
+  notifyPage(from, OPEN_METHOD, { cwd: project });
+}
+
+// Each page, the projects with a window on its machine, for Open project.
+function tellWindows() {
+  for (const ws of pages) {
+    const projects = [...pages].filter((o) => !o.data.view && o.data.project && o.data.host === ws.data.host).map((o) => o.data.project);
+    notifyPage(ws, "corkboard.windows", projects);
+  }
+}
+
+// A window's project, as its Neovim says it (corkboard.context). One just
+// opened for it gets what it was opened to do.
+function arrived(ws: Bun.ServerWebSocket<Session>, context: { cwd?: string; project?: string } | undefined) {
+  const dir = context?.project ?? context?.cwd;
+  if (!dir || ws.data.view || trimSlash(dir) === ws.data.project) return;
+  ws.data.project = trimSlash(dir);
+  const key = windowKey(ws.data.host, ws.data.project);
+  const was = opening.get(key);
+  opening.delete(key);
+  if (was && Date.now() - was.at < OPENING_MS) for (const run of was.runs) handoff(ws, run);
+  tellWindows();
+}
+
 // The day plan's window, while one is open.
 let planWindow: Bun.ServerWebSocket<Session> | undefined;
 // Every page's socket, for the reload below.
@@ -329,6 +514,78 @@ if (DEV) {
     console.log(`commit ${now.slice(0, 7)}: reloading ${pages.size} page(s)`);
     for (const ws of pages) ws.send(JSON.stringify([2, "corkboard.reload", []]));
   }, 2000);
+}
+
+const ISOLATED = { "cross-origin-embedder-policy": "require-corp", "cross-origin-resource-policy": "same-origin" };
+const IMMUTABLE = "private, max-age=31536000, immutable";
+
+// What of Neovim's runtimepath never changes, whole, for the page to keep
+// (wasm.snapshot), at a URL that changes when it does.
+const SNAPSHOT_ROOTS = wasm.snapshotRoots([PLUGIN_ROOT, ...PLUGINS]);
+const SNAPSHOT_KEY = createHash("sha256").update(SNAPSHOT_ROOTS.join("\0")).digest("hex").slice(0, 16);
+let snapshotBytes: Uint8Array | undefined;
+
+function snapshotFile(req: Request, url: URL): Response {
+  if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
+  if (url.pathname !== `/host/snapshot/${SNAPSHOT_KEY}` || !SNAPSHOT_ROOTS.length) return new Response("not found", { status: 404 });
+  snapshotBytes ??= wasm.snapshot(SNAPSHOT_ROOTS);
+  return new Response(snapshotBytes, { headers: { ...ISOLATED, "content-type": "application/msgpack", "cache-control": IMMUTABLE } });
+}
+
+// The pages whose Neovim is theirs, by the id their worker calls /host with.
+const hosts = new Map<string, wasm.Host>();
+
+function startWasm(ws: Bun.ServerWebSocket<Session>) {
+  const data = ws.data;
+  data.toPage = (msg) => ws.send(JSON.stringify(msg, toJson));
+  // As spawnLocal gives it to Neovim, which its processes inherit.
+  const env = { ...(process.env as Record<string, string>), CORKBOARD_CLOUD: CLOUD, ...(data.view ? { CORKBOARD_WINDOW: data.view } : {}) };
+  const host = new wasm.Host(
+    (code, ...args) => deliver(data, [2, "nvim_exec_lua", [code, args]]),
+    (tag, method, params) => data.toPage!([10, tag, method, params]),
+    env,
+  );
+  data.wasmHost = host;
+  hosts.set(host.id, host);
+  const rtp = `set rtp^=${[PLUGIN_ROOT, ...PLUGINS].map((p) => p.replace(/[ \\,]/g, "\\Bun.serve<Session, {}>({")).join(",")}`;
+  notifyPage(ws, "corkboard.host", {
+    id: host.id,
+    cwd: data.cwd,
+    home: homedir(),
+    mounts: wasm.mounts(),
+    seeds: wasm.seeds(data.cwd, homedir(), env),
+    wasm: `wasm/${WASM_VERSION}/`,
+    snapshot: SNAPSHOT_ROOTS.length ? `host/snapshot/${SNAPSHOT_KEY}` : null,
+    env,
+    // Its processes start Neovim too (the hooks' `nvim -l`), this machine's.
+    args: ["--cmd", rtp, "--cmd", `let g:corkboard_wasm = 1 | let g:corkboard_server = '${host.socket}' | let g:corkboard_nvim = '${Bun.which(NVIM) ?? NVIM}'`],
+  });
+}
+
+// From a page whose Neovim is its own: what that Neovim said for the bridge,
+// and answers to the hooks' requests.
+function fromWasm(ws: Bun.ServerWebSocket<Session>, msg: any[]) {
+  if (msg[0] === 10) return ws.data.wasmHost!.reply(msg[1], msg[2], msg[3]);
+  if (msg[0] === 2 && msg[1] === AWAY_METHOD) return awayFrom(ws.data, msg[2]);
+  if (msg[0] === 2 && msg[1] === WINDOW_METHOD) {
+    const [cwd] = msg[2];
+    if (typeof cwd === "string") openWindow(ws, cwd);
+    return;
+  }
+  fromNvim(ws, msg);
+}
+
+// /host/fs and /host/lua, from a page's worker: as guarded as the socket
+// (its origin, the token), and for a page that has one open.
+async function hostCall(req: Request, url: URL): Promise<Response> {
+  const why = refuse(req);
+  if (why || req.method !== "POST") return new Response(why ?? "POST", { status: 403 });
+  if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
+  const host = hosts.get(url.searchParams.get("s") ?? "");
+  if (!host) return new Response("no such page", { status: 404 });
+  const body = new Uint8Array(await req.arrayBuffer());
+  const out = url.pathname === "/host/fs" ? host.fs(body) : await host.lua(body);
+  return new Response(out, { headers: { "content-type": "application/msgpack" } });
 }
 
 Bun.serve<Session, {}>({
@@ -360,11 +617,31 @@ Bun.serve<Session, {}>({
             : host
               ? resolveRemote(host, cwd)
               : resolveCwd(cwd);
+      if (inPage(url) && !data.error) {
+        if (data.host) data.error = "a page on another machine runs Neovim there, not in wasm";
+        else if (!NVIM_WASM) data.error = "CORKBOARD_NVIM_WASM is not set";
+        else data.wasm = true;
+      }
       // The browser drops a socket whose reply names no protocol it offered.
       const headers = offered.includes("corkboard") ? { "sec-websocket-protocol": "corkboard" } : undefined;
       return server.upgrade(req, { data, headers }) ? undefined : new Response("upgrade failed", { status: 400 });
     }
+    if (url.pathname === "/open") return open(url.searchParams.get("ticket") ?? "");
+    if (url.pathname === "/host/fs" || url.pathname === "/host/lua") return hostCall(req, url);
+    if (url.pathname.startsWith(`/host/snapshot/`)) return snapshotFile(req, url);
+    if (url.pathname.startsWith(`/wasm/${WASM_VERSION}/`) && NVIM_WASM) {
+      const name = url.pathname.split("/").at(-1)!;
+      const file = Bun.file(`${NVIM_WASM}/${name}`);
+      if (!/^nvim\.(js|wasm|data)$/.test(name) || !(await file.exists())) return new Response("not found", { status: 404 });
+      return new Response(file, { headers: { ...ISOLATED, "cache-control": IMMUTABLE } });
+    }
     const path = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
+    // The page, as one that runs Neovim itself, unless it said otherwise.
+    // The fragment (#token=) goes with the redirect.
+    if (path === "index.html" && WASM_DEFAULT && !url.searchParams.has("wasm") && !url.searchParams.has("host")) {
+      url.searchParams.set("wasm", "");
+      return new Response(null, { status: 302, headers: { location: `${url.pathname}${url.search}` } });
+    }
     if (path.split("/").includes("..")) return new Response("no", { status: 400 });
     if (DEV) {
       const failed = await (path === "index.html" ? build() : building);
@@ -375,7 +652,10 @@ Bun.serve<Session, {}>({
       const manifest = { ...(await file.json()), name: NAME, short_name: NAME };
       return new Response(JSON.stringify(manifest), { headers: { "content-type": "application/manifest+json" } });
     }
-    return (await file.exists()) ? new Response(file) : new Response("not found", { status: 404 });
+    if (!(await file.exists())) return new Response("not found", { status: 404 });
+    // The page that runs Neovim itself needs SharedArrayBuffer, and so
+    // cross-origin isolation.
+    return new Response(file, { headers: path === "index.html" && inPage(url) ? { ...ISOLATED, "cross-origin-opener-policy": "same-origin" } : ISOLATED });
   },
 
   websocket: {
@@ -385,9 +665,7 @@ Bun.serve<Session, {}>({
       ws.data.page = {
         host: ws.data.host,
         notify: (method, ...params) => ws.send(JSON.stringify([2, method, params])),
-        exec: (code, ...args) => {
-          if (ws.data.nvim && !ws.data.closed) send(ws.data.nvim, [2, "nvim_exec_lua", [code, args]]);
-        },
+        exec: (code, ...args) => deliver(ws.data, [2, "nvim_exec_lua", [code, args]]),
       };
       away.opened(ws.data.page);
       // One day plan at a time: a new plan window takes over from the old.
@@ -395,6 +673,7 @@ Bun.serve<Session, {}>({
         planWindow?.close(4002, "the day plan opened in another window");
         planWindow = ws;
       }
+      if (ws.data.wasm) return startWasm(ws);
       if (ws.data.host) {
         spawnRemote(ws.data).then(
           (nvim) => (ws.data.closed ? nvim.kill() : start(ws, nvim)),
@@ -415,7 +694,13 @@ Bun.serve<Session, {}>({
 
     message(ws, raw) {
       const text = String(raw);
+      if (ws.data.wasmHost) return fromWasm(ws, JSON.parse(text));
       if (text.startsWith(`[2,"${AWAY_METHOD}"`)) return awayFrom(ws.data, JSON.parse(text)[2]);
+      if (text.startsWith(`[2,"${WINDOW_METHOD}"`)) {
+        const [cwd] = JSON.parse(text)[2];
+        if (typeof cwd === "string") openWindow(ws, cwd);
+        return;
+      }
       if (ws.data.nvim) toNvim(ws.data.nvim, text);
       else ws.data.queued?.push(text);
     },
@@ -423,15 +708,19 @@ Bun.serve<Session, {}>({
     close(ws) {
       if (planWindow === ws) planWindow = undefined;
       pages.delete(ws);
+      if (ws.data.project) tellWindows();
       if (ws.data.page) away.closed(ws.data.page);
       ws.data.closed = true;
       ws.data.cloud?.close();
       ws.data.nvim?.kill();
+      if (ws.data.wasmHost) hosts.delete(ws.data.wasmHost.id);
+      ws.data.wasmHost?.close();
     },
   },
 });
 
-console.log(`corkboard on http://${HOST.includes(":") ? `[${HOST}]` : HOST}:${PORT}/${TOKEN ? `#token=${TOKEN}` : ""}`);
+console.log(`corkboard on ${ORIGIN ?? `http://${HOST.includes(":") ? `[${HOST}]` : HOST}:${PORT}`}/${TOKEN ? `#token=${TOKEN}` : ""}`);
 
-// What the phone needs from this machine (phone.ts).
+// What the phone needs from this machine (phone.ts), and from this bridge (remote.ts).
 phone.start();
+remote.start(PORT);

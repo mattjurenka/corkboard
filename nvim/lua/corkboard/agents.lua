@@ -159,11 +159,11 @@ local function clear(buf)
   clearing[buf] = nil
   if not (id and terminal.alive(buf)) then return end
   if vim.b[buf].corkboard_card == id then M.link(buf, nil) end
-  local chan = vim.bo[buf].channel
-  vim.api.nvim_chan_send(chan, "/clear")
+  local chan = terminal.job(buf)
+  vim.fn.chansend(chan, "/clear")
   -- Claude Code opens its command menu on the /; Enter once it has.
   vim.defer_fn(function()
-    if terminal.alive(buf) then vim.api.nvim_chan_send(chan, "\r") end
+    if terminal.alive(buf) then vim.fn.chansend(chan, "\r") end
   end, 200)
   vim.notify("corkboard: " .. id .. " is done, so its session was cleared for the next task")
 end
@@ -201,6 +201,8 @@ function M.hook(ev)
     id = ev.card
   end
   track_context(buf, ev)
+  -- When you last said something to it, which away mode orders by.
+  if ev.event == "UserPromptSubmit" then vim.b[buf].corkboard_typed = os.time() * 1000 end
   local was = live[buf]
   local state = event_state(ev)
   if state then
@@ -210,6 +212,9 @@ function M.hook(ev)
     local waiting = state == "asking" or state == "permission"
     vim.b[buf].corkboard_asking = waiting and (asking(ev) or vim.b[buf].corkboard_asking) or nil
     require("corkboard.away").report()
+    -- The tab's mark: a session in a tab off screen draws nothing that
+    -- would push it.
+    require("corkboard").push_layout()
   end
   -- Its card was done while it was mid-turn.
   if clearing[buf] and between_turns(buf) then return vim.schedule(function() clear(buf) end) end
@@ -303,7 +308,7 @@ local function cloud_mcp_config(id)
   local grant = cards.agent_token(id, "claude")
   local dir = vim.fs.joinpath(vim.fn.stdpath("state"), "corkboard", "agents")
   vim.fn.mkdir(dir, "p", tonumber("700", 8))
-  local path = vim.fs.joinpath(dir, util.path_key(vim.fn.getcwd()) .. "-" .. id:lower() .. ".json")
+  local path = vim.fs.joinpath(dir, util.project_key() .. "-" .. id:lower() .. ".json")
   local config = { mcpServers = { corkboard = { type = "http", url = grant.url, headers = { Authorization = "Bearer " .. grant.token } } } }
   local fd = assert(vim.uv.fs_open(path, "w", tonumber("600", 8)))
   vim.uv.fs_write(fd, vim.json.encode(config))

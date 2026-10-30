@@ -8,7 +8,7 @@ local function hook(name)
   local script = vim.api.nvim_get_runtime_file("hooks/" .. name, false)[1]
   return {
     type = "command",
-    command = table.concat({ vim.fn.shellescape(vim.v.progpath), "--clean --headless -l", vim.fn.shellescape(script) }, " "),
+    command = table.concat({ vim.fn.shellescape(require("corkboard.util").progpath()), "--clean --headless -l", vim.fn.shellescape(script) }, " "),
   }
 end
 
@@ -48,11 +48,14 @@ local NOTIFY_PROMPT = table.concat({
 -- right of the current one), via
 -- (a command that runs claude somewhere else, like { "pepper-vm-ssh" }:
 -- corkboard's hooks and mod are files on this machine, so that session goes
--- without them). The tab closes with the session, unless a shell in it is
--- still running.
+-- without them), attach (a command that joins a session already running
+-- elsewhere, run as it is: prompt and args don't apply), vm (the VM via or
+-- attach reaches, for the fleet view), shell (a command for a shell where
+-- the session runs, which <C-`> opens there). The tab closes with the session,
+-- unless a shell in it is still running.
 function M.start(opts)
   opts = opts or {}
-  local exe = opts.via and opts.via[1] or "claude"
+  local exe = opts.attach and opts.attach[1] or opts.via and opts.via[1] or "claude"
   if vim.fn.executable(exe) == 0 then
     vim.notify("corkboard: " .. exe .. " is not on PATH", vim.log.levels.ERROR)
     return nil
@@ -68,6 +71,8 @@ function M.start(opts)
   local tab = vim.api.nvim_get_current_tabpage()
   -- What it is, for corkboard.claude.cards, which opens beside it.
   vim.b[buf].corkboard_claude = opts.kind or "project"
+  vim.b[buf].corkboard_vm = opts.vm
+  vim.b[buf].corkboard_shell = opts.shell
   -- Its --name, for away mode's list (corkboard.away).
   local args = opts.args or {}
   for i, arg in ipairs(args) do
@@ -75,11 +80,13 @@ function M.start(opts)
     if arg == "--name" then vim.b[buf].corkboard_name = args[i + 1] end
   end
   -- Elsewhere, its PushNotifications have no hook to bring them here.
-  local parts = opts.via and {} or { NOTIFY_PROMPT }
+  local parts = (opts.via or opts.attach) and {} or { NOTIFY_PROMPT }
   if opts.prompt then table.insert(parts, opts.prompt) end
   local prompt = table.concat(parts, "\n\n")
   local cmd
-  if opts.via then
+  if opts.attach then
+    cmd = vim.deepcopy(opts.attach)
+  elseif opts.via then
     cmd = vim.list_extend(vim.deepcopy(opts.via), { "claude", "--append-system-prompt", prompt })
   else
     cmd = { "claude", "--settings", vim.json.encode(settings()), "--append-system-prompt", prompt }
@@ -88,9 +95,11 @@ function M.start(opts)
     local mod = vim.api.nvim_get_runtime_file("claude-plugin/.claude-plugin/plugin.json", false)[1]
     if mod then vim.list_extend(cmd, { "--plugin-dir", vim.fs.dirname(vim.fs.dirname(mod)) }) end
   end
-  vim.fn.jobstart(vim.list_extend(cmd, opts.args or {}), {
+  vim.fn.jobstart(opts.attach and cmd or vim.list_extend(cmd, opts.args or {}), {
     term = true,
     cwd = opts.cwd,
+    -- Its colors, for the phone.
+    on_stdout = require("corkboard.vt").track(buf),
     -- CORKBOARD_BUF tells the hooks which terminal the session is in;
     -- CORKBOARD_LIVE and CORKBOARD_SESSION, the mod what to draw.
     env = vim.tbl_extend("force", opts.env or {}, {
@@ -99,11 +108,14 @@ function M.start(opts)
       CORKBOARD_SESSION = opts.kind or "project",
     }),
   })
+  -- Elsewhere, no hook says it started.
+  if opts.via or opts.attach then vim.schedule(require("corkboard.away").report) end
   vim.api.nvim_create_autocmd("TermClose", {
     buffer = buf,
     once = true,
     callback = function()
-      local status = vim.v.event.status
+      local status = vim.b[buf].corkboard_exit_status or vim.v.event.status
+      require("corkboard.vt").forget(buf)
       vim.schedule(function()
         if opts.on_exit then opts.on_exit(status) end
         require("corkboard.away").report()
@@ -115,6 +127,13 @@ function M.start(opts)
     end,
   })
   return buf
+end
+
+-- What to call a session: its --name, else what Claude Code puts in the
+-- terminal's title (without its spinner), else Claude Code.
+function M.title(buf)
+  local t = (vim.b[buf].term_title or ""):gsub("^[^%w]+", "")
+  return vim.b[buf].corkboard_name or (t ~= "" and t) or "Claude Code"
 end
 
 -- <C-.>: Claude Code in the project.

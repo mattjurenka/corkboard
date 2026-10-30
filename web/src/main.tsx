@@ -5,28 +5,34 @@ import { App } from "./App";
 import { Grid } from "./nvim/grid.js";
 import { attachInput } from "./nvim/input.js";
 import { Rpc } from "./nvim/rpc.js";
+import { WasmRpc } from "./nvim/wasm/rpc";
 import { makeNvim, NvimContext } from "./nvim/context";
-import { store } from "./store";
+import { store, type Tab, type Toast } from "./store";
 import { askPermissionOnGesture, notifyAttention, notifyBack, notifyClaude } from "./attention";
 import { chime } from "./chime";
 import { openPlan } from "./planWindow";
-import { save as saveSkeleton } from "./skeleton";
+import { remember, save as saveSkeleton } from "./skeleton";
 
 // ?cwd=/path/to/project opens Neovim there; ?host=<name> on that machine,
 // over ssh (CORKBOARD_REMOTES in bridge/server.ts). ?view=plan is the day
-// plan's window instead (planWindow.ts).
+// plan's window instead (planWindow.ts). ?wasm runs Neovim in the page
+// (nvim/wasm), the bridge only its machine; ?wasm=0 doesn't, where the
+// bridge would have it (CORKBOARD_WASM in bridge/server.ts).
 const params = new URLSearchParams(location.search);
 const view = params.get("view") === "plan" ? "plan" : null;
 const host = view ? null : params.get("host");
+const wasm = params.get("wasm");
+const inPage = wasm !== null && wasm !== "0";
 const wsUrl = new URL("nvim", location.href);
 wsUrl.protocol = location.protocol === "https:" ? "wss:" : "ws:";
 const query = (cwd: string | null) => {
   const q = new URLSearchParams();
   if (host) q.set("host", host);
   if (cwd != null) q.set("cwd", cwd);
+  if (wasm !== null) q.set("wasm", wasm);
   return q.size ? `?${q}` : "";
 };
-wsUrl.search = view ? "?view=plan" : query(params.get("cwd"));
+wsUrl.search = view ? `?view=plan${wasm !== null ? `&wasm=${wasm}` : ""}` : query(params.get("cwd"));
 
 // The bridge's token, when it wants one (TOKEN in bridge/server.ts). It comes
 // in the fragment, #token=, and is kept so reloads and the windows of other
@@ -43,8 +49,11 @@ if (fragment.has("token")) {
   history.replaceState(null, "", `${location.pathname}${location.search}${fragment.size ? `#${fragment}` : ""}`);
 }
 
-const rpc = new Rpc(wsUrl, ["corkboard", ...(token ? [`corkboard.token.${token}`] : [])]);
+const protocols = ["corkboard", ...(token ? [`corkboard.token.${token}`] : [])];
+const rpc = inPage ? new WasmRpc(wsUrl, protocols, token) : new Rpc(wsUrl, protocols);
 const nvim = makeNvim(rpc);
+// For tests and the console.
+(window as any).__nvim = nvim;
 store.set({ host, view });
 
 // Rendered at once, so the canvas is there for the grid.
@@ -82,23 +91,33 @@ rpc.on("corkboard.files_changed",() => store.set({ filesVersion: store.get().fil
 // would show the view buffer's text (entering a tab) or the previous
 // panel's (leaving one). The timeout covers a layout with no redraw after
 // it, as at attach. Scrollbars wait for the flush the same way.
-let pending: { layout?: any; scroll?: any } = {};
+let pending: { layout?: any; scroll?: any; switching?: null } = {};
 let layoutTimer: ReturnType<typeof setTimeout> | undefined;
 const applyLayout = () => {
   clearTimeout(layoutTimer);
-  if (pending.layout || pending.scroll) flushSync(() => store.set(pending));
+  // The tab the sidebar asked for, drawn, ends its loading in the same
+  // render as its layout. Its layout comes before this flush, or not at all
+  // when it is laid out as the last tab was.
+  const { tabs, switching } = store.get();
+  if (pending.layout?.wins && tabs) remember(tabs.current.id, pending.layout.wins);
+  if (switching !== null && switching === tabs?.current.id) pending.switching = null;
+  if (pending.layout || pending.scroll || pending.switching === null) flushSync(() => store.set(pending));
   pending = {};
 };
 const later = () => {
   clearTimeout(layoutTimer);
   layoutTimer = setTimeout(applyLayout, 50);
 };
+// Neovim's names for tabs whose buffer names read badly, by tab handle
+// (corkboard.tab_labels), put on the tabs so the skeleton keeps them.
+let tabLabels: Record<string, NonNullable<Tab["label"]>> = {};
+const labelTabs = (tabs: Tab[]) => tabs.map((t) => ({ ...t, label: tabLabels[t.tab.id] }));
 rpc.on("redraw", (batches: any[]) => {
   grid.redraw(batches);
   for (const [name, ...calls] of batches) {
     if (name === "tabline_update") {
       const [current, tabs] = calls.at(-1);
-      store.set({ tabs: { current, tabs } });
+      store.set({ tabs: { current, tabs: labelTabs(tabs) } });
     }
   }
   if (batches.some(([name]) => name === "flush")) applyLayout();
@@ -110,6 +129,11 @@ rpc.on("corkboard.layout", ([layout]: any[]) => {
 rpc.on("corkboard.scroll", ([scroll]: any[]) => {
   pending.scroll = scroll;
   later();
+});
+rpc.on("corkboard.tab_labels", ([labels]: any[]) => {
+  tabLabels = labels ?? {};
+  const tabs = store.get().tabs;
+  if (tabs) store.set({ tabs: { ...tabs, tabs: labelTabs(tabs.tabs) } });
 });
 rpc.on("corkboard.board", ([state]: any[]) => {
   store.set({ views: { ...store.get().views, board: state } });
@@ -126,15 +150,24 @@ rpc.on("corkboard.notification", ([n]: any[]) =>
 // "enter") through to here, which is not a state.
 rpc.on("corkboard.away", ([away]: any[]) => store.set({ away: typeof away === "object" ? away : null }));
 rpc.on("corkboard.tools", ([tools]: any[]) => store.set({ tools }));
+rpc.on("corkboard.projects", ([projects]: any[]) => store.set({ projects }));
 rpc.on("corkboard.chime", () => chime());
+// A toast replaces the one with its id; one that's ended goes after a while.
+rpc.on("corkboard.toast", ([t]: [Toast]) => {
+  store.set({ toasts: [...store.get().toasts.filter((o) => o.id !== t.id), t] });
+  if (t.kind === "pending") return;
+  setTimeout(() => store.set({ toasts: store.get().toasts.filter((o) => o !== t) }), t.kind === "error" ? 8000 : 3000);
+});
 rpc.on("corkboard.away_return", ([here]: any[]) => {
   if (!here) notifyBack();
   canvas.focus();
 });
 rpc.on("corkboard.usage",([state]: any[]) => store.set({ views: { ...store.get().views, usage: state } }));
 rpc.on("corkboard.fleet", ([state]: any[]) => store.set({ views: { ...store.get().views, fleet: state } }));
-rpc.on("corkboard.plan", ([state]: any[]) => store.set({ views: { ...store.get().views, plan: state } }));
+// The day and the ranked list are two windows on one state.
+rpc.on("corkboard.plan", ([state]: any[]) => store.set({ views: { ...store.get().views, plan: state, "plan-priority": state } }));
 rpc.on("corkboard.plan_diff", ([state]: any[]) => store.set({ views: { ...store.get().views, "plan-diff": state } }));
+rpc.on("corkboard.plan_goals", ([state]: any[]) => store.set({ views: { ...store.get().views, "plan-goals": state } }));
 // A state without text (a markdown preview's scroll) keeps the last text.
 rpc.on("corkboard.view", ([buf, state]: any[]) => {
   const bufs = store.get().bufs;
@@ -157,6 +190,17 @@ rpc.on("corkboard.clipboard", ([text]: any[]) => {
 rpc.on("corkboard.open_plan", () => {
   if (!openPlan()) rpc.notify("nvim_exec_lua", "vim.notify(...)", ["corkboard: the browser blocked the day plan's window", 3]);
 });
+// The project asked for from another window has this one (openWindow in
+// bridge/server.ts): it comes forward, which focus() alone can't do on
+// Wayland; this navigation within the page tells the desktop app to
+// (app/main.js), as for the day plan (planWindow.ts).
+rpc.on("corkboard.front", () => {
+  location.hash = `front-${Date.now()}`;
+  window.focus();
+  canvas.focus();
+});
+// The projects with a window on this machine, for Open project.
+rpc.on("corkboard.windows", ([windows]: any[]) => store.set({ windows }));
 rpc.on("corkboard.open", ([{ cwd }]: any[]) => {
   const url = new URL(location.href);
   url.search = query(cwd);
@@ -189,9 +233,23 @@ rpc.on("corkboard.theme", async ([theme]: any[]) => {
 });
 // The tabs and windows, for the next load to show while Neovim starts.
 addEventListener("pagehide", () => saveSkeleton(store.get()));
+// A bridge that went away (restarted, or the machine slept) is waited for,
+// and the page loads again once it answers, with a new Neovim as a reload
+// would. A close the bridge chose (Neovim exited, a wrong token, the plan
+// opened elsewhere) stays closed.
+const reconnect = async () => {
+  for (let wait = 500; ; wait = Math.min(wait * 2, 5000)) {
+    await new Promise((r) => setTimeout(r, wait));
+    try {
+      if ((await fetch("manifest.webmanifest", { method: "HEAD", cache: "no-store" })).ok) return location.reload();
+    } catch {}
+  }
+};
 rpc.on("close", (e: CloseEvent) => {
   document.title = "corkboard (disconnected)";
-  store.set({ status: e.reason || (e.code === 1006 ? "can't reach the bridge — is it running?" : "nvim exited") });
+  const lost = e.code === 1006 || e.code === 1001;
+  store.set({ status: e.reason || (lost ? "can't reach the bridge — reconnecting" : "nvim exited") });
+  if (lost) reconnect();
 });
 
 await rpc.ready;

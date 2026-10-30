@@ -3,9 +3,13 @@
 
 local M = {}
 
+-- A terminal buffer's job, for jobwait and chansend: its channel, which
+-- b:terminal_job_id has where 'channel' doesn't (corkboard.wasm's).
+function M.job(buf) return vim.b[buf].terminal_job_id or vim.bo[buf].channel end
+
 -- Whether a terminal buffer's job is still running.
 function M.alive(buf)
-  return buf ~= nil and vim.api.nvim_buf_is_valid(buf) and vim.fn.jobwait({ vim.bo[buf].channel }, 0)[1] == -1
+  return buf ~= nil and vim.api.nvim_buf_is_valid(buf) and vim.fn.jobwait({ M.job(buf) }, 0)[1] == -1
 end
 
 -- A new tab showing buf, with :tabnew's empty buffer cleaned up.
@@ -27,7 +31,7 @@ end
 
 -- <C-`>: a shell along the bottom of the tab. Toggles: hidden when shown,
 -- back (the same shell) when not. One per tab, made again once it exits.
--- Not in a shell's own tab.
+-- Not in a shell's own tab. Beside a session in a VM, the shell is in its VM.
 function M.toggle()
   if vim.t.corkboard_terminal_tab then return end
   local buf = vim.t.corkboard_terminal
@@ -45,7 +49,13 @@ function M.toggle()
     vim.cmd("botright 15split")
     vim.api.nvim_win_set_buf(0, buf)
   else
-    vim.cmd("botright 15split | terminal")
+    local shell = vim.b.corkboard_shell
+    for _, win in ipairs(shell and {} or vim.api.nvim_tabpage_list_wins(0)) do
+      shell = shell or vim.b[vim.api.nvim_win_get_buf(win)].corkboard_shell
+    end
+    vim.cmd("botright 15split")
+    vim.cmd.enew()
+    vim.fn.jobstart(shell or { vim.o.shell }, { term = true })
     vim.bo.bufhidden = "hide"
     vim.t.corkboard_terminal = vim.api.nvim_get_current_buf()
   end
