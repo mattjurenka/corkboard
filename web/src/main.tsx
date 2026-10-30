@@ -19,8 +19,9 @@ import { nvimFlushed, startLatency } from "./latency";
 // plan's window instead (planWindow.ts). ?wasm runs Neovim in the page
 // (nvim/wasm), the bridge only its machine; ?wasm=0 doesn't, where the
 // bridge would have it (CORKBOARD_WASM in bridge/server.ts).
-// ?wasm=ephemeral&repo=owner/name[&ref=] has no machine at all: Neovim's
-// files are a clone of that Forgejo repository, in memory (nvim/wasm/machine).
+// ?board=<key> (or ?wasm=ephemeral&repo=owner/name[&ref=]) has no machine
+// at all: Neovim's files are a clone of the board's Forgejo repository, in
+// memory (nvim/wasm/machine). The Worker serves the page so, at /edit/.
 const params = new URLSearchParams(location.search);
 const view = params.get("view") === "plan" ? "plan" : null;
 const host = view ? null : params.get("host");
@@ -54,9 +55,10 @@ if (fragment.has("token")) {
 
 const protocols = ["corkboard", ...(token ? [`corkboard.token.${token}`] : [])];
 const [owner, name] = (params.get("repo") ?? "").split("/");
+const board = params.get("board") ?? undefined;
 const rpc =
-  wasm === "ephemeral" && owner && name
-    ? new EphemeralRpc({ owner, name, ref: params.get("ref") ?? undefined, headers: token ? { "x-corkboard-token": token } : {} }, token)
+  board || (wasm === "ephemeral" && owner && name)
+    ? new EphemeralRpc({ board, repo: owner && name ? { owner, name, ref: params.get("ref") ?? undefined } : undefined, token })
     : inPage
       ? new WasmRpc(wsUrl, protocols, token)
       : new Rpc(wsUrl, protocols);

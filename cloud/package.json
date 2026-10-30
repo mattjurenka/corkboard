@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "nix build \"path:$(cd .. && pwd)#edit-page\" -o .edit && wrangler deploy",
     "test": "vitest run",
     "typecheck": "tsc -p ."
   },

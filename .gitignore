@@ -12,3 +12,6 @@ result-*
 
 # emscripten cache for `nix develop .#wasm`
 /wasm/.emcache/
+
+# the /edit/ page the Worker serves (nix build ..#edit-page -o .edit)
+/cloud/.edit

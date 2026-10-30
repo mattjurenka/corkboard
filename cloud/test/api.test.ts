@@ -268,6 +268,19 @@ describe("live", () => {
     l.ws.close();
   });
 
+  it("takes a browser's token as a subprotocol, and names corkboard back", async () => {
+    const b64 = btoa(owner).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const res = await api(`/api/boards/${BOARD}/live`, { token: null, headers: { Upgrade: "websocket", "Sec-WebSocket-Protocol": `corkboard, corkboard.bearer.${b64}` } });
+    expect(res.status).toBe(101);
+    expect(res.headers.get("Sec-WebSocket-Protocol")).toBe("corkboard");
+    res.webSocket!.accept();
+    res.webSocket!.close();
+    const wrong = btoa("nope").replace(/=+$/, "");
+    expect((await api(`/api/boards/${BOARD}/live`, { token: null, headers: { Upgrade: "websocket", "Sec-WebSocket-Protocol": `corkboard, corkboard.bearer.${wrong}` } })).status).toBe(401);
+    // Only on a socket: a plain request's token is its header.
+    expect((await api(`/api/boards/${BOARD}/cards`, { token: null, headers: { "Sec-WebSocket-Protocol": `corkboard, corkboard.bearer.${b64}` } })).status).toBe(401);
+  });
+
   it("needs a token and a board", async () => {
     expect((await api(`/api/boards/${BOARD}/live`, { token: null, headers: { Upgrade: "websocket" } })).status).toBe(401);
     expect((await api(`/api/boards/typo/live`, { headers: { Upgrade: "websocket" } })).status).toBe(404);

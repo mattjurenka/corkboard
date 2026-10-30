@@ -8,6 +8,9 @@ import { defineConfig } from "vite";
 // bridge on its usual port.
 export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
+  // Relative, so the page works where the bridge serves it (/) and where
+  // the Worker does (/edit/).
+  base: "./",
   plugins: [react(), tailwindcss()],
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   build: { outDir: "dist", emptyOutDir: true, target: "es2022" },

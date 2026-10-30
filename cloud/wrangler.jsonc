@@ -33,6 +33,10 @@
   // Files agents attach to cards (src/media.ts).
   "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "corkboard-media" }],
   "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "8f69c7790e394751a12b04353f29adc9" }],
+  // The editor with no machine behind it (wasm/edit-page.ts), at /edit/:
+  // nix build ..#edit-page -o .edit, which deploy does. Served before the
+  // Worker runs, for the paths it has.
+  "assets": { "directory": "./.edit" },
   // The portal's page (../portal), served for every path that isn't ours.
   "services": [{ "binding": "PORTAL", "service": "corkboard-portal" }],
   "vars": {

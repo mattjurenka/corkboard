@@ -100,7 +100,7 @@
       # `corkboard-bridge`; the CORKBOARD_* variables still apply, and
       # plugins given in CORKBOARD_PLUGINS come before snacks.nvim.
       packages = forAll (pkgs: let nvimWasm = (wasmOn pkgs.stdenv.hostPlatform.system).packages.nvim-wasm or null; in
-        (wasmOn pkgs.stdenv.hostPlatform.system).packages // rec {
+        pkgs.lib.filterAttrs (_: p: p != null) ((wasmOn pkgs.stdenv.hostPlatform.system).packages // rec {
         # What building the page needs (React, Vite, Tailwind), from bun.lock.
         # A fixed-output derivation so bun can reach the registry; the hash
         # changes with bun.lock, and differs per system because Vite and
@@ -132,7 +132,9 @@
           version = "0.1.0";
           src = pkgs.lib.fileset.toSource {
             root = ./.;
-            fileset = pkgs.lib.fileset.unions [ ./package.json ./tsconfig.json ./web/index.html ./web/vite.config.ts ./web/src ./web/public ];
+            # The page answers Neovim's cloud requests itself when it has no
+            # machine, with the bridge's own code for it.
+            fileset = pkgs.lib.fileset.unions [ ./package.json ./tsconfig.json ./web/index.html ./web/vite.config.ts ./web/src ./web/public ./bridge/cloud-session.ts ];
           };
           nativeBuildInputs = [ pkgs.bun ];
           buildPhase = ''
@@ -242,6 +244,25 @@
         plugin = pkgs.runCommand "corkboard-nvim-plugin" { } ''
           cp -r ${./nvim} $out
         '';
-      });
+
+        # The page the Worker serves at /edit/, with no machine behind it
+        # (wasm/edit-page.ts): `nix build .#edit-page -o cloud/.edit` before
+        # deploying the Worker (cloud/package.json's deploy does).
+        edit-page = if nvimWasm == null then null else pkgs.stdenvNoCC.mkDerivation {
+          pname = "corkboard-edit-page";
+          version = "0.1.0";
+          src = pkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = pkgs.lib.fileset.unions [ ./bridge/wasm.ts ./wasm/edit-page.ts ./nvim ];
+          };
+          nativeBuildInputs = [ pkgs.bun ];
+          buildPhase = ''
+            export HOME=$TMPDIR
+            ln -s ${webDeps} node_modules
+            bun wasm/edit-page.ts $out ${web} ${nvimWasm}/lib/nvim-wasm $PWD/nvim ${pkgs.vimPlugins.snacks-nvim}
+          '';
+          dontInstall = true;
+        };
+      }));
     };
 }

@@ -30,6 +30,8 @@ export function Frame({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     answered()
       .then((back) => {
+        // The editor (/edit/) is the API Worker's own page, not one of ours.
+        if (back?.startsWith("/edit/")) return location.replace(back)
         if (back) router.replace(back)
         setState(signedOut() ? "out" : "in")
       })

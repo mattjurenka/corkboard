@@ -12,6 +12,8 @@
 // a clone of the repository in memory.
 
 import { decode, decodeMultiStream, encode, ExtensionCodec } from "@msgpack/msgpack";
+import { Cloud, Session as CloudSession, USER, type Link } from "../../../../bridge/cloud-session";
+import * as cloud from "../../cloud";
 import { replyBuffer } from "./machine/link";
 import { InputRing } from "./ring.js";
 import type { Start } from "./worker";
@@ -209,18 +211,44 @@ export class WasmRpc extends WasmNvim {
 // What a page with no machine starts from (bridge/server.ts /wasm/manifest,
 // and the Worker's when it serves the page): where Neovim is, and the
 // plugins' files (wasm.bundle), with their names in runtimepath order.
-type Manifest = { wasm: string; plugins: string; rtp: string[] };
+// cloud: the page's own origin is the Worker, which it signs in to
+// (../../cloud.ts) for its boards and its clone.
+type Manifest = { wasm: string; plugins: string; rtp: string[]; cloud?: boolean };
 
-// A repository on Forgejo, and the headers git's requests for it need.
-export type Repo = { owner: string; name: string; ref?: string; headers: Record<string, string> };
+// What to open: a board (its repository is its remote on Forgejo), or a
+// Forgejo repository itself. token: the bridge's, when a bridge serves the page.
+export type Opening = { board?: string; repo?: { owner: string; name: string; ref?: string }; token: string | null };
+
+// The repository a remote names on Forgejo's host: owner and name, or none.
+function onForgejo(remote: string, host: string) {
+  const scp = remote.match(/^[\w.-]+@([\w.-]+):([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/);
+  if (scp) return scp[1] === host ? { owner: scp[2], name: scp[3] } : undefined;
+  const url = URL.parse(remote);
+  const m = url?.pathname.match(/^\/([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/);
+  return url?.hostname === host && m ? { owner: m[1], name: m[2] } : undefined;
+}
+
+// Neovim's cloud requests (corkboard.cloud: cards, plans, the fleet), which
+// the bridge answers for a page that has one (bridge/boards.ts), answered
+// here with the same code, straight to the Worker.
+const pageLink: Link = {
+  cloud: location.origin,
+  token: () => cloud.token(),
+  socket: cloud.socket,
+  environment: null,
+  remotes: async () => [],
+  machine: () => null,
+  self: () => undefined,
+};
 
 export class EphemeralRpc extends WasmNvim {
   ready: Promise<unknown>;
   private machine = new Worker(new URL("./machine/machine.ts", import.meta.url), { type: "module" });
   private asks = new Map<number, { resolve: () => void; reject: (e: Error) => void }>();
   private nextAsk = 1;
+  private cloud?: CloudSession;
 
-  constructor(repo: Repo, token: string | null) {
+  constructor(open: Opening) {
     super();
     this.machine.onmessage = ({ data }) => {
       if (data.type === "progress") return this.handlers.get("corkboard.clone")?.([data]);
@@ -231,7 +259,26 @@ export class EphemeralRpc extends WasmNvim {
       if (data.type === "done") ask?.resolve();
       else ask?.reject(new Error(data.error));
     };
-    this.ready = this.start(repo, token);
+    this.ready = this.start(open);
+  }
+
+  // What the bridge would have taken: the cloud's requests are answered
+  // here; away mode and other windows are a machine's, and there's none.
+  protected forward(msg: unknown[]) {
+    if (msg[1] === "corkboard.cloud") {
+      this.cloudCall(msg[2] as unknown[]);
+      return true;
+    }
+    return msg[1] === "corkboard.away" || msg[1] === "corkboard.open";
+  }
+
+  private cloudCall([id, op, ...args]: unknown[]) {
+    const answer = (a: object) => this.notify("nvim_exec_lua", "require('corkboard.cards.cloud').answer(...)", [{ id, ...a }]);
+    if (!this.cloud) return answer({ error: "corkboard cloud: this page isn't signed in to it" });
+    this.cloud.call(op as string, args).then(
+      (result) => answer({ result: result ?? null }),
+      (err) => answer({ error: (err as Error).message }),
+    );
   }
 
   private ask(msg: Record<string, unknown>, transfer: Transferable[] = []): Promise<void> {
@@ -240,15 +287,42 @@ export class EphemeralRpc extends WasmNvim {
     return new Promise((resolve, reject) => this.asks.set(id, { resolve, reject }));
   }
 
-  private async start(repo: Repo, token: string | null) {
+  // The repository of a board: its remote on Forgejo.
+  private async repoOf(key: string) {
+    const [boards, git] = await Promise.all([cloud.api<{ key: string; remotes?: string[] }[]>("/api/boards"), cloud.api<{ origin: string }>("/api/git")]);
+    const board = boards.find((b) => b.key === key);
+    if (!board) throw new Error(`no board ${key}`);
+    const host = new URL(git.origin).hostname;
+    for (const r of board.remotes ?? []) {
+      const repo = onForgejo(r, host);
+      if (repo) return repo;
+    }
+    throw new Error(`board ${key} has no repository on ${host}`);
+  }
+
+  private async start(open: Opening) {
     const base = new URL(".", location.href).href;
-    const headers: Record<string, string> = token ? { "x-corkboard-token": token } : {};
+    const headers: Record<string, string> = open.token ? { "x-corkboard-token": open.token } : {};
     const manifest = (await (await fetch(new URL("wasm/manifest", base), { headers })).json()) as Manifest;
-    const bundle = new Uint8Array(await (await fetch(new URL(manifest.plugins, base), { headers })).arrayBuffer());
+    const bundle = fetch(new URL(manifest.plugins, base), { headers }).then(async (r) => new Uint8Array(await r.arrayBuffer()));
+    if (manifest.cloud) {
+      this.cloud = new CloudSession(new Cloud(pageLink), (key, event) =>
+        key === USER
+          ? // The day plan's window follows it for the plan, a project's for the fleet view.
+            this.notify("nvim_exec_lua", "require(require('corkboard').window == 'plan' and 'corkboard.plan' or 'corkboard.fleet').cloud_event(...)", [event])
+          : this.notify("nvim_exec_lua", "require('corkboard.cards').cloud_event(...)", [key, event]),
+      );
+    }
+    const repo = open.repo ?? (open.board && manifest.cloud ? await this.repoOf(open.board) : undefined);
+    if (!repo) throw new Error("which repository? ?repo=owner/name, or ?board= on a page the Worker serves");
+    // The Worker's git route (cloud/src/git.ts), signed in; a bridge's
+    // passes it on with its own sign-in, for its token.
+    const git = manifest.cloud ? { Authorization: `Bearer ${await cloud.token()}` } : headers;
     const dir = `/work/${repo.name}`;
+    const plugins = await bundle;
     await Promise.all([
-      this.ask({ type: "load", bundle }, [bundle.buffer]),
-      this.ask({ type: "clone", url: new URL(`api/git/repos/${repo.owner}/${repo.name}`, base).href, dir, ref: repo.ref, headers: repo.headers }),
+      this.ask({ type: "load", bundle: plugins }, [plugins.buffer]),
+      this.ask({ type: "clone", url: new URL(`api/git/repos/${repo.owner}/${repo.name}`, location.origin + "/").href, dir, ref: open.repo?.ref, headers: git }),
     ]);
     const link = new MessageChannel();
     const reply = replyBuffer();
@@ -264,7 +338,8 @@ export class EphemeralRpc extends WasmNvim {
       session: "",
       token: null,
       args: ["--cmd", `set rtp^=${rtp}`, "--cmd", "let g:corkboard_wasm = 1 | let g:corkboard_ephemeral = 1"],
-      env: { LANG: "en_US.UTF-8" },
+      // The board, named: a shallow clone has no first commit to find it by.
+      env: { LANG: "en_US.UTF-8", ...(open.board && { CORKBOARD_BOARD: open.board }) },
       cwd: dir,
       mounts: ["/work", "/plugins"],
       seeds: {},

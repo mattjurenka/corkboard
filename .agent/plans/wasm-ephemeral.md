@@ -34,14 +34,21 @@ browser
 
 ## Status (2026-10-30)
 
-Steps 1 and 2 work end to end, against a stand-in Worker (git http-backend) and a test bridge:
-`?wasm=ephemeral&repo=owner/name` clones in well under a second, corkboard starts clean on the
-clone, and edits show in the file tree's git marks. The Worker's route (cloud/src/git.ts) is
-tested but **not deployed**: cloud/ also held another session's uncommitted work.
+Steps 1–3 work end to end against local stand-ins (headless Chromium): `/edit/?board=<key>` on
+the Worker's origin finds the board's Forgejo remote, clones it shallow into memory, starts
+corkboard on it with the board's cards, and follows the board live. No bridge anywhere.
 
-- The page is still served by a bridge, which also gives it `/wasm/manifest`, the plugin bundle
-  and `/api/git` (passed to the Worker with the bridge's sign-in). Step 3 moves these to the Worker.
-- The clone is shallow (depth 1), so the first commit isn't known: `project_commit` is nil.
+- The page is `nix build .#edit-page` (wasm/edit-page.ts), served as the Worker's static assets
+  at /edit/ with COOP/COEP from `_headers`; `cloud`'s deploy builds it into cloud/.edit.
+- Sign-in is the portal's, shared through localStorage (web/src/cloud.ts); the portal sends a
+  sign-in that started at /edit/ back there.
+- Neovim's cloud requests are answered in the page with the bridge's own code:
+  bridge/cloud-session.ts, behind a Link (bridge/boards.ts is the bridge's Link). A page has
+  no environment, so it never reports its in-memory clone as a board's root.
+- Browser sockets sign in with a subprotocol, `corkboard.bearer.<base64url token>`
+  (cloud/src/index.ts).
+- The clone is shallow (depth 1), so the board is named by `$CORKBOARD_BOARD`, not found by
+  its first commit.
 - git is emulated for what corkboard runs (machine/git.ts); anything else, and every other
   program, exits 127. No push yet (step 4 needs write access on the Forgejo token).
 

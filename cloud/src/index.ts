@@ -91,10 +91,34 @@ function oauth(env: Env): OAuthProvider<Env> {
   return provider;
 }
 
+// A browser's WebSocket can't carry an Authorization header, so a page
+// (web/src/cloud.ts) sends its token as a subprotocol beside "corkboard":
+// corkboard.bearer.<the token, base64url>. It becomes the header, and the
+// socket answers with "corkboard", which the browser wants named back.
+const BEARER = "corkboard.bearer.";
+function bearerOf(request: Request): string | undefined {
+  if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket" || request.headers.has("Authorization")) return;
+  const offered = (request.headers.get("Sec-WebSocket-Protocol") ?? "").split(",").map((p) => p.trim());
+  const b64 = offered.find((p) => p.startsWith(BEARER))?.slice(BEARER.length);
+  if (!b64 || !offered.includes("corkboard")) return;
+  try {
+    return new TextDecoder().decode(Uint8Array.from(atob(b64.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0)));
+  } catch {
+    return;
+  }
+}
+
 export default {
-  fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     // An upload's URL is its own auth (media.ts), for an agent's curl.
     if (new URL(request.url).pathname.startsWith("/upload/")) return upload(request, env);
-    return oauth(env).fetch(request, env, ctx);
+    const bearer = bearerOf(request);
+    if (!bearer) return oauth(env).fetch(request, env, ctx);
+    const headers = new Headers(request.headers);
+    headers.set("Authorization", `Bearer ${bearer}`);
+    headers.delete("Sec-WebSocket-Protocol");
+    const res = await oauth(env).fetch(new Request(request, { headers }), env, ctx);
+    if (res.status !== 101) return res;
+    return new Response(null, { status: 101, webSocket: res.webSocket, headers: { "Sec-WebSocket-Protocol": "corkboard" } });
   },
 } satisfies ExportedHandler<Env>;
