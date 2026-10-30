@@ -24,7 +24,8 @@
 //   GET   /api/sessions                      each connected bridge, with its pages' Claude Code sessions
 //   GET   /api/sessions/:bridge/:key         { lines }: what the session's terminal shows
 //   POST  /api/sessions/:bridge/:key/say     { text?, keys? }: typed into it, the keys after the text
-//   GET   /api/sessions/:bridge/:key/attach  WebSocket: its conversation as it goes (user.ts)
+//   GET   /api/sessions/:bridge/:key/attach  WebSocket: its conversation as it goes (user.ts);
+//                                            ?terminal for its terminal, both ways
 //   GET   /api/notes                        ?q= to search, ?kind=, ?limit=
 //   GET, PUT, DELETE /api/notes/:id          PUT { kind, title, body, path?, version? }
 //   GET   /api/goals                         the goal notes, read into their parts (goals.ts)

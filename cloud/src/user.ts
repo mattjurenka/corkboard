@@ -400,7 +400,8 @@ export class User extends DurableObject {
   // ?bridge=<id>&machine=<name>[&url=]: a bridge's own socket. At
   // /api/sessions/:bridge/:key/attach, the phone following one of its
   // sessions: a stream the bridge sends the conversation down
-  // (bridge/remote.ts), which hears nothing else.
+  // (bridge/remote.ts), which hears nothing else. With ?terminal, its
+  // terminal's bytes instead, and the stream sends keys and its size back.
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get("Upgrade") !== "websocket") return new Response("expected a websocket", { status: 426 });
     const url = new URL(request.url);
@@ -414,7 +415,7 @@ export class User extends DurableObject {
       const stream = crypto.randomUUID();
       this.ctx.acceptWebSocket(server, [`stream:${stream}`, `streams:${attach[1]}`]);
       server.serializeAttachment({ bridge: attach[1], stream } satisfies Attached);
-      to.send(JSON.stringify({ type: "attach", stream, key: attach[2] }));
+      to.send(JSON.stringify({ type: "attach", stream, key: attach[2], ...(url.searchParams.has("terminal") && { terminal: true }) }));
     } else if (bridge) {
       // A machine's bridge is in its environment, whatever it says, and
       // can't take over one that's elsewhere's.
@@ -446,6 +447,7 @@ export class User extends DurableObject {
 
   // A bridge's sessions, its answer to a question, or what goes down a
   // stream. The phone says nothing on a stream; what it types goes by /say.
+  // A terminal's stream says what's typed into it ("in") and its size.
   webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer) {
     const from = ws.deserializeAttachment() as Attached | null;
     if (!from || typeof raw !== "string") return;
@@ -455,7 +457,13 @@ export class User extends DurableObject {
     } catch {
       return;
     }
-    if ("stream" in from) return;
+    if ("stream" in from) {
+      const to = this.connected(from.bridge)[0];
+      if (m.type === "in" && typeof m.data === "string" && m.data.length <= 65536) to?.send(JSON.stringify({ type: "in", stream: from.stream, data: m.data }));
+      else if (m.type === "size" && Number.isInteger(m.rows) && Number.isInteger(m.cols))
+        to?.send(JSON.stringify({ type: "size", stream: from.stream, rows: m.rows, cols: m.cols, focus: m.focus === true }));
+      return;
+    }
     if (m.type === "sessions" && Array.isArray(m.sessions)) {
       const environment = "pinned" in from && from.pinned ? from.pinned : typeof m.environment === "string" ? m.environment.slice(0, 64) : null;
       this.setBridge({ id: from.bridge, machine: from.machine, url: from.url ?? null, environment, sessions: m.sessions.slice(0, 64).map(bridgeSession).filter((s) => s.key) });
@@ -518,6 +526,8 @@ export type BridgeSession = {
   context: number | null;
   // Whether the phone can open a terminal on it (attach).
   attach: boolean;
+  // Whether its terminal can be mirrored (attach?terminal).
+  terminal: boolean;
 };
 // What the phone asks of one, and what its bridge says.
 export type Question = { type: "screen"; key: string } | { type: "say"; key: string; text: string; keys: string[] };
@@ -557,5 +567,6 @@ function bridgeSession(v: unknown): BridgeSession {
     card: str(s.card, 32),
     context: num(s.context),
     attach: s.attach === true,
+    terminal: s.terminal === true,
   };
 }

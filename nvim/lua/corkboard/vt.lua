@@ -413,11 +413,24 @@ local function size(buf)
   return vim.api.nvim_win_get_height(win), vim.api.nvim_win_get_width(win) - info.textoff
 end
 
+-- The size its process was told instead, while a mirror of it has the say
+-- (corkboard.mirror): { rows, cols }.
+local told = {}
+
+function M.told(buf, rows, cols)
+  told[buf] = rows and { rows, cols } or nil
+end
+
 -- jobstart's on_stdout for buf's terminal.
 function M.track(buf)
   return function(_, data)
     local s = terms[buf]
-    local rows, cols = size(buf)
+    local rows, cols
+    if told[buf] then
+      rows, cols = told[buf][1], told[buf][2]
+    else
+      rows, cols = size(buf)
+    end
     if not s then
       s = new(rows or 24, cols or 80)
       terms[buf] = s
@@ -430,6 +443,69 @@ end
 
 function M.forget(buf)
   terms[buf] = nil
+  told[buf] = nil
+end
+
+local function sgr(a)
+  local out = { "0" }
+  for bitv, code in pairs({ [1] = "1", [2] = "2", [4] = "3", [8] = "4", [16] = "7", [32] = "9" }) do
+    if bit.band(a[3], bitv) ~= 0 then table.insert(out, code) end
+  end
+  for i, base in ipairs({ 38, 48 }) do
+    local c = a[i]
+    if c >= 2 ^ 24 then
+      c = c - 2 ^ 24
+      table.insert(out, ("%d;2;%d;%d;%d"):format(base, bit.rshift(c, 16), bit.band(bit.rshift(c, 8), 255), bit.band(c, 255)))
+    elseif c >= 0 then
+      table.insert(out, ("%d;5;%d"):format(base, c))
+    end
+  end
+  return "\27[" .. table.concat(out, ";") .. "m"
+end
+
+-- What buf's terminal shows, its scrollback before it, as what would draw
+-- it on a fresh terminal of its width (corkboard.mirror's first bytes). nil
+-- for one it never saw.
+function M.ansi(buf)
+  local s = terms[buf]
+  if not s then return nil end
+  local out = {}
+  local function line(l)
+    -- Without its trailing blanks, which a fresh terminal has already.
+    local last = #l
+    while last > 0 and l[last][1] == " " and l[last][2] == 1 do
+      last = last - 1
+    end
+    local parts, at = {}, 1
+    for c = 1, last do
+      if l[c][2] ~= at then
+        at = l[c][2]
+        table.insert(parts, sgr(attrs[at]))
+      end
+      table.insert(parts, l[c][1])
+    end
+    if at ~= 1 then table.insert(parts, "\27[0m") end
+    return table.concat(parts)
+  end
+  if not s.alt then
+    for _, l in ipairs(s.back) do
+      table.insert(out, line(l))
+    end
+  end
+  -- Down to the cursor or the last row with something on it, so the
+  -- cursor's row is the same distance from the end as here.
+  local last = s.r
+  for r = s.rows, s.r + 1, -1 do
+    if line(s.grid[r]) ~= "" then
+      last = r
+      break
+    end
+  end
+  for r = 1, last do
+    table.insert(out, line(s.grid[r]))
+  end
+  local up = last - s.r
+  return table.concat(out, "\r\n") .. (up > 0 and ("\27[%dA"):format(up) or "") .. ("\27[%dG"):format(math.min(s.c, s.cols))
 end
 
 local function text(line)

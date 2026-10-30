@@ -335,6 +335,13 @@ M.delete = remove("delete")
 -- Any of the bridge's operations, for corkboard.plan's plan_* ones.
 M.call = request
 
+-- The same without waiting, nor hearing how it went: for what goes often
+-- and in order, like a mirrored terminal's keys. Id 0 is never waited on.
+function M.send(op, ...)
+  local chan = channel()
+  if chan then vim.rpcnotify(chan, "corkboard.cloud", 0, op, ...) end
+end
+
 -- A token for agent's MCP session on card id: { token, url, expires_at }.
 -- It can read the board and work on that card only.
 function M.agent_token(id, agent) return request("token", key(), id:upper(), agent) end

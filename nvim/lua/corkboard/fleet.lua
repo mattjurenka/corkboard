@@ -554,6 +554,8 @@ end
 function M.cloud_event(event)
   -- A conversation followed from here (corkboard.conversation), open or not.
   if event.type == "conversation" or event.type == "conversation_end" then return require("corkboard.conversation").event(event) end
+  -- A terminal mirrored here (corkboard.mirror).
+  if event.type == "terminal" or event.type == "terminal_end" then return require("corkboard.mirror").event(event) end
   if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
   if event.type == "spawn" or event.type == "fleet" or event.type == "reconnected" then reload() end
   -- Another bridge's sessions, as they change.
@@ -730,12 +732,14 @@ function M.open()
   if c then
     if c.mine then return require("corkboard.terminal").focus(c.buf) end
     if c.bridge then
-      if not c.attach then return vim.notify("corkboard: " .. c.name .. " has no conversation to follow") end
+      -- Its terminal, where its bridge can mirror it; else its conversation.
+      local mod = c.terminal and "corkboard.mirror" or "corkboard.conversation"
+      if not (c.terminal or c.attach) then return vim.notify("corkboard: " .. c.name .. " has no conversation to follow") end
       -- Another project's, in that project's window if it's cloned here.
       local here = vim.fs.basename(require("corkboard.util").project_root(vim.fn.getcwd(-1, -1)))
       local path = c.project ~= here and clone_here(function(p) return vim.fs.basename(p.path) == c.project end)
-      if path then return in_window(path, { "corkboard.conversation", "open", c.bridge, c.key, c.name }) end
-      return require("corkboard.conversation").open(c.bridge, c.key, c.name)
+      if path then return in_window(path, { mod, "open", c.bridge, c.key, c.name }) end
+      return require(mod).open(c.bridge, c.key, c.name)
     end
     -- Another window's: there, brought forward.
     return require("corkboard").notify("corkboard.away", "show", c.page, c.buf)

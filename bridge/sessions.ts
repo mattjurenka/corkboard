@@ -2,7 +2,8 @@
 // Worker (cloud/src/user.ts): following the user's live socket as a bridge
 // (?bridge=), saying what sessions there are whenever that changes, and
 // answering what's asked of one: its screen, something typed into it, and
-// its conversation as it goes, read from its log (transcript.ts). The
+// its conversation as it goes, read from its log (transcript.ts), or its
+// terminal itself, mirrored both ways where the source has one. The
 // bridge serves its pages' sessions (remote.ts), fleetd its VMs'
 // (fleet/fleetd/sessions.ts).
 
@@ -37,6 +38,17 @@ export type Source = {
   watch(fn: () => void): void;
   say(key: string, text: string, keys: string[]): Promise<Answer>;
   screen?(key: string): Promise<Answer>;
+  // Its terminal, mirrored: given where its bytes go, what to do with a
+  // stream's opening, keys (base64), size and closing.
+  terminals?(to: TerminalOut): Terminals;
+};
+
+export type TerminalOut = { out(stream: string, data: string): void; end(stream: string, why: string): void };
+export type Terminals = {
+  open(stream: string, key: string): void;
+  input(stream: string, data: string): void;
+  size(stream: string, rows: number, cols: number, focus: boolean): void;
+  close(stream: string): void;
 };
 
 // How much of the conversation a stream starts with.
@@ -54,7 +66,11 @@ export function serve(id: string, environment: string, source: Source) {
 
   // Where its log is stays here: only whether it can be followed goes.
   const report = () =>
-    send({ type: "sessions", environment, sessions: source.list().map(({ transcript, ...s }) => ({ ...s, attach: !!transcript })) });
+    send({
+      type: "sessions",
+      environment,
+      sessions: source.list().map(({ transcript, ...s }) => ({ ...s, attach: !!transcript, terminal: !!source.terminals })),
+    });
   source.watch(report);
 
   const answer = async (q: any) => {
@@ -80,7 +96,20 @@ export function serve(id: string, environment: string, source: Source) {
       streams.delete(stream);
       clearInterval(s.timer);
     }
+    if (mirrored.delete(stream)) terminals?.close(stream);
     send({ type: "end", stream, ...(why && { why }) });
+  };
+
+  // A terminal's streams: its bytes as they come, base64 in "out".
+  const mirrored = new Set<string>();
+  const terminals = source.terminals?.({
+    out: (stream, data) => mirrored.has(stream) && send({ type: "out", stream, data }),
+    end: (stream, why) => mirrored.has(stream) && end(stream, why),
+  });
+  const mirror = (stream: string, key: string) => {
+    if (!terminals) return end(stream, "that session has no terminal here");
+    mirrored.add(stream);
+    terminals.open(stream, key);
   };
 
   // In batches, each well under a socket message's limit.
@@ -126,13 +155,15 @@ export function serve(id: string, environment: string, source: Source) {
           return;
         }
         if ((m.type === "screen" || m.type === "say") && typeof m.ask === "number") answer(m);
-        else if (m.type === "attach" && typeof m.stream === "string" && typeof m.key === "string") attach(m.stream, m.key);
+        else if (m.type === "attach" && typeof m.stream === "string" && typeof m.key === "string") (m.terminal ? mirror : attach)(m.stream, m.key);
         else if (m.type === "detach" && typeof m.stream === "string") end(m.stream);
+        else if (m.type === "in" && mirrored.has(m.stream) && typeof m.data === "string") terminals?.input(m.stream, m.data);
+        else if (m.type === "size" && mirrored.has(m.stream)) terminals?.size(m.stream, m.rows, m.cols, m.focus === true);
       };
       ws.onclose = () => {
         clearInterval(ping);
         // Its streams went with it.
-        for (const stream of [...streams.keys()]) end(stream);
+        for (const stream of [...streams.keys(), ...mirrored]) end(stream);
         setTimeout(follow, (retry = Math.min(retry * 2, 60_000)));
       };
     } catch {

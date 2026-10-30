@@ -98,8 +98,14 @@ function M.start(opts)
   vim.fn.jobstart(opts.attach and cmd or vim.list_extend(cmd, opts.args or {}), {
     term = true,
     cwd = opts.cwd,
-    -- Its colors, for the phone.
-    on_stdout = require("corkboard.vt").track(buf),
+    -- Its colors, for the phone; its bytes, for its mirrors.
+    on_stdout = (function()
+      local track = require("corkboard.vt").track(buf)
+      return function(chan, data, name)
+        track(chan, data, name)
+        require("corkboard.mirror").output(buf, data)
+      end
+    end)(),
     -- CORKBOARD_BUF tells the hooks which terminal the session is in;
     -- CORKBOARD_LIVE and CORKBOARD_SESSION, the mod what to draw.
     env = vim.tbl_extend("force", opts.env or {}, {
@@ -116,6 +122,7 @@ function M.start(opts)
     callback = function()
       local status = vim.b[buf].corkboard_exit_status or vim.v.event.status
       require("corkboard.vt").forget(buf)
+      require("corkboard.mirror").ended(buf)
       vim.schedule(function()
         if opts.on_exit then opts.on_exit(status) end
         require("corkboard.away").report()

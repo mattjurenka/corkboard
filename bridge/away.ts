@@ -185,6 +185,18 @@ export function ask(id: number, fn: "screen" | "say", ...args: unknown[]): Promi
   }).finally(() => waiting.delete(q));
 }
 
+// A session's terminal, mirrored to a stream (corkboard/mirror.lua's
+// host_<fn>): false when its page is closed. Its Neovim sends the bytes back
+// as "terminal" (stream, data), and its end as "terminal" (stream, nil, why).
+export function mirror(id: number, fn: "open" | "input" | "size" | "close", ...args: unknown[]) {
+  const page = [...ids].find(([, i]) => i === id)?.[0];
+  page?.exec(`require('corkboard.mirror').host_${fn}(...)`, ...args);
+  return !!page;
+}
+
+let mirrored: (stream: string, data: string | null, why?: string) => void = () => {};
+export const onMirror = (fn: typeof mirrored) => (mirrored = fn);
+
 // A Neovim's sessions, all of them each time.
 export function report(page: Page, list: Reported[]) {
   const was = sessions.get(page) ?? new Map<number, Live>();
@@ -230,6 +242,10 @@ export function command(from: Page, op: string, args: unknown[]) {
   if (op === "answer") {
     const [q, answer] = args as [number, Record<string, unknown>];
     return waiting.get(q)?.(answer ?? {});
+  }
+  if (op === "terminal") {
+    const [stream, data, why] = args as [string, string | null, string?];
+    return mirrored(stream, data ?? null, why);
   }
   // "show" is go without away mode: the fleet view's <CR> on a session in
   // another window, which comes forward with it.

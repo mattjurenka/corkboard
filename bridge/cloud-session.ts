@@ -140,6 +140,8 @@ export class Session {
   private keys = new Set<string>();
   // The conversations it follows (fleet_follow), by "bridge/key".
   private conversations = new Map<string, WebSocket>();
+  // The terminals it mirrors (fleet_terminal), the same way.
+  private terminals = new Map<string, WebSocket>();
   // sessions: the fleet view's (away.ts's list, for this Neovim's page).
   constructor(
     private cloud: Cloud,
@@ -356,6 +358,50 @@ export class Session {
         };
         return null;
       }
+      // A session's terminal, mirrored (corkboard/mirror.lua): its bytes,
+      // base64, as { type: "terminal", bridge, key, data }, then
+      // { type: "terminal_end", why }; fleet_terminal_send says what's typed
+      // ("in") or its size.
+      case "fleet_terminal": {
+        const [bridge, key] = args as [string, string];
+        const id = `${bridge}/${key}`;
+        if (!/^[\w-]{1,64}\/[\w.-]{1,64}$/.test(id)) throw new Error("corkboard cloud: which session?");
+        this.terminals.get(id)?.close();
+        const ws = this.cloud.link.socket(`${this.cloud.link.cloud.replace(/^http/, "ws")}/api/sessions/${id}/attach?terminal`, await this.cloud.link.token());
+        this.terminals.set(id, ws);
+        ws.onmessage = (e) => {
+          let m: any;
+          try {
+            m = JSON.parse(String(e.data));
+          } catch {
+            return;
+          }
+          if (m.type === "out") this.listener(USER, { type: "terminal", bridge, key, data: m.data });
+          else if (m.type === "end") this.listener(USER, { type: "terminal_end", bridge, key, why: m.why ?? "ended" });
+        };
+        ws.onclose = () => {
+          if (this.terminals.get(id) !== ws) return;
+          this.terminals.delete(id);
+          this.listener(USER, { type: "terminal_end", bridge, key, why: "no longer connected" });
+        };
+        return null;
+      }
+      case "fleet_terminal_send": {
+        const [bridge, key, m] = args as [string, string, object];
+        const ws = this.terminals.get(`${bridge}/${key}`);
+        if (!ws) return null;
+        const raw = JSON.stringify(m);
+        if (ws.readyState === WebSocket.OPEN) ws.send(raw);
+        else if (ws.readyState === WebSocket.CONNECTING) ws.addEventListener("open", () => ws.send(raw), { once: true });
+        return null;
+      }
+      case "fleet_unterminal": {
+        const id = `${args[0]}/${args[1]}`;
+        const ws = this.terminals.get(id);
+        this.terminals.delete(id);
+        ws?.close();
+        return null;
+      }
       case "fleet_unfollow": {
         const id = `${args[0]}/${args[1]}`;
         const ws = this.conversations.get(id);
@@ -436,6 +482,8 @@ export class Session {
   close() {
     for (const ws of this.conversations.values()) ws.close();
     this.conversations.clear();
+    for (const ws of this.terminals.values()) ws.close();
+    this.terminals.clear();
     for (const key of this.keys) {
       const l = this.cloud.live.get(key);
       if (!l) continue;

@@ -1,7 +1,8 @@
 // The bridge's sessions, for the phone and the fleet view (sessions.ts): the
 // Claude Code sessions of every page it has open (away.ts's list), each by
 // its page's id and its buffer ("3-12"). Their screen and what's typed into
-// them go to the page's Neovim (corkboard/away.lua); their conversation is
+// them go to the page's Neovim (corkboard/away.lua), and so does a mirror of
+// their terminal (corkboard/mirror.lua); their conversation is
 // read from their log. A page on another machine has its logs there, so
 // its sessions have no conversation here.
 //
@@ -37,5 +38,27 @@ export function start(port: number) {
     watch: away.watch,
     screen: (key) => away.ask(at(key)[0], "screen", at(key)[1]),
     say: (key, text, keys) => away.ask(at(key)[0], "say", at(key)[1], text, keys),
+    terminals: (to) => {
+      // Each stream's page, which its Neovim is in.
+      const pages = new Map<string, number>();
+      away.onMirror((stream, data, why) => (data === null ? to.end(stream, why ?? "ended") : to.out(stream, data)));
+      const tell = (stream: string, fn: "input" | "size" | "close", ...args: unknown[]) => {
+        const page = pages.get(stream);
+        if (page !== undefined && !away.mirror(page, fn, stream, ...args)) to.end(stream, "that session's page is closed");
+      };
+      return {
+        open: (stream, key) => {
+          const [page, buf] = at(key);
+          pages.set(stream, page);
+          if (!away.mirror(page, "open", stream, buf)) to.end(stream, "that session's page is closed");
+        },
+        input: (stream, data) => tell(stream, "input", data),
+        size: (stream, rows, cols, focus) => tell(stream, "size", rows, cols, focus),
+        close: (stream) => {
+          tell(stream, "close");
+          pages.delete(stream);
+        },
+      };
+    },
   });
 }

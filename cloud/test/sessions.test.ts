@@ -95,6 +95,34 @@ describe("sessions", () => {
     bridge.ws.close();
   });
 
+  it("mirrors a terminal both ways: its bytes down, keys and size up", async () => {
+    const bridge = await listen("?bridge=desk-7778&machine=desk");
+    const res = await api("/api/sessions/desk-7778/1-7/attach?terminal", { headers: { Upgrade: "websocket" } });
+    expect(res.status).toBe(101);
+    const viewer = res.webSocket!;
+    viewer.accept();
+    const got: any[] = [];
+    viewer.addEventListener("message", (e) => void got.push(JSON.parse(e.data as string)));
+
+    await bridge.until(() => bridge.events.some((e) => e.type === "attach"));
+    const attach = bridge.events.find((e) => e.type === "attach");
+    expect(attach).toMatchObject({ key: "1-7", terminal: true });
+
+    viewer.send(JSON.stringify({ type: "size", rows: 40, cols: 100, focus: true }));
+    viewer.send(JSON.stringify({ type: "in", data: btoa("hi\r") }));
+    viewer.send(JSON.stringify({ type: "size", rows: "40", cols: 100 }));
+    await bridge.until(() => bridge.events.some((e) => e.type === "in"));
+    expect(bridge.events.filter((e) => e.type === "size" || e.type === "in")).toEqual([
+      { type: "size", stream: attach.stream, rows: 40, cols: 100, focus: true },
+      { type: "in", stream: attach.stream, data: btoa("hi\r") },
+    ]);
+
+    bridge.ws.send(JSON.stringify({ type: "out", stream: attach.stream, data: btoa("\x1b[2Jhello") }));
+    for (let i = 0; i < 100 && !got.length; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(got).toEqual([{ type: "out", data: btoa("\x1b[2Jhello") }]);
+    bridge.ws.close();
+  });
+
   it("refuses a terminal on a bridge that isn't there", async () => {
     expect((await api("/api/sessions/gone-1/1-7/attach", { headers: { Upgrade: "websocket" } })).status).toBe(404);
   });
