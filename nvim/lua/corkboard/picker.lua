@@ -1,6 +1,6 @@
 -- Pickers, from snacks.nvim, set up for corkboard: no backdrop (a full-screen
 -- float would cut the panels away), and a file picked from a panel opens in a
--- split beside it rather than replacing it.
+-- split beside it (a tab, when narrow) rather than replacing it.
 
 local M = {}
 
@@ -18,8 +18,9 @@ local function confirm(picker, item, action)
   picker:close()
   vim.schedule(function()
     vim.api.nvim_set_current_win(main)
+    local split = require("corkboard").narrow() and "$tabedit " or "rightbelow vsplit "
     for _, it in ipairs(items) do
-      vim.cmd("rightbelow vsplit " .. vim.fn.fnameescape(Snacks.picker.util.path(it)))
+      vim.cmd(split .. vim.fn.fnameescape(Snacks.picker.util.path(it)))
       if it.pos then pcall(vim.api.nvim_win_set_cursor, 0, it.pos) end
     end
   end)

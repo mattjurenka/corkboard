@@ -63,7 +63,7 @@ function Entry({ note }: { note: Note }) {
         <span className="truncate text-primary">{note.title}</span>
       </span>
       <span className="line-clamp-3 break-words whitespace-pre-line">{note.body}</span>
-      {!note.shown && <span className="truncate text-muted-foreground">not shown: {note.reason}</span>}
+      {!note.shown && note.reason && <span className="truncate text-muted-foreground">not shown: {note.reason}</span>}
     </li>
   );
 }

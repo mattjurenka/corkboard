@@ -136,8 +136,75 @@ function M.title(buf)
   return vim.b[buf].corkboard_name or (t ~= "" and t) or "Claude Code"
 end
 
--- <C-.>: Claude Code in the project.
-function M.open() M.start() end
+-- A fleet session, once it's running: its conversation, in a tab of its
+-- own. fleetd has the spawn claimed and started within a minute or so; its
+-- session shows among the bridges' when it has.
+local function follow_spawn(spawn, label)
+  local cloud = require("corkboard.cards.cloud")
+  local ui = require("corkboard")
+  local tries = 0
+  local function look()
+    tries = tries + 1
+    local ok, fleet = pcall(cloud.call, "fleet_get")
+    local s = ok and vim.iter(fleet.spawns or {}):find(function(x) return x.id == spawn.id end)
+    if s and (s.state == "failed" or s.state == "stopped" or s.state == "done") then
+      return ui.toast("session-" .. spawn.id, "error", label .. ": " .. s.state .. (s.error ~= vim.NIL and s.error and (" (" .. s.error .. ")") or ""))
+    end
+    local slot = s and s.slot ~= vim.NIL and s.slot or nil
+    for _, b in ipairs(ok and fleet.bridges or {}) do
+      for _, c in ipairs(b.sessions or {}) do
+        if slot and c.vm == slot and b.environment == spawn.environment and c.attach then
+          ui.toast("session-" .. spawn.id, "done", label .. " is running in " .. slot)
+          return require("corkboard.conversation").open(b.id, c.key, c.name or label)
+        end
+      end
+    end
+    if tries >= 60 then return ui.toast("session-" .. spawn.id, "error", label .. " hasn't started after 3 minutes; the fleet view has it") end
+    vim.defer_fn(look, 3000)
+  end
+  vim.defer_fn(look, 3000)
+end
+
+-- <C-.>: a Claude Code session, wherever you choose: here, when this
+-- machine has claude, or in one of the fleet's VMs (an environment's agent
+-- template, on this board's project), whose conversation opens when it's up.
+function M.open()
+  local cloud = require("corkboard.cards.cloud")
+  local choices = {}
+  if vim.fn.executable("claude") == 1 then table.insert(choices, { text = "Claude Code here", run = function() M.start() end }) end
+  local ok, fleet = pcall(cloud.call, "fleet_get")
+  for _, e in ipairs(ok and fleet.environments or {}) do
+    local slots = vim.tbl_get(e, "running", "slots") or {}
+    local free = #vim.tbl_filter(function(sl) return sl.spawn == vim.NIL or sl.spawn == nil end, slots)
+    local names = vim.tbl_keys(e.templates or {})
+    table.sort(names)
+    for _, t in ipairs(names) do
+      local caps = e.templates[t].capNames
+      table.insert(choices, {
+        text = string.format("%s in %s", t, e.name),
+        detail = string.format("%d of %d VMs free%s", free, #slots, type(caps) == "table" and #caps > 0 and (" · " .. table.concat(caps, ", ")) or ""),
+        run = function()
+          local label = t .. " in " .. e.name
+          local id = "session-" .. e.name .. "-" .. t
+          require("corkboard").toast(id, "pending", "starting " .. label)
+          local queued, spawn = pcall(cloud.call, "fleet_session", e.name, t, cloud.key())
+          if not queued then return require("corkboard").toast(id, "error", "couldn't start " .. label .. ": " .. tostring(spawn)) end
+          require("corkboard").toast(id, "done", label .. " queued")
+          follow_spawn(spawn, label)
+        end,
+      })
+    end
+  end
+  if #choices == 0 then
+    return vim.notify("corkboard: no claude here, and no fleet to start a session in" .. (ok and "" or (": " .. tostring(fleet))), vim.log.levels.ERROR)
+  end
+  vim.ui.select(choices, {
+    prompt = "Claude Code session",
+    format_item = function(c) return c.detail and (c.text .. "  (" .. c.detail .. ")") or c.text end,
+  }, function(c)
+    if c then c.run() end
+  end)
+end
 
 local HANDOFF_PROMPT = [=[
 Pepper, Matt's personal assistant, handed you this work from the day plan window. Do it here, in this project.

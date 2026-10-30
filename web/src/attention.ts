@@ -1,9 +1,10 @@
 // Desktop notifications, and the list of them the sidebar keeps for this
-// page (Notifications in Sidebar.tsx). Two sources: cards whose agent is
+// page (Notifications in Sidebar.tsx). Three sources: cards whose agent is
 // asking something of the user (a card's attention field; see
-// corkboard/board.lua and mcp/board.ts), and Claude Code sessions' own
+// corkboard/board.lua and mcp/board.ts), Claude Code sessions' own
 // PushNotification calls (corkboard.notification, from
-// nvim/hooks/claude-notification.lua). Every one is listed, including those
+// nvim/hooks/claude-notification.lua), and Neovim's warnings and errors
+// (corkboard.message). Every one is listed, including those
 // that raised nothing. Clicking one brings this window up (with the card
 // open, for a card). Notifications need a secure context, which loopback is.
 
@@ -38,6 +39,13 @@ function record(note: Omit<Note, "id" | "time" | "shown">, want: boolean) {
     entry.open?.();
     n.close();
   };
+}
+
+// A warning or error from Neovim (corkboard.message: vim.notify, in
+// corkboard/init.lua), listed rather than shown on the command line. Only
+// the list: it's about what you just did, in the window you're looking at.
+export function notifyMessage({ level, text }: { level: "error" | "warning"; text: string }) {
+  record({ title: level === "error" ? "Error" : "Warning", body: text }, false);
 }
 
 // Browsers grant permission only from a user gesture, so ask on the first one.

@@ -8,7 +8,7 @@ import { Rpc } from "./nvim/rpc.js";
 import { EphemeralRpc, WasmRpc } from "./nvim/wasm/rpc";
 import { makeNvim, NvimContext } from "./nvim/context";
 import { store, type Tab, type Toast } from "./store";
-import { askPermissionOnGesture, notifyAttention, notifyBack, notifyClaude } from "./attention";
+import { askPermissionOnGesture, notifyAttention, notifyBack, notifyClaude, notifyMessage } from "./attention";
 import { chime } from "./chime";
 import { openPlan } from "./planWindow";
 import { remember, save as saveSkeleton } from "./skeleton";
@@ -175,6 +175,7 @@ rpc.on("corkboard.away", ([away]: any[]) => store.set({ away: typeof away === "o
 rpc.on("corkboard.tools", ([tools]: any[]) => store.set({ tools }));
 rpc.on("corkboard.projects", ([projects]: any[]) => store.set({ projects }));
 rpc.on("corkboard.chime", () => chime());
+rpc.on("corkboard.message", ([m]: any[]) => notifyMessage(m));
 // A toast replaces the one with its id; one that's ended goes after a while.
 rpc.on("corkboard.toast", ([t]: [Toast]) => {
   store.set({ toasts: [...store.get().toasts.filter((o) => o.id !== t.id), t] });

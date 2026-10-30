@@ -246,9 +246,16 @@
         '';
 
         # The page the Worker serves at /edit/, with no machine behind it
-        # (wasm/edit-page.ts): `nix build .#edit-page -o cloud/.edit` before
-        # deploying the Worker (cloud/package.json's deploy does).
-        edit-page = if nvimWasm == null then null else pkgs.stdenvNoCC.mkDerivation {
+        # (wasm/edit-page.ts), built into cloud/.edit by cloud/deploy.sh.
+        # Its plugins are a bridge's: corkboard, then $CORKBOARD_PLUGINS when
+        # built with --impure (the deploying machine's, for its theme), then
+        # snacks.nvim unless those had it.
+        edit-page = let
+          given = builtins.getEnv "CORKBOARD_PLUGINS";
+          theirs = map builtins.storePath (pkgs.lib.filter (p: p != "") (pkgs.lib.splitString ":" given));
+          snacks = pkgs.lib.optional (!pkgs.lib.any (p: pkgs.lib.hasInfix "snacks" p) theirs) pkgs.vimPlugins.snacks-nvim;
+          plugins = theirs ++ snacks;
+        in if nvimWasm == null then null else pkgs.stdenvNoCC.mkDerivation {
           pname = "corkboard-edit-page";
           version = "0.1.0";
           src = pkgs.lib.fileset.toSource {
@@ -259,7 +266,7 @@
           buildPhase = ''
             export HOME=$TMPDIR
             ln -s ${webDeps} node_modules
-            bun wasm/edit-page.ts $out ${web} ${nvimWasm}/lib/nvim-wasm $PWD/nvim ${pkgs.vimPlugins.snacks-nvim}
+            bun wasm/edit-page.ts $out ${web} ${nvimWasm}/lib/nvim-wasm $PWD/nvim ${pkgs.lib.escapeShellArgs plugins}
           '';
           dontInstall = true;
         };

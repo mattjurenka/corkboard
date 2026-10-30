@@ -91,6 +91,18 @@ end
 -- Whether a page is attached.
 function M.attached() return next(chans) ~= nil end
 
+-- A narrow page (a phone, a skinny window) is one column: nothing opens
+-- beside a window by itself (the cards beside a session, a markdown
+-- preview), and a file opened from a panel gets a tab of its own. The page
+-- says which it is (main.tsx); User CorkboardNarrow tells the rest.
+function M.narrow() return vim.g.corkboard_narrow == true end
+
+function M.set_narrow(on)
+  if M.narrow() == on then return end
+  vim.g.corkboard_narrow = on
+  vim.api.nvim_exec_autocmds("User", { pattern = "CorkboardNarrow" })
+end
+
 -- What another window sent this one to do (corkboard.open's run, from the
 -- bridge): require(mod)[fn](...), once the editor is put back, which would
 -- move off it.
@@ -453,7 +465,7 @@ end
 -- in the explorer's preview tab (above), or a tab of its own at the end, or
 -- goes to the window already showing it. Otherwise it opens in the current
 -- window if that holds a file, else the tab's first that does, else a new
--- split, so a panel or terminal is never replaced.
+-- split (a tab, when narrow), so a panel or terminal is never replaced.
 function M.open_file(path, tab)
   vim.schedule(function()
     vim.cmd.stopinsert()
@@ -469,7 +481,7 @@ function M.open_file(path, tab)
       vim.api.nvim_set_current_win(target)
       vim.cmd.edit(vim.fn.fnameescape(path))
     else
-      vim.cmd("rightbelow vsplit " .. vim.fn.fnameescape(path))
+      vim.cmd((M.narrow() and "$tabedit " or "rightbelow vsplit ") .. vim.fn.fnameescape(path))
     end
   end)
 end
@@ -616,7 +628,19 @@ local function tab_step(step)
   vim.cmd.tabnext((vim.fn.tabpagenr() - 1 + step) % n + 1)
 end
 
+-- Warnings and errors go to the page's notifications (the sidebar's foot),
+-- not the command line, while there's a page to show them.
+local notify = vim.notify
+local function notify_page(msg, level, opts)
+  if (level or 0) < vim.log.levels.WARN or not M.attached() then return notify(msg, level, opts) end
+  M.notify("corkboard.message", {
+    level = level >= vim.log.levels.ERROR and "error" or "warning",
+    text = tostring(msg):gsub("^corkboard: ", ""),
+  })
+end
+
 function M.setup()
+  vim.notify = notify_page
   vim.g.clipboard = {
     name = "corkboard",
     copy = { ["+"] = clip_copy, ["*"] = clip_copy },

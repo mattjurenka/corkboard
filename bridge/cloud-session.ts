@@ -375,10 +375,11 @@ export class Session {
         if (!res.ok) throw new Error(`corkboard cloud: ${json.error ?? `HTTP ${res.status}`}`);
         return null;
       }
-      // A session you talk to, in one of an environment's slots.
+      // A session you talk to, in one of an environment's slots: on a
+      // board's project (its clone there), when one is named.
       case "fleet_session": {
-        const [environment, template] = args as [string, string];
-        return send("POST", "/spawns", { environment, template, interactive: true, task: "" });
+        const [environment, template, board] = args as [string, string, string?];
+        return send("POST", "/spawns", { environment, template, interactive: true, task: "", ...(board && { board }) });
       }
       case "fleet_approve":
       case "fleet_stop":
