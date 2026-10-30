@@ -5,19 +5,22 @@ import { App } from "./App";
 import { Grid } from "./nvim/grid.js";
 import { attachInput } from "./nvim/input.js";
 import { Rpc } from "./nvim/rpc.js";
-import { WasmRpc } from "./nvim/wasm/rpc";
+import { EphemeralRpc, WasmRpc } from "./nvim/wasm/rpc";
 import { makeNvim, NvimContext } from "./nvim/context";
 import { store, type Tab, type Toast } from "./store";
 import { askPermissionOnGesture, notifyAttention, notifyBack, notifyClaude } from "./attention";
 import { chime } from "./chime";
 import { openPlan } from "./planWindow";
 import { remember, save as saveSkeleton } from "./skeleton";
+import { nvimFlushed, startLatency } from "./latency";
 
 // ?cwd=/path/to/project opens Neovim there; ?host=<name> on that machine,
 // over ssh (CORKBOARD_REMOTES in bridge/server.ts). ?view=plan is the day
 // plan's window instead (planWindow.ts). ?wasm runs Neovim in the page
 // (nvim/wasm), the bridge only its machine; ?wasm=0 doesn't, where the
 // bridge would have it (CORKBOARD_WASM in bridge/server.ts).
+// ?wasm=ephemeral&repo=owner/name[&ref=] has no machine at all: Neovim's
+// files are a clone of that Forgejo repository, in memory (nvim/wasm/machine).
 const params = new URLSearchParams(location.search);
 const view = params.get("view") === "plan" ? "plan" : null;
 const host = view ? null : params.get("host");
@@ -50,11 +53,26 @@ if (fragment.has("token")) {
 }
 
 const protocols = ["corkboard", ...(token ? [`corkboard.token.${token}`] : [])];
-const rpc = inPage ? new WasmRpc(wsUrl, protocols, token) : new Rpc(wsUrl, protocols);
-const nvim = makeNvim(rpc);
+const [owner, name] = (params.get("repo") ?? "").split("/");
+const rpc =
+  wasm === "ephemeral" && owner && name
+    ? new EphemeralRpc({ owner, name, ref: params.get("ref") ?? undefined, headers: token ? { "x-corkboard-token": token } : {} }, token)
+    : inPage
+      ? new WasmRpc(wsUrl, protocols, token)
+      : new Rpc(wsUrl, protocols);
+const nvim = makeNvim(rpc, token);
 // For tests and the console.
 (window as any).__nvim = nvim;
 store.set({ host, view });
+// Key-to-pixels timings (latency.ts), to the bridge's latency.jsonl.
+startLatency((samples) =>
+  fetch(new URL("latency", location.href), {
+    method: "POST",
+    body: JSON.stringify({ view, host, cwd: params.get("cwd"), samples }),
+    headers: token ? { "x-corkboard-token": token } : {},
+    keepalive: true,
+  }).catch(() => {}),
+);
 
 // Rendered at once, so the canvas is there for the grid.
 const root = createRoot(document.getElementById("root")!);
@@ -120,7 +138,10 @@ rpc.on("redraw", (batches: any[]) => {
       store.set({ tabs: { current, tabs: labelTabs(tabs) } });
     }
   }
-  if (batches.some(([name]) => name === "flush")) applyLayout();
+  if (batches.some(([name]) => name === "flush")) {
+    applyLayout();
+    nvimFlushed();
+  }
 });
 rpc.on("corkboard.layout", ([layout]: any[]) => {
   pending.layout = layout;

@@ -62,6 +62,7 @@ local function new_log(path)
     misses = {}, -- cache misses, as their rebuild items
     units = {}, -- model -> input-token units
     series = {}, -- context size per request
+    times = {}, -- and when it was sent, in seconds
   }
 end
 
@@ -209,6 +210,7 @@ local function request(log, msg, timestamp)
   end
   log.compacted = false
   log.prev_time = now or log.prev_time
+  table.insert(log.times, log.prev_time or 0)
   -- The TTL the context was last cached with, for telling an expiry from
   -- an eviction.
   if write > 0 then log.prev_ttl = w1h > 0 and "1h" or "5m" end
@@ -443,13 +445,16 @@ function M.summarize(log, price)
     })
   end
 
-  -- At most 120 points for the context chart; a point that covers a miss
-  -- is marked.
-  local series, step = {}, math.max(1, math.ceil(#log.series / 120))
+  -- At most 120 points for the context chart, each at the seconds from the
+  -- first request to the first it covers; a point that covers a miss is
+  -- marked.
+  local series, times, step = {}, {}, math.max(1, math.ceil(#log.series / 120))
+  local start = log.times[1] or 0
   for i = 1, #log.series, step do
     local m = 0
     for j = i, math.min(i + step - 1, #log.series) do m = math.max(m, log.series[j]) end
     table.insert(series, m)
+    table.insert(times, math.max(0, (log.times[i] or start) - start))
   end
   local miss_points = {}
   for _, miss in ipairs(log.misses) do
@@ -497,6 +502,7 @@ function M.summarize(log, price)
     tokens = log.tokens,
     context = log.series[#log.series] or 0,
     series = series,
+    times = times,
     miss_points = miss_points,
     cache = cache,
     categories = categories,

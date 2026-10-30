@@ -26,6 +26,7 @@ import { range } from "./dates";
 import type { Brain, Memory } from "./memory";
 import type { User } from "./user";
 import { Refused, spawn, status, stop } from "./fleet";
+import { MAX_INLINE, MediaError, attach, fileName, fileType, offer } from "./media";
 
 export type Grant =
   | { kind: "card"; board: string; card: string; agent: string }
@@ -111,7 +112,7 @@ function full(c: Card & { log: LogEntry[] }) {
 
 // Tools ------------------------------------------------------------------------------
 
-type Call = { board: Stub; key: string; me: string; grant: Grant; cards: () => Promise<Card[]> };
+type Call = { env: Env; user: string; board: Stub; key: string; me: string; grant: Grant; cards: () => Promise<Card[]> };
 type Tool = {
   description: string;
   properties?: Record<string, object>;
@@ -333,6 +334,34 @@ const TOOLS: Record<string, Tool> = {
         }),
       ),
   },
+  attach_file: {
+    description:
+      "Attach a file to a card for the user to look at in corkboard, beside your session: a screenshot, plot, recording, audio clip, PDF. Images, video, audio and PDFs play there; anything else can be downloaded. Pass data (base64) for a small file you have in hand; otherwise leave it out and you get an upload URL, good for an hour: run the command it gives (curl -T <path> <url>), and the file is on the card once that succeeds. Up to 100 MB.",
+    properties: {
+      id,
+      name: str("The file's name, like plot.png; its extension gives its type"),
+      type: str("Its MIME type, like video/mp4, if the name doesn't say"),
+      data: str("The file, base64, for one under 4 MB; leave it out to upload it with curl instead"),
+    },
+    required: ["id", "name"],
+    card: "own",
+    run: async (a, c) => {
+      const name = fileName(a.name);
+      const type = fileType(name, a.type);
+      if (a.data === undefined || a.data === null || a.data === "") {
+        const { url, expires_at } = await offer(c.env, c.user, c.key, a.id, c.me, name, type);
+        return { upload: url, expires_at, command: `curl -fsS -T <path to ${name}> ${url}` };
+      }
+      if (typeof a.data !== "string" || a.data.length > (MAX_INLINE * 4) / 3 + 4) throw new ToolError("data is base64 under 4 MB; upload a larger file with curl");
+      let bytes: Uint8Array;
+      try {
+        bytes = Uint8Array.from(atob(a.data.replace(/\s+/g, "")), (ch) => ch.charCodeAt(0));
+      } catch {
+        throw new ToolError("data must be base64");
+      }
+      return attach(c.env, c.user, c.key, a.id, c.me, name, type, bytes);
+    },
+  },
   // No card token may: an agent doesn't take its own or anyone's card off
   // the board. Deleting for good is the user's alone (the REST API).
   archive_card: {
@@ -409,7 +438,8 @@ const HOLD_ALLOWS = new Set(["read_card", "block", "request_user_action", "relea
 const INSTRUCTIONS = (me: string) => `The corkboard project board: one card per task. You are "${me}".
 To pick up work, call next_card (or claim_card for a specific card). While working, log progress with log.
 If you need a human decision, call block with your question and stop. If you need the user to do something
-(log in, approve, test on a device), call request_user_action; both notify them on their desktop. When done, call submit_for_review.
+(log in, approve, test on a device), call request_user_action; both notify them on their desktop. To show them a screenshot, plot,
+recording or PDF, attach it to your card with attach_file; it appears beside your session. When done, call submit_for_review.
 Put follow-up work you discover in new cards with create_card (parent: the card you are on).`;
 
 // The user's own tools, for OAuth clients and Pepper, not card agents: the
@@ -770,7 +800,12 @@ async function callTool(env: Env, user: string, grant: Grant, name: string, args
   }
   let listed: Card[] | undefined;
   const cards = async () => (listed ??= unwrap(await board.list()));
-  return tool.run(args, { board, key, me: grant.agent, grant, cards });
+  try {
+    return await tool.run(args, { env, user, board, key, me: grant.agent, grant, cards });
+  } catch (e) {
+    if (e instanceof MediaError) throw new ToolError(e.message);
+    throw e;
+  }
 }
 
 // JSON-RPC ----------------------------------------------------------------------------

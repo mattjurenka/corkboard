@@ -16,7 +16,12 @@ local function board() return require("corkboard.board") end
 
 local sessions = {} -- card id -> terminal buffer of its running session
 local starting = {} -- card ids schedule() has queued to start
-local live = {} -- terminal buffer -> working | idle | asking | permission
+-- terminal buffer -> working | background (its turn is over but work it
+-- started still runs) | ready (it waits on you) | idle (a fresh session) |
+-- asking | permission
+local live = {}
+local pending = {} -- terminal buffer -> { [tool_use_id] = true } of background work
+local waking = {} -- terminal buffer -> true when this turn scheduled a /loop wakeup
 local exited = {} -- card ids whose session has ended
 
 -- The card's running session's terminal, if any.
@@ -44,7 +49,7 @@ local function event_state(ev)
   if ev.event == "Notification" then
     local kind = ev.notification_type or ""
     if kind == "permission_prompt" or (kind == "" and (ev.message or ""):lower():find("permission")) then return "permission" end
-    if kind == "idle_prompt" then return "idle" end
+    if kind == "idle_prompt" then return "settled" end
     return nil
   end
   return ({
@@ -53,8 +58,35 @@ local function event_state(ev)
     PreToolUse = "working",
     PostToolUse = "working",
     PermissionRequest = "permission",
-    Stop = "idle",
+    Stop = "settled",
   })[ev.event]
+end
+
+-- The task-notifications in the transcript's end, by the tool call that
+-- started each: one with a status is that work finished.
+local NOTES = 4 * 1024 * 1024
+local function finished_tasks(path)
+  local done = {}
+  local fd = path and vim.uv.fs_open(vim.fn.expand(path), "r", 0)
+  if not fd then return done end
+  local size = vim.uv.fs_fstat(fd).size
+  local text = vim.uv.fs_read(fd, math.min(size, NOTES), math.max(0, size - NOTES)) or ""
+  vim.uv.fs_close(fd)
+  for note in text:gmatch("<task%-notification>(.-)</task%-notification>") do
+    local id = note:match("<tool%-use%-id>([^<]+)</tool%-use%-id>")
+    if id and note:find("<status>", 1, true) then done[id] = true end
+  end
+  return done
+end
+
+-- Between turns: still at work while what it started in the background
+-- hasn't come back, or a /loop will wake it; otherwise waiting on you.
+local function settle(buf, ev)
+  local mine = pending[buf]
+  if mine and next(mine) then
+    for id in pairs(finished_tasks(ev.transcript_path)) do mine[id] = nil end
+  end
+  return ((mine and next(mine)) or waking[buf]) and "background" or "ready"
 end
 
 -- Each card's sessions, in sessions.json beside the board as
@@ -152,7 +184,7 @@ end
 -- they are.
 local clearing = {} -- terminal buffer -> the done card it waits to be cleared of
 
-local function between_turns(buf) return live[buf] == nil or live[buf] == "idle" end
+local function between_turns(buf) return live[buf] == nil or live[buf] == "idle" or live[buf] == "ready" end
 
 local function clear(buf)
   local id = clearing[buf]
@@ -187,6 +219,8 @@ function M.hook(ev)
   local id = vim.b[buf].corkboard_card
   -- What corkboard.restore resumes; a /clear starts another.
   if ev.event == "SessionStart" and ev.session_id then
+    -- A new session (a /clear) has none of the last one's background work.
+    if vim.b[buf].corkboard_claude_session ~= ev.session_id then pending[buf], waking[buf] = nil, nil end
     vim.b[buf].corkboard_claude_session = ev.session_id
     vim.b[buf].corkboard_claude_transcript = ev.transcript_path
   end
@@ -205,6 +239,14 @@ function M.hook(ev)
   if ev.event == "UserPromptSubmit" then vim.b[buf].corkboard_typed = os.time() * 1000 end
   local was = live[buf]
   local state = event_state(ev)
+  -- A turn starting: whether it schedules another wakeup is up to it.
+  if state == "working" and was ~= "working" then waking[buf] = nil end
+  if ev.background and ev.tool_use_id then
+    pending[buf] = pending[buf] or {}
+    pending[buf][ev.tool_use_id] = true
+  end
+  if ev.wakeup then waking[buf] = true end
+  if state == "settled" then state = settle(buf, ev) end
   if state then
     live[buf] = state
     -- What it waits on, for away mode: a Notification that it still does

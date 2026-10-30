@@ -20,7 +20,7 @@ export type BoardCard = {
   // Dependencies not done yet; missing ones name no card.
   waiting?: { id: string; missing: boolean }[];
   // The agent's Claude Code session, from its hooks (corkboard.agents).
-  session?: "starting" | "working" | "idle" | "permission" | "exited";
+  session?: "starting" | "working" | "background" | "ready" | "idle" | "permission" | "exited";
   // What its agents' sessions cost (corkboard.usage's card_costs); cost is
   // missing until a session has recorded one.
   cost?: { cost?: number; tokens: number; sessions: number };
@@ -32,6 +32,8 @@ const costLine = (c: NonNullable<BoardCard["cost"]>) =>
 const SESSION: Record<string, [string, string]> = {
   starting: ["starting", "text-muted-foreground"],
   working: ["running", "text-working"],
+  background: ["running in the background", "text-working"],
+  ready: ["ready", "text-primary"],
   idle: ["idle", "text-muted-foreground"],
   permission: ["asking permission", "text-blocked"],
   exited: ["session ended", "text-muted-foreground"],

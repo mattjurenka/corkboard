@@ -13,7 +13,7 @@ export function Spinner({ className, style }: { className?: string; style?: Reac
     return () => clearInterval(t);
   }, []);
   return (
-    <div className={cn("flex items-center justify-center text-muted-foreground", className)} style={style} aria-label="loading">
+    <div className={cn("flex items-center justify-center text-muted-foreground", className)} style={style} aria-label="loading" data-ambient>
       {FRAMES[i]}
     </div>
   );

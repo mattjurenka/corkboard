@@ -1,5 +1,4 @@
-// neovim-wasm's web/ring.js, whose layout its pre.js reads: keep the two alike.
-// Producer side of the stdin ring buffer read by web/pre.js.
+// Producer side of the stdin ring buffer that pre.js reads.
 //
 // Layout of the SharedArrayBuffer:
 //   Int32 [0]  bytes written (wrapping counter, written here)

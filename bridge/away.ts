@@ -36,14 +36,15 @@ type Reported = {
   // Its log (corkboard/agents.lua), which the phone draws the conversation from.
   transcript?: string;
 };
-// working and starting are busy; asking and permission need you.
+// working, background and starting are busy; asking and permission need
+// you; ready and idle are done.
 type Kind = "busy" | "needs" | "idle";
 type Live = Reported & { kind: Kind; since: number };
 
 const WAIT_MS = 20 * 60 * 1000;
 
 const kind = (state: string): Kind =>
-  state === "asking" || state === "permission" ? "needs" : state === "idle" ? "idle" : "busy";
+  state === "asking" || state === "permission" ? "needs" : state === "idle" || state === "ready" ? "idle" : "busy";
 
 const sessions = new Map<Page, Map<number, Live>>();
 const ids = new Map<Page, number>();

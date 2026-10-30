@@ -23,6 +23,8 @@ type Session = {
   model?: string;
   context: number;
   series: number[];
+  // Seconds from the first request to each point.
+  times?: number[];
   miss_points?: number[];
   cache: { hit: number; read: number; write: number; write_1h: number; uncached: number; misses: Miss[]; miss_tokens: number };
   categories?: { label: string; share: number; output?: boolean; written: number; uncached: number; read: number; cost?: number; count: number }[];
@@ -243,7 +245,7 @@ function Detail({ s, item }: { s: Session; item?: number }) {
       </p>
       {s.series.length > 1 && (
         <Part title="Context size per request">
-          <ContextChart series={s.series} missPoints={s.miss_points} />
+          <ContextChart series={s.series} times={s.times} missPoints={s.miss_points} />
         </Part>
       )}
       <Part title="Where it went">
@@ -398,18 +400,24 @@ function Grid({
   );
 }
 
-// Context size per request as a line, with a crosshair and readout on hover.
-// Cache misses are marked with a tick at the top; drops are compactions.
-function ContextChart({ series, missPoints = [] }: { series: number[]; missPoints?: number[] }) {
+// Context size over the session's time, with a crosshair and readout on
+// hover. Each request's context holds until the next, so the line steps.
+// Cache misses are marked with a dashed line; drops are compactions.
+function ContextChart({ series, times, missPoints = [] }: { series: number[]; times?: number[]; missPoints?: number[] }) {
   const [at, setAt] = useState<number | null>(null);
   const W = 600, H = 90, pad = 4;
   const max = Math.max(...series);
-  const x = (i: number) => pad + (i / (series.length - 1)) * (W - 2 * pad);
+  // Seconds since the first request; by request when there are no times.
+  const timed = times?.length === series.length && times[times.length - 1] > 0;
+  const t = timed ? times! : series.map((_, i) => i);
+  const span = t[t.length - 1];
+  const x = (i: number) => pad + (t[i] / span) * (W - 2 * pad);
   const y = (v: number) => H - pad - (v / max) * (H - 2 * pad);
-  const pts = series.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const pts = series
+    .map((v, i) => (i ? `${x(i).toFixed(1)},${y(series[i - 1]).toFixed(1)} ` : "") + `${x(i).toFixed(1)},${y(v).toFixed(1)}`)
+    .join(" ");
   const misses = new Set(missPoints);
   const stroke = { vectorEffect: "non-scaling-stroke" } as const;
-
   return (
     <div className="relative">
       <svg
@@ -420,8 +428,11 @@ function ContextChart({ series, missPoints = [] }: { series: number[]; missPoint
         className="block h-[calc(var(--cell-h)*5)] w-full"
         onMouseMove={(e) => {
           const box = e.currentTarget.getBoundingClientRect();
-          const i = Math.round(((e.clientX - box.left) / box.width) * (series.length - 1));
-          setAt(Math.max(0, Math.min(series.length - 1, i)));
+          // The last request sent before the time under the mouse.
+          const when = ((e.clientX - box.left) / box.width) * span;
+          let i = 0;
+          while (i < t.length - 1 && t[i + 1] <= when) i++;
+          setAt(i);
         }}
         onMouseLeave={() => setAt(null)}
       >
@@ -432,10 +443,14 @@ function ContextChart({ series, missPoints = [] }: { series: number[]; missPoint
           <line key={i} x1={x(i)} x2={x(i)} y1={0} y2={H - pad} stroke="var(--blocked)" strokeWidth={2} strokeDasharray="3 3" style={stroke} />
         ))}
       </svg>
-      <div className="text-right text-muted-foreground">
-        {at == null
-          ? `peak ${tokens(max)}`
-          : `point ${at + 1} of ${series.length}: ${tokens(series[at])}${misses.has(at) ? " · cache miss" : ""}`}
+      <div className="flex justify-between gap-2ch text-muted-foreground tabular-nums">
+        <span>{timed ? "0" : "1"}</span>
+        <span className="min-w-0 truncate">
+          {at == null
+            ? `peak ${tokens(max)}`
+            : `${timed ? elapsed(t[at]) : `point ${at + 1}`}: ${tokens(series[at])}${misses.has(at) ? " · cache miss" : ""}`}
+        </span>
+        <span>{timed ? elapsed(span) : series.length}</span>
       </div>
     </div>
   );
@@ -488,6 +503,14 @@ function tokens(n: number) {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
   if (n >= 1e3) return `${Math.round(n / 1e3)}k`;
   return String(Math.round(n ?? 0));
+}
+
+// Time into the session: 45s, 12m, 1h05.
+function elapsed(secs: number) {
+  if (secs < 60) return `${Math.round(secs)}s`;
+  if (secs < 3600) return `${Math.round(secs / 60)}m`;
+  const m = Math.round(secs / 60);
+  return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}`;
 }
 
 const money = (n?: number | null) => (n == null ? "—" : `$${n.toFixed(2)}`);

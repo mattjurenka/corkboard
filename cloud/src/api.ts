@@ -14,6 +14,7 @@
 //   POST  /api/boards/:board/cards/:id/archive  { archived? }: off the board (default) or back on
 //   POST  /api/boards/:board/cards/:id/log   { who, note }
 //   POST  /api/boards/:board/cards/:id/lease { agent }: the agent is alive; { until } or null (board.ts's touch)
+//   GET   /api/boards/:board/cards/:id/media/:mid  a file attached to the card (media.ts)
 //   POST  /api/boards/:board/import          { cards: [...] } with their ids, times and logs; empty boards only
 //   GET   /api/live                          WebSocket: { type: "plan", plan } on every plan change,
 //                                            { type: "chat", message } on every chat message, and the
@@ -69,6 +70,7 @@ import { type Grant, brainOf, hiddenFor, mcp, memoryOf } from "./mcp";
 import { blocks, chatText, date, note, noteId } from "./plans";
 import { BRAINS, type Brain } from "./memory";
 import { fleetRoutes } from "./fleet";
+import { MEDIA_ID, forget, mediaKey, serve } from "./media";
 import { gitRoutes } from "./git";
 import { goals } from "./goals";
 import { type Answer, MACHINE_HEADER } from "./user";
@@ -85,7 +87,7 @@ function reply<T>(result: Result<T>, status = 200): Response {
 // (corkboard's path_key); clones elsewhere find it by its first commit.
 const BOARD_KEY = /^[A-Za-z0-9._-]{1,128}$/;
 
-const ROUTE = /^\/api\/boards(?:\/([^/]+)(?:\/cards(?:\/([^/]+)(?:\/(log|lease|archive))?)?|\/(live|import))?)?$/;
+const ROUTE = /^\/api\/boards(?:\/([^/]+)(?:\/cards(?:\/([^/]+)(?:\/(log|lease|archive)|\/media\/([^/]+))?)?|\/(live|import))?)?$/;
 
 async function body(request: Request): Promise<Record<string, unknown>> {
   let value: unknown;
@@ -121,7 +123,7 @@ const REMOTE = /^(https?:\/\/|ssh:\/\/|git:\/\/|[\w.-]+@[\w.-]+:)[^\s]{1,500}$/;
 async function route(request: Request, env: Env, user: string): Promise<Response> {
   const m = new URL(request.url).pathname.match(ROUTE);
   if (!m) return error(404, "not found");
-  const [, key, rawId, sub, live] = m;
+  const [, key, rawId, sub, mediaId, live] = m;
   const method = request.method;
   const users = env.USER.get(env.USER.idFromName(user));
 
@@ -143,6 +145,7 @@ async function route(request: Request, env: Env, user: string): Promise<Response
   if (!cards) {
     if (method === "DELETE") {
       await board.destroy();
+      await forget(env, `${user}/${key}/`);
       await users.forget(key);
       return new Response(null, { status: 204 });
     }
@@ -162,6 +165,11 @@ async function route(request: Request, env: Env, user: string): Promise<Response
     return error(405, "method not allowed");
   }
   const id = cardId(rawId);
+  if (mediaId !== undefined) {
+    if (method !== "GET") return error(405, "method not allowed");
+    if (!MEDIA_ID.test(mediaId)) return error(404, `no file ${mediaId} on ${id}`);
+    return serve(env, user, key, id, mediaId);
+  }
   if (sub === "log") {
     if (method !== "POST") return error(405, "method not allowed");
     const { who, note } = logEntry(await body(request));
@@ -183,6 +191,7 @@ async function route(request: Request, env: Env, user: string): Promise<Response
   if (method === "GET") return reply(await board.get(id));
   if (method === "DELETE") {
     const r = await board.remove(id);
+    if (r.ok) await forget(env, mediaKey(user, key, id));
     return r.ok ? new Response(null, { status: 204 }) : reply(r);
   }
   if (method === "PATCH") {

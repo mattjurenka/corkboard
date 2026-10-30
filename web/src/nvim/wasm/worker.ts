@@ -1,6 +1,6 @@
-// The Web Worker that runs Neovim compiled to wasm (~/neovim-wasm), for a
-// page opened with ?wasm. neovim-wasm's own pre.js gives it stdio over the
-// page's ring buffer; this gives it the bridge's machine:
+// The Web Worker that runs Neovim compiled to wasm (wasm/), for a
+// page opened with ?wasm. pre.js gives it stdio over the page's ring
+// buffer; this gives it the bridge's machine:
 //
 // - HOSTFS: the machine's directories (bridge/wasm.ts mounts()) mounted at
 //   the same paths, each call a blocking XHR to /host/fs. Neovim blocks
@@ -11,8 +11,13 @@
 //   round trip, and starting Neovim makes hundreds.
 // - /dev/corkboard-host: corkboard.wasm writes a request to it and reads
 //   the answer, which comes from /host/lua (processes, terminals, watches).
+//
+// A page with no machine (?wasm=ephemeral) has its own instead, in another
+// worker (machine/machine.ts): the same calls go there (machine/link.ts)
+// rather than to the bridge.
 
 import { decode, encode } from "@msgpack/msgpack";
+import { caller } from "./machine/link";
 
 export type Start = {
   type: "start";
@@ -33,6 +38,8 @@ export type Start = {
   mounts: string[];
   // lstat's answers for what starting asks first (wasm.seeds).
   seeds: Record<string, [string | null, number[] | null]>;
+  // The page's own machine, in place of the bridge's.
+  machine?: { port: MessagePort; reply: SharedArrayBuffer };
 };
 
 // A classic worker (importScripts), typed here as the DOM lib allows.
@@ -66,13 +73,16 @@ self.onmessage = (e: MessageEvent<Start>) => {
   if (e.data.type !== "start") return;
   const start = e.data;
 
+  const machine = start.machine && caller(start.machine.port, start.machine.reply);
   // Without waiting for the answer, which nobody wants.
   const send = (path: string, body: Uint8Array) => {
+    if (machine) return machine.send(path, body);
     const url = new URL(path, start.base);
     url.searchParams.set("s", start.session);
     fetch(url, { method: "POST", body: body as Uint8Array<ArrayBuffer>, headers: start.token ? { "x-corkboard-token": start.token } : {} }).catch(() => {});
   };
   const post = (path: string, body: Uint8Array): Uint8Array => {
+    if (machine) return machine.call(path, body);
     const url = new URL(path, start.base);
     url.searchParams.set("s", start.session);
     const xhr = new XMLHttpRequest();

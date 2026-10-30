@@ -20,6 +20,19 @@ if input.hook_event_name == "PostToolUse" and (tool == "claim_card" or tool == "
   card = card and card:upper()
 end
 
+-- Work a tool left running after it returned (a command run in the
+-- background, a Monitor, a background agent): the session isn't done with
+-- the turn's work until its task-notification comes back. And a /loop's
+-- next wakeup.
+local background, wakeup
+if input.hook_event_name == "PostToolUse" then
+  local args = type(input.tool_input) == "table" and input.tool_input or {}
+  local text = vim.F.npcall(vim.json.encode, input.tool_response) or ""
+  background = args.run_in_background == true or input.tool_name == "Monitor" or input.tool_name == "Workflow"
+    or text:find("async_launched", 1, true) ~= nil or text:find("running in background", 1, true) ~= nil
+  wakeup = input.tool_name == "ScheduleWakeup" and args.stop ~= true
+end
+
 local chan = vim.F.npcall(vim.fn.sockconnect, "pipe", addr, { rpc = true })
 if not chan or chan == 0 then return end
 -- A notification, not a request: the session needn't wait on Neovim.
@@ -32,6 +45,9 @@ pcall(vim.rpcnotify, chan, "nvim_exec_lua", "require('corkboard.agents').hook(..
     notification_type = input.notification_type,
     message = input.message,
     tool_name = input.tool_name,
+    tool_use_id = input.tool_use_id,
+    background = background or nil,
+    wakeup = wakeup or nil,
     corkboard_tool = tool or nil,
     card = card,
     -- AskUserQuestion's first question, for the card's attention.

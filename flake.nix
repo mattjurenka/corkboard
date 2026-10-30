@@ -1,9 +1,18 @@
 {
   description = "corkboard: Neovim in the browser, with agent panels beside it";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # Neovim compiled to wasm (wasm/), on a nixpkgs of its own: emscripten
+    # and the builds on it take hours, so they move only when this does.
+    nixpkgs-wasm.url = "github:NixOS/nixpkgs/31ecbaca1bdefa45dffc409f0250bd8039ea0010";
+    neovim-src = {
+      url = "github:neovim/neovim/v0.12.6";
+      flake = false;
+    };
+  };
 
-  outputs = { self, nixpkgs, ... }:
+  outputs = { self, nixpkgs, nixpkgs-wasm, neovim-src, ... }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAll = f: nixpkgs.lib.genAttrs systems (s: f nixpkgs.legacyPackages.${s});
@@ -12,6 +21,11 @@
       pepperPlan = import ./fleet/plan.nix { name = "pepper-vm"; interface = "pep0"; octet = 89; mac = "52:54:00:c1:a0:30"; };
       # Plugins the bridge puts on Neovim's runtimepath.
       pluginPath = pkgs: pkgs.lib.concatStringsSep ":" [ pkgs.vimPlugins.snacks-nvim ];
+      # The wasm build (wasm/), on x86_64-linux only, where it has been tried.
+      wasmOn = system:
+        if system == "x86_64-linux"
+        then import ./wasm { pkgs = nixpkgs-wasm.legacyPackages.${system}; inherit neovim-src; nvimVersion = "0.12.6"; }
+        else { packages = { }; checks = { }; shell = null; };
     in
     {
       # The agent VMs (fleet/, and .agent/plans/agent-fleet.md). A host that
@@ -35,7 +49,7 @@
 
       checks = forAll (pkgs: {
         fleet = import ./fleet/tests.nix { inherit pkgs; inherit (pkgs) lib; };
-      });
+      } // (wasmOn pkgs.stdenv.hostPlatform.system).checks);
 
       devShells = forAll (pkgs:
         let
@@ -77,13 +91,16 @@
           };
           android = androidShell false;
           android-emulator = androidShell true;
+        } // pkgs.lib.optionalAttrs ((wasmOn pkgs.stdenv.hostPlatform.system).shell != null) {
+          wasm = (wasmOn pkgs.stdenv.hostPlatform.system).shell;
         });
 
       # The bridge, the web page and the Neovim plugin, laid out as in the repo
       # so server.ts finds ../web and ../nvim from its own path. Exposes
       # `corkboard-bridge`; the CORKBOARD_* variables still apply, and
       # plugins given in CORKBOARD_PLUGINS come before snacks.nvim.
-      packages = forAll (pkgs: rec {
+      packages = forAll (pkgs: let nvimWasm = (wasmOn pkgs.stdenv.hostPlatform.system).packages.nvim-wasm or null; in
+        (wasmOn pkgs.stdenv.hostPlatform.system).packages // rec {
         # What building the page needs (React, Vite, Tailwind), from bun.lock.
         # A fixed-output derivation so bun can reach the registry; the hash
         # changes with bun.lock, and differs per system because Vite and
@@ -105,7 +122,7 @@
           dontFixup = true;
           outputHashMode = "recursive";
           outputHash = {
-            x86_64-linux = "sha256-X2ponyGENHb5U2owd/x1tCr23VayW2thj1GQMnSdMLA=";
+            x86_64-linux = "sha256-0MsLZ6iPcYO4eIGzvXjuG63Q0IRrMuKgGZ76ry8qsBk=";
           }.${pkgs.stdenv.hostPlatform.system} or pkgs.lib.fakeHash;
         };
 
@@ -151,7 +168,8 @@
             makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-bridge \
               --add-flags $share/bridge/server.ts \
               --suffix PATH : ${pkgs.lib.makeBinPath [ pkgs.neovim pkgs.bun pkgs.ripgrep pkgs.fd ]} \
-              --suffix CORKBOARD_PLUGINS : ${pluginPath pkgs}
+              --suffix CORKBOARD_PLUGINS : ${pluginPath pkgs} \
+              ${pkgs.lib.optionalString (nvimWasm != null) "--set-default CORKBOARD_NVIM_WASM ${nvimWasm}/lib/nvim-wasm"}
             # A brain's vault into its memory in the Worker (bridge/memory-sync.ts).
             makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-memory-sync \
               --add-flags $share/bridge/memory-sync.ts

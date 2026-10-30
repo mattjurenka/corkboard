@@ -1,0 +1,11 @@
+--- a/src/lib/libnoderawfs.js	2026-10-30 11:04:58.536439084 -0700
++++ b/src/lib/libnoderawfs.js	2026-10-30 11:04:58.541610770 -0700
+@@ -109,7 +109,7 @@
+       var stream = FS.getStreamChecked(fd);
+       // Virtual streams (pipes, sockets) have no backing node fd; defer to their
+       // own getattr rather than node's fs.fstatSync.
+-      var getattr = stream.stream_ops?.getattr ?? stream.node.node_ops?.getattr;
++      var getattr = stream.stream_ops?.getattr ?? stream.node?.node_ops?.getattr;
+       if (getattr) {
+         return getattr(stream.stream_ops?.getattr ? stream : stream.node);
+       }

@@ -8,6 +8,11 @@
 -- it); s or a click goes to its session, or to what it's asking, or to the
 -- card on the board.
 --
+-- Below it, the lower half of the column, the files agents attached to those
+-- cards (attach_file), newest first: another HTML panel (b:corkboard_view
+-- "media", web/src/views/Media.tsx), one line a file, the selected one
+-- shown. A file that arrives is selected, so it shows as soon as it's sent.
+--
 -- It opens when the session's window is the only one in its tab, goes with
 -- that window, and, closed by hand, stays closed in that tab until
 -- :AgentCards. Not beside Pepper, who shares the day plan's tab.
@@ -96,9 +101,115 @@ end
 
 local function notify(src, p) require("corkboard").notify("corkboard.view", p, state(src, p)) end
 
+-- Media -------------------------------------------------------------------------
+
+local media = {} -- Claude Code terminal buffer -> its media panel buffer
+local line_file = {} -- media panel buffer -> line number -> file key
+local picked = {} -- media panel buffer -> the file key its cursor is on
+local newest = {} -- media panel buffer -> the newest file key it has shown
+
+-- The board's key, for the files' URLs; nil with card files, which have none.
+local function board_key()
+  local cloud = require("corkboard.cards.cloud")
+  if not cloud.enabled() then return nil end
+  local ok, k = pcall(cloud.key)
+  return ok and k or nil
+end
+
+-- What was attached to src's session's cards, newest first. url is the
+-- bridge's (bridge/server.ts's /media).
+local function files(src)
+  local k, out = board_key(), {}
+  if not k then return out end
+  for _, c in ipairs((sections(src))) do
+    for _, m in ipairs(type(c.media) == "table" and c.media or {}) do
+      table.insert(out, {
+        key = c.id .. "/" .. m.id,
+        url = ("media/%s/%s/%s"):format(k, c.id, m.id),
+        card = c.id,
+        name = m.name,
+        type = m.type,
+        size = m.size,
+        at = m.at,
+        who = m.who,
+      })
+    end
+  end
+  table.sort(out, function(a, b) return a.at > b.at end)
+  return out
+end
+
+local function push_media(src)
+  local p = media[src]
+  if not (p and vim.api.nvim_buf_is_valid(p)) then return end
+  local list = files(src)
+  local lines, map = {}, {}
+  for _, f in ipairs(list) do
+    table.insert(lines, ("%s  %s  %s"):format(f.name, f.type, f.card))
+    map[#lines] = f.key
+  end
+  line_file[p] = map
+  pinned.set_lines(p, #lines > 0 and lines or { "" })
+  local top = list[1] and list[1].key
+  if top ~= newest[p] or not (picked[p] and pinned.line_of(map, picked[p])) then picked[p] = top end
+  newest[p] = top
+  pinned.follow(p, map, picked[p])
+  require("corkboard").notify("corkboard.view", p, { files = list, selected = picked[p] })
+end
+
+-- A click on a file in the panel shown in win.
+function M.pick(win, key)
+  vim.schedule(function()
+    if not valid_win(win) then return end
+    local p = vim.api.nvim_win_get_buf(win)
+    picked[p] = key
+    pinned.follow(p, line_file[p] or {}, key)
+    push_media(vim.b[p].corkboard_source)
+  end)
+end
+
+local function media_buf(src)
+  local p = media[src]
+  if p and vim.api.nvim_buf_is_valid(p) then return p end
+  p = vim.api.nvim_create_buf(false, true)
+  media[src] = p
+  vim.api.nvim_buf_set_name(p, "media://" .. src)
+  vim.bo[p].filetype = "corkboard"
+  vim.b[p].corkboard_view = "media"
+  vim.b[p].corkboard_source = src
+  local function step(dir) return function() pinned.step(line_file[p] or {}, dir) end end
+  for lhs, key in pairs(pinned.arrows({ j = { step(1), "next file" }, k = { step(-1), "previous file" } })) do
+    vim.keymap.set("n", lhs, key[1], { buffer = p, nowait = true, desc = "media: " .. key[2] })
+  end
+  vim.api.nvim_create_autocmd("CursorMoved", {
+    buffer = p,
+    callback = function()
+      local key = (line_file[p] or {})[vim.api.nvim_win_get_cursor(0)[1]]
+      if key and key ~= picked[p] then
+        picked[p] = key
+        push_media(src)
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd("BufWipeout", {
+    buffer = src,
+    once = true,
+    callback = function()
+      media[src], line_file[p], picked[p], newest[p] = nil, nil, nil, nil
+      vim.schedule(function()
+        for _, win in ipairs(vim.fn.win_findbuf(p)) do pcall(vim.api.nvim_win_close, win, true) end
+        pcall(vim.api.nvim_buf_delete, p, { force = true })
+      end)
+    end,
+  })
+  push_media(src)
+  return p
+end
+
 local function push(src, p)
   render(src, p)
   notify(src, p)
+  push_media(src)
 end
 
 -- Its session if it has one running, what it's asking if it asks, else
@@ -192,16 +303,24 @@ local function open(win)
   local p = panel_buf(src)
   local pwin = vim.api.nvim_open_win(p, false, { split = "right", win = win, width = width() })
   pinned.follow(p, line_card[p] or {}, selected[p])
-  vim.wo[pwin].winfixwidth = true
-  vim.wo[pwin].number = false
-  vim.wo[pwin].relativenumber = false
-  vim.wo[pwin].signcolumn = "no"
+  -- The column's lower half.
+  local m = media_buf(src)
+  local mwin = vim.api.nvim_open_win(m, false, { split = "below", win = pwin, height = math.floor(vim.api.nvim_win_get_height(pwin) / 2) })
+  pinned.follow(m, line_file[m] or {}, picked[m])
+  for _, w in ipairs({ pwin, mwin }) do
+    vim.wo[w].winfixwidth = true
+    vim.wo[w].number = false
+    vim.wo[w].relativenumber = false
+    vim.wo[w].signcolumn = "no"
+  end
   local tab = vim.api.nvim_win_get_tabpage(pwin)
+  -- Closing the cards closes the column.
   vim.api.nvim_create_autocmd("WinClosed", {
     pattern = tostring(pwin),
     once = true,
     callback = function()
       if not closing and valid_win(win) and vim.api.nvim_tabpage_is_valid(tab) then vim.t[tab].corkboard_cards_off = true end
+      if valid_win(mwin) then vim.schedule(function() close(mwin) end) end
     end,
   })
 end
@@ -212,7 +331,7 @@ local function windows()
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
     if vim.api.nvim_win_get_config(win).relative == "" then
       local buf = vim.api.nvim_win_get_buf(win)
-      if vim.b[buf].corkboard_view == "cards" then
+      if vim.b[buf].corkboard_view == "cards" or vim.b[buf].corkboard_view == "media" then
         table.insert(shown, win)
       elseif is_session(buf) then
         table.insert(sessions, win)
@@ -281,9 +400,17 @@ function M.setup()
   vim.api.nvim_create_autocmd("VimResized", {
     group = group,
     callback = function()
-      for _, p in pairs(panels) do
+      for src, p in pairs(panels) do
         for _, win in ipairs(vim.api.nvim_buf_is_valid(p) and vim.fn.win_findbuf(p) or {}) do
           vim.api.nvim_win_set_width(win, width())
+          -- The media panel below it keeps half the column.
+          local m = media[src]
+          local tab = vim.api.nvim_win_get_tabpage(win)
+          for _, mwin in ipairs(m and vim.api.nvim_buf_is_valid(m) and vim.fn.win_findbuf(m) or {}) do
+            if vim.api.nvim_win_get_tabpage(mwin) == tab then
+              vim.api.nvim_win_set_height(mwin, math.floor((vim.api.nvim_win_get_height(win) + vim.api.nvim_win_get_height(mwin)) / 2))
+            end
+          end
         end
       end
     end,

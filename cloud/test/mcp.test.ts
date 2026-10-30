@@ -215,3 +215,48 @@ describe("an OAuth client", () => {
     expect((await tool(await cardToken(), "create_card", { title: "x", attention: "look" })).error).toMatch(/request_user_action/);
   });
 });
+
+describe("attach_file", () => {
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+  const b64 = (b: Uint8Array) => btoa(String.fromCharCode(...b));
+  const file = (id: string, mid: string) => call(owner, "GET", `/api/boards/${BOARD}/cards/${id}/media/${mid}`);
+
+  it("keeps a small file sent inline, on the card", async () => {
+    const token = await cardToken();
+    const m = await tool(token, "attach_file", { id: "TASK-1", name: "out/plot.png", data: b64(PNG) });
+    expect(m).toMatchObject({ name: "plot.png", type: "image/png", size: PNG.length, who: "claude" });
+    const c = await card("TASK-1");
+    expect(c.extra.media).toEqual([m]);
+    expect(c.log.at(-1).note).toBe("attached plot.png (image/png, 7 B)");
+    const res = await file("TASK-1", m.id);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(PNG);
+    expect((await tool(token, "read_card", { id: "TASK-1" })).media).toEqual([m]);
+  });
+
+  it("offers an upload URL, good once, and the file is on the card when it arrives", async () => {
+    const offered = await tool(await cardToken(), "attach_file", { id: "TASK-1", name: "run.mp4" });
+    expect(offered.command).toContain(offered.upload);
+    expect((await card("TASK-1")).extra.media).toBeUndefined();
+    const put = await worker(offered.upload, { method: "PUT", body: PNG, headers: { "Content-Length": String(PNG.length) } });
+    expect(put.status).toBe(201);
+    const m = await put.json<any>();
+    expect(m).toMatchObject({ name: "run.mp4", type: "video/mp4", size: PNG.length });
+    expect((await card("TASK-1")).extra.media).toEqual([m]);
+    expect(new Uint8Array(await (await file("TASK-1", m.id)).arrayBuffer())).toEqual(PNG);
+    expect((await worker(offered.upload, { method: "PUT", body: PNG })).status).toBe(404);
+  });
+
+  it("only on the token's own card", async () => {
+    expect((await tool(await cardToken(), "attach_file", { id: "TASK-2", name: "x.png", data: b64(PNG) })).error).toMatch(/works on TASK-1/);
+    expect((await tool(owner, "attach_file", { board: BOARD, id: "TASK-9", name: "x.png", data: b64(PNG) })).error).toMatch(/no card TASK-9/);
+    expect((await tool(owner, "attach_file", { board: BOARD, id: "TASK-2", name: "x", type: "not a type", data: b64(PNG) })).error).toMatch(/MIME/);
+  });
+
+  it("goes with its card", async () => {
+    const m = await tool(owner, "attach_file", { board: BOARD, id: "TASK-2", name: "a.pdf", data: b64(PNG) });
+    expect((await file("TASK-2", m.id)).status).toBe(200);
+    expect((await call(owner, "DELETE", `/api/boards/${BOARD}/cards/TASK-2`)).status).toBe(204);
+    expect((await file("TASK-2", m.id)).status).toBe(404);
+  });
+});

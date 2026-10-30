@@ -140,6 +140,7 @@ local function state()
         waiting = M.waiting_on(c),
         session = agents.live(c.id),
         cost = costs[c.id],
+        media = c.media,
       }
     end, shown),
   }
@@ -165,6 +166,7 @@ local function push_state()
       session = c.session,
       waiting = c.waiting,
       cost = c.cost,
+      media = c.media,
     }
   end, vim.tbl_filter(function(c) return c.status ~= "done" end, s.cards)))
 end

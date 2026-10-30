@@ -13,7 +13,7 @@ function Spin() {
     const t = setInterval(() => setI((n) => (n + 1) % FRAMES.length), 80);
     return () => clearInterval(t);
   }, []);
-  return <span className="text-working">{FRAMES[i]}</span>;
+  return <span className="text-working" data-ambient>{FRAMES[i]}</span>;
 }
 
 export function Toasts() {

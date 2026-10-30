@@ -1,4 +1,4 @@
-// A page whose Neovim runs in the page, compiled to wasm (~/neovim-wasm),
+// A page whose Neovim runs in the page, compiled to wasm (wasm/),
 // rather than here as `nvim --embed`. Neovim there has no processes and only
 // an in-memory filesystem; this is the machine it stands in for:
 //
@@ -66,6 +66,31 @@ export function snapshot(roots: string[]): Uint8Array {
   };
   for (const root of roots) walk(root);
   return encode({ roots, entries });
+}
+
+// The plugins on the runtimepath, for a page with no machine (?wasm=
+// ephemeral, web/src/nvim/wasm/machine): by plugin (its directory's name),
+// each path's mode and bytes, or a link's target. Only what Neovim loads
+// from a plugin: snacks.nvim's tests alone are 18 MB.
+const RUNTIME_DIRS = new Set(["lua", "plugin", "colors", "after", "ftplugin", "ftdetect", "indent", "syntax", "autoload", "queries"]);
+export function bundle(dirs: string[]): { names: string[]; bytes: Uint8Array } {
+  const plugins: Record<string, Record<string, [number, unknown]>> = {};
+  for (const dir of dirs) {
+    const root = realpathSync(dir);
+    let name = root.split("/").at(-1)!;
+    while (plugins[name]) name += "_";
+    const files: Record<string, [number, unknown]> = (plugins[name] = {});
+    const walk = (rel: string) => {
+      const s = lstatSync(`${root}/${rel}`);
+      if (s.isSymbolicLink()) files[rel] = [s.mode, readlinkSync(`${root}/${rel}`)];
+      else if (s.isDirectory()) {
+        files[rel] = [s.mode, null];
+        for (const n of readdirSync(`${root}/${rel}`)) walk(`${rel}/${n}`);
+      } else files[rel] = [s.mode, readFileSync(`${root}/${rel}`)];
+    };
+    for (const top of readdirSync(root)) if (RUNTIME_DIRS.has(top)) walk(top);
+  }
+  return { names: Object.keys(plugins), bytes: encode(plugins) };
 }
 
 // What every start asks first, answered with the page's first message

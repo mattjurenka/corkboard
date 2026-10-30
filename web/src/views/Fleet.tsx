@@ -87,6 +87,8 @@ const STATE_CLASS: Record<string, string> = {
   failed: "text-destructive",
   stopped: "text-muted-foreground",
   working: "text-working",
+  background: "text-working",
+  ready: "text-primary",
   attached: "text-working",
   asking: "text-review",
   permission: "text-review",

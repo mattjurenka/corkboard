@@ -17,8 +17,14 @@ function fakeForgejo() {
     const req = new Request(input as RequestInfo, init);
     if (!req.url.startsWith("https://git.test/")) return real(input, init);
     calls.push({ url: req.url, auth: req.headers.get("Authorization") });
-    if (req.headers.get("Authorization") !== "token forgejo-token") return Response.json({ message: "token is required" }, { status: 401 });
     const path = new URL(req.url).pathname;
+    // git's smart HTTP, with the token as the user name.
+    if (path.startsWith("/mattjurenka/corkboard.git/")) {
+      if (req.headers.get("Authorization") !== `Basic ${btoa("forgejo-token:x-oauth-basic")}`) return new Response("", { status: 401 });
+      if (path.endsWith("/info/refs")) return new Response("001e# service=git-upload-pack\n0000", { headers: { "Content-Type": "application/x-git-upload-pack-advertisement" } });
+      return new Response(`pack for ${req.headers.get("Content-Type")} ${req.headers.get("Git-Protocol")}: ${await req.text()}`, { headers: { "Content-Type": "application/x-git-upload-pack-result" } });
+    }
+    if (req.headers.get("Authorization") !== "token forgejo-token") return Response.json({ message: "token is required" }, { status: 401 });
     if (path === "/api/v1/user/repos") return Response.json([{ owner: { login: "mattjurenka" }, name: "corkboard", private: true, default_branch: "main", updated_at: "2026-10-30T00:00:00Z" }]);
     if (path === "/api/v1/repos/mattjurenka/corkboard") return Response.json({ owner: { login: "mattjurenka" }, name: "corkboard", default_branch: "main" });
     if (path === "/api/v1/repos/mattjurenka/corkboard/branches")
@@ -80,6 +86,26 @@ describe("browsing Forgejo", () => {
       { name: "fleet/x", sha: "bbb", message: "Fix the tree", author: "agent", date: "2026-10-30T02:00:00Z", default: false, ahead: 3, behind: 1 },
     ]);
     expect(calls.some((c) => c.url.endsWith("/compare/aaa...bbb"))).toBe(true);
+  });
+
+  it("passes git's smart HTTP through for a clone, upload-pack only", async () => {
+    const refs = await api("/api/git/repos/mattjurenka/corkboard.git/info/refs?service=git-upload-pack");
+    expect(refs.status).toBe(200);
+    expect(refs.headers.get("Content-Type")).toBe("application/x-git-upload-pack-advertisement");
+    expect(await refs.text()).toBe("001e# service=git-upload-pack\n0000");
+    expect(calls.at(-1)!.url).toBe("https://git.test/mattjurenka/corkboard.git/info/refs?service=git-upload-pack");
+    const pack = await worker("/api/git/repos/mattjurenka/corkboard/git-upload-pack", {
+      method: "POST",
+      body: "0032want aaa\n",
+      headers: { Authorization: `Bearer ${owner}`, "Content-Type": "application/x-git-upload-pack-request", "Git-Protocol": "version=2" },
+    });
+    expect(await pack.text()).toBe("pack for application/x-git-upload-pack-request version=2: 0032want aaa\n");
+    // Pushing is another service, and isn't here.
+    expect((await api("/api/git/repos/mattjurenka/corkboard/info/refs?service=git-receive-pack")).status).toBe(403);
+    expect((await api("/api/git/repos/mattjurenka/corkboard/git-receive-pack", { method: "POST", body: "x" })).status).toBe(405);
+    expect((await api("/api/git/repos/mattjurenka/corkboard/git-upload-pack")).status).toBe(405);
+    expect((await worker("/api/git/repos/mattjurenka/corkboard/info/refs?service=git-upload-pack")).status).toBe(401);
+    expect(calls.length).toBe(2);
   });
 
   it("refuses bad names, paths and refs, and anything but reading", async () => {

@@ -274,7 +274,7 @@ local function summary_of(session)
     local as = transcript.summarize(a, price)
     as.type = a.meta.agentType or "agent"
     as.description = a.meta.description or ""
-    as.categories, as.series = nil, nil
+    as.categories, as.series, as.times = nil, nil, nil
     table.insert(s.agents, as)
   end
   table.sort(s.agents, function(a, b) return total(a.tokens) > total(b.tokens) end)

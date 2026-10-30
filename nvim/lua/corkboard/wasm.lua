@@ -1,4 +1,4 @@
--- For a Neovim compiled to wasm, running in the page (?wasm; ~/neovim-wasm),
+-- For a Neovim compiled to wasm, running in the page (?wasm; wasm/),
 -- which has the machine's files (the worker's HOSTFS) but no processes.
 -- Its processes run on the bridge's machine (bridge/wasm.ts) instead, and
 -- this puts them back where corkboard looks for them: vim.system, jobstart

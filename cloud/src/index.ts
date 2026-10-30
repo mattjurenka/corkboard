@@ -7,6 +7,7 @@ import { OAuthProvider, type OAuthHelpers } from "@cloudflare/workers-oauth-prov
 import { api, tokenKey } from "./api";
 import { auth } from "./auth";
 import type { Board } from "./board";
+import { upload } from "./media";
 import type { Grant } from "./mcp";
 import type { Memory } from "./memory";
 import type { User } from "./user";
@@ -25,6 +26,8 @@ export type Env = {
   VECTORS: VectorizeIndex;
   MEMORY_VECTORS?: string;
   OAUTH_KV: KVNamespace;
+  // Files attached to cards (media.ts).
+  MEDIA: R2Bucket;
   OAUTH_PROVIDER: OAuthHelpers;
   // The Worker's own origin, no trailing slash: the token audience and
   // Google's redirect URI are built from it.
@@ -90,6 +93,8 @@ function oauth(env: Env): OAuthProvider<Env> {
 
 export default {
   fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    // An upload's URL is its own auth (media.ts), for an agent's curl.
+    if (new URL(request.url).pathname.startsWith("/upload/")) return upload(request, env);
     return oauth(env).fetch(request, env, ctx);
   },
 } satisfies ExportedHandler<Env>;

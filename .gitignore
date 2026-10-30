@@ -9,3 +9,6 @@ result-*
 # wrangler dev state and secrets
 .wrangler/
 .dev.vars
+
+# emscripten cache for `nix develop .#wasm`
+/wasm/.emcache/

@@ -2,6 +2,7 @@ import type { Nvim } from "@/nvim/context";
 import { Board } from "./Board";
 import { Cards } from "./Cards";
 import { Fleet } from "./Fleet";
+import { Media } from "./Media";
 import { Plan, PlanDiff, PlanGoals, PlanPriority } from "./Plan";
 import { Usage } from "./Usage";
 import { ImageView, MarkdownView, PdfView } from "./Viewers";
@@ -11,6 +12,7 @@ export type ViewProps<S = any> = { state: S; win: number; focused: boolean; nvim
 export const VIEWS: Record<string, React.ComponentType<ViewProps>> = {
   board: Board,
   cards: Cards,
+  media: Media,
   usage: Usage,
   fleet: Fleet,
   plan: Plan,

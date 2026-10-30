@@ -12,9 +12,9 @@
 import { decodeMultiStream, decode, encode, ExtensionCodec } from "@msgpack/msgpack";
 import type { Subprocess } from "bun";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import * as away from "./away";
 import * as boards from "./boards";
 import * as phone from "./phone";
@@ -25,7 +25,7 @@ import { CLOUD, token } from "./cloud";
 const HOST = process.env.CORKBOARD_HOST ?? "127.0.0.1";
 const PORT = Number(process.env.CORKBOARD_PORT ?? 7777);
 const NVIM = process.env.CORKBOARD_NVIM ?? "nvim";
-// Neovim compiled to wasm (~/neovim-wasm's nvim-wasm-web: nvim.js, .wasm,
+// Neovim compiled to wasm (the nvim-wasm package, wasm/: nvim.js, .wasm,
 // .data), for pages opened with ?wasm. Served at /wasm/<version>/, which
 // changes when it does, so the browser keeps its 28 MB for good.
 const NVIM_WASM = process.env.CORKBOARD_NVIM_WASM;
@@ -98,6 +98,15 @@ function refuse(req: Request): string | undefined {
   if (ORIGIN) return origin === ORIGIN ? undefined : `wrong origin: ${origin}`;
   if (LOCAL && !isLoopback(new URL(`http://${host}`).hostname)) return `wrong host: ${host}`;
   if (!origin || URL.parse(origin)?.host !== host) return `wrong origin: ${origin}`;
+}
+
+// The same for a request the page may make as a plain GET, which a browser
+// sends with no Origin when it's same-origin: then its Sec-Fetch-Site says.
+function refuseFetch(req: Request): string | undefined {
+  if (req.headers.has("origin")) return refuse(req);
+  const host = req.headers.get("host") ?? "";
+  if (LOCAL && !isLoopback(new URL(`http://${host}`).hostname)) return `wrong host: ${host}`;
+  if (req.headers.get("sec-fetch-site") !== "same-origin") return `not from this page: ${req.headers.get("sec-fetch-site")}`;
 }
 
 const extensionCodec = new ExtensionCodec();
@@ -532,6 +541,41 @@ function snapshotFile(req: Request, url: URL): Response {
   return new Response(snapshotBytes, { headers: { ...ISOLATED, "content-type": "application/msgpack", "cache-control": IMMUTABLE } });
 }
 
+// For a page with no machine (?wasm=ephemeral, web/src/nvim/wasm/machine):
+// where Neovim is, and the plugins' files (wasm.bundle), at a URL that
+// changes with them. Remade for each page, since the plugin is edited here.
+let bundled: { key: string; bytes: Uint8Array } | undefined;
+function wasmManifest(req: Request): Response {
+  const why = refuseFetch(req);
+  if (why) return new Response(why, { status: 403 });
+  if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
+  if (!NVIM_WASM) return new Response("CORKBOARD_NVIM_WASM is not set", { status: 404 });
+  const { names, bytes } = wasm.bundle([PLUGIN_ROOT, ...PLUGINS]);
+  bundled = { key: createHash("sha256").update(bytes).digest("hex").slice(0, 16), bytes };
+  return Response.json({ wasm: `wasm/${WASM_VERSION}/`, plugins: `wasm/plugins/${bundled.key}`, rtp: names }, { headers: { "cache-control": "no-store" } });
+}
+function wasmPlugins(req: Request, url: URL): Response {
+  if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
+  if (!bundled || url.pathname !== `/wasm/plugins/${bundled.key}`) return new Response("not found", { status: 404 });
+  return new Response(bundled.bytes, { headers: { ...ISOLATED, "content-type": "application/msgpack", "cache-control": IMMUTABLE } });
+}
+
+// /api/git/: the Worker's, with this bridge's sign-in, for a page with no
+// machine that this bridge serves. The Worker serving the page itself does
+// the same on its own origin (cloud/src/git.ts); the page asks either alike.
+async function gitProxy(req: Request, url: URL): Promise<Response> {
+  const why = refuseFetch(req);
+  if (why || (req.method !== "GET" && req.method !== "POST")) return new Response(why ?? "GET or POST", { status: 403 });
+  if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
+  const headers = new Headers({ Authorization: `Bearer ${await token()}` });
+  for (const h of ["Content-Type", "Accept", "Git-Protocol", "Content-Encoding"]) {
+    const v = req.headers.get(h);
+    if (v) headers.set(h, v);
+  }
+  const res = await fetch(`${CLOUD}${url.pathname}${url.search}`, { method: req.method, headers, body: req.method === "POST" ? req.body : undefined });
+  return new Response(res.body, { status: res.status, headers: { "content-type": res.headers.get("content-type") ?? "application/octet-stream", "cache-control": "no-store" } });
+}
+
 // The pages whose Neovim is theirs, by the id their worker calls /host with.
 const hosts = new Map<string, wasm.Host>();
 
@@ -547,7 +591,7 @@ function startWasm(ws: Bun.ServerWebSocket<Session>) {
   );
   data.wasmHost = host;
   hosts.set(host.id, host);
-  const rtp = `set rtp^=${[PLUGIN_ROOT, ...PLUGINS].map((p) => p.replace(/[ \\,]/g, "\\Bun.serve<Session, {}>({")).join(",")}`;
+  const rtp = `set rtp^=${[PLUGIN_ROOT, ...PLUGINS].map((p) => p.replace(/[ \\,]/g, "\\$&")).join(",")}`;
   notifyPage(ws, "corkboard.host", {
     id: host.id,
     cwd: data.cwd,
@@ -586,6 +630,40 @@ async function hostCall(req: Request, url: URL): Promise<Response> {
   const body = new Uint8Array(await req.arrayBuffer());
   const out = url.pathname === "/host/fs" ? host.fs(body) : await host.lua(body);
   return new Response(out, { headers: { "content-type": "application/msgpack" } });
+}
+
+// /latency: a page's key-to-pixels timings (web/src/latency.ts), one line
+// per key with the window it came from, for `bun run latency` and for
+// lining up with whatever else the machine was doing at the time.
+const LATENCY_LOG = join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state"), "corkboard", "latency.jsonl");
+async function latency(req: Request): Promise<Response> {
+  const why = refuse(req);
+  if (why || req.method !== "POST") return new Response(why ?? "POST", { status: 403 });
+  if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
+  const { samples, ...page } = (await req.json()) as { samples?: unknown[] };
+  if (!Array.isArray(samples)) return new Response("samples", { status: 400 });
+  mkdirSync(dirname(LATENCY_LOG), { recursive: true });
+  appendFileSync(LATENCY_LOG, samples.map((s) => JSON.stringify({ ...(s as object), ...page }) + "\n").join(""));
+  return new Response(null, { status: 204 });
+}
+
+// /media/<board>/<card>/<id>: a file an agent attached to a card, from the
+// Worker with the bridge's sign-in, for the page's media panel. The token
+// header is the guard: a page elsewhere can't send it without a preflight
+// the bridge never answers, and a same-origin GET carries no Origin.
+const MEDIA_PATH = /^\/media\/([A-Za-z0-9._-]{1,128})\/([A-Za-z]+-\d+)\/([0-9a-f]{12})$/;
+async function media(req: Request, url: URL): Promise<Response> {
+  if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
+  if (!TOKEN && !isLoopback(url.hostname)) return new Response(`wrong host: ${url.host}`, { status: 403 });
+  const m = url.pathname.match(MEDIA_PATH);
+  if (!m || req.method !== "GET") return new Response("not found", { status: 404 });
+  const res = await fetch(`${CLOUD}/api/boards/${m[1]}/cards/${m[2]}/media/${m[3]}`, { headers: { Authorization: `Bearer ${await token()}` } });
+  const headers = new Headers({ "x-content-type-options": "nosniff" });
+  for (const h of ["content-type", "content-length", "etag", "cache-control"]) {
+    const v = res.headers.get(h);
+    if (v) headers.set(h, v);
+  }
+  return new Response(res.body, { status: res.status, headers });
 }
 
 Bun.serve<Session, {}>({
@@ -628,6 +706,11 @@ Bun.serve<Session, {}>({
     }
     if (url.pathname === "/open") return open(url.searchParams.get("ticket") ?? "");
     if (url.pathname === "/host/fs" || url.pathname === "/host/lua") return hostCall(req, url);
+    if (url.pathname === "/latency") return latency(req);
+    if (url.pathname === "/wasm/manifest") return wasmManifest(req);
+    if (url.pathname.startsWith("/wasm/plugins/")) return wasmPlugins(req, url);
+    if (url.pathname.startsWith("/api/git/")) return gitProxy(req, url);
+    if (url.pathname.startsWith("/media/")) return media(req, url);
     if (url.pathname.startsWith(`/host/snapshot/`)) return snapshotFile(req, url);
     if (url.pathname.startsWith(`/wasm/${WASM_VERSION}/`) && NVIM_WASM) {
       const name = url.pathname.split("/").at(-1)!;

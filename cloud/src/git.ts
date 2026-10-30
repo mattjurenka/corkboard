@@ -12,6 +12,10 @@
 //                                                and how far it is ahead of and behind the default
 //   GET  /api/git/repos/:owner/:repo/contents/:path?ref=
 //                                                a directory's entries, or a file and its content
+//   GET  /api/git/repos/:owner/:repo/info/refs?service=git-upload-pack
+//   POST /api/git/repos/:owner/:repo/git-upload-pack
+//                                                git's smart HTTP, for a clone or fetch of the
+//                                                repository (the page's own Neovim, web/src/nvim/wasm)
 //
 // Read-only: no route here writes, and the token couldn't. Owner tokens only (api.ts).
 
@@ -104,11 +108,41 @@ async function branchList(env: Env, at: string): Promise<Response> {
   return json(list);
 }
 
+// git's smart HTTP, upload-pack only (what clone and fetch use), passed
+// through to Forgejo with its token: the bodies are git's own and stream
+// both ways untouched. Forgejo takes a token as the user name when the
+// password is x-oauth-basic.
+const SMART = /^\/api\/git\/repos\/([^/]+)\/([^/]+)\/(info\/refs|git-upload-pack)$/;
+async function smartHttp(request: Request, env: Env, url: URL, [, owner, repo, what]: RegExpMatchArray): Promise<Response> {
+  const name = repo.replace(/\.git$/, "");
+  if (!NAME.test(owner) || !NAME.test(name)) return error(400, "bad repository name");
+  const refs = what === "info/refs";
+  if (request.method !== (refs ? "GET" : "POST")) return error(405, "method not allowed");
+  if (refs && url.searchParams.get("service") !== "git-upload-pack") return error(403, "only git-upload-pack");
+  const headers = new Headers({ Authorization: `Basic ${btoa(`${env.FORGEJO_TOKEN}:x-oauth-basic`)}` });
+  for (const h of ["Content-Type", "Accept", "Git-Protocol", "Content-Encoding"]) {
+    const v = request.headers.get(h);
+    if (v) headers.set(h, v);
+  }
+  const res = await fetch(`${env.FORGEJO_ORIGIN}/${owner}/${name}.git/${what}${refs ? "?service=git-upload-pack" : ""}`, {
+    method: request.method,
+    headers,
+    body: refs ? undefined : request.body,
+  });
+  if (res.status === 401 || res.status === 403) return error(502, `forgejo: HTTP ${res.status}`);
+  const out = new Headers({ "Cache-Control": "no-store" });
+  const type = res.headers.get("Content-Type");
+  if (type) out.set("Content-Type", type);
+  return new Response(res.body, { status: res.status, headers: out });
+}
+
 export async function gitRoutes(request: Request, env: Env): Promise<Response> {
   if (!env.FORGEJO_ORIGIN || !env.FORGEJO_TOKEN) return error(404, "no Forgejo is set up");
-  if (request.method !== "GET") return error(405, "method not allowed");
   const url = new URL(request.url);
   const path = url.pathname;
+  const smart = path.match(SMART);
+  if (smart) return smartHttp(request, env, url, smart);
+  if (request.method !== "GET") return error(405, "method not allowed");
 
   if (path === "/api/git") return json({ origin: env.FORGEJO_ORIGIN });
   if (path === "/api/git/repos") {

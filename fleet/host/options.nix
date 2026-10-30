@@ -100,6 +100,38 @@
       description = "Flake the launchers build the VMs from.";
     };
 
+    runners = lib.mkOption {
+      type = lib.types.attrsOf lib.types.package;
+      default = { };
+      example = lib.literalExpression ''
+        { pepper-vm = self.nixosConfigurations.pepper-vm.config.system.build.vm; }
+      '';
+      description = ''
+        Each instance's `system.build.vm`, built with the host. A launcher
+        with one here starts it directly; one without falls back to
+        `nix build` of `flake` at start, which evaluates the whole flake
+        from a working tree on every boot -- two minutes of saturated disk
+        on omni-laptop, 2026-10-30, while the desktop was coming up. Slots
+        take theirs from `flake` regardless: their guest is the template
+        fleetd picks, which is not known until the spawn.
+
+        The cost is that a guest changes with a host switch rather than
+        with its next start, and the host closure carries every guest's.
+      '';
+    };
+
+    autostartDelay = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "3min";
+      description = ''
+        How long after boot the headless VMs start, as a systemd time span,
+        so that none of them starts during the login. Null, the default,
+        starts them with multi-user.target; with `runners` set that costs a
+        store-image build only when a guest's closure has changed.
+      '';
+    };
+
     instances = lib.mkOption {
       default = { };
       description = ''

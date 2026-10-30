@@ -233,13 +233,22 @@ export function edgeWindow(key: string, nvim: Nvim): boolean {
 }
 
 function TabMark({ name, label }: { name: string; label?: Tab["label"] }) {
-  if (label?.state === "working") return <Thinking />;
+  if (label?.state === "working" || label?.state === "background") return <Thinking />;
   const glyph =
     label ? "✻"
     : name.startsWith("term://") ? "$"
     : VIEW_TABS[name] ? "◷"
     : "·";
-  return <span className="w-2ch flex-none text-center text-muted-foreground group-hover:hidden">{glyph}</span>;
+  return (
+    <span
+      className={cn(
+        "w-2ch flex-none text-center group-hover:hidden",
+        label?.state === "ready" ? "text-primary" : "text-muted-foreground",
+      )}
+    >
+      {glyph}
+    </span>
+  );
 }
 
 // Claude Code's own spinner while it thinks: the star swelling and shrinking.
@@ -252,7 +261,7 @@ function Thinking() {
     const t = setInterval(() => setI((n) => (n + 1) % THINKING_FRAMES.length), 120);
     return () => clearInterval(t);
   }, []);
-  return <span className="w-2ch flex-none text-center text-focus group-hover:hidden">{THINKING_FRAMES[i]}</span>;
+  return <span className="w-2ch flex-none text-center text-focus group-hover:hidden" data-ambient>{THINKING_FRAMES[i]}</span>;
 }
 
 // preview: the file explorer's preview (untouched, replaced by the next file

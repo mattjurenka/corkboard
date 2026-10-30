@@ -542,15 +542,70 @@ let
         # account means no getty either, so the console a person attaches
         # to is silent. Deleting it up front costs nothing, because the
         # run script rebuilds it unconditionally anyway, and makes that
-        # failure unreachable.
-        rm -f "$TMPDIR"/store.img
-      '') + ''
+        # failure unreachable. A prebuilt runner keeps its image instead,
+        # and guards it with a key file (see cachedStoreImage).
+        ${lib.optionalString (!(cfg.runners ? ${name})) ''rm -f "$TMPDIR"/store.img''}
+      '') + (if cfg.runners ? ${name} then ''
+
+        exec ${cachedStoreImage name cfg.runners.${name}}/bin/run-${name}-vm "$@"
+      '' else ''
 
         runner=$(nix build --no-link --print-out-paths \
           "${cfg.flake}#nixosConfigurations.${name}.config.system.build.vm")
         exec "$runner"/bin/run-${name}-vm "$@"
-      '';
+      '');
     };
+
+  # qemu-vm.nix packs the guest's closure into a fresh erofs store.img on
+  # every start: tar and mkfs.erofs over every file of it (pepper-vm's is
+  # 1.6 GiB in 613 paths), whether or not anything changed. With a prebuilt
+  # runner the closure is fixed, so the image only needs making once per
+  # runner. This copies the run script with that block wrapped in a check
+  # against a key file holding the block's own hash -- which names the
+  # closure, the label and the erofs-utils -- and writes the key only once
+  # mkfs.erofs has succeeded. A run killed part-way therefore leaves no key,
+  # and the next start rebuilds instead of attaching the half-written image
+  # the launcher's `rm -f store.img` exists to keep away. The guest mounts
+  # it read-only, so a reused image is the one that was made.
+  #
+  # A runner with no store image (`ownsDisk`) passes through unchanged. One
+  # that runs mkfs.erofs outside the markers fails the build: nixpkgs moved
+  # them, and silently rebuilding on every start again is the thing to avoid.
+  cachedStoreImage = name: runner:
+    pkgs.runCommand "${name}-vm-cached-store" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+      mkdir -p $out/bin
+      python3 - ${runner}/bin/run-${name}-vm $out/bin/run-${name}-vm <<'EOF'
+      import hashlib, re, sys
+      src, dst = sys.argv[1], sys.argv[2]
+      text = open(src).read()
+      block = re.compile(r'^echo "Creating Nix store image\.\.\."\n.*?^echo "Created Nix store image\."\n',
+                         re.M | re.S)
+      m = block.search(text)
+      if m is None:
+          if "mkfs.erofs" in text:
+              sys.exit(f"{src}: mkfs.erofs outside the store-image markers; cachedStoreImage needs updating")
+      else:
+          # The subshell stands alone, not in `&&` or an `if`: bash ignores
+          # `set -e` inside either, and a failed pack would get its key.
+          # Standing alone, its failure ends the script under the run
+          # script's own `set -e`, before the key is written.
+          if not re.search(r'^set -e$', text[:m.start()], re.M):
+              sys.exit(f"{src}: no `set -e` before the store image; a failed pack would be keyed")
+          key = hashlib.sha256(m.group(0).encode()).hexdigest()
+          text = text[:m.start()] + f"""\
+      if [ -f "$TMPDIR"/store.img ] && [ "$(cat "$TMPDIR"/store.img.key 2>/dev/null)" = {key} ]; then
+          echo "Reusing Nix store image."
+      else
+          rm -f "$TMPDIR"/store.img "$TMPDIR"/store.img.key
+          ( set -euo pipefail
+      {m.group(0)}    )
+          echo {key} > "$TMPDIR"/store.img.key
+      fi
+      """ + text[m.end():]
+      open(dst, "w").write(text)
+      EOF
+      chmod +x $out/bin/run-${name}-vm
+    '';
 
   # A slot's launcher. The guest is whichever template fleetd claimed the
   # slot for, written into ${stateDir}/template before it starts the unit,
@@ -1476,9 +1531,16 @@ in
           let vm = plans.${name}; in
           lib.nameValuePair name {
             description = if inst.slot then "Agent slot ${name}" else "Agent VM ${name}";
-            wantedBy = lib.optional (!inst.slot) "multi-user.target";
+            # With autostartDelay set, the timer below starts it instead.
+            wantedBy = lib.optional (!inst.slot && cfg.autostartDelay == null) "multi-user.target";
             after = [ "${name}-net.service" ];
             requires = [ "${name}-net.service" ];
+            # A prebuilt runner puts the guest's closure in ExecStart, so
+            # every guest change is a unit change, and a switch would
+            # restart the VM under whatever session is attached to its
+            # console. The new guest waits for the next start instead, as
+            # it did when the launcher built it then.
+            restartIfChanged = false;
             serviceConfig = {
               Type = "simple";
               User = cfg.owner;
@@ -1580,6 +1642,19 @@ in
           };
         }))
     ];
+
+    # The headless VMs start a little after boot rather than with it, so a
+    # store image being made is not competing with the login for the disk.
+    systemd.timers = lib.mkIf (cfg.autostartDelay != null) (lib.mapAttrs'
+      (name: _: lib.nameValuePair "${name}-autostart" {
+        description = "Start ${name} after boot";
+        wantedBy = [ "timers.target" ];
+        timerConfig = {
+          OnBootSec = cfg.autostartDelay;
+          Unit = "${name}.service";
+        };
+      })
+      (lib.filterAttrs (_: inst: inst.headless && !inst.slot) active));
 
     # fleetd runs as the owner and starts and stops the slots, which are
     # system units (like every VM here, so `<name>-ssh` and the journal
