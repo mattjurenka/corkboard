@@ -38,9 +38,33 @@ describe("auth", () => {
 describe("boards", () => {
   it("lists the boards that were made", async () => {
     expect(await (await api("/api/boards")).json()).toEqual([
-      { key: BOARD, name: "corkboard", root: "/home/matthew/corkboard" },
-      { key: "other", name: "other", root: null },
+      { key: BOARD, name: "corkboard", root: "/home/matthew/corkboard", commit: null, remotes: [], environments: [] },
+      { key: "other", name: "other", root: null, commit: null, remotes: [], environments: [] },
     ]);
+  });
+
+  it("finds a project's board by its first commit, from any clone", async () => {
+    const commit = "a".repeat(40);
+    // Opened again where it was made: the commit is learned, the name kept.
+    await send("PUT", `/api/boards/${BOARD}`, { root: "/home/matthew/corkboard", commit, environment: "laptop" });
+    expect(await (await api(`/api/boards?commit=${commit}`)).json()).toEqual([
+      { key: BOARD, name: "corkboard", root: "/home/matthew/corkboard", commit, remotes: [], environments: ["laptop"] },
+    ]);
+    expect(await (await api(`/api/boards?commit=${"b".repeat(40)}`)).json()).toEqual([]);
+    // A commit, once known, isn't replaced.
+    await send("PUT", `/api/boards/${BOARD}`, { root: "/srv/corkboard", commit: "b".repeat(40), environment: "droplet" });
+    expect((await (await api(`/api/boards?commit=${commit}`)).json<unknown[]>()).length).toBe(1);
+    expect((await send("PUT", `/api/boards/${BOARD}`, { commit: "main" })).status).toBe(400);
+  });
+
+  it("keeps a board's remotes, until it's told others", async () => {
+    const remotes = ["git@github.com:matthew/corkboard.git", "https://github.com/upstream/corkboard"];
+    await send("PUT", `/api/boards/${BOARD}`, { root: "/home/matthew/corkboard", environment: "laptop", remotes });
+    await send("PUT", `/api/boards/${BOARD}`, { root: "/home/matthew/corkboard", environment: "laptop" });
+    const [board] = await (await api("/api/boards")).json<{ remotes: string[] }[]>();
+    expect(board.remotes).toEqual(remotes);
+    expect((await send("PUT", `/api/boards/${BOARD}`, { remotes: ["--upload-pack=evil"] })).status).toBe(400);
+    expect((await send("PUT", `/api/boards/${BOARD}`, { remotes: ["/home/matthew/corkboard"] })).status).toBe(400);
   });
 
   it("renames a board in place", async () => {

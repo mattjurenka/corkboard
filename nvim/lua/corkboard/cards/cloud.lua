@@ -52,16 +52,37 @@ function M.note_put(id, note) return request("note_put", id, note) end
 -- A note on the Worker, or nil when there is none.
 function M.note_get(id) return request("note_get", id) end
 
+-- Every board in the account: { key, name, root, commit, remotes }.
+function M.boards() return request("boards") end
+-- A board for a new project at root, before its first card.
+function M.make(k, name, root) return request("make", k, name, root) end
+
 -- The bridge's answer: { id, error?, result? }.
 function M.answer(a)
   if waiting[a.id] then answers[a.id] = a end
 end
 
--- The board's key, as the file boards name their directories.
+-- The board's key. A project's board is found by its first commit, so every
+-- clone of it, wherever it is, shares one; its key is still the path of the
+-- clone it was made in (as the file boards name their directories). A
+-- project with no commit yet, or a directory outside git, goes by its path.
+local keys = {} -- project root -> key
 local function key()
   if vim.env.CORKBOARD_BOARD then return vim.fs.basename(vim.env.CORKBOARD_BOARD) end
-  return util.path_key(vim.fn.getcwd())
+  local root = util.project_root()
+  if keys[root] then return keys[root] end
+  local commit = util.project_commit(root)
+  local k = util.pinned_board(root)
+  if not k and commit then
+    local ok, found = pcall(request, "resolve", util.path_key(root), commit)
+    k = ok and found or nil
+  end
+  -- Asked again next time, when the bridge couldn't say.
+  if not k then return util.path_key(root) end
+  keys[root] = k
+  return k
 end
+M.key = key
 
 -- The copies: key -> { cards = { [id] = card as the Worker sends it }, logs = { [id] = { entries } } }.
 local copies = {}
@@ -102,8 +123,8 @@ local function copy_of(k, make)
   k = k or key()
   if copies[k] and copies[k].missing and make then copies[k] = nil end
   if not copies[k] then
-    local cwd = vim.fn.getcwd()
-    local cards = request("subscribe", k, vim.fs.basename(cwd), cwd, make or false)
+    local root = util.project_root()
+    local cards = request("subscribe", k, vim.fs.basename(root), root, make or false, util.project_commit(root) or false)
     -- A call made while this one waited may have subscribed already and
     -- written since; its copy is newer than this answer.
     if not copies[k] or (make and copies[k].missing) then
@@ -323,6 +344,9 @@ function M.revoke(token) request("revoke", key(), token) end
 -- A token for Pepper's MCP session, the only one that sees the goals:
 -- { token, url, expires_at }.
 function M.pepper_token() return request("pepper_token") end
+
+-- A token for another brain's agents, in its memory: { token, url, expires_at }.
+function M.brain_token(brain) return request("brain_token", brain) end
 
 -- Tell the Worker card id's agent is still running, so its claim doesn't
 -- lapse (cloud/src/board.ts's leases). Not waited for: a heartbeat that

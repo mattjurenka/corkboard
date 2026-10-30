@@ -8,6 +8,10 @@ import { type Skeleton, load as loadSkeleton } from "./skeleton";
 
 export type Ext = { __ext: number; id: number };
 
+// A toast in the editor's corner (corkboard.toast): pending until Neovim
+// says how it ended.
+export type Toast = { id: string; kind: "pending" | "done" | "error"; text: string };
+
 // A window that shows a view buffer, or a float, in grid cells
 // (corkboard.layout).
 export type Rect = { row: number; col: number; width: number; height: number };
@@ -31,7 +35,9 @@ export type Layout = {
 export type Bar = Rect & { win: number; top: number; bottom: number; lines: number };
 export type Scroll = { bars: Bar[]; floats: Rect[] };
 
-export type Tab = { tab: Ext; name: string };
+// label: what Neovim calls it where the buffer name reads badly
+// (corkboard.tab_labels), with a Claude Code session's state from its hooks.
+export type Tab = { tab: Ext; name: string; label?: { title: string; kind: string; state?: string } };
 
 // Away mode, from the bridge (bridge/away.ts): every page's Claude Code
 // sessions, each on page (the bridge's id for it) in terminal buf. at: when
@@ -44,6 +50,8 @@ export type AwaySession = {
   name: string;
   detail?: string;
   at: number;
+  // When you last said something to it.
+  typed?: number;
   state: "working" | "needs" | "ready" | "idle";
 };
 export type Away = { since: number; now: number; wake: string | null; sessions: AwaySession[] };
@@ -74,6 +82,9 @@ export type State = {
   // The tabs and windows as the page last saw them (skeleton.ts), shown
   // loading until Neovim has put the editor back.
   skeleton: Skeleton | null;
+  // The tab asked for from the sidebar, until its layout comes: its windows
+  // (skeleton.ts) show loading over the editor meanwhile.
+  switching: number | null;
   // Focus mode (corkboard/focus.lua): no sidebar, and the grid this many
   // columns wide in the middle of the page. Null when off.
   focus: { width: number } | null;
@@ -81,6 +92,12 @@ export type State = {
   away: Away | null;
   // The tool picker (corkboard.picker.tools), while it's open.
   tools: { leader: string; tools: { text: string; hint: string }[] } | null;
+  // Open project (corkboard.picker), while it's open. here: this window has a
+  // project, so the one chosen opens in a window of its own.
+  projects: { here: boolean } | null;
+  // The projects with a window on this machine (the bridge's openWindow).
+  windows: string[];
+  toasts: Toast[];
 };
 
 let state: State = {
@@ -99,9 +116,13 @@ let state: State = {
   notifications: [],
   unread: 0,
   skeleton: loadSkeleton(),
+  switching: null,
   focus: null,
   away: null,
   tools: null,
+  projects: null,
+  windows: [],
+  toasts: [],
 };
 
 const listeners = new Set<() => void>();

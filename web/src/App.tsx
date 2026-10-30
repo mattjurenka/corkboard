@@ -5,9 +5,11 @@
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Away } from "@/components/Away";
 import { Panels } from "@/components/Panels";
+import { Projects } from "@/components/Projects";
 import { Scrollbars } from "@/components/Scrollbars";
 import { Sidebar } from "@/components/Sidebar";
 import { Skeleton } from "@/components/Skeleton";
+import { Toasts } from "@/components/Toasts";
 import { Tools } from "@/components/Tools";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/store";
@@ -46,6 +48,7 @@ export function App() {
         <Panels />
         <Scrollbars />
         <Skeleton />
+        <Toasts />
       </div>
       {status && (
         <Alert
@@ -56,6 +59,7 @@ export function App() {
         </Alert>
       )}
       <Tools />
+      <Projects />
       <Away />
     </div>
   );

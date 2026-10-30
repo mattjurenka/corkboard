@@ -232,10 +232,11 @@ end
 -- The board ---------------------------------------------------------------------
 
 -- A project's board lives outside it, so cards stay out of its git history:
--- $XDG_DATA_HOME/corkboard/boards/<project path with / as ->. CORKBOARD_BOARD
--- overrides it, as it does for mcp/board.ts.
+-- $XDG_DATA_HOME/corkboard/boards/<project path with / as ->, one for a
+-- repository and its worktrees. CORKBOARD_BOARD overrides it, as it does for
+-- mcp/board.ts.
 function M.dir()
-  return vim.env.CORKBOARD_BOARD or util.data_dir("boards", util.path_key(vim.fn.getcwd()))
+  return vim.env.CORKBOARD_BOARD or util.data_dir("boards", util.project_key())
 end
 
 function M.tasks_dir() return vim.fs.joinpath(M.dir(), "tasks") end
@@ -246,7 +247,7 @@ local function setup(board)
   local files = {
     ["README.md"] = README,
     ["config.yml"] = table.concat({
-      "project_name: " .. quote(vim.fs.basename(vim.fn.getcwd())),
+      "project_name: " .. quote(vim.fs.basename(util.project_root())),
       "default_status: " .. M.statuses[1],
       "statuses: [" .. table.concat(M.statuses, ", ") .. "]",
       "labels: []",

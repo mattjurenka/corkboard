@@ -112,3 +112,12 @@ describe("the API", () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe("the portal", () => {
+  it("is every path that isn't the API's or sign-in's", async () => {
+    for (const path of ["/", "/files/mattjurenka/corkboard", "/_next/static/x.js"]) expect(await (await worker(path)).text()).toBe(`portal ${path}`);
+    expect((await worker("/api/boards")).status).toBe(401);
+    expect(await (await worker("/authorize")).text()).not.toMatch(/^portal/);
+    expect(await (await worker("/.well-known/oauth-authorization-server")).json()).toHaveProperty("token_endpoint");
+  });
+});

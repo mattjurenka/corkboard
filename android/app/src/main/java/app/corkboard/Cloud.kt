@@ -33,7 +33,7 @@ import java.util.concurrent.TimeUnit
 // (bridge/cloud.ts): it registers itself, signs in through the browser
 // with PKCE, and calls /api with the owner scope.
 object Cloud {
-    const val ORIGIN = "https://corkboard.matthewjurenka.workers.dev"
+    const val ORIGIN = "https://portal.corkboard.fyi"
 
     val json = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = false }
     val http: OkHttpClient = OkHttpClient.Builder().pingInterval(30, TimeUnit.SECONDS).build()
@@ -195,12 +195,66 @@ object Cloud {
         api("POST", "/api/plans/${plan.date}/discard", buildJsonObject { put("version", plan.version) }),
     )
 
+    suspend fun goals(): List<Goal> = json.decodeFromJsonElement(api("GET", "/api/goals"))
+
     suspend fun chat(after: Long = 0): List<ChatMessage> = json.decodeFromJsonElement(api("GET", "/api/chat?after=$after"))
 
     suspend fun say(text: String): ChatMessage =
         json.decodeFromJsonElement(api("POST", "/api/chat", buildJsonObject { put("text", text) }))
 
-    // The user's live socket: a plan or chat event for every change.
+    suspend fun environments(): List<FleetEnvironment> = json.decodeFromJsonElement(api("GET", "/api/fleet/environments"))
+
+    suspend fun spawns(states: String, limit: Int): List<Spawn> =
+        json.decodeFromJsonElement(api("GET", "/api/spawns?state=$states&limit=$limit"))
+
+    // A POST needs a body, if an empty one.
+    suspend fun approve(id: String): Spawn = json.decodeFromJsonElement(api("POST", "/api/spawns/$id/approve", buildJsonObject {}))
+
+    suspend fun stop(id: String): Spawn = json.decodeFromJsonElement(api("POST", "/api/spawns/$id/stop", buildJsonObject {}))
+
+    suspend fun boards(): List<BoardInfo> = json.decodeFromJsonElement(api("GET", "/api/boards"))
+
+    // A session in one of an environment's VMs (cloud/src/fleet.ts's interactive spawn).
+    suspend fun startSession(environment: String, template: String, board: String?, task: String): Spawn = json.decodeFromJsonElement(
+        api(
+            "POST",
+            "/api/spawns",
+            buildJsonObject {
+                put("environment", environment)
+                put("template", template)
+                put("interactive", true)
+                put("task", task)
+                board?.let { put("board", it) }
+            },
+        ),
+    )
+
+    suspend fun bridges(): List<Bridge> = json.decodeFromJsonElement(api("GET", "/api/sessions"))
+
+    suspend fun terminal(bridge: String, s: BridgeSession): Terminal =
+        json.decodeFromJsonElement(api("GET", "/api/sessions/$bridge/${s.key}"))
+
+    // Text typed into a session, then keys (enter, esc, up, down, tab, shift-tab, ctrl-c).
+    suspend fun type(bridge: String, s: BridgeSession, text: String, keys: List<String>) {
+        api(
+            "POST",
+            "/api/sessions/$bridge/${s.key}/say",
+            buildJsonObject {
+                put("text", text)
+                put("keys", json.encodeToJsonElement(keys))
+            },
+        )
+    }
+
+    // A session's conversation as it goes: { type: "out", data }, data a
+    // Turns (bridge/transcript.ts's items), until { type: "end", why }.
+    suspend fun attach(bridge: String, s: BridgeSession, listener: WebSocketListener): WebSocket {
+        val token = token()
+        val req = Request.Builder().url("$ORIGIN/api/sessions/$bridge/${s.key}/attach").header("Authorization", "Bearer $token").build()
+        return http.newWebSocket(req, listener)
+    }
+
+    // The user's live socket: a plan, chat, fleet, spawn or bridge event for every change.
     suspend fun live(listener: WebSocketListener): WebSocket {
         val token = token()
         val req = Request.Builder().url("$ORIGIN/api/live").header("Authorization", "Bearer $token").build()

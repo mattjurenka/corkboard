@@ -109,3 +109,19 @@ test("what's up: residents while their unit is, and each slot's spawn", () => {
   });
   expect(occupancy(m(null), [], new Set()).residents[0]).toMatchObject({ brain: null, up: false });
 });
+
+test("each VM's config: a resident's own, a slot's as the template it runs", () => {
+  const network = { address: "10.80.0.2", egress: "allowlist" as const, allowedDomains: ["api.anthropic.com"], allowedDomainSuffixes: [], routedEgress: [] };
+  const base = m(null);
+  const man: Manifest = {
+    ...base,
+    slots: { "agent-0": { ...slot(0), network }, "agent-1": { ...slot(1), network } },
+    residents: { "brain-vm": { unit: "brain-vm.service", memory: 14336, brain: "work", account: "work", cores: 4, capNames: ["coding"], network } },
+  };
+  const a = spawn("work-coding", "running", "agent-0");
+  const o = occupancy(man, [a], new Set(["brain-vm.service"]));
+  expect(o.residents[0].config).toEqual({ ...network, cores: 4, capabilities: ["coding"], account: "work" });
+  expect(o.slots[0].config).toEqual({ ...network, cores: 2, capabilities: ["coding"], account: "personal", needsApproval: true });
+  expect(o.slots[1].config).toEqual({ ...network, cores: null, capabilities: [], account: null });
+  expect(occupancy(base, [], new Set()).residents[0].config).toBeUndefined();
+});

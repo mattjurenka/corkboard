@@ -2,7 +2,7 @@
   "mcpServers": {
     "corkboard": {
       "type": "http",
-      "url": "https://corkboard.matthewjurenka.workers.dev/mcp"
+      "url": "https://portal.corkboard.fyi/mcp"
     }
   }
 }

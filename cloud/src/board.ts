@@ -7,6 +7,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { type BoardEvent, type Card, type Fields, type Imported, type LogEntry, type Status, waitingOn } from "./cards";
+import { type Dump, dump, restore } from "./dump";
 
 // card, plan: on a conflict, the thing as it is now, to redo the change on.
 export type Result<T> = { ok: true; value: T } | { ok: false; status: number; error: string; card?: Card; plan?: unknown; note?: unknown };
@@ -69,8 +70,12 @@ CREATE TABLE IF NOT EXISTS meta (
 // hasn't changed hands or state since, so hearing from the agent undoes it.
 export const LEASE_MS = 15 * 60_000;
 
-// What a board is: a name, and the local project path corkboard maps it to.
-export type BoardInfo = { key: string; name: string; root: string | null };
+// What a board is: a name, the local project path corkboard maps it to (the
+// one it was last opened at), and its repository's first commit, which every
+// clone of it shares.
+// remotes: its project's git remotes, to clone it from; environments: those
+// with a clone of it (board_roots), as listed.
+export type BoardInfo = { key: string; name: string; root: string | null; commit?: string | null; remotes?: string[]; environments?: string[] };
 
 // Seconds, UTC, as the card logs have always been written.
 const now = () => new Date().toISOString().replace(/\.\d+Z$/, "Z");
@@ -127,6 +132,18 @@ export class Board extends DurableObject {
       name,
       root,
     );
+  }
+
+  // The whole board, to copy it to another account's Worker (dump.ts).
+  // Leases stay behind: an agent still working takes its card again.
+  dump(): Dump {
+    return dump(this.sql, ["leases"]);
+  }
+
+  // Into a board that doesn't exist yet.
+  restore(d: Dump): Result<number> {
+    if (this.exists()) return fail(409, "the board already exists");
+    return ok(restore(this.sql, d));
   }
 
   // Everything the board holds, and its live sockets.

@@ -1,6 +1,7 @@
 // The corkboard Worker. The OAuth provider owns the token, registration and
 // discovery endpoints; /api/*, /mcp and /memory/* reach api.ts only with a
-// valid access token; everything else (the sign-in pages) is auth.ts.
+// valid access token; everything else (the sign-in pages, and the portal's
+// page by way of them) is auth.ts.
 
 import { OAuthProvider, type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import { api, tokenKey } from "./api";
@@ -34,12 +35,18 @@ export type Env = {
   TIMEZONE: string;
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
+  // Forgejo, whose repositories the portal browses (git.ts), and a read-only
+  // token of the user's there (a secret); without them, none.
+  FORGEJO_ORIGIN?: string;
+  FORGEJO_TOKEN?: string;
+  // The portal's page (../portal), which serves every path that isn't ours.
+  PORTAL?: Fetcher;
 };
 
 // What a token carries about its user. Encrypted in KV by the provider. A
 // card token (POST /api/tokens) or Pepper's (/api/tokens/pepper) also
-// carries its grant.
-export type Props = { userId: string; email: string; grant?: Extract<Grant, { kind: "card" | "pepper" | "brain" }> };
+// carries its grant, as does a machine's (/api/tokens/machine).
+export type Props = { userId: string; email: string; grant?: Extract<Grant, { kind: "card" | "pepper" | "brain" | "machine" }> };
 
 // Card and Pepper tokens start with this, so they're told from OAuth tokens
 // at a glance.

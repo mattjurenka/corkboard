@@ -1,0 +1,249 @@
+@import "tailwindcss";
+@import "shadcn/tailwind.css";
+
+/* Dark is the system's to choose: there's no toggle. */
+@custom-variant dark (@media (prefers-color-scheme: dark));
+
+/* The portal's palette: slate ground, hairline rules, and the editor's state
+   colors (web/'s --nv-*), so a board reads the same here as in the editor. */
+:root {
+  --ground: #eef0f2;
+  --ink: #1b1f24;
+  --rule: #c3c9d1;
+  --dim: #5d6673;
+  --link: #2f5bd3;
+  --working: #3f7d20;
+  --blocked: #c0344f;
+  --review: #8a5a00;
+  --raise: #e2e6ea;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #15181e;
+    --ink: #d5d9e0;
+    --rule: #2b3039;
+    --dim: #7c8594;
+    --link: #7aa2f7;
+    --working: #9ece6a;
+    --blocked: #f7768e;
+    --review: #e0af68;
+    --raise: #1d2129;
+  }
+}
+
+/* shadcn's tokens, in those colors. */
+:root {
+  --background: var(--ground);
+  --foreground: var(--ink);
+  --card: var(--ground);
+  --card-foreground: var(--ink);
+  --popover: var(--ground);
+  --popover-foreground: var(--ink);
+  --primary: var(--link);
+  --primary-foreground: var(--ground);
+  --secondary: var(--raise);
+  --secondary-foreground: var(--ink);
+  --muted: var(--raise);
+  --muted-foreground: var(--dim);
+  --accent: var(--raise);
+  --accent-foreground: var(--ink);
+  --destructive: var(--blocked);
+  --border: var(--rule);
+  --input: var(--rule);
+  --ring: var(--link);
+  --radius: 0;
+}
+
+@theme inline {
+  --font-mono: var(--font-mono);
+  --font-sans: var(--font-mono);
+  --font-heading: var(--font-mono);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-rule: var(--rule);
+  --color-dim: var(--dim);
+  --color-link: var(--link);
+  --color-raise: var(--raise);
+  --color-working: var(--working);
+  --color-blocked: var(--blocked);
+  --color-review: var(--review);
+
+  /* One size, one line height, square edges, no shadows: it's a terminal. */
+  --text-xs: 14px;
+  --text-xs--line-height: 21px;
+  --text-sm: 14px;
+  --text-sm--line-height: 21px;
+  --text-base: 14px;
+  --text-base--line-height: 21px;
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+  --shadow-xs: none;
+  --shadow-sm: none;
+  --shadow-md: none;
+  --shadow-lg: none;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-mono;
+    font-size: 14px;
+    line-height: 21px;
+    font-variant-ligatures: none;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--rule) transparent;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--link) 30%, transparent);
+  }
+  :focus-visible {
+    outline: 1px solid var(--link);
+    outline-offset: 1px;
+  }
+}
+
+/* A pane: a box whose title sits in its top rule, the way a TUI draws one. */
+@layer components {
+  .pane {
+    position: relative;
+    border: 1px solid var(--rule);
+    padding: 10px 1ch 4px;
+  }
+  .pane > .pane-title {
+    position: absolute;
+    top: -11px;
+    left: 1ch;
+    display: flex;
+    gap: 2ch;
+    max-width: calc(100% - 2ch);
+    padding: 0 1ch;
+    background: var(--ground);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pane > .pane-title-end {
+    position: absolute;
+    top: -11px;
+    right: 1ch;
+    padding: 0 1ch;
+    background: var(--ground);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* The tree's connectors, drawn rather than typed: box-drawing glyphs only
+   meet at the font's own line height, and these meet at any. Each level is
+   three cells wide; the line runs down the middle of the first. */
+@layer components {
+  .tree-pipe,
+  .tree-tee,
+  .tree-elbow {
+    position: relative;
+  }
+  .tree-pipe::before,
+  .tree-tee::before,
+  .tree-elbow::before {
+    content: "";
+    position: absolute;
+    left: 0.5ch;
+    top: 0;
+    bottom: 0;
+    border-left: 1px solid var(--rule);
+  }
+  .tree-elbow::before {
+    bottom: 50%;
+  }
+  .tree-tee::after,
+  .tree-elbow::after {
+    content: "";
+    position: absolute;
+    left: 0.5ch;
+    right: 0.5ch;
+    top: 50%;
+    border-top: 1px solid var(--rule);
+  }
+}
+
+/* Syntax, in the editor's colors: Shiki's tokens below, and the tree's file kinds
+   (lib/highlight.ts). */
+:root {
+  --syn-comment: #7a8496;
+  --syn-string: #3f7d20;
+  --syn-constant: #b35b00;
+  --syn-keyword: #7847bd;
+  --syn-function: #2f5bd3;
+  --syn-property: #1f7a68;
+  --syn-escape: #8a5a00;
+  --syn-punct: #5d6673;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --syn-comment: #5f6b80;
+    --syn-string: #9ece6a;
+    --syn-constant: #ff9e64;
+    --syn-keyword: #bb9af7;
+    --syn-function: #7aa2f7;
+    --syn-property: #73daca;
+    --syn-escape: #e0af68;
+    --syn-punct: #7c8594;
+  }
+}
+
+@layer components {
+  .syn-keyword { color: var(--syn-keyword); }
+  .syn-property { color: var(--syn-property); }
+  .syn-escape { color: var(--syn-escape); }
+}
+
+/* Shiki's css-variables theme (lib/highlight.ts), in those colors. */
+:root {
+  --shiki-foreground: var(--ink);
+  --shiki-background: transparent;
+  --shiki-token-comment: var(--syn-comment);
+  --shiki-token-string: var(--syn-string);
+  --shiki-token-string-expression: var(--syn-string);
+  --shiki-token-constant: var(--syn-constant);
+  --shiki-token-keyword: var(--syn-keyword);
+  --shiki-token-function: var(--syn-function);
+  --shiki-token-parameter: var(--syn-property);
+  --shiki-token-punctuation: var(--syn-punct);
+  --shiki-token-link: var(--link);
+}

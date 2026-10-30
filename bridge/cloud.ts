@@ -2,6 +2,11 @@
 //
 //   bun bridge/cloud.ts login    sign in (opens the browser); once per machine
 //   bun bridge/cloud.ts token    print a current access token, for curl
+//   bun bridge/cloud.ts machine <environment>
+//                                mint a machine token, signed in as the owner,
+//                                and print the auth.json that signs a server in
+//                                with it (the droplet: its own environment's
+//                                fleet and sessions, not the laptop's)
 //
 // The bridge is an ordinary OAuth client of the Worker: it registers itself,
 // then signs in with PKCE through a one-shot server on a loopback port, the
@@ -16,11 +21,13 @@ import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statS
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 
-export const CLOUD = (process.env.CORKBOARD_CLOUD ?? "https://corkboard.matthewjurenka.workers.dev").replace(/\/$/, "");
+export const CLOUD = (process.env.CORKBOARD_CLOUD ?? "https://portal.corkboard.fyi").replace(/\/$/, "");
 const STATE_DIR = join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state"), "corkboard");
 const AUTH = join(STATE_DIR, "auth.json");
 
-type Auth = { cloud: string; client_id: string; access_token: string; refresh_token: string; expires_at: number };
+type OAuth = { cloud: string; client_id: string; access_token: string; refresh_token: string; expires_at: number };
+// A machine's has only its token, which lasts until it's revoked.
+type Auth = OAuth | { cloud: string; token: string };
 
 const b64url = (b: Buffer) => b.toString("base64url");
 
@@ -111,7 +118,10 @@ export async function login(): Promise<void> {
     }).toString();
     console.log(`Opening the browser to sign in. If it doesn't open, go to:\n\n  ${url}\n`);
     console.log("If the browser ends on a page that won't load, paste that page's address here.\n");
-    Bun.spawn(["xdg-open", url.toString()], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+    // A machine with no browser (a server) has no xdg-open: the address above is the way in.
+    try {
+      Bun.spawn(["xdg-open", url.toString()], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+    } catch {}
     (async () => {
       for await (const line of console) {
         const pasted = URL.canParse(line.trim()) ? new URL(line.trim()) : undefined;
@@ -158,17 +168,19 @@ async function refreshing<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-const fresh = (auth: Auth) => auth.expires_at - 60_000 > Date.now();
+const fresh = (auth: OAuth) => auth.expires_at - 60_000 > Date.now();
 
 // A current access token, refreshed when it's within a minute of expiring.
 // Refresh tokens rotate, so each refresh is saved before it's used.
 export async function token(): Promise<string> {
   const auth = load();
   if (!auth) throw new Error(`corkboard: not signed in to ${CLOUD}; run bun bridge/cloud.ts login`);
+  if ("token" in auth) return auth.token;
   if (fresh(auth)) return auth.access_token;
   return refreshing(async () => {
     // Another process may have refreshed while this one waited.
-    const now = load() ?? auth;
+    const loaded = load();
+    const now = loaded && !("token" in loaded) ? loaded : auth;
     if (fresh(now)) return now.access_token;
     const t = await tokens({ grant_type: "refresh_token", refresh_token: now.refresh_token, client_id: now.client_id }).catch((e) => {
       throw new Error(`${e.message}; run bun bridge/cloud.ts login`);
@@ -186,8 +198,17 @@ if (import.meta.main) {
       process.exit(0); // the paste reader would otherwise hold stdin open
     }
     else if (command === "token") console.log(await token());
-    else {
-      console.error("usage: bun bridge/cloud.ts login|token");
+    else if (command === "machine" && process.argv[3]) {
+      const res = await fetch(`${CLOUD}/api/tokens/machine`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await token()}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ environment: process.argv[3] }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { token?: string; error?: string };
+      if (!res.ok || !json.token) throw new Error(`corkboard: ${json.error ?? `HTTP ${res.status}`}`);
+      console.log(JSON.stringify({ cloud: CLOUD, token: json.token }, null, 2));
+    } else {
+      console.error("usage: bun bridge/cloud.ts login|token|machine <environment>");
       process.exit(2);
     }
   } catch (e) {

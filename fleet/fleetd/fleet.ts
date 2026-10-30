@@ -11,14 +11,26 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFile
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+// Where a VM is and what it may reach, as host.nix configures it.
+export type Network = {
+  address: string | null;
+  egress: "open" | "allowlist";
+  allowedDomains: string[];
+  allowedDomainSuffixes: string[];
+  routedEgress: { reason: string; destinations: string[]; tcpPorts: string[]; udpPorts: string[] }[];
+};
+
 export type Manifest = {
   flake: string;
   owner: string;
   // MiB the agents may have between them, or null for no limit.
   memoryBudget: number | null;
-  slots: Record<string, { guestAddress: string; stateDir: string; shareDir: string; outboxDir: string; unit: string }>;
+  slots: Record<string, { guestAddress: string; stateDir: string; shareDir: string; outboxDir: string; unit: string; network?: Network }>;
   // VMs that are always there: they count against the budget while up.
-  residents: Record<string, { unit: string; memory: number | null; brain?: string | null }>;
+  residents: Record<
+    string,
+    { unit: string; memory: number | null; brain?: string | null; account?: string | null; cores?: number | null; capNames?: string[]; network?: Network }
+  >;
   templates: Record<string, { memory: number; cores: number; needsApproval: boolean; brain: string | null; account: string | null; capNames: string[] }>;
   // Each brain's Claude account, and the one a brainless template runs as
   // when the user spawns it without saying.
@@ -50,6 +62,10 @@ export type Spawn = {
   // From the Worker's queue: its card, and the spawn token for it (emptied
   // once it's revoked, at the end).
   remote?: { board: string; card: string; agent: string; token: string };
+  // A session you talk to rather than a task (sessions.ts); when it was
+  // asked to finish, if it has been.
+  interactive?: boolean;
+  ending?: string;
   // The last state the Worker was told of.
   reported?: State;
   // The branch its commits were fetched into, in its repo.
@@ -118,20 +134,35 @@ export type Plan = {
 // What's up, as the Worker's fleet view shows it: each resident VM, each
 // slot and the spawn in it, and the memory they take of the budget. A
 // resident counts at its memoryMax while up, a slot at its template's
-// memory and OVERHEAD.
+// memory and OVERHEAD. Each says how it's configured, when the manifest
+// does: a slot as the template it's running.
+export type Config = Network & { cores: number | null; capabilities: string[]; account: string | null; needsApproval?: boolean };
 export type Occupancy = {
   budget: number | null;
   used: number;
-  residents: { name: string; brain: string | null; memory: number | null; up: boolean }[];
-  slots: { name: string; spawn: string | null; template: string | null; memory: number | null }[];
+  residents: { name: string; brain: string | null; memory: number | null; up: boolean; config?: Config }[];
+  slots: { name: string; spawn: string | null; template: string | null; memory: number | null; config?: Config }[];
 };
 
 export function occupancy(m: Manifest, all: Spawn[], active: Set<string>): Occupancy {
-  const residents = Object.entries(m.residents).map(([name, r]) => ({ name, brain: r.brain ?? null, memory: r.memory, up: active.has(r.unit) }));
-  const slots = Object.keys(m.slots).map((name) => {
+  const residents = Object.entries(m.residents).map(([name, r]) => ({
+    name,
+    brain: r.brain ?? null,
+    memory: r.memory,
+    up: active.has(r.unit),
+    ...(r.network && { config: { ...r.network, cores: r.cores ?? null, capabilities: r.capNames ?? [], account: r.account ?? null } }),
+  }));
+  const slots = Object.entries(m.slots).map(([name, slot]) => {
     const s = all.find((x) => x.state === "running" && x.slot === name);
     const t = s && m.templates[s.template];
-    return { name, spawn: s?.id ?? null, template: s?.template ?? null, memory: s ? (t?.memory ?? 0) + OVERHEAD : null };
+    const config: Config | undefined = slot.network && {
+      ...slot.network,
+      cores: t?.cores ?? null,
+      capabilities: t?.capNames ?? [],
+      account: s?.account ?? null,
+      ...(t && { needsApproval: t.needsApproval }),
+    };
+    return { name, spawn: s?.id ?? null, template: s?.template ?? null, memory: s ? (t?.memory ?? 0) + OVERHEAD : null, ...(config && { config }) };
   });
   // A running spawn whose slot left the manifest still takes its memory.
   const lost = all.filter((s) => s.state === "running" && !m.slots[s.slot!]);

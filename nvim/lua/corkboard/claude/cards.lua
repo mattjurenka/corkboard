@@ -145,12 +145,10 @@ local function panel_buf(src)
   local keys = {
     j = { step(1), "next card" },
     k = { step(-1), "previous card" },
-    ["<Down>"] = { step(1), "next card" },
-    ["<Up>"] = { step(-1), "previous card" },
     ["<CR>"] = { on_card(function(id) require("corkboard.board").open_card(id) end), "open the card" },
     s = { on_card(M.go), "go to the card's session" },
   }
-  for lhs, key in pairs(keys) do
+  for lhs, key in pairs(pinned.arrows(keys)) do
     vim.keymap.set("n", lhs, key[1], { buffer = p, nowait = true, desc = "cards: " .. key[2] })
   end
   vim.api.nvim_create_autocmd("CursorMoved", {

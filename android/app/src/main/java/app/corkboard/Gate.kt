@@ -27,7 +27,7 @@ object Gate {
 }
 
 // The meditation timer. It runs in the app, and keeps running with the
-// screen off, but stops the moment another app comes to the front (Blocker
+// screen off, but stops the moment another app comes to the front (Watcher
 // tells it). Seconds are banked per day; a run in progress is the time
 // since medRunningSince.
 object Meditation {
@@ -43,10 +43,12 @@ object Meditation {
 
     fun running(store: Store = App.store) = store.medDate == today() && store.medRunningSince != 0L
 
-    fun elapsed(store: Store = App.store): Int {
+    fun elapsed(store: Store = App.store): Int = (elapsedMillis(store) / 1000).toInt()
+
+    fun elapsedMillis(store: Store = App.store): Long {
         if (store.medDate != today()) return 0
-        val run = if (store.medRunningSince != 0L) ((System.currentTimeMillis() - store.medRunningSince) / 1000).toInt() else 0
-        return minOf(GOAL, store.medSeconds + run)
+        val run = if (store.medRunningSince != 0L) System.currentTimeMillis() - store.medRunningSince else 0
+        return minOf(GOAL * 1000L, store.medSeconds * 1000L + run)
     }
 
     fun start(context: Context) {
@@ -61,6 +63,7 @@ object Meditation {
             done(context),
         )
         Notifications.meditating(context, System.currentTimeMillis() + remaining * 1000L)
+        Chimes.sync(context)
     }
 
     fun pause(context: Context) {
@@ -69,6 +72,7 @@ object Meditation {
         store.medSeconds = elapsed(store)
         store.medRunningSince = 0
         alarms(context).cancel(done(context))
+        Chimes.sync(context)
         Notifications.meditationPaused(context, store.medSeconds)
     }
 
@@ -82,6 +86,7 @@ object Meditation {
         if (!running(store)) return
         store.medSeconds = GOAL
         store.medRunningSince = 0
+        Chimes.sync(context)
         RingtoneManager.getRingtone(context, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))?.play()
         Notifications.meditationDone(context)
         Ticker.update(context)

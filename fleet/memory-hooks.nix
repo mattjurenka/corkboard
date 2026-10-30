@@ -13,7 +13,7 @@
 # never fail a session.
 #
 # Gives back `hooks`, for a guest's Claude Code managed settings.
-{ pkgs, lib, url ? "https://corkboard.matthewjurenka.workers.dev", tokenFile }:
+{ pkgs, lib, url ? "https://portal.corkboard.fyi", tokenFile }:
 let
   context = pkgs.writeShellApplication {
     name = "corkboard-memory-context";

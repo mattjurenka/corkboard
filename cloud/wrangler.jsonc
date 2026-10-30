@@ -11,6 +11,8 @@
   // needs it to fetch clients' metadata documents (CIMD) safely.
   "compatibility_flags": ["global_fetch_strictly_public"],
   "workers_dev": true,
+  // The portal, the API, /mcp and sign-in, on the account that owns corkboard.fyi.
+  "routes": [{ "pattern": "portal.corkboard.fyi", "custom_domain": true }],
   "durable_objects": {
     "bindings": [
       { "name": "BOARD", "class_name": "Board" },
@@ -28,14 +30,18 @@
   // namespace per brain (src/memory.ts).
   "ai": { "binding": "AI" },
   "vectorize": [{ "binding": "VECTORS", "index_name": "corkboard-memory" }],
-  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "b5e2d5807ec748e58a7fbf3a94385742" }],
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "8f69c7790e394751a12b04353f29adc9" }],
+  // The portal's page (../portal), served for every path that isn't ours.
+  "services": [{ "binding": "PORTAL", "service": "corkboard-portal" }],
   "vars": {
-    "ORIGIN": "https://corkboard.matthewjurenka.workers.dev",
+    "ORIGIN": "https://portal.corkboard.fyi",
     "ALLOWED_EMAIL": "matthewjurenka@gmail.com",
     // Where "today" is, for plans.
     "TIMEZONE": "America/Phoenix",
     // The dayplan-512206 project's Web application client.
-    "GOOGLE_CLIENT_ID": "911829084497-iab0dt2ufoiobeot2uanudsc1tc02s8o.apps.googleusercontent.com"
+    "GOOGLE_CLIENT_ID": "911829084497-iab0dt2ufoiobeot2uanudsc1tc02s8o.apps.googleusercontent.com",
+    // The portal's file browser (src/git.ts); FORGEJO_TOKEN is a secret.
+    "FORGEJO_ORIGIN": "https://git.corkboard.fyi"
   }
   // Secrets (wrangler secret put): GOOGLE_CLIENT_SECRET.
 }

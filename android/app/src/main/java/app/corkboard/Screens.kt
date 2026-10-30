@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
 import android.provider.Settings
 import android.util.Log
 import android.speech.RecognitionListener
@@ -62,11 +63,17 @@ sealed interface Screen {
     data object Meditate : Screen
     data object Apps : Screen
     data object Setup : Screen
+    data object Fleet : Screen
+    data class Goals(val id: String? = null) : Screen
     data class Chat(val draft: String = "") : Screen
+    data class Session(val bridge: String, val key: String) : Screen
+    data class NewSession(val environment: String) : Screen
 
     companion object {
         fun named(name: String?): Screen? = when (name) {
             "plan" -> Plan
+            "fleet" -> Fleet
+            "goals" -> Goals()
             "meditate" -> Meditate
             "chat" -> Chat()
             "apps" -> Apps
@@ -171,11 +178,13 @@ fun SetupScreen(resumed: Int, done: () -> Unit) {
                     Permission(need.title, need.why, on.getValue(need)) {
                         @SuppressLint("BatteryLife")
                         val intent = when (need) {
-                            Setup.Need.Accessibility -> Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                            Setup.Need.Usage -> Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS, Uri.parse("package:${context.packageName}"))
+                            Setup.Need.Overlay -> Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))
                             Setup.Need.Battery -> Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
                             Setup.Need.Alarms -> Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${context.packageName}"))
                         }
-                        context.startActivity(intent)
+                        // Not every phone opens Usage access at the app itself.
+                        runCatching { context.startActivity(intent) }.onFailure { context.startActivity(Intent(intent.action)) }
                     }
                 }
                 Rule(Monokai.base01)
@@ -183,10 +192,8 @@ fun SetupScreen(resumed: Int, done: () -> Unit) {
                     ask.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
             }
-            Spacer(Modifier.height(16.dp))
-            Text("On Android 13+, accessibility may be greyed out for an app installed outside the Play Store: open corkboard's App info, ⋮ › Allow restricted settings, then try again.", style = Small)
         }
-        Footer { Solid("Continue", Modifier.weight(1f), enabled = on.getValue(Setup.Need.Accessibility), onClick = done) }
+        Footer { Solid("Continue", Modifier.weight(1f), enabled = on.getValue(Setup.Need.Usage) && on.getValue(Setup.Need.Overlay), onClick = done) }
     }
 }
 
@@ -249,7 +256,7 @@ fun LockedScreen(go: (Screen) -> Unit) {
             Spacer(Modifier.height(24.dp))
             Panel("${Locks.count(context)} apps locked") {
                 PanelRow({ go(Screen.Apps) }) {
-                    val open = App.store.openApps.filter { it in Locks.launcherApps(context) }.map { Blocker.label(context, it) }.sorted()
+                    val open = App.store.openApps.filter { it in Locks.launcherApps(context) }.map { Locks.label(context, it) }.sorted()
                     Text(
                         "open: " + open.take(4).joinToString(", ") + if (open.size > 4) " +${open.size - 4}" else "",
                         modifier = Modifier.weight(1f),
@@ -315,6 +322,7 @@ fun NowScreen(go: (Screen) -> Unit) {
                 }
             }
             plan?.let { DayStrip(it, minute) }
+            Spacer(Modifier.height(16.dp))
         }
         Rule()
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -324,11 +332,7 @@ fun NowScreen(go: (Screen) -> Unit) {
                 Check(true); Text("planned", style = Small)
                 Check(true); Text("meditated", style = Small, modifier = Modifier.weight(1f))
             }
-        }
-        Footer {
-            Outline("plan", Modifier.weight(1f)) { go(Screen.Plan) }
-            Outline("pepper", Modifier.weight(1f), color = Monokai.purple) { go(Screen.Chat()) }
-            Outline("apps", Modifier.weight(1f)) { go(Screen.Apps) }
+            Text("apps ›", color = Monokai.base04, modifier = Modifier.clickable(role = Role.Button) { go(Screen.Apps) }.padding(vertical = 8.dp))
         }
     }
 }
@@ -371,8 +375,9 @@ private fun DayStrip(plan: Plan, minute: Int) {
 // Planning: Pepper's plan, accepted here ----------------------------------------------
 
 @Composable
-fun PlanScreen(go: (Screen) -> Unit, back: () -> Unit) {
+fun PlanScreen(go: (Screen) -> Unit) {
     val plan by Repo.plan.collectAsState()
+    val goals by Repo.goals.collectAsState()
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -404,7 +409,7 @@ fun PlanScreen(go: (Screen) -> Unit, back: () -> Unit) {
                     if (proposal.reasons.isNotEmpty()) {
                         Spacer(Modifier.height(16.dp))
                         Panel("pepper") {
-                            for (r in proposal.reasons) Text(r.text, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+                            for (r in proposal.reasons) Markdown(r.text, Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
                         }
                     }
                     Spacer(Modifier.height(16.dp))
@@ -428,10 +433,13 @@ fun PlanScreen(go: (Screen) -> Unit, back: () -> Unit) {
                 }
             }
             error?.let { Text(it, color = Monokai.orange, modifier = Modifier.padding(top = 12.dp)) }
+            if (goals.isNotEmpty()) {
+                Spacer(Modifier.height(24.dp))
+                GoalsPanel(goals) { go(Screen.Goals(it)) }
+            }
             Spacer(Modifier.height(16.dp))
         }
         Footer {
-            Outline("back", color = Monokai.base04, onClick = back)
             when {
                 proposal != null -> {
                     Outline("change", Modifier.weight(1f), color = Monokai.purple) { go(Screen.Chat("")) }
@@ -472,7 +480,7 @@ private fun Timeline(blocks: List<Block>, why: Map<String, String>) {
 // Pepper -------------------------------------------------------------------------------
 
 @Composable
-fun ChatScreen(draft: String, back: () -> Unit) {
+fun ChatScreen(draft: String) {
     val messages by Repo.chat.collectAsState()
     val ready by Repo.chatReady.collectAsState()
     val scope = rememberCoroutineScope()
@@ -489,14 +497,14 @@ fun ChatScreen(draft: String, back: () -> Unit) {
             items(messages, key = { it.id }) { m ->
                 Column {
                     Text(if (m.who == "pepper") "pepper" else "you", style = Small.copy(color = if (m.who == "pepper") Monokai.purple else Monokai.base04))
-                    Text(m.text, modifier = Modifier.padding(top = 2.dp))
+                    if (m.who == "pepper") Markdown(m.text, Modifier.padding(top = 2.dp))
+                    else Text(m.text, modifier = Modifier.padding(top = 2.dp))
                 }
             }
         }
         error?.let { Text(it, color = Monokai.orange, modifier = Modifier.padding(horizontal = 16.dp)) }
         Rule()
         Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Outline("back", color = Monokai.base04, onClick = back)
             Row(
                 Modifier.weight(1f).heightIn(min = 52.dp).border(1.dp, Monokai.base02).padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -544,15 +552,15 @@ fun ChatScreen(draft: String, back: () -> Unit) {
 class Dictation(val available: Boolean, val listening: Boolean, val toggle: (String) -> Unit, val stop: () -> Unit)
 
 @Composable
-private fun rememberDictation(onHeard: (String) -> Unit, onError: (String) -> Unit): Dictation {
+fun rememberDictation(onHeard: (String) -> Unit, onError: (String) -> Unit): Dictation {
     val context = LocalContext.current
-    // The on-device recognizer (Android System Intelligence) where there is
-    // one: the default here, Speech Services', heard speech and returned none.
+    // The on-device recognizer only: what's said never leaves the phone. A
+    // phone without one has no mic, rather than one that sends the speech off.
     val recognizer = remember {
-        when {
-            SpeechRecognizer.isOnDeviceRecognitionAvailable(context) -> SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
-            SpeechRecognizer.isRecognitionAvailable(context) -> SpeechRecognizer.createSpeechRecognizer(context)
-            else -> null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) {
+            SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+        } else {
+            null
         }
     }
     DisposableEffect(recognizer) { onDispose { recognizer?.destroy() } }
@@ -560,7 +568,7 @@ private fun rememberDictation(onHeard: (String) -> Unit, onError: (String) -> Un
     var before by remember { mutableStateOf("") }
 
     fun heard(b: Bundle?) = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-        ?.also { Log.d("corkboard", "heard: $it") }?.takeIf { it.isNotBlank() }?.let { onHeard(before + it) }
+        ?.takeIf { it.isNotBlank() }?.let { onHeard(before + it) }
     fun listen() {
         val r = recognizer ?: return
         r.setRecognitionListener(object : RecognitionListener {
@@ -576,7 +584,7 @@ private fun rememberDictation(onHeard: (String) -> Unit, onError: (String) -> Un
                     else -> onError("couldn't listen (speech error $e)")
                 }
             }
-            override fun onReadyForSpeech(b: Bundle?) { Log.d("corkboard", "listening, on-device: ${SpeechRecognizer.isOnDeviceRecognitionAvailable(context)}") }
+            override fun onReadyForSpeech(b: Bundle?) {}
             override fun onBeginningOfSpeech() {}
             override fun onRmsChanged(db: Float) {}
             override fun onBufferReceived(buffer: ByteArray?) {}
@@ -626,14 +634,9 @@ fun MeditateScreen(back: () -> Unit) {
             )
             Text("${elapsed / 60} of 30 minutes", color = Monokai.base04, modifier = Modifier.align(Alignment.CenterHorizontally))
             Spacer(Modifier.height(40.dp))
-            Panel("one cell a minute") {
+            Panel("minutes") {
                 Box(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) { Cells(elapsed / 60, 30, 15, Monokai.orange) }
             }
-            Text(
-                "The screen can go off. Opening another app pauses the timer.\nA chime plays at 30:00.",
-                style = Small, textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
-            )
         }
         Footer {
             if (left == 0) {
@@ -696,5 +699,36 @@ fun AppsScreen(back: () -> Unit) {
             }
         }
         Footer { Outline("back", Modifier.weight(1f), color = Monokai.base04, onClick = back) }
+    }
+}
+
+private val tabs = listOf("now" to Screen.Home, "plan" to Screen.Plan, "pepper" to Screen.Chat(), "fleet" to Screen.Fleet)
+
+fun isTab(screen: Screen) = tabs.any { it.second::class == screen::class }
+
+// The four tabs along the foot: now, the plan, Pepper and the fleet; the
+// plan and the fleet yellow while something there waits on you.
+@Composable
+fun Tabs(screen: Screen, go: (Screen) -> Unit) {
+    val fleet by Repo.fleet.collectAsState()
+    val plan by Repo.plan.collectAsState()
+    val waiting = fleet?.let { f -> f.spawns.any { it.state == "pending-approval" } || f.bridges.any { b -> b.sessions.any(::needsYou) } } == true
+    Rule()
+    Row(Modifier.fillMaxWidth()) {
+        for ((label, to) in tabs) {
+            val here = screen::class == to::class
+            Text(
+                if (here) "[$label]" else label,
+                color = when {
+                    to == Screen.Fleet && waiting -> Monokai.yellow
+                    to == Screen.Plan && plan?.proposal != null -> Monokai.yellow
+                    here -> Monokai.base05
+                    else -> Monokai.base04
+                },
+                fontWeight = if (here) FontWeight.SemiBold else FontWeight.Normal,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.weight(1f).clickable(role = Role.Button) { go(to) }.padding(vertical = 14.dp),
+            )
+        }
     }
 }

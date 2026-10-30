@@ -1,17 +1,18 @@
 // Away mode (corkboard/away.lua, bridge/away.ts): the whole page black, with
-// a dot for each Claude Code session in every project and a count under
-// them. Any key shows them as a list; when the bridge wakes you, the list
+// a dot for each Claude Code session, a row of them for each project, and a
+// count under them. Any key shows them as a list, under their projects; when the bridge wakes you, the list
 // comes up on its own with why, and what's asking at the top. Keys stop
 // here while it's up, so none reach Neovim.
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useNvim } from "@/nvim/context";
 import { type AwaySession, store, useStore } from "@/store";
 
 const GLYPH = { working: "●", needs: "▲", ready: "○", idle: "·" };
 const COLOR = { working: "text-working", needs: "text-blocked", ready: "text-primary", idle: "text-muted-foreground" };
-const ORDER = { needs: 0, ready: 1, working: 2, idle: 3 };
+// How many finished sessions it shows.
+const READY = 3;
 const WORD = { working: "working", needs: "needs you", ready: "ready", idle: "idle" };
 
 const minutes = (ms: number) => Math.max(0, Math.floor(ms / 60000));
@@ -33,10 +34,17 @@ export function Away() {
 
   // The bridge's clock, as this page's.
   const skew = useMemo(() => (away ? Date.now() - away.now : 0), [away]);
-  const sessions = useMemo(
-    () => [...(away?.sessions ?? [])].sort((a, b) => ORDER[a.state] - ORDER[b.state] || a.at - b.at),
-    [away],
-  );
+  // The one you last typed in first, and of the finished ones only the
+  // last READY; by project, the project of the first first. j and k go
+  // through them in that order.
+  const groups = useMemo(() => {
+    const recent = [...(away?.sessions ?? [])].sort((a, b) => (b.typed ?? b.at) - (a.typed ?? a.at));
+    const finished = recent.filter((s) => s.state === "ready" || s.state === "idle").slice(READY);
+    const byProject = new Map<string, AwaySession[]>();
+    for (const s of recent.filter((s) => !finished.includes(s))) byProject.set(s.project, [...(byProject.get(s.project) ?? []), s]);
+    return [...byProject].map(([project, sessions]) => ({ project, sessions }));
+  }, [away]);
+  const sessions = useMemo(() => groups.flatMap((g) => g.sessions), [groups]);
   const shown = !!away?.wake || listed;
 
   useEffect(() => {
@@ -46,7 +54,7 @@ export function Away() {
   }, [!away]);
   // Waking (or leaving) starts again at the top: what's asking, else what's done.
   useEffect(() => {
-    setPicked(0);
+    setPicked(Math.max(0, sessions.findIndex((s) => s.state === "needs")));
     if (!away) setListed(false);
   }, [away?.wake, !away]);
 
@@ -88,11 +96,18 @@ export function Away() {
       <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-[calc(var(--cell-h)*1.5)] bg-black text-muted-foreground">
         {sessions.length ? (
           <>
-            <div className="flex gap-2ch text-[1.5em] leading-[1.5]">
-              {sessions.map((s) => (
-                <span key={`${s.page}:${s.buf}`} className={cn(COLOR[s.state], s.state === "working" && "animate-breathe")}>
-                  {GLYPH[s.state]}
-                </span>
+            <div className="grid grid-cols-[auto_auto] items-baseline gap-x-3ch">
+              {groups.map((g) => (
+                <Fragment key={g.project}>
+                  <span className="max-w-[24ch] truncate text-right">{g.project}</span>
+                  <div className="flex gap-2ch text-[1.5em] leading-[1.5]">
+                    {g.sessions.map((s) => (
+                      <span key={`${s.page}:${s.buf}`} className={cn(COLOR[s.state], s.state === "working" && "animate-breathe")}>
+                        {GLYPH[s.state]}
+                      </span>
+                    ))}
+                  </div>
+                </Fragment>
               ))}
             </div>
             <span>{counts || "all idle"}</span>
@@ -125,16 +140,26 @@ export function Away() {
       )}
       <ol className="w-[80ch] max-w-[calc(100%-4ch)]">
         {sessions.length === 0 && <li className="text-muted-foreground">no Claude Code sessions</li>}
-        {sessions.map((s, i) => (
-          <li
-            key={`${s.page}:${s.buf}`}
-            className={cn("grid grid-cols-[3ch_16ch_1fr_10ch_6ch]", i === picked && "bg-selection")}
-          >
-            <span className={COLOR[s.state]}>{GLYPH[s.state]}</span>
-            <span className="truncate">{s.project}</span>
-            <span className="truncate text-muted-foreground">{s.name}</span>
-            <span className={COLOR[s.state]}>{WORD[s.state]}</span>
-            <span className="text-right text-muted-foreground">{ago(now - skew - s.at)}</span>
+        {groups.map((g, n) => (
+          <li key={g.project} className={cn(n > 0 && "pt-row")}>
+            <span className="font-bold">{g.project}</span>
+            <ol>
+              {g.sessions.map((s) => {
+                const i = sessions.indexOf(s);
+                return (
+                  <li
+                    key={`${s.page}:${s.buf}`}
+                    className={cn("grid grid-cols-[2ch_3ch_1fr_10ch_6ch]", i === picked && "bg-selection")}
+                  >
+                    <span />
+                    <span className={COLOR[s.state]}>{GLYPH[s.state]}</span>
+                    <span className="truncate">{s.name}</span>
+                    <span className={COLOR[s.state]}>{WORD[s.state]}</span>
+                    <span className="text-right text-muted-foreground">{ago(now - skew - s.at)}</span>
+                  </li>
+                );
+              })}
+            </ol>
           </li>
         ))}
       </ol>

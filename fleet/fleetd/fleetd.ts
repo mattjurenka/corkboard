@@ -14,6 +14,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync,
 import { join } from "node:path";
 import { manifest, schedule, SPAWNS, spawns, tokenFor, write, type Manifest, type Spawn } from "./fleet";
 import { Queue } from "./queue";
+import { end, message, post, serveSessions } from "./sessions";
 import { CLOUD } from "../../bridge/cloud";
 
 const now = () => new Date().toISOString();
@@ -44,6 +45,10 @@ async function start(m: Manifest, s: Spawn, slot: string) {
   empty(sl.shareDir);
   empty(sl.outboxDir);
   writeFileSync(join(sl.shareDir, "task.md"), s.remote ? s.task + cardNote(s) : s.task);
+  if (s.interactive) {
+    writeFileSync(join(sl.shareDir, "session"), "");
+    if (s.task) post(sl.shareDir, message(s.task + (s.remote ? sessionNote(s) : "")));
+  }
   copyFileSync(token, join(sl.shareDir, "claude-token"));
   if (s.remote?.token) {
     const mcp = { mcpServers: { corkboard: { type: "http", url: `${CLOUD}/mcp`, headers: { Authorization: `Bearer ${s.remote.token}` } } } };
@@ -57,6 +62,12 @@ async function start(m: Manifest, s: Spawn, slot: string) {
   const r = await run(["systemctl", "start", "--no-block", sl.unit]);
   if (!r.ok) throw new Error(`couldn't start ${sl.unit}: ${r.out}`);
 }
+
+const sessionNote = (s: Spawn) => `
+
+---
+This session is corkboard card ${s.remote!.card} on the ${s.remote!.board} board, and you are its agent, ${s.remote!.agent}. The corkboard MCP server is connected for it.
+`;
 
 const cardNote = (s: Spawn) => `
 
@@ -84,11 +95,17 @@ async function tick() {
     if (s.state !== "running") continue;
     const unit = m.slots[s.slot!]?.unit;
     if (unit && active.has(unit)) {
-      if (s.stopRequested) await run(["systemctl", "stop", "--no-block", unit]);
+      // A session is asked to finish first, so its work comes back; one
+      // that hasn't in a couple of minutes is stopped as a task is.
+      if (s.stopRequested && s.interactive && !s.ending) {
+        end(m, s);
+        write({ ...s, ending: now() });
+      } else if (s.stopRequested && (!s.interactive || Date.now() - Date.parse(s.ending!) > 120_000)) await run(["systemctl", "stop", "--no-block", unit]);
       continue;
     }
     const exit = collect(m, s);
-    const state = s.stopRequested ? "stopped" : exit === 0 ? "done" : "failed";
+    // A session asked to finish that did is done, not stopped.
+    const state = s.stopRequested && !(s.interactive && exit === 0) ? "stopped" : exit === 0 ? "done" : "failed";
     write({ ...s, state, exit, ended: now(), error: exit === undefined && !s.stopRequested ? "the slot stopped without finishing the task (journalctl -u " + unit + ")" : s.error });
     s.state = state;
   }
@@ -114,6 +131,7 @@ async function tick() {
 console.log("fleetd: watching", SPAWNS);
 const queue = new Queue();
 queue.start();
+serveSessions();
 for (;;) {
   await tick().catch((e) => console.error("fleetd:", e));
   await queue.step(await activeUnits(manifest()).catch(() => undefined));

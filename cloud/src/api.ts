@@ -16,11 +16,17 @@
 //   POST  /api/boards/:board/cards/:id/lease { agent }: the agent is alive; { until } or null (board.ts's touch)
 //   POST  /api/boards/:board/import          { cards: [...] } with their ids, times and logs; empty boards only
 //   GET   /api/live                          WebSocket: { type: "plan", plan } on every plan change,
-//                                            { type: "chat", message } on every chat message
+//                                            { type: "chat", message } on every chat message, and the
+//                                            fleet's; ?bridge=<id>&machine= for a bridge's (user.ts)
 //   GET   /api/chat                          the chat with Pepper, oldest first: ?after=id, else the newest 100
 //   POST  /api/chat                          { text }: the user says something to Pepper
+//   GET   /api/sessions                      each connected bridge, with its pages' Claude Code sessions
+//   GET   /api/sessions/:bridge/:key         { lines }: what the session's terminal shows
+//   POST  /api/sessions/:bridge/:key/say     { text?, keys? }: typed into it, the keys after the text
+//   GET   /api/sessions/:bridge/:key/attach  WebSocket: its conversation as it goes (user.ts)
 //   GET   /api/notes                        ?q= to search, ?kind=, ?limit=
 //   GET, PUT, DELETE /api/notes/:id          PUT { kind, title, body, path?, version? }
+//   GET   /api/goals                         the goal notes, read into their parts (goals.ts)
 //   POST  /api/memory/entries                { entries: [{ day, at, who, text, key }] }: a log written
 //                                            elsewhere, each entry added once
 //   GET   /api/memory/vectors                { on, queued, embedded }: how far embedding has got
@@ -33,10 +39,18 @@
 //   POST  /api/tokens                        a card token for an agent: { board, card, agent }
 //   POST  /api/tokens/pepper                 a token for Pepper's session: the goals, besides what assistant sees
 //   POST  /api/tokens/brain                  { brain }: a token for another brain's agents, in its memory
+//   POST  /api/tokens/machine                { environment }: a server's token, until revoked: this
+//                                            API but tickets, export and import, and of the fleet
+//                                            and sessions only that environment's
 //   POST  /api/tokens/revoke                 { token }
 //   /api/spawns, /api/fleet/environments     the fleet's queue (fleet.ts)
+//   POST  /api/workspace/tickets             { bridge, board }: { url } that opens the board on that bridge's page
+//   POST  /api/workspace/redeem              { bridge, ticket }: the bridge, for the board: { key, name, root, remotes }
+//   /api/git                                 the user's Forgejo repositories, read-only (git.ts)
+//   GET   /api/export                      the whole account, to move it to another Worker
+//   POST  /api/import                      that export, into an account with no boards yet
 //
-// All of it needs the owner scope. /mcp (mcp.ts) is behind the same token
+// All of it needs the owner scope or a machine token. /mcp (mcp.ts) is behind the same token
 // check, and takes owner and assistant tokens, card tokens and Pepper's.
 //
 // A brain's memory (memory.ts), for its sessions' hooks, with any token but
@@ -48,12 +62,16 @@
 
 import { insufficientScope, type OAuthResourceContext } from "@cloudflare/workers-oauth-provider";
 import { Invalid, cardId, fields, imported, logEntry } from "./cards";
-import type { Result } from "./board";
+import type { BoardInfo, Result } from "./board";
+import type { Dump } from "./dump";
 import { CARD_TOKEN, type Env, type Props } from "./index";
 import { type Grant, brainOf, hiddenFor, mcp, memoryOf } from "./mcp";
 import { blocks, chatText, date, note, noteId } from "./plans";
 import { BRAINS, type Brain } from "./memory";
 import { fleetRoutes } from "./fleet";
+import { gitRoutes } from "./git";
+import { goals } from "./goals";
+import { type Answer, MACHINE_HEADER } from "./user";
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const error = (status: number, message: string, extra: object = {}) => json({ error: message, ...extra }, status);
@@ -63,7 +81,8 @@ function reply<T>(result: Result<T>, status = 200): Response {
   return error(result.status, result.error, result.card ? { card: result.card } : result.plan ? { plan: result.plan } : result.note ? { note: result.note } : {});
 }
 
-// A board key is a local project path with / as - (corkboard's path_key).
+// A board key is the local project path it was made at, with / as -
+// (corkboard's path_key); clones elsewhere find it by its first commit.
 const BOARD_KEY = /^[A-Za-z0-9._-]{1,128}$/;
 
 const ROUTE = /^\/api\/boards(?:\/([^/]+)(?:\/cards(?:\/([^/]+)(?:\/(log|lease|archive))?)?|\/(live|import))?)?$/;
@@ -79,13 +98,25 @@ async function body(request: Request): Promise<Record<string, unknown>> {
   return value as Record<string, unknown>;
 }
 
-function boardInfo(key: string, input: Record<string, unknown>) {
-  const { name = key, root = null, ...rest } = input;
+// A name left out is the board's own, or its key when it's new. environment:
+// the machine root is on (as its fleetd names it), for fleetd there to work
+// in that clone. remotes: its project's git remotes, which another
+// environment clones it from.
+function boardInfo(key: string, input: Record<string, unknown>, had?: BoardInfo) {
+  const { name = had?.name ?? key, root = null, commit = null, environment = null, remotes, ...rest } = input;
   if (Object.keys(rest).length) throw new Invalid(`unknown field ${Object.keys(rest)[0]}`);
   if (typeof name !== "string" || !name.trim()) throw new Invalid("name must be a non-empty string");
   if (root !== null && typeof root !== "string") throw new Invalid("root must be a path or null");
-  return { key, name: name.trim(), root };
+  if (commit !== null && (typeof commit !== "string" || !COMMIT.test(commit))) throw new Invalid("commit must be a commit hash");
+  if (environment !== null && typeof environment !== "string") throw new Invalid("environment must be a name");
+  if (remotes !== undefined && !(Array.isArray(remotes) && remotes.length <= 8 && remotes.every((r) => typeof r === "string" && REMOTE.test(r))))
+    throw new Invalid("remotes must be a list of up to 8 git URLs");
+  return { info: { key, name: name.trim(), root, commit, remotes: remotes as string[] | undefined }, environment };
 }
+
+const COMMIT = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+// A URL or scp-like address git clones from, not an option or a local path.
+const REMOTE = /^(https?:\/\/|ssh:\/\/|git:\/\/|[\w.-]+@[\w.-]+:)[^\s]{1,500}$/;
 
 async function route(request: Request, env: Env, user: string): Promise<Response> {
   const m = new URL(request.url).pathname.match(ROUTE);
@@ -96,7 +127,7 @@ async function route(request: Request, env: Env, user: string): Promise<Response
 
   if (key === undefined) {
     if (method !== "GET") return error(405, "method not allowed");
-    return json(await users.boards());
+    return json(await users.boards(new URL(request.url).searchParams.get("commit") ?? undefined));
   }
   if (!BOARD_KEY.test(key)) return error(400, `bad board key ${key}`);
   const board = env.BOARD.get(env.BOARD.idFromName(`${user}/${key}`));
@@ -116,10 +147,11 @@ async function route(request: Request, env: Env, user: string): Promise<Response
       return new Response(null, { status: 204 });
     }
     if (method !== "PUT") return error(405, "method not allowed");
-    const info = boardInfo(key, await body(request));
+    const { info, environment } = boardInfo(key, await body(request), await users.board(key));
     await board.describe(info.name, info.root);
     await users.remember(info);
-    return json(info);
+    if (environment && info.root) await users.place(key, environment, info.root);
+    return json((await users.board(key)) ?? info);
   }
   if (!rawId) {
     if (method === "GET") {
@@ -248,6 +280,45 @@ async function chat(request: Request, users: Users): Promise<Response> {
   return json(await users.post("matt", chatText((await body(request)).text)), 201);
 }
 
+// The keys a session can be sent besides text (nvim/lua/corkboard/away.lua's).
+const KEYS = ["enter", "esc", "up", "down", "tab", "shift-tab", "ctrl-c"];
+
+// MACHINE_HEADER is set here only, never passed on from the client.
+function asMachine(request: Request, machine: string | undefined): Request {
+  const r = new Request(request);
+  r.headers.delete(MACHINE_HEADER);
+  if (machine) r.headers.set(MACHINE_HEADER, machine);
+  return r;
+}
+
+// machine: a machine token's environment, whose bridges are the only ones
+// it may watch or type into; the list it may see.
+async function sessions(request: Request, users: Users, machine?: string): Promise<Response> {
+  const m = new URL(request.url).pathname.match(/^\/api\/sessions(?:\/([\w-]{1,64})\/([\w.-]{1,64})(?:\/(say|attach))?)?$/);
+  if (!m) return error(404, "not found");
+  const [, bridge, key, say] = m;
+  if (bridge && machine && (await users.bridges()).find((b) => b.id === bridge)?.environment !== machine)
+    return error(403, `bridge ${bridge} isn't one of ${machine}'s`);
+  if (say === "attach") return users.fetch(asMachine(request, machine));
+  if (!bridge) return request.method === "GET" ? json(await users.bridges()) : error(405, "method not allowed");
+  const at = { key };
+  let r: Result<Answer>;
+  if (!say) {
+    if (request.method !== "GET") return error(405, "method not allowed");
+    r = await users.ask(bridge, { type: "screen", ...at });
+  } else {
+    if (request.method !== "POST") return error(405, "method not allowed");
+    const input = await body(request);
+    const text = input.text ?? "";
+    if (typeof text !== "string" || text.length > 20_000) throw new Invalid("text must be a string, under 20000 characters");
+    const keys = input.keys ?? [];
+    if (!Array.isArray(keys) || keys.length > 16 || keys.some((k) => !KEYS.includes(k))) throw new Invalid(`keys must be a list of ${KEYS.join(", ")}`);
+    if (!text && !keys.length) throw new Invalid("say something: text, keys or both");
+    r = await users.ask(bridge, { type: "say", ...at, text, keys });
+  }
+  return reply(r);
+}
+
 async function plans(request: Request, users: Users): Promise<Response> {
   const m = new URL(request.url).pathname.match(/^\/api\/plans\/([^/]+)(?:\/(say|accept|discard|day))?$/);
   if (!m) return error(404, "not found");
@@ -285,27 +356,39 @@ async function plans(request: Request, users: Users): Promise<Response> {
 const CARD_TOKEN_TTL = 7 * 24 * 3600;
 
 const hex = (buf: ArrayBuffer) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-export const tokenKey = async (token: string) =>
-  `card-token:${hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))}`;
+const sha256 = async (s: string) => hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)));
+export const tokenKey = async (token: string) => `card-token:${await sha256(token)}`;
+const random = () => btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
-async function mintToken(env: Env, props: Props, grant: NonNullable<Props["grant"]>) {
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  const token = CARD_TOKEN + btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+// ttl null: until it's revoked (a machine's, which has no one to renew it).
+async function mintToken(env: Env, props: Props, grant: NonNullable<Props["grant"]>, ttl: number | null = CARD_TOKEN_TTL) {
+  const token = CARD_TOKEN + random();
   const minted: Props = { userId: props.userId, email: props.email, grant };
-  await env.OAUTH_KV.put(await tokenKey(token), JSON.stringify(minted), { expirationTtl: CARD_TOKEN_TTL });
-  return { token, expires_at: new Date(Date.now() + CARD_TOKEN_TTL * 1000).toISOString() };
+  await env.OAUTH_KV.put(await tokenKey(token), JSON.stringify(minted), ttl === null ? {} : { expirationTtl: ttl });
+  return { token, expires_at: ttl === null ? null : new Date(Date.now() + ttl * 1000).toISOString() };
 }
 
 const mint = async (env: Env, props: Props, grant: NonNullable<Props["grant"]>) => json(await mintToken(env, props, grant), 201);
 
-async function tokens(request: Request, env: Env, props: Props): Promise<Response> {
+const ENVIRONMENT = /^[\w.-]{1,64}$/;
+
+// machine: the environment, when a machine token asks. It mints and revokes
+// the tokens its agents use, but no machine's.
+async function tokens(request: Request, env: Env, props: Props, machine?: string): Promise<Response> {
   const path = new URL(request.url).pathname;
   if (request.method !== "POST") return error(405, "method not allowed");
   const input = await body(request);
   if (path === "/api/tokens/revoke") {
     if (typeof input.token !== "string") throw new Invalid("token must be the token to revoke");
-    await env.OAUTH_KV.delete(await tokenKey(input.token));
+    const key = await tokenKey(input.token);
+    if (machine && (await env.OAUTH_KV.get<Props>(key, "json"))?.grant?.kind === "machine") return error(403, "only the owner revokes a machine's token");
+    await env.OAUTH_KV.delete(key);
     return new Response(null, { status: 204 });
+  }
+  if (path === "/api/tokens/machine") {
+    if (machine) return error(403, "only the owner mints a machine's token");
+    if (typeof input.environment !== "string" || !ENVIRONMENT.test(input.environment)) throw new Invalid("environment must be the machine's environment name");
+    return json(await mintToken(env, props, { kind: "machine", environment: input.environment, agent: input.environment }, null), 201);
   }
   if (path === "/api/tokens/pepper") return mint(env, props, { kind: "pepper", agent: "pepper" });
   if (path === "/api/tokens/brain") {
@@ -325,10 +408,90 @@ async function tokens(request: Request, env: Env, props: Props): Promise<Respons
   return mint(env, props, { kind: "card", board: key, card, agent: agent.trim() });
 }
 
+// Opening a board on another machine's bridge, from the portal (../portal):
+// a ticket for one board on one bridge, good once and for two minutes, which
+// that bridge redeems (bridge/server.ts's /open) before it serves its page
+// with its own token. The portal's token never leaves this origin.
+const TICKET_TTL = 120;
+type Ticket = { userId: string; bridge: string; board: string };
+
+// A machine redeems tickets for its own bridges, and makes none: that's the
+// portal's, signed in as the owner.
+async function workspace(request: Request, env: Env, props: Props, users: Users, machine?: string): Promise<Response> {
+  const path = new URL(request.url).pathname;
+  if (request.method !== "POST") return error(405, "method not allowed");
+  const input = await body(request);
+  if (typeof input.bridge !== "string") throw new Invalid("bridge must be a bridge id");
+  const bridge = (await users.bridges()).find((b) => b.id === input.bridge);
+  if (machine && (path === "/api/workspace/tickets" || bridge?.environment !== machine)) return error(403, "not with a machine token");
+  if (path === "/api/workspace/tickets") {
+    const { board: key } = input;
+    if (typeof key !== "string" || !BOARD_KEY.test(key)) throw new Invalid("board must be a board key");
+    if (!(await users.board(key))) return error(404, `no board ${key}`);
+    if (!bridge?.url) return error(404, `bridge ${input.bridge} isn't connected, or serves no page`);
+    const ticket = random();
+    await env.OAUTH_KV.put(`ticket:${await sha256(ticket)}`, JSON.stringify({ userId: props.userId, bridge: bridge.id, board: key } satisfies Ticket), {
+      expirationTtl: TICKET_TTL,
+    });
+    return json({ url: `${bridge.url}/open?ticket=${ticket}` }, 201);
+  }
+  if (path === "/api/workspace/redeem") {
+    if (typeof input.ticket !== "string") throw new Invalid("ticket must be the ticket");
+    const at = `ticket:${await sha256(input.ticket)}`;
+    const ticket = await env.OAUTH_KV.get<Ticket>(at, "json");
+    if (!ticket || ticket.userId !== props.userId || ticket.bridge !== input.bridge) return error(403, "that ticket is used, expired, or for another bridge");
+    await env.OAUTH_KV.delete(at);
+    const board = await users.board(ticket.board);
+    if (!board) return error(404, `no board ${ticket.board}`);
+    // Its clone there, if that environment has one.
+    const environment = bridge?.environment;
+    const root = environment && board.environments?.includes(environment) ? await users.rootIn(board.key, environment) : null;
+    return json({ key: board.key, name: board.name, root, remotes: board.remotes ?? [] });
+  }
+  return error(404, "not found");
+}
+
+// The whole account, to move it to a Worker on another Cloudflare account,
+// where Durable Objects can't follow: the user's object, each board's and
+// each brain's memory, table by table (dump.ts). The other Worker takes it
+// only while it has no boards. Sign-ins don't move: every client signs in
+// there again.
+type Account = { version: 1; user: Dump; boards: Record<string, Dump>; memory: Partial<Record<Brain, Dump>> };
+
+async function exportAccount(env: Env, userId: string, users: Users): Promise<Account> {
+  const boards: Account["boards"] = {};
+  for (const b of await users.boards()) boards[b.key] = await env.BOARD.get(env.BOARD.idFromName(`${userId}/${b.key}`)).dump();
+  const memory: Account["memory"] = {};
+  for (const brain of BRAINS) memory[brain] = await env.MEMORY.get(env.MEMORY.idFromName(`${userId}/${brain}`)).dump();
+  return { version: 1, user: await users.dump(), boards, memory };
+}
+
+async function importAccount(env: Env, userId: string, users: Users, input: Record<string, unknown>): Promise<Response> {
+  const a = input as Partial<Account>;
+  if (a.version !== 1 || !a.user || typeof a.boards !== "object" || typeof a.memory !== "object") throw new Invalid("expected an export (GET /api/export)");
+  const counts: Record<string, number> = {};
+  const step = async (what: string, r: Result<number>) => {
+    if (!r.ok) throw Object.assign(new Error(`${what}: ${r.error}`), { status: r.status, counts });
+    counts[what] = r.value;
+  };
+  try {
+    await step("user", await users.restore(a.user));
+    for (const [key, d] of Object.entries(a.boards!)) {
+      if (!BOARD_KEY.test(key)) throw new Invalid(`bad board key ${key}`);
+      await step(`board ${key}`, await env.BOARD.get(env.BOARD.idFromName(`${userId}/${key}`)).restore(d));
+    }
+    for (const [brain, d] of Object.entries(a.memory!)) await step(`memory ${brainNamed(brain)}`, await env.MEMORY.get(env.MEMORY.idFromName(`${userId}/${brain}`)).restore(d!));
+  } catch (e: any) {
+    if (e instanceof Invalid) throw e;
+    return error(e.status ?? 500, e.message, { restored: counts });
+  }
+  return json({ restored: counts }, 201);
+}
+
 // Who's asking, for the MCP server: a card or Pepper token says; OAuth
 // tokens by scope.
 function grantOf(ctx: OAuthResourceContext<Props>): Grant | undefined {
-  if (ctx.props.grant) return ctx.props.grant;
+  if (ctx.props.grant) return ctx.props.grant.kind === "machine" ? undefined : ctx.props.grant;
   if (ctx.auth.scope.includes("owner")) return { kind: "owner", agent: "claude" };
   if (ctx.auth.scope.includes("assistant")) return { kind: "assistant", agent: "assistant" };
 }
@@ -352,19 +515,31 @@ export const api = {
         throw e;
       }
     }
-    // A card token is only for the MCP server.
-    if (ctx.props.grant || !ctx.auth.scope.includes("owner")) return insufficientScope(ctx.auth, ["owner"]);
+    // A card token is only for the MCP server. A machine's is the owner's
+    // API less what reaches past its own environment.
+    const machine = ctx.props.grant?.kind === "machine" ? ctx.props.grant.environment : undefined;
+    if (!machine && (ctx.props.grant || !ctx.auth.scope.includes("owner"))) return insufficientScope(ctx.auth, ["owner"]);
     try {
-      if (path.startsWith("/api/tokens")) return await tokens(request, env, ctx.props);
-      if (path.startsWith("/api/spawns") || path.startsWith("/api/fleet/")) return await fleetRoutes(request, env, ctx.props, () => body(request), mintToken);
+      if (path.startsWith("/api/tokens")) return await tokens(request, env, ctx.props, machine);
+      if (path.startsWith("/api/spawns") || path.startsWith("/api/fleet/")) return await fleetRoutes(request, env, ctx.props, () => body(request), mintToken, machine);
       const users = env.USER.get(env.USER.idFromName(ctx.props.userId));
-      if (path === "/api/live") return users.fetch(request);
+      if (path === "/api/live") return users.fetch(asMachine(request, machine));
       const brain = brainNamed(new URL(request.url).searchParams.get("brain") ?? "pepper");
       if (path.startsWith("/api/notes")) return await notes(request, await memoryOf(env, ctx.props.userId, brain));
+      if (path === "/api/goals") {
+        if (request.method !== "GET") return error(405, "method not allowed");
+        return json(goals(await (await memoryOf(env, ctx.props.userId, brain)).goalNotes()));
+      }
       if (path === "/api/memory/entries") return await importEntries(request, await memoryOf(env, ctx.props.userId, brain));
       if (path === "/api/memory/vectors") return json(await (await memoryOf(env, ctx.props.userId, brain)).vectorState());
       if (path.startsWith("/api/plans/")) return await plans(request, users);
       if (path === "/api/chat") return await chat(request, users);
+      if (path.startsWith("/api/sessions")) return await sessions(request, users, machine);
+      if (path.startsWith("/api/workspace/")) return await workspace(request, env, ctx.props, users, machine);
+      if (path === "/api/git" || path.startsWith("/api/git/")) return machine ? error(403, "not with a machine token") : await gitRoutes(request, env);
+      if ((path === "/api/export" || path === "/api/import") && machine) return error(403, "not with a machine token");
+      if (path === "/api/export") return request.method === "GET" ? json(await exportAccount(env, ctx.props.userId, users)) : error(405, "method not allowed");
+      if (path === "/api/import") return request.method === "POST" ? await importAccount(env, ctx.props.userId, users, await body(request)) : error(405, "method not allowed");
       return await route(request, env, ctx.props.userId);
     } catch (e) {
       if (e instanceof Invalid) return error(400, e.message);

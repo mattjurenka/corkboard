@@ -7,6 +7,9 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAll = f: nixpkgs.lib.genAttrs systems (s: f nixpkgs.legacyPackages.${s});
+      # Pepper's VM on the droplet: its addresses, shared by the guest and
+      # the droplet's half (fleet/pepper/).
+      pepperPlan = import ./fleet/plan.nix { name = "pepper-vm"; interface = "pep0"; octet = 89; mac = "52:54:00:c1:a0:30"; };
       # Plugins the bridge puts on Neovim's runtimepath.
       pluginPath = pkgs: pkgs.lib.concatStringsSep ":" [ pkgs.vimPlugins.snacks-nvim ];
     in
@@ -24,6 +27,10 @@
         # Claude Code hooks that give a guest's sessions its brain's memory.
         memoryHooks = import ./fleet/memory-hooks.nix;
         inherit (import ./fleet/lib.nix { inherit (nixpkgs) lib; }) mkFleet capabilities;
+      };
+
+      nixosConfigurations.pepper-vm = nixpkgs.lib.nixosSystem {
+        modules = [ (import ./fleet/pepper/guest.nix { plan = pepperPlan; memoryHooks = import ./fleet/memory-hooks.nix; }) ];
       };
 
       checks = forAll (pkgs: {
@@ -98,7 +105,7 @@
           dontFixup = true;
           outputHashMode = "recursive";
           outputHash = {
-            x86_64-linux = "sha256-ThtesmVbru/WWHaKp5LUrHRXq4eR6Zpy/3NR9pMVG8c=";
+            x86_64-linux = "sha256-X2ponyGENHb5U2owd/x1tCr23VayW2thj1GQMnSdMLA=";
           }.${pkgs.stdenv.hostPlatform.system} or pkgs.lib.fakeHash;
         };
 
@@ -182,20 +189,33 @@
           version = "0.1.0";
           src = pkgs.lib.fileset.toSource {
             root = ./.;
-            fileset = pkgs.lib.fileset.unions [ ./fleet/fleetd/fleet.ts ./fleet/fleetd/fleetd.ts ./fleet/fleetd/cli.ts ./fleet/fleetd/queue.ts ./bridge/cloud.ts ];
+            fileset = pkgs.lib.fileset.unions [ ./fleet/fleetd/fleet.ts ./fleet/fleetd/fleetd.ts ./fleet/fleetd/cli.ts ./fleet/fleetd/queue.ts ./fleet/fleetd/sessions.ts ./bridge/cloud.ts ./bridge/host.ts ./bridge/sessions.ts ./bridge/transcript.ts ./fleet/pepper/pepperd.ts ];
           };
           nativeBuildInputs = [ pkgs.makeWrapper ];
           installPhase = ''
             share=$out/share/corkboard-fleet
-            mkdir -p $share/fleet/fleetd $share/bridge
+            mkdir -p $share/fleet/fleetd $share/fleet/pepper $share/bridge
             cp fleet/fleetd/*.ts $share/fleet/fleetd/
-            cp bridge/cloud.ts $share/bridge/
+            cp fleet/pepper/pepperd.ts $share/fleet/pepper/
+            cp bridge/cloud.ts bridge/host.ts bridge/sessions.ts bridge/transcript.ts $share/bridge/
             makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-fleetd \
               --add-flags $share/fleet/fleetd/fleetd.ts
             makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-fleet \
               --add-flags $share/fleet/fleetd/cli.ts
+            makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-pepperd \
+              --add-flags $share/fleet/pepper/pepperd.ts
           '';
           meta.mainProgram = "corkboard-fleet";
+        };
+
+        # Pepper's VM on the droplet (fleet/pepper/guest.nix), and the
+        # droplet's half of it, which installs it there (fleet/pepper/pepper.nix).
+        pepper-vm = self.nixosConfigurations.pepper-vm.config.system.build.vm;
+        pepper = import ./fleet/pepper/pepper.nix {
+          inherit pkgs fleet;
+          inherit (pkgs) lib;
+          plan = pepperPlan;
+          vm = pepper-vm;
         };
 
         # The Neovim plugin alone, for a Neovim the bridge runs on another

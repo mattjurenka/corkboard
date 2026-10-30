@@ -4,6 +4,8 @@
 -- Claude Code logs every session to ~/.claude/projects/<cwd with every
 -- non-alphanumeric as ->/<session>.jsonl, and each subagent to
 -- <session>/subagents/agent-<id>.jsonl beside a .meta.json naming its type.
+-- A project's sessions are in several: one for each directory of its
+-- repository and of its worktrees that Claude Code ran in.
 --
 -- The view is the agent://usage buffer: a plain listing with the browser's
 -- HTML drawn over it, like the board. It lists the sessions active in a
@@ -11,6 +13,7 @@
 -- line selects one.
 
 local pinned = require("corkboard.pinned")
+local util = require("corkboard.util")
 local transcript = require("corkboard.usage.transcript")
 
 local M = {}
@@ -32,6 +35,63 @@ local function project_dir(cwd)
   return vim.fs.joinpath(config, "projects", (cwd:gsub("[^%w]", "-")))
 end
 
+-- The cwd under place that a log directory's sessions ran in, if they did:
+-- its name can't be read back (every non-alphanumeric is -), so the first
+-- entry naming a cwd in a few of its logs says.
+local function cwd_under(dir, place)
+  local checked = 0
+  for name, kind in vim.fs.dir(dir) do
+    if kind == "file" and name:match("%.jsonl$") then
+      checked = checked + 1
+      if checked > 10 then return end
+      local f = io.open(vim.fs.joinpath(dir, name))
+      local cwd
+      for _ = 1, f and 20 or 0 do
+        local entry = f:read("*l")
+        cwd = entry and entry:match('"cwd":"([^"]+)"')
+        if not entry or cwd then break end
+      end
+      if f then f:close() end
+      if cwd and cwd:sub(1, #place + 1) == place .. "/" then return cwd end
+    end
+  end
+end
+
+-- The project's log directories, each with the cwd its sessions ran in: the
+-- repository's, its subdirectories', and its worktrees' (card worktrees
+-- among them, removed or not). Looked for again every half minute.
+local log_dirs_of = {} -- root -> { at, dirs }
+local function log_dirs(root)
+  local seen = log_dirs_of[root]
+  if seen and vim.uv.now() - seen.at < 30000 then return seen.dirs end
+  local places = { root, util.data_dir("worktrees", util.path_key(root)) }
+  local ok, out = util.git({ "worktree", "list", "--porcelain" }, root)
+  if ok then
+    for path in out:gmatch("worktree ([^\n]+)") do
+      if path ~= root then table.insert(places, path) end
+    end
+  end
+  local dirs = {}
+  local base = vim.fs.dirname(project_dir(root))
+  if vim.fn.isdirectory(base) == 1 then
+    for name, kind in vim.fs.dir(base) do
+      for _, place in ipairs(kind == "directory" and places or {}) do
+        local slug = vim.fs.basename(project_dir(place))
+        local dir = vim.fs.joinpath(base, name)
+        -- A subdirectory's slug starts with the place's, but so does a
+        -- sibling's (proj, proj-old): its logs say which.
+        local cwd = name == slug and place or (name:sub(1, #slug + 1) == slug .. "-" and cwd_under(dir, place))
+        if cwd then
+          table.insert(dirs, { dir = dir, cwd = cwd })
+          break
+        end
+      end
+    end
+  end
+  log_dirs_of[root] = { at = vim.uv.now(), dirs = dirs }
+  return dirs
+end
+
 local function read_meta(path)
   local ok, lines = pcall(vim.fn.readfile, path)
   if not ok then return {} end
@@ -42,15 +102,14 @@ end
 -- The sessions in this project written to since `since` (any, when nil),
 -- newest first, each with its subagents and whether any of its logs grew;
 -- and whether any log grew at all.
-local function scan(cwd, since)
-  local dir = project_dir(cwd)
+local function scan(root, since)
   local files = {}
-  if vim.fn.isdirectory(dir) == 1 then
-    for name, kind in vim.fs.dir(dir) do
+  for _, d in ipairs(log_dirs(root)) do
+    for name, kind in vim.fs.dir(d.dir) do
       if kind == "file" and name:match("%.jsonl$") then
-        local path = vim.fs.joinpath(dir, name)
+        local path = vim.fs.joinpath(d.dir, name)
         local stat = vim.uv.fs_stat(path)
-        if stat then table.insert(files, { path = path, id = name:gsub("%.jsonl$", ""), mtime = stat.mtime.sec }) end
+        if stat then table.insert(files, { path = path, dir = d.dir, cwd = d.cwd, id = name:gsub("%.jsonl$", ""), mtime = stat.mtime.sec }) end
       end
     end
   end
@@ -59,13 +118,13 @@ local function scan(cwd, since)
   local sessions, changed = {}, false
   for _, f in ipairs(files) do
     if since and f.mtime < since then break end
-    local log, grew = transcript.read(f.path, cwd)
+    local log, grew = transcript.read(f.path, f.cwd)
     local session = { id = f.id, log = log, agents = {}, grew = grew }
-    local sub = vim.fs.joinpath(dir, f.id, "subagents")
+    local sub = vim.fs.joinpath(f.dir, f.id, "subagents")
     if vim.fn.isdirectory(sub) == 1 then
       for name, kind in vim.fs.dir(sub) do
         if kind == "file" and name:match("%.jsonl$") then
-          local alog, agrew = transcript.read(vim.fs.joinpath(sub, name), cwd)
+          local alog, agrew = transcript.read(vim.fs.joinpath(sub, name), f.cwd)
           session.grew = session.grew or agrew
           alog.meta = alog.meta or read_meta(vim.fs.joinpath(sub, (name:gsub("%.jsonl$", ".meta.json"))))
           table.insert(session.agents, alog)
@@ -95,7 +154,7 @@ function M.card_costs()
     local c = { tokens = 0, sessions = 0, today = 0 }
     for _, s in ipairs(list) do
       if s.transcript and vim.uv.fs_stat(s.transcript) then
-        local log = transcript.read(s.transcript, vim.fn.getcwd())
+        local log = transcript.read(s.transcript, util.project_root())
         local t = log.tokens
         c.sessions = c.sessions + 1
         c.tokens = c.tokens + t.input + t.write + t.read + t.output
@@ -149,6 +208,11 @@ local sort = "recent"
 -- view shows it in place of the selected session.
 local advice
 local show_advice = false
+-- Where h/j/k/l are: the session list, the session's rows (item, from 0,
+-- the one picked out as the mouse would hover it) or Pepper's advice
+-- (line, how far down it is read).
+local pane = "list"
+local item, line = 0, 0
 
 local function period_of(key)
   for i, p in ipairs(PERIODS) do
@@ -254,12 +318,24 @@ local function state()
   local periods = {}
   for _, p in ipairs(PERIODS) do table.insert(periods, { key = p.key, label = p.label }) end
   return {
-    root = vim.fn.getcwd(), selected = selected, sessions = list,
-    loading = warmed[vim.fn.getcwd()] ~= true or nil,
+    root = util.project_root(), selected = selected, sessions = list,
+    loading = warmed[util.project_root()] ~= true or nil,
     period = period, periods = periods, sort = sort, total = period_total(),
     advice = advice and { body = advice.body, updated = advice.updated } or nil, show_advice = show_advice,
     cards = cards, labels = labels,
+    pane = pane, item = pane == "detail" and item or nil, line = pane == "advice" and line or nil,
   }
+end
+
+-- The selected session's rows, in the order the browser draws them.
+local function item_count()
+  for _, session in ipairs(sessions) do
+    if session.id == selected then
+      local s = summary_of(session)
+      return #(s.categories or {}) + #s.cache.misses + #s.top + #s.agents
+    end
+  end
+  return 0
 end
 
 local function push_state()
@@ -268,7 +344,7 @@ end
 
 local function render_text()
   if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
-  local lines, map = { "Token usage  " .. vim.fn.getcwd(), "" }, {}
+  local lines, map = { "Token usage  " .. util.project_root(), "" }, {}
   table.insert(lines, string.format("SESSIONS (%d) · %s · by %s · %s      p period · s sort", #sessions,
     period == "all" and "all time" or ("last " .. period_of(period).label), sort, dollars(period_total())))
   for _, session in ipairs(sessions) do
@@ -278,10 +354,10 @@ local function render_text()
     map[#lines] = s.id
   end
   if #sessions == 0 then
-    if warmed[vim.fn.getcwd()] ~= true then
+    if warmed[util.project_root()] ~= true then
       table.insert(lines, "  reading session logs…")
     else
-      table.insert(lines, "  — no Claude Code sessions in " .. project_dir(vim.fn.getcwd())
+      table.insert(lines, "  — no Claude Code sessions in " .. util.project_root()
         .. (period ~= "all" and (" in the last " .. period_of(period).label) or ""))
     end
   end
@@ -501,6 +577,7 @@ end
 function M.show_advice(on)
   if on == nil then on = not show_advice end
   show_advice = on
+  if pane ~= "list" then pane = on and "advice" or "detail" end
   push_state()
   if on then vim.schedule(fetch_advice) end
 end
@@ -510,7 +587,7 @@ local function publish_hourly(cwd)
   hourly = hourly or assert(vim.uv.new_timer())
   if not hourly:is_active() then
     hourly:start(3600 * 1000, 3600 * 1000, vim.schedule_wrap(function()
-      publish(vim.fn.getcwd())
+      publish(util.project_root())
       fetch_advice()
     end))
   end
@@ -527,26 +604,25 @@ end
 local function warm(cwd)
   warmed[cwd] = false
   local paths = {}
-  local dir = project_dir(cwd)
-  if vim.fn.isdirectory(dir) == 1 then
-    for name, kind in vim.fs.dir(dir, { depth = 3 }) do
-      if kind == "file" and name:match("%.jsonl$") then table.insert(paths, vim.fs.joinpath(dir, name)) end
+  for _, d in ipairs(log_dirs(cwd)) do
+    for name, kind in vim.fs.dir(d.dir, { depth = 3 }) do
+      if kind == "file" and name:match("%.jsonl$") then table.insert(paths, { path = vim.fs.joinpath(d.dir, name), cwd = d.cwd }) end
     end
   end
   for _, list in pairs(require("corkboard.agents").card_sessions()) do
     for _, s in ipairs(list) do
-      if s.transcript then table.insert(paths, s.transcript) end
+      if s.transcript then table.insert(paths, { path = s.transcript, cwd = cwd }) end
     end
   end
   local i = 0
   local function step()
     i = i + 1
     if paths[i] then
-      pcall(transcript.read, paths[i], cwd)
+      pcall(transcript.read, paths[i].path, paths[i].cwd)
       return vim.defer_fn(step, 0)
     end
     warmed[cwd] = true
-    if vim.fn.getcwd() == cwd then M.push(true) end
+    if util.project_root() == cwd then M.push(true) end
     publish_hourly(cwd)
   end
   vim.defer_fn(step, 0)
@@ -554,7 +630,7 @@ end
 
 -- Re-read the logs; redraw and push when anything changed (or force).
 function M.push(force)
-  local cwd = vim.fn.getcwd()
+  local cwd = util.project_root()
   if not warmed[cwd] then
     if warmed[cwd] == nil then warm(cwd) end
     sessions, cards, labels, M.cwd = {}, {}, {}, nil
@@ -606,6 +682,10 @@ end
 -- A click on a session in the browser.
 function M.select(id, win)
   if win and vim.api.nvim_win_is_valid(win) then vim.api.nvim_set_current_win(win) end
+  if pane ~= "list" then
+    pane = "list"
+    push_state()
+  end
   local lnum = pinned.line_of(line_session, id)
   if lnum then vim.api.nvim_win_set_cursor(0, { lnum, 2 }) end
 end
@@ -624,14 +704,41 @@ local function tick()
   end
 end
 
+-- j/k: the next or previous session, the session's row, or further down
+-- or up Pepper's advice.
+local function down(dir)
+  if pane == "list" then return pinned.step(line_session, dir) end
+  if pane == "detail" then
+    item = math.max(0, math.min(item_count() - 1, item + dir))
+  else
+    local lines = advice and #vim.split(advice.body, "\n") or 0
+    line = math.max(0, math.min(lines - 1, line + dir))
+  end
+  push_state()
+end
+
+-- l: from the list into the session, then on to Pepper's advice; h back.
+local function across(dir)
+  local panes = { "list", "detail", "advice" }
+  local i = math.max(1, math.min(3, ({ list = 1, detail = 2, advice = 3 })[pane] + dir))
+  if panes[i] == pane then return end
+  pane = panes[i]
+  if pane == "detail" then item = 0 end
+  if pane == "advice" then line = 0 end
+  if pane ~= "list" then return M.show_advice(pane == "advice") end
+  push_state()
+end
+
 local function buffer()
   if buf and vim.api.nvim_buf_is_valid(buf) then return buf end
   timer = timer or assert(vim.uv.new_timer())
   buf = pinned.listing("agent://usage", "usage", {
-    j = { function() pinned.step(line_session, 1) end, "next session" },
-    k = { function() pinned.step(line_session, -1) end, "previous session" },
-    ["<Down>"] = { function() pinned.step(line_session, 1) end, "next session" },
-    ["<Up>"] = { function() pinned.step(line_session, -1) end, "previous session" },
+    j = { function() down(1) end, "next session or row" },
+    k = { function() down(-1) end, "previous session or row" },
+
+    l = { function() across(1) end, "into the session, then Pepper's advice" },
+    h = { function() across(-1) end, "back towards the sessions" },
+
     R = { function()
       M.push(true)
       vim.schedule(fetch_advice)

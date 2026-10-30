@@ -15,12 +15,12 @@
     "test:fleet": "bun test fleet/fleetd"
   },
   "dependencies": {
+    "@base-ui/react": "^1.9.0",
     "@msgpack/msgpack": "^3.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dompurify": "^3.4.17",
     "marked": "^18.1.1",
-    "radix-ui": "^1.8.1",
     "react": "19",
     "react-dom": "19",
     "tailwind-merge": "^3.7.0"

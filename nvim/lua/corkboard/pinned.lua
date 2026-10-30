@@ -124,10 +124,25 @@ function M.follow(buf, lines, id)
   end
 end
 
+-- The arrow for each of h/j/k/l.
+M.ARROWS = { h = "Left", j = "Down", k = "Up", l = "Right" }
+
+-- keys, with each arrow doing what its h/j/k/l does and each Alt+arrow what
+-- its Alt+h/j/k/l does, unless keys maps the arrow itself.
+function M.arrows(keys)
+  local out = vim.tbl_extend("force", {}, keys)
+  for key, arrow in pairs(M.ARROWS) do
+    out["<" .. arrow .. ">"] = out["<" .. arrow .. ">"] or keys[key]
+    out["<A-" .. arrow .. ">"] = out["<A-" .. arrow .. ">"] or keys["<A-" .. key .. ">"]
+  end
+  return out
+end
+
 -- A read-only listing buffer named name, shown as an HTML view. keys maps
--- lhs to { fn, desc }; on_select(id) runs when the cursor moves onto another
--- item.
+-- lhs to { fn, desc }, and the arrows go as h/j/k/l do (arrows above);
+-- on_select(id) runs when the cursor moves onto another item.
 function M.listing(name, view, keys, current, on_select)
+  keys = M.arrows(keys)
   local b = vim.api.nvim_create_buf(true, true)
   vim.api.nvim_buf_set_name(b, name)
   vim.bo[b].filetype = "corkboard"

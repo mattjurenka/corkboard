@@ -588,6 +588,13 @@ let
 
   spawnable = lib.attrNames (lib.filterAttrs (_: t: t.spawnable or false) cfg.templates);
 
+  # What the fleet view shows of a VM: where it is and what it may reach.
+  network = name: inst: {
+    address = plans.${name}.guestAddress or null;
+    inherit (inst) egress allowedDomains allowedDomainSuffixes;
+    routedEgress = map (r: { inherit (r) reason destinations tcpPorts udpPorts; }) inst.routedEgress;
+  };
+
   # What fleetd and corkboard-fleet read: the slots, the VMs that are always
   # there (they count against the budget while they run), the templates a
   # slot can take, and the budget itself.
@@ -598,14 +605,21 @@ let
         let vm = plans.${name}; in {
           inherit (vm) guestAddress stateDir shareDir outboxDir;
           unit = "${name}.service";
+          network = network name inst;
         })
       (lib.filterAttrs (_: inst: inst.slot) active);
     residents = lib.mapAttrs
-      (name: inst: {
-        unit = "${name}.service";
-        memory = inst.memoryMax;
-        brain = cfg.templates.${name}.brain or null;
-      })
+      (name: inst:
+        let t = cfg.templates.${name} or { }; in {
+          unit = "${name}.service";
+          memory = inst.memoryMax;
+          brain = t.brain or null;
+          account = t.account or null;
+          # Its capabilities' minimum; none asked for says nothing of the VM.
+          cores = if (t.cores or 0) > 0 then t.cores else null;
+          capNames = t.capNames or [ ];
+          network = network name inst;
+        })
       (lib.filterAttrs (_: inst: inst.headless && !inst.slot) active);
     templates = lib.mapAttrs
       (_: t: { inherit (t) memory cores needsApproval brain account capNames; })

@@ -26,3 +26,13 @@ export function load(): Skeleton | null {
     return null;
   }
 }
+
+// Each tab's windows as the page last saw them, by tab handle: while a tab
+// asked for is coming (State's switching), its windows show loading.
+const seen = new Map<number, Rect[]>();
+
+export function remember(tab: number, wins: Rect[]) {
+  seen.set(tab, wins.map(({ row, col, width, height }) => ({ row, col, width, height })));
+}
+
+export const windowsOf = (tab: number) => seen.get(tab);

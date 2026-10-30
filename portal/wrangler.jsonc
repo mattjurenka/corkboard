@@ -1,0 +1,15 @@
+// The portal's page, as its own Worker (OpenNext). It has no route of its
+// own: the API Worker (../cloud) owns portal.corkboard.fyi and hands it every
+// path that isn't the API's or sign-in's, over a service binding (PORTAL).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "corkboard-portal",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "workers_dev": false,
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  }
+}

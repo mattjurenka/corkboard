@@ -177,7 +177,7 @@ describe("an OAuth client", () => {
     const tools = body.result.tools;
     expect(tools[0].name).toBe("list_boards");
     expect(tools.find((t: any) => t.name === "read_card").inputSchema.required).toEqual(["board", "id"]);
-    expect(await tool(owner, "list_boards")).toEqual([{ key: BOARD, name: "corkboard", root: null }]);
+    expect(await tool(owner, "list_boards")).toEqual([{ key: BOARD, name: "corkboard", root: null, commit: null, remotes: [], environments: [] }]);
     expect((await tool(owner, "read_card", { board: BOARD, id: "TASK-2" })).title).toBe("Someone else's");
     expect((await tool(owner, "read_card", { id: "TASK-2" })).error).toMatch(/which board/);
     expect((await tool(owner, "read_card", { board: "nope", id: "TASK-2" })).error).toMatch(/no such board/);

@@ -23,6 +23,7 @@ import type { Env } from "./index";
 import { DAY_STARTS_HOUR, type Note, type NoteInput, today } from "./plans";
 import { range } from "./dates";
 import { chunks, embed, namespaceOf, sha, vectorId } from "./vectors";
+import { type Dump, dump, restore } from "./dump";
 
 // The brains there are: a memory is one of these.
 export const BRAINS = ["pepper", "work"] as const;
@@ -140,6 +141,22 @@ export class Memory extends DurableObject<Env> {
     this.backfill();
   }
 
+  // The whole memory, to copy it to another account's Worker (dump.ts),
+  // without its embeddings, which the other side makes again.
+  dump(): Dump {
+    return dump(this.sql, ["vectors", "vector_queue"]);
+  }
+
+  // Into a memory never opened (not through memoryOf, whose open() would
+  // bring the user's notes in first), then embedded from scratch.
+  restore(d: Dump): Result<number> {
+    if (this.meta("brain")) return { ok: false, status: 409, error: "this memory is already in use" };
+    const n = restore(this.sql, d);
+    this.sql.exec("DELETE FROM meta WHERE key = 'vectors'");
+    this.backfill();
+    return { ok: true, value: n };
+  }
+
   private today() {
     return today(this.env.TIMEZONE);
   }
@@ -166,6 +183,11 @@ export class Memory extends DurableObject<Env> {
       FROM notes_fts JOIN notes n ON n.rowid = notes_fts.rowid WHERE notes_fts MATCH ?`;
     const cond = where.map((w) => ` AND ${w}`).join("");
     return this.sql.exec(`${select}${cond} ORDER BY rank LIMIT ?`, q, ...args, limit).toArray();
+  }
+
+  // The goals, whole, for the goals view (goals.ts).
+  goalNotes(): Note[] {
+    return this.sql.exec("SELECT * FROM notes WHERE kind = 'goal' ORDER BY id").toArray() as unknown as Note[];
   }
 
   note(id: string): Result<Note> {
@@ -237,8 +259,13 @@ export class Memory extends DurableObject<Env> {
     const count = () => this.sql.exec("SELECT count(*) AS n FROM entries").one().n as number;
     const was = count();
     const last = (this.sql.exec("SELECT coalesce(max(id), 0) AS n FROM entries").one().n as number);
+    // Only the new ones are inserted: an ignored insert is still a row
+    // written, and a sync sends every entry every time, which on the free
+    // tier's 100,000 a day ran out by afternoon.
+    const have = new Set(this.sql.exec("SELECT key FROM entries WHERE key IS NOT NULL").toArray().map((r) => r.key as string));
+    const fresh = list.filter((e) => !have.has(e.key));
     this.ctx.storage.transactionSync(() => {
-      for (const e of list)
+      for (const e of fresh)
         this.sql.exec("INSERT OR IGNORE INTO entries (at, day, who, text, key) VALUES (?, ?, ?, ?, ?)", e.at, e.day, e.who, e.text, e.key);
       this.sql.exec("INSERT OR IGNORE INTO vector_queue (item) SELECT 'entry:' || id FROM entries WHERE id > ?", last);
     });

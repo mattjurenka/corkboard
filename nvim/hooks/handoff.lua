@@ -24,7 +24,9 @@ for name, kind in vim.fs.dir(dir) do
 end
 
 local project = type(req.project) == "string" and vim.fs.normalize(req.project) or nil
-table.sort(found, function(a, b) return a.cwd == project and b.cwd ~= project end)
+-- One in the project: in that directory, or in the repository it is in.
+local function in_project(nvim) return nvim.cwd == project or nvim.root == project end
+table.sort(found, function(a, b) return in_project(a) and not in_project(b) end)
 
 local why = "no corkboard window is open"
 for _, nvim in ipairs(found) do

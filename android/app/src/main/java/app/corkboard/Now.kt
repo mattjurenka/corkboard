@@ -65,7 +65,10 @@ object Notifications {
     }
 
     // The ongoing one: what's locked in the morning, the block during the day.
-    fun now(context: Context) {
+    // It's also the Watcher's, as a foreground service.
+    fun now(context: Context) = post(context, ID_NOW, nowNotification(context))
+
+    fun nowNotification(context: Context): Notification {
         val store = App.store
         val plan = store.plan?.takeIf { it.date == today() }
         val b = Notification.Builder(context, NOW)
@@ -81,6 +84,8 @@ object Notifications {
             if (!Gate.planned(store)) b.addAction(Notification.Action.Builder(null, "Plan", open(context, "plan")).build())
             if (!Gate.meditated(store)) b.addAction(Notification.Action.Builder(null, "Meditate", open(context, "meditate")).build())
         } else {
+            // The day's blocks say what you're doing: none of it on the lock screen.
+            b.setVisibility(Notification.VISIBILITY_SECRET)
             val block = Now.current(plan)
             val next = Now.next(plan, count = 1).firstOrNull()
             if (block == null) {
@@ -96,7 +101,7 @@ object Notifications {
                     .setProgress(block.stop - block.start, minuteNow() - block.start, false)
             }
         }
-        post(context, ID_NOW, b.build())
+        return b.build()
     }
 
     // The settings corkboard needs that are off (Setup), until they're on.
@@ -110,10 +115,10 @@ object Notifications {
             context, ID_SETUP,
             Notification.Builder(context, SETUP)
                 .setSmallIcon(R.drawable.ic_lock)
-                .setContentTitle(if (Setup.Need.Accessibility in missing) "The app lock is off" else "corkboard needs ${if (missing.size == 1) "a setting" else "${missing.size} settings"}")
+                .setContentTitle(if (!Setup.locking(context)) "The app lock is off" else "corkboard needs ${if (missing.size == 1) "a setting" else "${missing.size} settings"}")
                 .setContentText(missing.joinToString(" · ") { it.title })
                 .setStyle(Notification.BigTextStyle().bigText(text))
-                .setOngoing(Setup.Need.Accessibility in missing)
+                .setOngoing(!Setup.locking(context))
                 .setOnlyAlertOnce(true)
                 .setContentIntent(open(context, "setup"))
                 .build(),
@@ -154,7 +159,8 @@ object Notifications {
     )
 }
 
-// Keeps the ongoing notification, the settings one and the widget current:
+// Keeps the ongoing notification, the settings one, the widget and the
+// Watcher current:
 // updates them now and sets an alarm for the next change (a block's start
 // or end, the end of an emergency unlock, midnight), or in an hour.
 object Ticker {
@@ -162,6 +168,7 @@ object Ticker {
         Notifications.now(context)
         Notifications.setup(context)
         NowWidget.refresh(context)
+        Watcher.sync(context)
         val plan = App.store.plan?.takeIf { it.date == today() }
         val minute = minuteNow()
         val edges = plan?.day?.blocks.orEmpty().flatMap { listOf(it.start, it.stop) }.filter { it > minute }

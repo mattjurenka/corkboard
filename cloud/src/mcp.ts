@@ -31,6 +31,9 @@ export type Grant =
   | { kind: "card"; board: string; card: string; agent: string }
   | { kind: "pepper"; agent: string }
   | { kind: "brain"; brain: Exclude<Brain, "pepper">; agent: string }
+  // A server's (the droplet's): the API, but only its own environment's
+  // fleet and sessions (api.ts's machine). Not for the MCP server.
+  | { kind: "machine"; environment: string; agent: string }
   | { kind: "owner" | "assistant"; agent: string };
 
 // The board's methods as this file calls them. Typed by hand: through
@@ -645,6 +648,19 @@ const USER_TOOLS: Record<string, UserTool> = {
     required: ["template", "task"],
     user: true,
     run: async (a, c) => spawn(c.env, c.user, "user", a),
+  },
+  start_session: {
+    description:
+      "Start a Claude Code session in a VM of its own, for the user to talk to from their phone or the fleet view, rather than an agent on a task: it runs until stopped (spawn_stop), and its commits come back as the branch fleet/<id>. It gets a card on the board you name. spawn_status lists the templates (VM types) and where they run.",
+    properties: {
+      template: str("A template's name, from spawn_status: the VM type"),
+      board: str("The board's key, from list_boards: its project's repo is what the session works in"),
+      environment: str("Where to run it; the first that has the template, if left out"),
+      message: str("What to say to it first, if anything"),
+    },
+    required: ["template", "board"],
+    user: true,
+    run: async (a, c) => spawn(c.env, c.user, "user", { template: a.template, board: a.board, environment: a.environment, task: a.message ?? "", interactive: true }),
   },
   spawn_status: {
     description: "One spawned agent: its state, its card, and its answer when done. Without an id, the newest spawns, and the templates each environment can run.",

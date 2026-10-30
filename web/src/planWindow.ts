@@ -21,6 +21,10 @@ export function openPlan(): boolean {
     url.search = "?view=plan";
     url.hash = "";
     w.location.href = url.toString();
+  } else {
+    // Its focus() below doesn't raise a window on Wayland; this navigation
+    // within the page tells corkboard's desktop app to (app/main.js).
+    w.location.hash = `front-${Date.now()}`;
   }
   w.focus();
   return true;

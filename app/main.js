@@ -19,7 +19,7 @@
 // a new window of the running one; with --one (the day plan's app), it
 // brings the running one's window forward instead.
 
-import { app, BrowserWindow, Menu, session, shell } from "electron";
+import { app, BrowserWindow, Menu, net, session, shell } from "electron";
 
 function parse(argv) {
   const args = { name: "corkboard", title: undefined, url: undefined, one: false };
@@ -86,11 +86,20 @@ function setup(win) {
   });
 
   // Other projects and the day plan open in windows of their own (window.open
-  // in main.tsx and planWindow.ts); links out of the page go to the browser.
+  // in main.tsx and planWindow.ts), which stay when the window that opened
+  // them closes (Electron closes them with it by default); links out of the
+  // page go to the browser.
   wc.setWindowOpenHandler(({ url }) => {
-    if (url === "about:blank" || sameOrigin(url)) return { action: "allow", overrideBrowserWindowOptions: windowOptions() };
+    if (url === "about:blank" || sameOrigin(url)) return { action: "allow", outlivesOpener: true, overrideBrowserWindowOptions: windowOptions() };
     if (/^(https?|mailto):/i.test(url)) shell.openExternal(url);
     return { action: "deny" };
+  });
+  // The day plan asked for when it's open already (planWindow.ts): its
+  // window comes forward, which the page's own focus() can't do on Wayland.
+  wc.on("did-navigate-in-page", (_e, url, isMainFrame) => {
+    if (!isMainFrame || !new URL(url).hash.startsWith("#front-")) return;
+    if (win.isMinimized()) win.restore();
+    win.focus();
   });
   wc.on("will-navigate", (e, url) => {
     if (sameOrigin(url)) return;
@@ -110,15 +119,33 @@ function setup(win) {
   });
 
   // The bridge may still be coming up (the launchers start its service just
-  // before this), so a page that didn't load tries again for a while.
-  let tries = 0;
-  wc.on("did-fail-load", (_e, code, _desc, url, isMainFrame) => {
+  // before this), or be down, so a page that didn't load says so and is
+  // loaded again once the bridge answers.
+  let waiting = false;
+  wc.on("did-fail-load", async (_e, code, desc, url, isMainFrame) => {
     // -3 is a load cut short by another, which is not a failure.
-    if (!isMainFrame || code === -3 || tries++ >= 60) return;
-    setTimeout(() => wc.loadURL(url), 500);
+    if (!isMainFrame || code === -3 || waiting) return;
+    waiting = true;
+    wc.loadURL(errorPage(desc, url));
+    for (let wait = 500; ; wait = Math.min(wait * 2, 5000)) {
+      await new Promise((r) => setTimeout(r, wait));
+      if (wc.isDestroyed()) return;
+      try {
+        if ((await net.fetch(url, { method: "HEAD", cache: "no-store" })).ok) break;
+      } catch {}
+    }
+    waiting = false;
+    wc.loadURL(url);
   });
-  wc.on("did-finish-load", () => (tries = 0));
 }
+
+const escape = (s) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+const errorPage = (desc, url) =>
+  "data:text/html;charset=utf-8," +
+  encodeURIComponent(`<!doctype html><title>corkboard (disconnected)</title>
+<body style="margin:0;height:100vh;display:grid;place-items:center;background:${themeColor};color:${symbolFor(themeColor)};font:14px/1.5 monospace">
+<pre style="margin:0;padding:1ch 2ch;border:1px solid currentColor">can't reach the bridge — reconnecting
+${escape(desc)}  ${escape(url)}</pre>`);
 
 app.on("browser-window-created", (_e, win) => setup(win));
 

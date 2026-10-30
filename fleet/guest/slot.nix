@@ -1,4 +1,4 @@
-# The guest a slot boots: one spawned agent, one task, then off.
+# The guest a slot boots: one spawned agent, one task (or one session), then off.
 #
 # A slot's addresses are fixed (its plan), what runs in it is not: `mkFleet`
 # builds this module with each spawnable template's modules on top, as
@@ -15,10 +15,19 @@
 #   /mnt/share/mcp.json      optional: corkboard's MCP server, with the spawn
 #                            token for the agent's card (a spawn from the
 #                            Worker's queue)
+#   /mnt/share/session       for a session you talk to rather than a task:
+#                            Claude Code keeps going, reading each message
+#                            fleetd puts in /mnt/share/inbox/ (a file a stream-
+#                            json line, named 0, 1, 2, ...; the first the task
+#                            if there is one) until one is END, then finishes
+#                            as a task does
 #
 #   /mnt/outbox/result.json  Claude Code's `--output-format json`
 #   /mnt/outbox/work.bundle  the commits it made, if it was given a repo
 #   /mnt/outbox/exit         its exit status
+#   /mnt/outbox/events.jsonl a session's output, as stream-json
+#   /mnt/outbox/projects/    a session's Claude Code logs, which fleetd
+#                            follows while it runs (fleet/fleetd/sessions.ts)
 #
 # A template with a brain also mounts the brain's memory (its `shares`),
 # writable where the brain says, and the same for every agent of it.
@@ -26,7 +35,7 @@
 # Egress is the slot's allowlist, through the filtering proxy on its
 # gateway; there is no resolver and no route, as for Pepper.
 { plan, template, ownerUid ? null }:
-{ pkgs, lib, modulesPath, ... }:
+{ config, pkgs, lib, modulesPath, ... }:
 let
   vm = plan;
 
@@ -76,10 +85,42 @@ let
       if [ -f /mnt/share/mcp.json ]; then mcp=(--mcp-config /mnt/share/mcp.json); fi
 
       status=0
-      claude -p "$(cat /mnt/share/task.md)" "''${mcp[@]}" \
-        --output-format json \
-        --dangerously-skip-permissions \
-        > "$out/result.json" || status=$?
+      if [ -f /mnt/share/session ]; then
+        # Its logs where fleetd can follow them.
+        mkdir -p "$out/projects" "$HOME/.claude"
+        rm -rf "$HOME/.claude/projects"
+        ln -s "$out/projects" "$HOME/.claude/projects"
+        # Each message as it arrives, by the next name: the share caches a
+        # file's contents, never a name it hasn't seen. END closes Claude
+        # Code's input, and it exits once the turn it's on is done.
+        inbox() {
+          local n=0 line
+          while :; do
+            if [ -e "/mnt/share/inbox/$n" ]; then
+              line=$(cat "/mnt/share/inbox/$n")
+              n=$((n + 1))
+              if [ "$line" = END ]; then return; fi
+              printf '%s\n' "$line"
+            else
+              sleep 0.5
+            fi
+          done
+        }
+        inbox \
+          | claude -p "''${mcp[@]}" \
+              --input-format stream-json \
+              --output-format stream-json \
+              --verbose \
+              --dangerously-skip-permissions \
+              > "$out/events.jsonl" || status=$?
+        # Its last answer, where a task's goes.
+        jq -s '[.[] | select(.type == "result")] | last // {}' "$out/events.jsonl" > "$out/result.json" || true
+      else
+        claude -p "$(cat /mnt/share/task.md)" "''${mcp[@]}" \
+          --output-format json \
+          --dangerously-skip-permissions \
+          > "$out/result.json" || status=$?
+      fi
 
       if [ -n "''${base:-}" ]; then
         # Whatever it left uncommitted, as one last commit, so nothing it
@@ -151,7 +192,7 @@ in
       serviceConfig = {
         Type = "oneshot";
         User = "claude";
-        Group = "users";
+        Group = config.users.users.claude.group;
         WorkingDirectory = "/home/claude";
         ExecStart = lib.getExe runTask;
         # Done, whatever happened: the unit on the host ends with QEMU,
@@ -168,7 +209,7 @@ in
       serviceConfig = {
         ExecStart = "${pkgs.bashInteractive}/bin/bash -il";
         User = "claude";
-        Group = "users";
+        Group = config.users.users.claude.group;
         WorkingDirectory = "/home/claude";
         StandardInput = "tty";
         StandardOutput = "tty";

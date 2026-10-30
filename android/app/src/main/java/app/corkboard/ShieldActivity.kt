@@ -41,7 +41,7 @@ class ShieldActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        val app = Blocker.label(this, intent.getStringExtra(APP) ?: "")
+        val app = Locks.label(this, intent.getStringExtra(APP) ?: "")
         setContent {
             CorkboardTheme {
                 val plan by Repo.plan.collectAsState()

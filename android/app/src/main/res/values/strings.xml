@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="blocker_description">Locks the apps you choose until today\'s plan is accepted and you\'ve meditated for 30 minutes. corkboard only looks at which app each window on the screen belongs to; it doesn\'t read what\'s in them.</string>
     <string name="widget_description">The block now and what\'s next</string>
 </resources>

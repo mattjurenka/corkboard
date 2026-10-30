@@ -8,6 +8,10 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.runtime.collectAsState
@@ -25,6 +29,7 @@ class MainActivity : ComponentActivity() {
     private var resumed by mutableIntStateOf(0)
     private var setupDone by mutableStateOf(false)
 
+    @OptIn(ExperimentalLayoutApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -37,21 +42,41 @@ class MainActivity : ComponentActivity() {
                     val plan by Repo.plan.collectAsState()
                     val go = { s: Screen -> screen = s }
                     val home = { screen = Screen.Home }
-                    BackHandler(screen != Screen.Home, home)
+                    BackHandler(screen != Screen.Home) {
+                        screen = when (screen) {
+                            is Screen.Session, is Screen.NewSession -> Screen.Fleet
+                            is Screen.Goals -> Screen.Plan
+                            else -> Screen.Home
+                        }
+                    }
                     resumed // read, so a resume recomposes
                     when {
                         !signedIn -> SignInScreen()
-                        !setupDone && !Blocker.enabled(this@MainActivity) -> SetupScreen(resumed) { setupDone = true }
-                        else -> when (val s = screen) {
-                            Screen.Home -> {
-                                plan // the gate follows the plan
-                                if (Gate.open()) NowScreen(go) else LockedScreen(go)
+                        !setupDone && !Setup.locking(this@MainActivity) -> SetupScreen(resumed) { setupDone = true }
+                        // The four tabs, with the bar along the foot; it steps
+                        // aside for the keyboard.
+                        isTab(screen) -> Column(Modifier.fillMaxSize()) {
+                            Box(Modifier.weight(1f)) {
+                                when (val s = screen) {
+                                    Screen.Fleet -> FleetScreen(go)
+                                    Screen.Plan -> PlanScreen(go)
+                                    is Screen.Chat -> ChatScreen(s.draft)
+                                    else -> {
+                                        plan // the gate follows the plan
+                                        if (Gate.open()) NowScreen(go) else LockedScreen(go)
+                                    }
+                                }
                             }
-                            Screen.Plan -> PlanScreen(go, home)
+                            if (!WindowInsets.isImeVisible) Tabs(screen, go)
+                        }
+                        else -> when (val s = screen) {
+                            Screen.Home, Screen.Fleet, Screen.Plan, is Screen.Chat -> {}
+                            is Screen.Goals -> GoalsScreen(s.id) { screen = Screen.Plan }
                             Screen.Meditate -> MeditateScreen(home)
                             Screen.Apps -> AppsScreen(home)
                             Screen.Setup -> SetupScreen(resumed, home)
-                            is Screen.Chat -> ChatScreen(s.draft) { screen = Screen.Plan.takeIf { plan?.accepted == null } ?: Screen.Home }
+                            is Screen.Session -> SessionScreen(s) { screen = Screen.Fleet }
+                            is Screen.NewSession -> NewSessionScreen(s.environment, go) { screen = Screen.Fleet }
                         }
                     }
                 }

@@ -1,7 +1,9 @@
-// The day plan (corkboard.plan): today as a column of blocks with what's
-// ranked across projects beside it, and a re-plan of it as a diff. Neovim
-// owns the plan, the selection and the keys; clicks and the key hints call
-// back into it.
+// The day plan (corkboard.plan), as the three windows of its tab: the goals
+// above what's ranked across projects, and beside them today as a column
+// of blocks; and a re-plan of the day as a diff. Neovim owns the
+// plan, the selections and the keys; clicks and the key hints call back
+// into it. What's behind an item (a goal's aim, a ranked item's why) shows
+// only on the selected one, in a focused window.
 
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -20,6 +22,8 @@ type PlanState = {
   blocks: Block[];
   selected?: string;
   ranked: Ranked[];
+  // The ranked item selected in the priority's window, from 1.
+  rank: number;
   later?: { title: string; project: string; why: string }[];
   later_count: number;
   inputs: { label: string; value: string; tone?: string }[];
@@ -27,6 +31,10 @@ type PlanState = {
   fixed: number;
   proposal?: boolean;
 };
+
+// The goals, as the Worker reads them out of Pepper's goal notes (goals.ts).
+type Goal = { id: string; name: string; aim: string; why: string; measures: string[]; week: string[]; week_of?: string };
+type GoalsState = { goals: Goal[]; selected?: string };
 
 type Op = " " | "+" | "-" | "~";
 type Line = { op: Op; hunk?: number; id: string; start: number; stop: number; title: string; kind: Kind; project?: string; card?: string; was?: string };
@@ -130,9 +138,7 @@ const PLAN_KEYS = [
   ["replan", "r", "Re-plan"],
   ["edit", "e", "Edit"],
   ["pin", "p", "Pin"],
-  ["later", "z", "Not today"],
   ["open", "⏎", "Open card"],
-  ["reset", "R", "Read again"],
   ["claude", "c", "Pepper"],
 ];
 
@@ -150,122 +156,104 @@ export function Plan({ state, win, focused, nvim }: ViewProps<PlanState>) {
   }, [state.selected]);
 
   const lanes = laneOf(state.blocks);
-  const linked = state.ranked.findIndex((r) => r.block && r.block === state.selected);
 
   return (
-    <div className="@container/plan flex h-full flex-col px-2ch pt-row">
-      <header className="flex flex-wrap justify-between gap-x-2ch pb-row">
-        <span>
-          today · {state.date}
-          <span className="text-muted-foreground"> · {state.focus} planned · {state.fixed} fixed</span>
-        </span>
+    <div className="@container/plan text-large flex h-full flex-col px-2ch pt-half">
+      <header className="flex flex-wrap justify-between gap-x-2ch pb-half">
+        <span className="text-muted-foreground">{state.focus} planned</span>
         {state.proposal ? (
-          <span className="text-review">● a re-plan is waiting · r to see it</span>
+          <span className="text-review">● re-plan waiting</span>
         ) : state.problem ? (
           <span className="text-blocked">● {state.problem}</span>
         ) : !state.blocks.length ? (
-          <span className="text-muted-foreground">no plan yet · Pepper proposes one</span>
+          <span className="text-muted-foreground">no plan yet</span>
         ) : null}
       </header>
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(34ch,46ch)] gap-x-3ch @max-[96ch]/plan:grid-cols-1 @max-[96ch]/plan:overflow-y-auto @max-[96ch]/plan:pt-half">
-        {/* Down half a line, as the aside is for its titles: the boxes' tops line up. */}
-        <Box title="day" aside="00:00 → 24:00" className="mt-half flex min-h-0 flex-col @max-[96ch]/plan:mt-0 @max-[96ch]/plan:min-h-[calc(var(--cell-h)*20)]">
-          <div ref={ref} className="min-h-0 flex-1 overflow-y-auto py-half pr-ch">
-            <div className="relative" style={{ height: rows(24 * 60) }}>
-              {Array.from({ length: 24 }, (_, h) => (
-                <div
-                  key={h}
-                  className="absolute right-0 left-0 flex border-t border-dotted border-[color-mix(in_srgb,var(--border)_60%,transparent)]"
-                  style={{ top: rows(h * 60) }}
-                >
-                  <span className="-mt-half w-[7ch] flex-none bg-background pl-ch text-muted-foreground">{hour(h)}</span>
-                </div>
-              ))}
-              {state.blocks.map((b) => (
-                <DayBlock
-                  key={b.id}
-                  b={b}
-                  lane={lanes.get(b.id)!}
-                  color={colorOf(state.projects, b.project)}
-                  past={b.stop <= now}
-                  selected={b.id === state.selected}
-                  focused={focused}
-                  onClick={() => select(b.id)}
-                  onDoubleClick={() => select(b.id).then(() => action("open"))}
-                />
-              ))}
-              {now > 0 && now < 24 * 60 && (
-                <div className="pointer-events-none absolute right-0 left-0 z-1 flex items-center" style={{ top: `calc(${rows(now)} - var(--cell-h) / 2)` }}>
-                  <span className="bg-blocked px-ch font-bold text-background">{clock(now)}</span>
-                  <span className="flex-1 border-t border-blocked" />
-                </div>
-              )}
+      <div ref={ref} className="min-h-0 flex-1 overflow-y-auto py-half pr-ch">
+        <div className="relative" style={{ height: rows(24 * 60) }}>
+          {Array.from({ length: 24 }, (_, h) => (
+            <div
+              key={h}
+              className="absolute right-0 left-0 flex border-t border-dotted border-[color-mix(in_srgb,var(--border)_60%,transparent)]"
+              style={{ top: rows(h * 60) }}
+            >
+              <span className="-mt-half w-[7ch] flex-none bg-background text-muted-foreground">{hour(h)}</span>
             </div>
-          </div>
-        </Box>
-
-        <aside className="flex min-h-0 flex-col gap-row overflow-y-auto pt-half @max-[96ch]/plan:overflow-visible @max-[96ch]/plan:pt-row">
-          <Box title="priority" aside={`${state.projects.length} projects`}>
-            <ol className="py-half">
-              {state.ranked.map((r, i) => (
-                <li
-                  key={i}
-                  onClick={() => r.block && select(r.block)}
-                  className={cn("px-ch", r.block && "cursor-pointer hover:bg-accent", i === linked && "bg-selection hover:bg-selection")}
-                >
-                  <div className="flex gap-ch">
-                    <span className="w-2ch flex-none text-muted-foreground">{i + 1}</span>
-                    <span style={{ color: colorOf(state.projects, r.project) }}>●</span>
-                    <span className={cn("min-w-0 flex-1 truncate", i === linked && focused && "font-bold")}>{r.title}</span>
-                    <span className="flex-none text-muted-foreground">{r.est}</span>
-                  </div>
-                  <div className="pl-[5ch] text-muted-foreground">{r.why}</div>
-                </li>
-              ))}
-            </ol>
-            <div className="border-t px-ch text-muted-foreground">
-              {state.later ? (
-                <>
-                  <div>not today · <kbd className="text-primary">z</kbd> to hide</div>
-                  {state.later.map((l, i) => (
-                    <div key={i} className="flex gap-ch">
-                      <span style={{ color: colorOf(state.projects, l.project) }}>●</span>
-                      <span className="min-w-0 flex-1 truncate text-foreground">{l.title}</span>
-                      <span className="flex-none">{l.why}</span>
-                    </div>
-                  ))}
-                </>
-              ) : (
-                <>─ not today ({state.later_count}) · <kbd className="text-primary">z</kbd> to show</>
-              )}
+          ))}
+          {state.blocks.map((b) => (
+            <DayBlock
+              key={b.id}
+              b={b}
+              lane={lanes.get(b.id)!}
+              color={colorOf(state.projects, b.project)}
+              past={b.stop <= now}
+              selected={b.id === state.selected}
+              focused={focused}
+              onClick={() => select(b.id)}
+              onDoubleClick={() => select(b.id).then(() => action("open"))}
+            />
+          ))}
+          {now > 0 && now < 24 * 60 && (
+            <div className="pointer-events-none absolute right-0 left-0 z-1 flex items-center" style={{ top: `calc(${rows(now)} - var(--cell-h) / 2)` }}>
+              <span className="bg-blocked px-ch font-bold text-background">{clock(now)}</span>
+              <span className="flex-1 border-t border-blocked" />
             </div>
-          </Box>
-
-          <Box title="inputs">
-            <dl className="grid grid-cols-[12ch_1fr] gap-x-2ch px-ch py-half">
-              {state.inputs.map((x) => (
-                <div key={x.label} className="contents">
-                  <dt className="text-muted-foreground">{x.label}</dt>
-                  <dd style={{ color: x.tone ? VAR[x.tone] : undefined }}>{x.value}</dd>
-                </div>
-              ))}
-            </dl>
-          </Box>
-
-          <Box title="legend">
-            <div className="flex flex-wrap gap-x-2ch px-ch py-half">
-              {state.projects.map((p) => (
-                <span key={p.key}>
-                  <span style={{ color: VAR[p.color] }}>●</span> {p.name}
-                </span>
-              ))}
-              <span>◇ calendar</span>
-              <span className="text-muted-foreground">· off</span>
-            </div>
-          </Box>
-        </aside>
+          )}
+        </div>
       </div>
       <Keys keys={PLAN_KEYS} onKey={action} />
+    </div>
+  );
+}
+
+// The ranked list ----------------------------------------------------------------------
+
+export function PlanPriority({ state, win, focused, nvim }: ViewProps<PlanState>) {
+  const pick = (i: number) => nvim.lua("require('corkboard.plan').select_rank(...)", i, win);
+  const action = (name: string) => nvim.lua("require('corkboard.plan').action(...)", "plan-priority", name, win);
+  // Focused, the window's own selection; otherwise the day's block's item.
+  const on = focused ? state.rank - 1 : state.ranked.findIndex((r) => r.block && r.block === state.selected);
+
+  return (
+    <div className="@container/plan text-large flex h-full flex-col overflow-y-auto px-2ch py-half">
+      <ol>
+        {state.ranked.map((r, i) => (
+          <li
+            key={i}
+            onClick={() => pick(i + 1)}
+            className={cn("cursor-pointer px-ch hover:bg-accent", i === on && "bg-selection hover:bg-selection")}
+          >
+            <div className="flex gap-ch">
+              <span className="w-2ch flex-none text-muted-foreground">{i + 1}</span>
+              <span style={{ color: colorOf(state.projects, r.project) }}>●</span>
+              <span className={cn("min-w-0 flex-1 truncate", i === on && focused && "font-bold")}>{r.title}</span>
+              <span className="flex-none text-muted-foreground">{r.est}</span>
+            </div>
+            {i === on && focused && r.why && <div className="pl-[5ch] text-muted-foreground">{r.why}</div>}
+          </li>
+        ))}
+      </ol>
+
+      <button onClick={() => action("later")} className="mt-row self-start px-ch text-muted-foreground hover:text-foreground">
+        not today · {state.later_count}
+      </button>
+      {state.later?.map((l, i) => (
+        <div key={i} className="flex gap-ch px-ch text-muted-foreground">
+          <span style={{ color: colorOf(state.projects, l.project) }}>●</span>
+          <span className="min-w-0 flex-1 truncate">{l.title}</span>
+        </div>
+      ))}
+
+      {focused && !!state.inputs.length && (
+        <dl className="mt-row grid grid-cols-[auto_1fr] gap-x-2ch px-ch">
+          {state.inputs.map((x) => (
+            <div key={x.label} className="contents">
+              <dt className="text-muted-foreground">{x.label}</dt>
+              <dd style={{ color: x.tone ? VAR[x.tone] : undefined }}>{x.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
     </div>
   );
 }
@@ -507,6 +495,52 @@ export function PlanDiff({ state, win, focused, nvim }: ViewProps<DiffState>) {
         </aside>
       </div>
       <Keys keys={DIFF_KEYS} onKey={action} />
+    </div>
+  );
+}
+
+// The goals ----------------------------------------------------------------------
+
+export function PlanGoals({ state, win, focused, nvim }: ViewProps<GoalsState>) {
+  const pick = (id: string) => nvim.lua("require('corkboard.plan').select_goal(...)", id, win);
+  const g = state.goals.find((g) => g.id === state.selected) ?? state.goals[0];
+
+  return (
+    <div className="@container/plan text-large flex h-full flex-col overflow-y-auto px-2ch py-half">
+      <ul className="flex flex-col gap-half">
+        {state.goals.map((x) => {
+          const open = x.id === g?.id && focused;
+          // This week's steps are the goal; what it aims at, why and how
+          // it's measured are behind them, on the open one.
+          return (
+            <li
+              key={x.id}
+              onClick={() => pick(x.id)}
+              className={cn("cursor-pointer px-ch pb-half hover:bg-accent", open && "bg-selection hover:bg-selection")}
+            >
+              <div className="font-bold">{x.name}</div>
+              <ul>
+                {x.week.map((w, i) => (
+                  <li key={i} className="flex gap-ch">
+                    <span className="flex-none text-primary">○</span>
+                    <span>{w}</span>
+                  </li>
+                ))}
+              </ul>
+              {open && (x.aim || x.why || !!x.measures.length) && (
+                <div className="mt-half flex flex-col border-l pl-ch text-muted-foreground">
+                  {x.aim && <div>{x.aim}</div>}
+                  {x.measures.map((m, i) => (
+                    <div key={i}>{m}</div>
+                  ))}
+                  {x.why && <div className="mt-half">{x.why}</div>}
+                </div>
+              )}
+            </li>
+          );
+        })}
+        {!state.goals.length && <li className="px-ch text-muted-foreground">no goals yet</li>}
+      </ul>
     </div>
   );
 }

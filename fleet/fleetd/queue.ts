@@ -10,11 +10,14 @@
 // fleetd's tick runs it like any other, and this reports each new state.
 
 import { existsSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { CLOUD, token } from "../../bridge/cloud";
+import { host, steady, type Host } from "../../bridge/host";
 import { accountFor, answer, manifest, occupancy, read, SPAWNS, spawns, write, type Manifest, type Occupancy, type Spawn, type State } from "./fleet";
 
-export const ENVIRONMENT = process.env.CORKBOARD_FLEET_ENVIRONMENT ?? "local";
+// This machine's name, unless told otherwise.
+export const ENVIRONMENT = process.env.CORKBOARD_FLEET_ENVIRONMENT ?? hostname();
 const LOOK_EVERY = 60_000;
 
 const now = () => new Date().toISOString();
@@ -43,6 +46,8 @@ async function ok(method: string, path: string, body?: unknown) {
   return r.json;
 }
 
+const told = (r: Occupancy & { host?: Host }) => JSON.stringify({ ...r, host: steady(r.host) });
+
 export class Queue {
   private dirty = true;
   private lastLook = 0;
@@ -50,8 +55,10 @@ export class Queue {
   private retry = 1000;
   private ping?: ReturnType<typeof setInterval>;
   private offline?: string;
-  // What runs here, and what the Worker was last told of it.
-  private running?: Occupancy;
+  // What runs here, and what the Worker was last told of it. This machine
+  // goes with it, and only a change other than its load, free memory and
+  // uptime is told at once.
+  private running?: Occupancy & { host?: Host };
   private told?: string;
 
   start() {
@@ -97,8 +104,8 @@ export class Queue {
   // at once, for the fleet view.
   async step(active?: Set<string>) {
     try {
-      if (active) this.running = occupancy(manifest(), spawns(), active);
-      if (this.running && JSON.stringify(this.running) !== this.told) this.dirty = true;
+      if (active) this.running = { ...occupancy(manifest(), spawns(), active), host: host() };
+      if (this.running && told(this.running) !== this.told) this.dirty = true;
       await this.report();
       if (this.dirty || Date.now() - this.lastLook > LOOK_EVERY) {
         this.dirty = false;
@@ -117,7 +124,7 @@ export class Queue {
     const m = manifest();
     const running = this.running;
     await ok("PUT", `/api/fleet/environments/${ENVIRONMENT}`, { templates: m.templates, running });
-    this.told = JSON.stringify(running);
+    this.told = running && told(running);
     const listed = (await ok("GET", `/api/spawns?environment=${ENVIRONMENT}&state=queued,running,stopped&limit=100`)) as Remote[];
     for (const r of listed) {
       const here = read(r.id);
@@ -143,6 +150,7 @@ export class Queue {
       state: "queued",
       created: now(),
       remote: { board: spawn.board, card: spawn.card, agent: spawn.agent, token: cardToken },
+      ...((spawn as { interactive?: boolean }).interactive && { interactive: true }),
     };
     try {
       s.account = accountFor(m, s.template, s.by);

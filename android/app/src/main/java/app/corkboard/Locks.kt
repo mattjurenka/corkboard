@@ -38,6 +38,12 @@ object Locks {
 
     fun count(context: Context) = launcherApps(context).count { locked(context, it) }
 
+    @Suppress("DEPRECATION") // the flags overload is API 33
+    fun label(context: Context, pkg: String): String = runCatching {
+        val pm = context.packageManager
+        pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+    }.getOrDefault(pkg)
+
     private fun handler(context: Context, intent: Intent) =
         context.packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
 }

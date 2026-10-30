@@ -2,7 +2,7 @@
 // selection (corkboard.usage); a click on a session calls back into it.
 
 import { Marked } from "marked";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Spinner } from "@/components/Spinner";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -47,6 +47,11 @@ type UsageState = {
   // corkboard.usage sends), and whether it shows in place of the session.
   advice?: { body: string; updated: string };
   show_advice?: boolean;
+  // Where Neovim's h/j/k/l are: the list, the session's rows (item, the
+  // one picked out as if hovered) or the advice (line, how far down).
+  pane?: "list" | "detail" | "advice";
+  item?: number;
+  line?: number;
 };
 
 export function Usage({ state, win, focused, nvim }: ViewProps<UsageState>) {
@@ -56,6 +61,7 @@ export function Usage({ state, win, focused, nvim }: ViewProps<UsageState>) {
   }, [state.selected]);
   const selected = state.sessions.find((s) => s.id === state.selected && s.categories);
   const n = state.sessions.length;
+  const inList = focused && (state.pane ?? "list") === "list";
 
   return (
     <div className="@container/usage flex h-full flex-col px-2ch pt-row">
@@ -91,10 +97,10 @@ export function Usage({ state, win, focused, nvim }: ViewProps<UsageState>) {
                   className={cn(
                     "cursor-pointer border-b px-ch py-half hover:bg-accent",
                     on && "bg-selection hover:bg-selection",
-                    on && focused && "shadow-[inset_0.5ch_0_0_var(--primary)]",
+                    on && inList && "shadow-[inset_0.5ch_0_0_var(--primary)]",
                   )}
                 >
-                  <div className={cn("truncate", on && focused && "font-bold")}>{s.title}</div>
+                  <div className={cn("truncate", on && inList && "font-bold")}>{s.title}</div>
                   <div className="flex gap-2ch text-muted-foreground">
                     <span>{s.ago}</span>
                     <span>{money(s.session_cost ?? s.cost)}</span>
@@ -119,9 +125,9 @@ export function Usage({ state, win, focused, nvim }: ViewProps<UsageState>) {
             onPick={(key) => nvim.lua("require('corkboard.usage').show_advice(...)", key === "advice")}
           />
           {state.show_advice ? (
-            <Advice advice={state.advice} />
+            <Advice advice={state.advice} line={focused ? state.line : undefined} />
           ) : selected ? (
-            <Detail s={selected} />
+            <Detail s={selected} item={focused ? state.item : undefined} />
           ) : (
             <div className="px-ch text-muted-foreground">—</div>
           )}
@@ -150,7 +156,15 @@ const safe = new Marked({
 });
 
 // What Pepper made of the report: markdown, on the grid like a card's.
-function Advice({ advice }: { advice: UsageState["advice"] }) {
+function Advice({ advice, line }: { advice: UsageState["advice"]; line?: number }) {
+  // Scrolled as far down as line is through the note's lines.
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || line == null || !advice) return;
+    const lines = advice.body.split("\n").length;
+    el.scrollTop = lines > 1 ? (line / (lines - 1)) * (el.scrollHeight - el.clientHeight) : 0;
+  }, [line, advice]);
   if (!advice) {
     return (
       <div className="px-ch text-muted-foreground">
@@ -159,7 +173,7 @@ function Advice({ advice }: { advice: UsageState["advice"] }) {
     );
   }
   return (
-    <div className="on-grid min-h-0 min-w-0 flex-1 overflow-y-auto pr-ch">
+    <div ref={box} className="on-grid min-h-0 min-w-0 flex-1 overflow-y-auto pr-ch">
       <p className="text-muted-foreground">Pepper · updated {advice.updated.slice(0, 16).replace("T", " ")}Z</p>
       <article className="markdown-body" dangerouslySetInnerHTML={{ __html: safe.parse(advice.body) as string }} />
     </div>
@@ -194,12 +208,21 @@ function ByCard({ cards, labels }: { cards: NonNullable<UsageState["cards"]>; la
   );
 }
 
-function Detail({ s }: { s: Session }) {
+// item: the row Neovim's j/k are on, counting down through the tables
+// (where it went, cache misses, heaviest items, subagents), shown as hovered.
+function Detail({ s, item }: { s: Session; item?: number }) {
   const t = s.tokens;
   const c = s.cache;
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    box.current?.querySelector("[data-at]")?.scrollIntoView({ block: "nearest" });
+  }, [item, s.id]);
+  // Each table's item, counted from its first row; -1 for none.
+  const starts = [0, s.categories!.length, s.categories!.length + c.misses.length, s.categories!.length + c.misses.length + s.top.length];
+  const at = (table: number) => (item == null ? -1 : item - starts[table]);
   const writes = c.write_1h === c.write ? "1h" : c.write_1h ? `${tokens(c.write_1h)} 1h` : "5m";
   return (
-    <div className="min-h-0 min-w-0 flex-1 overflow-y-auto pr-ch">
+    <div ref={box} className="min-h-0 min-w-0 flex-1 overflow-y-auto pr-ch">
       <h1 className="mb-row font-bold">{s.title}</h1>
       <div className="mt-half grid grid-cols-[repeat(auto-fit,minmax(18ch,1fr))] gap-x-2ch gap-y-half">
         <Tile label="Cost" value={money(s.session_cost)} sub={s.agents.length ? `incl. ${s.agents.length} subagent${s.agents.length > 1 ? "s" : ""}` : ""} />
@@ -224,11 +247,12 @@ function Detail({ s }: { s: Session }) {
         </Part>
       )}
       <Part title="Where it went">
-        <Categories cats={s.categories!} />
+        <Categories cats={s.categories!} at={at(0)} />
       </Part>
       {c.misses.length > 0 && (
         <Part title="Cache misses">
           <Grid
+            at={at(1)}
             head={["request", "cause", "re-sent", "written", "uncached", "cost"]}
             minor={[3, 4]}
             wide={1}
@@ -247,6 +271,7 @@ function Detail({ s }: { s: Session }) {
       )}
       <Part title="Heaviest items">
         <Grid
+          at={at(2)}
           head={["item", "size", "reads", "share", "cost"]}
           minor={[2]}
           clip={2}
@@ -259,6 +284,7 @@ function Detail({ s }: { s: Session }) {
       {s.agents.length > 0 && (
         <Part title="Subagents">
           <Grid
+            at={at(3)}
             head={["agent", "task", "requests", "tokens", "cost"]}
             minor={[2]}
             clip={2}
@@ -273,11 +299,12 @@ function Detail({ s }: { s: Session }) {
 // One bar per category, its share of the session's cost. Written and
 // uncached are how its tokens first arrived; cache read is what later
 // requests read back of it.
-function Categories({ cats }: { cats: NonNullable<Session["categories"]> }) {
+function Categories({ cats, at }: { cats: NonNullable<Session["categories"]>; at: number }) {
   const max = Math.max(...cats.map((c) => c.share), 0.0001);
   return (
     <div>
       <Grid
+        at={at}
         head={["", "", "share", "written", "uncached", "cache read", "cost"]}
         minor={[3, 4, 5]}
         barColumn
@@ -316,6 +343,7 @@ function Grid({
   wide,
   barColumn,
   minor = [],
+  at = -1,
 }: {
   head: string[];
   rows: { title?: string; cells: React.ReactNode[] }[];
@@ -323,6 +351,7 @@ function Grid({
   wide?: number;
   barColumn?: boolean;
   minor?: number[];
+  at?: number;
 }) {
   const align = (i: number) =>
     cn(
@@ -346,13 +375,23 @@ function Grid({
       </TableHeader>
       <TableBody>
         {rows.map((r, i) => (
-          <TableRow key={i} title={r.title} className="border-0 hover:bg-accent">
-            {r.cells.map((cell, j) => (
-              <TableCell key={j} className={cn(align(j), "py-0")}>
-                {cell}
-              </TableCell>
-            ))}
-          </TableRow>
+          <Fragment key={i}>
+            <TableRow title={r.title} data-at={i === at || undefined} className={cn("border-0 hover:bg-accent", i === at && "bg-accent")}>
+              {r.cells.map((cell, j) => (
+                <TableCell key={j} className={cn(align(j), "py-0")}>
+                  {cell}
+                </TableCell>
+              ))}
+            </TableRow>
+            {/* What the mouse would show on it, for the keys. */}
+            {i === at && r.title && (
+              <TableRow className="border-0 bg-accent hover:bg-accent">
+                <TableCell colSpan={r.cells.length} className="py-0 pl-ch whitespace-normal text-muted-foreground">
+                  {r.title}
+                </TableCell>
+              </TableRow>
+            )}
+          </Fragment>
         ))}
       </TableBody>
     </Table>
@@ -406,17 +445,16 @@ function ContextChart({ series, missPoints = [] }: { series: number[]; missPoint
 function Segmented({ options, value, onPick }: { options: string[][]; value: string; onPick: (key: string) => void }) {
   return (
     <ToggleGroup
-      type="single"
       size="cell"
-      value={value}
+      value={[value]}
       // Pressing the current one again would clear it; it stays.
-      onValueChange={(key) => key && key !== value && onPick(key)}
+      onValueChange={([key]) => key && key !== value && onPick(key)}
     >
       {options.map(([key, label]) => (
         <ToggleGroupItem
           key={key}
           value={key}
-          className="text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+          className="text-muted-foreground hover:bg-transparent hover:text-foreground data-pressed:bg-primary data-pressed:text-primary-foreground"
         >
           {label}
         </ToggleGroupItem>

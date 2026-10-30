@@ -42,6 +42,11 @@ class Store(context: Context) {
         get() = p.getLong("medRunningSince", 0)
         set(v) = p.edit().putLong("medRunningSince", v).apply()
 
+    // How the fleet tab shows the fleet: away, project or machine.
+    var fleetView: String
+        get() = p.getString("fleetView", "away")!!
+        set(v) = p.edit().putString("fleetView", v).apply()
+
     // An emergency unlock lasts until then, in epoch millis.
     var emergencyUntil: Long
         get() = p.getLong("emergencyUntil", 0)

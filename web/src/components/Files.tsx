@@ -1,13 +1,15 @@
 // The file browser in the sidebar's lower half: the project's folders,
 // read from Neovim one directory at a time as they are opened
 // (corkboard.list_dir). A click on a file opens it in a Neovim tab of its
-// own (corkboard.open_file); keyboard focus stays with the canvas.
+// own (corkboard.open_file); keyboard focus stays with the canvas. Alt+j
+// from the sidebar's tabs brings the keys here to walk the tree.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useNvim } from "@/nvim/context";
+import { toNvimKey } from "@/nvim/input.js";
 import { useStore } from "@/store";
-import { HeaderButton, Section } from "./Sidebar";
+import { edgeWindow, focusTab, HeaderButton, Section } from "./Sidebar";
 
 type Entry = { name: string; dir?: boolean; ignored?: boolean; git?: "modified" | "added" };
 
@@ -73,20 +75,29 @@ export function Files() {
     if (tree.current) tree.current.scrollTop = 0;
   };
 
+  // The row the keys are on while the tree has focus (Alt+j from the tabs).
+  const [focused, setFocused] = useState(false);
+  const [cursor, setCursor] = useState<string | null>(null);
+
   const rows: React.ReactNode[] = [];
+  // Every row shown, top to bottom, with its folder, for the keys.
+  const shown: { path: string; dir: string; entry: Entry }[] = [];
   const walk = (dir: string, depth: number) => {
     for (const entry of children.get(dir) ?? []) {
       const path = `${dir}/${entry.name}`;
       const open = entry.dir && expanded.has(path);
+      shown.push({ path, dir, entry });
       rows.push(
         <div
           key={path}
           title={path}
+          data-path={path}
           style={{ paddingLeft: `${1 + depth * 2}ch` }}
           onClick={() => (entry.dir ? toggle(path) : nvim.openFile(path, true))}
           className={cn(
             "flex cursor-pointer items-center gap-ch pr-ch whitespace-nowrap hover:bg-accent",
             path === current && "bg-selection hover:bg-selection",
+            focused && path === cursor && "outline outline-focus -outline-offset-1",
             entry.ignored && "opacity-50",
           )}
         >
@@ -102,13 +113,73 @@ export function Files() {
   };
   if (root) walk(root, 0);
 
+  // Focus starts on the current file if it is shown, else the first row.
+  const at = shown.findIndex((r) => r.path === cursor);
+  const onFocus = () => {
+    setFocused(true);
+    if (at < 0) setCursor(shown.find((r) => r.path === current)?.path ?? shown[0]?.path ?? null);
+  };
+  useEffect(() => {
+    if (focused && cursor) tree.current?.querySelector(`[data-path="${CSS.escape(cursor)}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [focused, cursor]);
+
+  // With focus here, j/k or the arrows move down and up, showing each file
+  // they land on in the preview tab (as a click does), as j/k in the tabs
+  // change tab; l, → or Enter open a folder, or go to the file. h or ← shut
+  // the folder or go up to the one it is in. Alt+k goes back up to the last tab, and Alt+j round to the first;
+  // Alt+l to the leftmost window, Alt+h round to the rightmost; Esc to Neovim. Any other key goes back too, and on to Neovim.
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.ctrlKey || e.metaKey) return;
+    const key = e.key.toLowerCase();
+    const row = shown[at];
+    const move = (to: number) => {
+      if (!shown[to]) return;
+      setCursor(shown[to].path);
+      if (!shown[to].entry.dir) nvim.openFile(shown[to].path, true);
+    };
+    e.preventDefault();
+    if (e.altKey) {
+      if (key === "k" || key === "j") focusTab(key === "j" ? "first" : "last", nvim);
+      else edgeWindow(key, nvim);
+      return;
+    }
+    if (key === "j" || e.key === "ArrowDown") move(at + 1);
+    else if (key === "k" || e.key === "ArrowUp") move(at - 1);
+    else if (key === "l" || e.key === "ArrowRight" || e.key === "Enter") {
+      if (!row) return;
+      if (!row.entry.dir) {
+        nvim.openFile(row.path, true);
+        nvim.refocus();
+      } else if (!expanded.has(row.path)) toggle(row.path);
+      else move(at + 1);
+    } else if (key === "h" || e.key === "ArrowLeft") {
+      if (!row) return;
+      if (row.entry.dir && expanded.has(row.path)) toggle(row.path);
+      else if (row.dir !== root) setCursor(row.dir);
+    } else if (e.key === "Escape") nvim.refocus();
+    else {
+      const k = toNvimKey(e.nativeEvent);
+      if (!k) return;
+      nvim.refocus();
+      nvim.notify("nvim_input", k);
+    }
+  };
+
   return (
     <Section
       title="Files"
       className="border-t pt-row"
       action={<HeaderButton title="Collapse all folders" onClick={collapseAll}>⊟</HeaderButton>}
     >
-      <div ref={tree} className="flex-1 overflow-auto pb-row">
+      <div
+        ref={tree}
+        id="files"
+        tabIndex={-1}
+        onKeyDown={onKeyDown}
+        onFocus={onFocus}
+        onBlur={() => setFocused(false)}
+        className="flex-1 overflow-auto pb-row outline-none"
+      >
         {rows}
       </div>
     </Section>

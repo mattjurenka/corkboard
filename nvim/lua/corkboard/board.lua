@@ -124,7 +124,7 @@ end
 local function state()
   local agents = require("corkboard.agents")
   return {
-    root = vim.fn.getcwd(),
+    root = require("corkboard.util").project_root(),
     statuses = M.statuses,
     selected = selected,
     activity = activity(),
@@ -480,8 +480,7 @@ local function buffer()
   buf = pinned.listing("agent://board", "board", {
     j = { function() pinned.step(line_card, 1) end, "next card" },
     k = { function() pinned.step(line_card, -1) end, "previous card" },
-    ["<Down>"] = { function() pinned.step(line_card, 1) end, "next card" },
-    ["<Up>"] = { function() pinned.step(line_card, -1) end, "previous card" },
+
     h = { function() M.jump(-1) end, "column left" },
     l = { function() M.jump(1) end, "column right" },
     H = { act("left"), "move card left" },
@@ -518,6 +517,8 @@ end
 -- Watching and pushing --------------------------------------------------------------
 
 local watcher, watched, following
+-- The last error reading the cards, so a failing board says it once.
+local last_error
 
 local function watch()
   -- A cloud board says when it changes; there are no files to watch.
@@ -551,7 +552,15 @@ function M.push()
   -- The day plan's window has no board.
   if require("corkboard").window == "plan" then return end
   watch()
-  shown = cards.list()
+  -- A cloud board can fail to read (signed out, offline). That leaves the
+  -- board as it was, not the page's attach and the editor's restore undone.
+  local ok, list = pcall(cards.list)
+  if not ok then
+    if list ~= last_error then vim.notify(tostring(list), vim.log.levels.ERROR) end
+    last_error = list
+    return
+  end
+  last_error, shown = nil, list
   costs = require("corkboard.usage").card_costs()
   render_text()
   push_state()

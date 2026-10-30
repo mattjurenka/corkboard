@@ -1,9 +1,11 @@
 -- The day plan: every hour of today, filled from work ranked across
 -- projects, and re-plans of it to accept or not.
 --
--- Two views, each a listing with the browser's HTML drawn over it like the
--- board. agent://plan is the day: a column of today's blocks with the
--- ranked list beside it; the cursor's line selects a block.
+-- Its tab is three windows, each a listing with the browser's HTML drawn
+-- over it like the board: agent://plan/goals above agent://plan/priority
+-- (what's ranked across projects) on the left, and agent://plan, the day,
+-- beside them (a column of today's blocks; the cursor's line selects a
+-- block).
 -- agent://plan/proposal is a re-plan of the rest of the day as a diff
 -- against the current plan, in hunks like a review: accepted whole, or
 -- with hunks undone first.
@@ -46,10 +48,16 @@ local projects = {}
 local problem -- why there's no plan to show: no bridge, not signed in
 local selected
 local show_later = false
-local plan_buf, diff_buf
--- Line number -> block id in the plan; -> hunk index in the diff.
-local line_block, line_hunk, hunk_lines = {}, {}, {}
+local plan_buf, diff_buf, goals_buf, priority_buf
+-- Line number -> block id in the plan; -> hunk index in the diff; -> goal
+-- id; -> index in the ranked list.
+local line_block, line_hunk, hunk_lines, line_goal, line_rank = {}, {}, {}, {}, {}
+local selected_rank = 1
 local selected_hunk = 1
+-- The goals, as the Worker reads them out of Pepper's goal notes (goals.ts),
+-- and the one selected in agent://plan/goals.
+local goals = {}
+local selected_goal
 
 -- 9:30am, as the plan shows times. hhmm is 24-hour, for the calendar.
 local function hhmm(m) return string.format("%02d:%02d", math.floor(m / 60), m % 60) end
@@ -166,7 +174,12 @@ local function plan_state()
     focus = length(focus),
     fixed = fixed,
     proposal = proposal ~= nil,
+    rank = selected_rank,
   }
+end
+
+local function goals_state()
+  return { goals = goals, selected = selected_goal }
 end
 
 local function diff_state()
@@ -205,6 +218,7 @@ local function notify_page()
   local corkboard = require("corkboard")
   corkboard.notify("corkboard.plan", plan_state())
   if proposal then corkboard.notify("corkboard.plan_diff", diff_state()) end
+  corkboard.notify("corkboard.plan_goals", goals_state())
   -- For Pepper's band and status line (corkboard.live).
   require("corkboard.live").set("plan", {
     date = today(),
@@ -234,18 +248,27 @@ local function render_plan()
       b.tag or "", b.pinned and "  pinned" or ""))
     map[#lines] = b.id
   end
-  vim.list_extend(lines, { "", "PRIORITY" })
+  pinned.set_lines(plan_buf, lines)
+  line_block = map
+  pinned.follow(plan_buf, line_block, selected)
+end
+
+local function render_priority()
+  if not (priority_buf and vim.api.nvim_buf_is_valid(priority_buf)) then return end
+  local lines, map = { "Priority", "" }, {}
   for i, r in ipairs(day.ranked) do
-    table.insert(lines, string.format("  %d. %-40s %5s  %s", i, r.title, r.est, r.why))
+    table.insert(lines, string.format("  %d. %-40s %5s", i, r.title, r.est))
+    map[#lines] = i
+    table.insert(lines, "     " .. r.why)
   end
   table.insert(lines, "")
   table.insert(lines, string.format("NOT TODAY (%d)%s", #day.later, show_later and "" or "  z to show"))
   if show_later then
     for _, l in ipairs(day.later) do table.insert(lines, "  " .. l.title .. "  " .. l.why) end
   end
-  pinned.set_lines(plan_buf, lines)
-  line_block = map
-  pinned.follow(plan_buf, line_block, selected)
+  pinned.set_lines(priority_buf, lines)
+  line_rank = map
+  selected_rank = math.min(selected_rank, math.max(#day.ranked, 1))
 end
 
 local function render_diff()
@@ -274,9 +297,30 @@ local function render_diff()
   selected_hunk = math.min(selected_hunk, math.max(#hunks, 1))
 end
 
+local function render_goals()
+  if not (goals_buf and vim.api.nvim_buf_is_valid(goals_buf)) then return end
+  local lines, map = { "Goals", "" }, {}
+  if #goals == 0 then table.insert(lines, "  no goals yet: Pepper keeps them as goal notes") end
+  for _, g in ipairs(goals) do
+    table.insert(lines, "  " .. g.name)
+    map[#lines] = g.id
+    if g.aim ~= "" then table.insert(lines, "    " .. g.aim) end
+    if g.why ~= "" then table.insert(lines, "    why: " .. g.why) end
+    for _, m in ipairs(g.measures) do table.insert(lines, "    measured by: " .. m) end
+    for _, w in ipairs(g.week) do table.insert(lines, "    this week: " .. w) end
+    table.insert(lines, "")
+  end
+  pinned.set_lines(goals_buf, lines)
+  line_goal = map
+  if not selected_goal or not pinned.line_of(line_goal, selected_goal) then selected_goal = goals[1] and goals[1].id end
+  pinned.follow(goals_buf, line_goal, selected_goal)
+end
+
 local function redraw()
   render_plan()
+  render_priority()
   render_diff()
+  render_goals()
   notify_page()
 end
 
@@ -292,11 +336,11 @@ local function show_buf(buf)
   if empty ~= buf then pcall(vim.api.nvim_buf_delete, empty, {}) end
 end
 
--- Close the proposal's tab (its window, when it shares one) and go back to
--- the plan.
-local function close_diff()
-  if diff_buf and vim.api.nvim_buf_is_valid(diff_buf) then
-    for _, win in ipairs(vim.fn.win_findbuf(diff_buf)) do
+-- Close a view's tab (its window, when it shares one), the proposal's, and
+-- go back to the plan.
+local function close_view(buf)
+  if buf and vim.api.nvim_buf_is_valid(buf) then
+    for _, win in ipairs(vim.fn.win_findbuf(buf)) do
       local tab = vim.api.nvim_win_get_tabpage(win)
       if #vim.api.nvim_tabpage_list_wins(tab) == 1 and #vim.api.nvim_list_tabpages() > 1 then
         pcall(vim.cmd.tabclose, vim.api.nvim_tabpage_get_number(tab))
@@ -314,7 +358,7 @@ end
 
 -- A block's card. In a project's window, on its board. The day plan's
 -- window has no board, so it opens the card's project in a window of its
--- own (corkboard.open), where the card is on the board.
+-- own (corkboard.open), or the one it has, and the card on its board there.
 local function open_card(id, board)
   if not id then return vim.notify("corkboard: this block has no card") end
   if require("corkboard").window ~= "plan" then return require("corkboard.board").reveal(id) end
@@ -324,7 +368,7 @@ local function open_card(id, board)
     if b.key == board and b.root ~= vim.NIL then root = b.root end
   end
   if not root then return vim.notify("corkboard: " .. id .. " is on a board with no project to open (" .. tostring(board) .. ")") end
-  require("corkboard").notify("corkboard.open", { cwd = root })
+  require("corkboard").notify("corkboard.open", { cwd = root, run = { "corkboard.board", "reveal", id } })
 end
 
 -- The re-plan waiting to be accepted. The assistant makes them; S tells it
@@ -384,7 +428,7 @@ function M.accept()
       return vim.notify("corkboard: on the calendar, but the Worker didn't take it: " .. res .. "; accept again", vim.log.levels.ERROR)
     end
     if settle(res, "it was accepted") then
-      close_diff()
+      close_view(diff_buf)
       vim.notify("corkboard: plan accepted. " .. vim.trim(r.stdout))
     end
   end))
@@ -392,7 +436,7 @@ end
 
 function M.discard()
   if not (proposal and doc) then return end
-  if settle(cloud().call("plan_discard", doc.date, doc.version), "it was discarded") then close_diff() end
+  if settle(cloud().call("plan_discard", doc.date, doc.version), "it was discarded") then close_view(diff_buf) end
 end
 
 -- Put the hunk's blocks back as the current plan has them.
@@ -463,11 +507,19 @@ end
 -- Read the plan again, and follow it from now on.
 local following = false
 
+-- The goals, read again. They change only when Pepper rewrites a goal note,
+-- which nothing tells of: read with the plan, and on opening them.
+local function load_goals()
+  local ok, res = pcall(cloud().call, "goals")
+  if ok and type(res) == "table" then goals = res end
+end
+
 function M.load()
   if not cloud().enabled() then
     problem = "the day plan needs corkboard's bridge and the cloud"
     return redraw()
   end
+  load_goals()
   local ok, res = pcall(function()
     if not following then
       cloud().call("plan_subscribe")
@@ -519,14 +571,49 @@ end
 
 M.reset = M.load
 
+-- The goals' window, on goal id (or the one last seen), read again.
+function M.goals(id)
+  load_goals()
+  M.ensure()
+  M.arrange()
+  show_buf(M.goals_buffer())
+  if id then selected_goal = id end
+  redraw()
+  local lnum = pinned.line_of(line_goal, selected_goal)
+  if lnum then vim.api.nvim_win_set_cursor(0, { lnum, 2 }) end
+end
+
 local PLAN_ACTIONS = {
   replan = M.replan,
   edit = M.edit,
   pin = M.pin,
   later = M.toggle_later,
+  goals = function() M.goals() end,
   claude = function() require("corkboard.plan.claude").open() end,
   open = function()
     local b = selected_block() or {}
+    open_card(b.card, b.board)
+  end,
+  reset = M.load,
+}
+
+local GOAL_ACTIONS = {
+  back = function() M.show() end,
+  claude = PLAN_ACTIONS.claude,
+  reset = function()
+    load_goals()
+    redraw()
+  end,
+}
+
+local function selected_ranked() return day.ranked[selected_rank] or {} end
+
+local PRIORITY_ACTIONS = {
+  back = function() M.show() end,
+  later = M.toggle_later,
+  claude = PLAN_ACTIONS.claude,
+  open = function()
+    local b = find(day.blocks, selected_ranked().block) or {}
     open_card(b.card, b.board)
   end,
   reset = M.load,
@@ -550,8 +637,25 @@ local DIFF_ACTIONS = {
 -- A key hint or double-click in the browser.
 function M.action(view, name, win)
   if win and vim.api.nvim_win_is_valid(win) then vim.api.nvim_set_current_win(win) end
-  local fn = (view == "plan-diff" and DIFF_ACTIONS or PLAN_ACTIONS)[name]
+  local actions = { ["plan-diff"] = DIFF_ACTIONS, ["plan-goals"] = GOAL_ACTIONS, ["plan-priority"] = PRIORITY_ACTIONS }
+  local fn = (actions[view] or PLAN_ACTIONS)[name]
   if fn then fn() end
+end
+
+-- A click on a ranked item in the browser.
+function M.select_rank(i, win)
+  if win and vim.api.nvim_win_is_valid(win) then vim.api.nvim_set_current_win(win) end
+  local lnum = pinned.line_of(line_rank, i)
+  if lnum then vim.api.nvim_win_set_cursor(0, { lnum, 2 }) end
+end
+
+-- A click on a goal in the browser: from another window, it goes to the
+-- goals'.
+function M.select_goal(id, win)
+  if win and vim.api.nvim_win_is_valid(win) then vim.api.nvim_set_current_win(win) end
+  if vim.api.nvim_get_current_buf() ~= goals_buf then return M.goals(id) end
+  local lnum = pinned.line_of(line_goal, id)
+  if lnum then vim.api.nvim_win_set_cursor(0, { lnum, 2 }) end
 end
 
 -- A click on a block in the browser.
@@ -584,14 +688,14 @@ function M.buffer()
     e = { "edit", "edit the block" },
     p = { "pin", "pin the block" },
     z = { "later", "show what's not today" },
+    g = { "goals", "see the goals" },
     c = { "claude", "go to Pepper, beside the plan" },
     ["<CR>"] = { "open", "open the block's card" },
     R = { "reset", "read the plan again" },
   })
   k.j = { step(1), "next block" }
   k.k = { step(-1), "previous block" }
-  k["<Down>"] = k.j
-  k["<Up>"] = k.k
+
   plan_buf = pinned.listing("agent://plan", "plan", k, function() return line_block end, function(id)
     if id == selected then return end
     selected = id
@@ -622,10 +726,93 @@ function M.diff_buffer()
   return diff_buf
 end
 
+function M.goals_buffer()
+  if goals_buf and vim.api.nvim_buf_is_valid(goals_buf) then return goals_buf end
+  local step = function(dir) return function() pinned.step(line_goal, dir) end end
+  local k = keys(GOAL_ACTIONS, {
+    q = { "back", "back to the day" },
+    c = { "claude", "go to Pepper, beside the plan" },
+    R = { "reset", "read the goals again" },
+  })
+  k.j = { step(1), "next goal" }
+  k.k = { step(-1), "previous goal" }
+
+  goals_buf = pinned.listing("agent://plan/goals", "plan-goals", k, function() return line_goal end, function(id)
+    if id == selected_goal then return end
+    selected_goal = id
+    notify_page()
+  end)
+  vim.bo[goals_buf].bufhidden = "hide"
+  return goals_buf
+end
+
+function M.priority_buffer()
+  if priority_buf and vim.api.nvim_buf_is_valid(priority_buf) then return priority_buf end
+  local step = function(dir) return function() pinned.step(line_rank, dir) end end
+  local k = keys(PRIORITY_ACTIONS, {
+    q = { "back", "back to the day" },
+    z = { "later", "show what's not today" },
+    c = { "claude", "go to Pepper, beside the plan" },
+    ["<CR>"] = { "open", "open the item's card" },
+    R = { "reset", "read the plan again" },
+  })
+  k.j = { step(1), "next item" }
+  k.k = { step(-1), "previous item" }
+
+  priority_buf = pinned.listing("agent://plan/priority", "plan-priority", k, function() return line_rank end, function(i)
+    if i == selected_rank then return end
+    selected_rank = i
+    -- The item's block is the day's selection too.
+    local r = day.ranked[i]
+    if r and r.block and find(day.blocks, r.block) then
+      selected = r.block
+      pinned.follow(plan_buf, line_block, selected)
+    end
+    notify_page()
+  end)
+  vim.bo[priority_buf].bufhidden = "hide"
+  return priority_buf
+end
+
+-- Whether buf is one of the plan's tab's three.
+function M.owns(buf) return buf == plan_buf or buf == goals_buf or buf == priority_buf end
+
+-- The goals' window left of the day, and the priority's under it, wherever
+-- the day's window is, unless they're already in that tab. Leaves focus
+-- where it was.
+local COLUMN_WIDTH = 52
+function M.arrange()
+  local plan_win = vim.fn.win_findbuf(M.buffer())[1]
+  if not plan_win then return end
+  local tab = vim.api.nvim_win_get_tabpage(plan_win)
+  local from = vim.api.nvim_get_current_win()
+  local function in_tab(buf)
+    for _, w in ipairs(vim.fn.win_findbuf(buf)) do
+      if vim.api.nvim_win_get_tabpage(w) == tab then return w end
+    end
+  end
+  -- Each from the window it goes beside: the day's, or the other one's.
+  local function open(buf, from_win, cmd)
+    vim.api.nvim_set_current_win(from_win)
+    vim.cmd(cmd)
+    vim.api.nvim_win_set_buf(0, buf)
+    vim.wo.winfixwidth = true
+    return vim.api.nvim_get_current_win()
+  end
+  local goals_win, priority_win = in_tab(M.goals_buffer()), in_tab(M.priority_buffer())
+  if not goals_win then
+    goals_win = priority_win and open(goals_buf, priority_win, "leftabove split") or open(goals_buf, plan_win, "leftabove vsplit")
+  end
+  if not priority_win then open(priority_buf, goals_win, "rightbelow split") end
+  vim.api.nvim_win_set_width(goals_win, COLUMN_WIDTH)
+  if vim.api.nvim_win_is_valid(from) then vim.api.nvim_set_current_win(from) end
+end
+
 -- In the day plan's window (corkboard.window == "plan"), keep the plan its
 -- first tab. Leaves focus where it was.
 function M.ensure()
   if pinned.ensure("corkboard_plan", 1, M.buffer()) then
+    M.arrange()
     M.load()
     -- The window opens with Pepper beside the plan, focus on the plan.
     -- CORKBOARD_PLAN_CLAUDE=0 leaves it out (tests).
@@ -650,7 +837,7 @@ end
 
 -- For a channel that just attached: the last state again, if the view exists.
 function M.push_all()
-  if plan_buf and vim.api.nvim_buf_is_valid(plan_buf) then notify_page() end
+  if (plan_buf and vim.api.nvim_buf_is_valid(plan_buf)) or (goals_buf and vim.api.nvim_buf_is_valid(goals_buf)) then notify_page() end
 end
 
 return M

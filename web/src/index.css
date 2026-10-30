@@ -109,6 +109,19 @@
   kbd { font: inherit; }
 }
 
+/* A size up from the editor's text, on a grid of its own: the day plan's
+   windows. The sizes are worked out on :root, from the cell grid.js
+   measures, so the utility can take the names over. */
+:root {
+  --font-size-large: calc(var(--font-size) * 1.25);
+  --cell-h-large: calc(var(--cell-h) * 1.25);
+}
+@utility text-large {
+  --font-size: var(--font-size-large);
+  --cell-h: var(--cell-h-large);
+  font: var(--font-size)/var(--cell-h) var(--font);
+}
+
 @keyframes pulse-dot { 50% { opacity: .35; } }
 @utility animate-pulse-dot {
   animation: pulse-dot 1.4s ease-in-out infinite;

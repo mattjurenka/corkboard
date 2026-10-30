@@ -12,11 +12,33 @@
 // When the socket drops it reconnects and sends a whole fresh copy, so
 // nothing missed in between is lost.
 
+import { hostname } from "node:os";
 import { CLOUD, token } from "./cloud";
+import { host } from "./host";
 import { acceptedHere } from "./phone";
+import * as remote from "./remote";
 
 // key: the board's, or USER for the user's own socket (plans).
 export type Listener = (key: string, event: unknown) => void;
+
+// The environment this machine is, as its fleetd names it (fleet/fleetd/queue.ts).
+const ENVIRONMENT = process.env.CORKBOARD_FLEET_ENVIRONMENT ?? hostname();
+
+// A clone's remotes, origin first, as URLs another machine can clone from: no
+// local paths, and no credentials in them.
+async function remotes(root: string): Promise<string[]> {
+  const proc = Bun.spawn(["git", "-C", root, "config", "--get-regexp", "^remote\\..*\\.url$"], { stdout: "pipe", stderr: "ignore" });
+  const out = await new Response(proc.stdout).text();
+  if ((await proc.exited) !== 0) return [];
+  const urls = out
+    .split("\n")
+    .map((line) => line.match(/^remote\.(.+)\.url (\S+)$/))
+    .filter((m): m is RegExpMatchArray => !!m)
+    .sort((a, b) => Number(b[1] === "origin") - Number(a[1] === "origin"))
+    .map((m) => m[2].replace(/^(https?:\/\/)[^\/@]*@/, "$1"))
+    .filter((u) => /^(https?:\/\/|ssh:\/\/|git:\/\/|[\w.-]+@[\w.-]+:)\S{1,500}$/.test(u));
+  return [...new Set(urls)].slice(0, 8);
+}
 
 // The user's socket, which tells of plan changes (GET /api/live).
 export const USER = "@user";
@@ -117,7 +139,13 @@ async function follow(key: string, listener: Listener) {
 // session stops its sockets once nobody else uses them.
 export class Session {
   private keys = new Set<string>();
-  constructor(private listener: Listener) {}
+  // The conversations it follows (fleet_follow), by "bridge/key".
+  private conversations = new Map<string, WebSocket>();
+  // sessions: the fleet view's (away.ts's list, for this Neovim's page).
+  constructor(
+    private listener: Listener,
+    private sessions: () => unknown[] = () => [],
+  ) {}
 
   // op and args as cards/cloud.lua sends them.
   async call(op: string, args: any[]): Promise<unknown> {
@@ -129,6 +157,18 @@ export class Session {
         method: "POST",
         headers: { Authorization: `Bearer ${await token()}`, "Content-Type": "application/json" },
         body: "{}",
+      });
+      const json = (await res.json().catch(() => ({}))) as any;
+      if (!res.ok) throw new Error(`corkboard cloud: ${json.error ?? `HTTP ${res.status}`}`);
+      return { ...json, url: `${CLOUD}/mcp` };
+    }
+    // Another brain's VM (fleet.lua's open_vm): its sessions' MCP and memory.
+    if (op === "brain_token") {
+      const [brain] = args;
+      const res = await fetch(`${CLOUD}/api/tokens/brain`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await token()}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ brain }),
       });
       const json = (await res.json().catch(() => ({}))) as any;
       if (!res.ok) throw new Error(`corkboard cloud: ${json.error ?? `HTTP ${res.status}`}`);
@@ -155,20 +195,50 @@ export class Session {
       if (!res.ok) throw new Error(`corkboard cloud: ${json.error ?? `HTTP ${res.status}`}`);
       return null;
     }
+    // The goals, read out of Pepper's goal notes: the day plan's goals box.
+    if (op === "goals") {
+      const res = await fetch(`${CLOUD}/api/goals`, { headers: { Authorization: `Bearer ${await token()}` } });
+      const json = (await res.json().catch(() => ({}))) as any;
+      if (!res.ok) throw new Error(`corkboard cloud: ${json.error ?? `HTTP ${res.status}`}`);
+      return json;
+    }
+    // The board of the project with this first commit: the one made at this
+    // path, if it's among them (a fork beside its upstream), or the first.
+    // Otherwise the path's own key, for a board made here.
+    if (op === "resolve") {
+      const [pathKey, commit] = args;
+      // Filtered here too: a Worker from before commits lists every board.
+      const listed = (await ok("GET", `?commit=${encodeURIComponent(commit)}`)) as { key: string; commit?: string }[];
+      const found = listed.filter((b) => b.commit === commit);
+      return (found.find((b) => b.key === pathKey) ?? found[0])?.key ?? pathKey;
+    }
+    // Every board, with its project's root and remotes: Open project (picker.lua).
+    if (op === "boards") return ok("GET", "");
     const [key] = args;
     if (typeof key !== "string" || !key) throw new Error("corkboard cloud: no board key");
     const board = `/${encodeURIComponent(key)}`;
     switch (op) {
       // Follows the board and answers with a whole copy; null for a board
       // that doesn't exist yet, unless make, which makes it (a first card).
-      // Opening corkboard somewhere doesn't make that a board.
+      // Opening corkboard somewhere doesn't make that a board. Opening one
+      // tells the Worker its first commit, and where this machine's clone is,
+      // and its remotes, which another machine clones it from (server.ts's /open).
       case "subscribe": {
-        const [, name, root, make] = args;
-        if (make) await ok("PUT", board, { name, root: root ?? null });
+        const [, name, root, make, commit] = args;
+        const found = root ? await remotes(root) : [];
+        const place = { root: root ?? null, environment: ENVIRONMENT, ...(commit && { commit }), ...(found.length && { remotes: found }) };
+        if (make) await ok("PUT", board, { name, ...place });
         else if ((await api("GET", `${board}/cards`)).status === 404) return null;
+        else if (root) await ok("PUT", board, place);
         await follow(key, this.listener);
         this.keys.add(key);
         return snapshot(key);
+      }
+      // A new project's board, made before it has a card (picker.lua).
+      case "make": {
+        const [, name, root] = args;
+        const found = await remotes(root);
+        return ok("PUT", board, { name, root, environment: ENVIRONMENT, ...(found.length && { remotes: found }) });
       }
       case "create":
         return ok("POST", `${board}/cards`, args[1]);
@@ -225,14 +295,16 @@ export class Session {
   }
 
   // The fleet view (fleet.lua): each environment and what runs there, the
-  // spawns not over yet and the last few that are, and the user's socket,
-  // which says when any of it changes.
+  // spawns not over yet and the last few that are, the Claude Code sessions
+  // of every page this bridge has open (away.ts tells it of changes in
+  // those) and the machine and environment the bridge is on, and the user's
+  // socket, which says when the rest changes.
   private async fleet(op: string, args: any[]): Promise<unknown> {
-    const send = async (method: string, path: string) => {
+    const send = async (method: string, path: string, body: object = {}) => {
       const res = await fetch(`${CLOUD}/api${path}`, {
         method,
         headers: { Authorization: `Bearer ${await token()}`, ...(method === "POST" ? { "Content-Type": "application/json" } : {}) },
-        body: method === "POST" ? "{}" : undefined,
+        body: method === "POST" ? JSON.stringify(body) : undefined,
       });
       const json = (await res.json().catch(() => ({}))) as any;
       if (!res.ok) throw new Error(`corkboard cloud: ${json.error ?? `HTTP ${res.status}`}`);
@@ -249,7 +321,62 @@ export class Session {
           send("GET", "/spawns?state=pending-approval,queued,running&limit=50"),
           send("GET", "/spawns?state=done,failed,stopped&limit=8"),
         ]);
-        return { environments, spawns: [...open, ...over] };
+        // Every other bridge's sessions, and fleetd's: this one's are sessions.
+        const bridges = ((await send("GET", "/sessions").catch(() => [])) as { id: string }[]).filter((b) => b.id !== remote.self());
+        return { environments, spawns: [...open, ...over], sessions: this.sessions(), bridges, self: remote.self() ?? null, machine: { ...host(), environment: ENVIRONMENT } };
+      }
+      // A session's conversation, as it goes, to the fleet view
+      // (corkboard/conversation.lua) as { type: "conversation", bridge, key,
+      // items, reset } and, once it's over, { type: "conversation_end", why }.
+      case "fleet_follow": {
+        const [bridge, key] = args as [string, string];
+        const id = `${bridge}/${key}`;
+        if (!/^[\w-]{1,64}\/[\w.-]{1,64}$/.test(id)) throw new Error("corkboard cloud: which session?");
+        this.conversations.get(id)?.close();
+        const ws = new WebSocket(`${CLOUD.replace(/^http/, "ws")}/api/sessions/${id}/attach`, { headers: { Authorization: `Bearer ${await token()}` } } as any);
+        this.conversations.set(id, ws);
+        ws.onmessage = (e) => {
+          let m: any;
+          try {
+            m = JSON.parse(String(e.data));
+          } catch {
+            return;
+          }
+          if (m.type === "out") {
+            const batch = JSON.parse(m.data);
+            this.listener(USER, { type: "conversation", bridge, key, items: batch.items ?? [], reset: !!batch.reset });
+          } else if (m.type === "end") this.listener(USER, { type: "conversation_end", bridge, key, why: m.why ?? "ended" });
+        };
+        ws.onclose = () => {
+          if (this.conversations.get(id) !== ws) return;
+          this.conversations.delete(id);
+          this.listener(USER, { type: "conversation_end", bridge, key, why: "no longer followed" });
+        };
+        return null;
+      }
+      case "fleet_unfollow": {
+        const id = `${args[0]}/${args[1]}`;
+        const ws = this.conversations.get(id);
+        this.conversations.delete(id);
+        ws?.close();
+        return null;
+      }
+      // Typed into a session: text, then keys (enter, esc, …).
+      case "fleet_say": {
+        const [bridge, key, text, keys] = args as [string, string, string, string[]];
+        const res = await fetch(`${CLOUD}/api/sessions/${encodeURIComponent(bridge)}/${encodeURIComponent(key)}/say`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${await token()}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ text: text ?? "", keys: keys ?? [] }),
+        });
+        const json = (await res.json().catch(() => ({}))) as any;
+        if (!res.ok) throw new Error(`corkboard cloud: ${json.error ?? `HTTP ${res.status}`}`);
+        return null;
+      }
+      // A session you talk to, in one of an environment's slots.
+      case "fleet_session": {
+        const [environment, template] = args as [string, string];
+        return send("POST", "/spawns", { environment, template, interactive: true, task: "" });
       }
       case "fleet_approve":
       case "fleet_stop":
@@ -304,6 +431,8 @@ export class Session {
   }
 
   close() {
+    for (const ws of this.conversations.values()) ws.close();
+    this.conversations.clear();
     for (const key of this.keys) {
       const l = live.get(key);
       if (!l) continue;

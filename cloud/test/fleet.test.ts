@@ -84,7 +84,37 @@ describe("spawning", () => {
   });
 });
 
+describe("sessions", () => {
+  it("queues an interactive spawn without a task, named for its template", async () => {
+    const s = await send("POST", "/api/spawns", { template: "coding", interactive: true, board: BOARD });
+    expect(s.status).toBe(201);
+    expect(s.body).toMatchObject({ interactive: true, task: "", state: "queued", board: BOARD });
+    expect((await tool(owner, "read_card", { board: BOARD, id: s.body.card })).title).toBe("coding session");
+    expect((await send("POST", "/api/spawns", { template: "coding" })).status).toBe(400);
+  });
+
+  it("starts one from MCP, its first message the task", async () => {
+    const s = await tool(owner, "start_session", { template: "coding", board: BOARD, message: "look at the flaky test" });
+    expect(s).toMatchObject({ interactive: true, task: "look at the flaky test", state: "queued", board: BOARD });
+  });
+});
+
+describe("environments", () => {
+  it("forgets one no fleetd runs as any more", async () => {
+    const del = (name: string) => send("DELETE", `/api/fleet/environments/${name}`);
+    expect((await del("local")).status).toBe(204);
+    expect((await send("GET", "/api/fleet/environments")).body.map((e: { name: string }) => e.name)).not.toContain("local");
+    expect((await del("local")).status).toBe(404);
+  });
+});
+
 describe("fleetd's side", () => {
+  it("works in the claiming environment's own clone of the board's project", async () => {
+    await send("PUT", `/api/boards/${BOARD}`, { root: "/srv/corkboard", environment: "local" });
+    const s = (await send("POST", "/api/spawns", { template: "coding", task: "fix it", board: BOARD })).body;
+    expect((await send("POST", `/api/spawns/${s.id}/claim`, { environment: "local" })).body.repo).toBe("/srv/corkboard");
+  });
+
   it("claims a spawn for a card token and the board's repo, runs it, and leaves the answer on the card", async () => {
     const s = (await send("POST", "/api/spawns", { template: "coding", task: "fix it", board: BOARD })).body;
     expect((await send("POST", `/api/spawns/${s.id}/claim`, { environment: "cloud" })).status).toBe(409);
@@ -159,6 +189,21 @@ describe("what's running", () => {
     const [local] = (await send("GET", "/api/fleet/environments")).body;
     expect(local.running).toEqual(RUNNING);
     expect((await tool(owner, "spawn_status")).environments[0].running).toEqual(RUNNING);
+  });
+
+  it("keeps each VM's config, cut to size", async () => {
+    const network = { address: "10.80.0.2", egress: "allowlist", allowedDomains: ["api.anthropic.com", 7], allowedDomainSuffixes: [], routedEgress: [] };
+    const config = { ...network, cores: 2, capabilities: ["claude-code", "coding"], account: "../x", needsApproval: false };
+    const running = { ...RUNNING, slots: [{ ...RUNNING.slots[0], config }, { ...RUNNING.slots[1], config: "no" }] };
+    const { body } = await send("PUT", "/api/fleet/environments/local", { templates: TEMPLATES, running });
+    expect(body.running.slots[0].config).toEqual({ ...config, allowedDomains: ["api.anthropic.com"], account: null });
+    expect(body.running.slots[1].config).toBeUndefined();
+  });
+
+  it("keeps the machine fleetd runs on", async () => {
+    const host = { name: "valheim-jurenka-nyc", os: "Ubuntu 24.04.5 LTS", cores: 2, memory: 3915, available: 1800, load: [0.2, 0.3, 0.3, 9], uptime: 100, junk: 1 };
+    const { body } = await send("PUT", "/api/fleet/environments/local", { templates: TEMPLATES, running: { ...RUNNING, host } });
+    expect(body.running.host).toEqual({ name: host.name, os: host.os, cores: 2, memory: 3915, available: 1800, load: [0.2, 0.3, 0.3], uptime: 100 });
   });
 
   it("drops what isn't a name", async () => {

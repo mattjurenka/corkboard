@@ -160,6 +160,18 @@ export class Grid {
     this.cursor = { row, col };
   }
 
+  // A terminal that hides its cursor, like Claude Code drawing its own:
+  // drawn over, that cell's reverse video would cancel out.
+  on_busy_start() {
+    this.busy = true;
+    this.dirty.add(this.cursor.row);
+  }
+
+  on_busy_stop() {
+    this.busy = false;
+    this.dirty.add(this.cursor.row);
+  }
+
   on_mode_info_set(_enabled, modes) {
     this.modes = modes;
   }
@@ -267,7 +279,7 @@ export class Grid {
   drawCursor() {
     const { row, col } = this.cursor;
     const cell = this.cells[row]?.[col];
-    if (!cell) return;
+    if (!cell || this.busy) return;
     const mode = this.modes[this.mode] ?? {};
     const { ctx, cellW, cellH } = this;
     const x = col * cellW;

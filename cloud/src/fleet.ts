@@ -4,8 +4,10 @@
 //
 //   PUT   /api/fleet/environments/:name      { templates, running? }: what fleetd there can run, and runs
 //   GET   /api/fleet/environments            each environment and its templates
+//   DELETE /api/fleet/environments/:name     one no fleetd runs as any more
 //   GET   /api/spawns                        newest first: ?environment=, ?state=a,b, ?limit=
-//   POST  /api/spawns                        { template, task, environment?, board? }: the user's
+//   POST  /api/spawns                        { template, task, environment?, board?, interactive? }: the user's;
+//                                            interactive, a session you talk to (task its first message, if any)
 //   GET   /api/spawns/:id
 //   POST  /api/spawns/:id/approve            a brain's spawn of a template with credentials
 //   POST  /api/spawns/:id/stop
@@ -37,11 +39,37 @@ export const FINAL: readonly SpawnState[] = ["done", "failed", "stopped"];
 export type Template = { brain: string | null; needsApproval: boolean; memory: number; cores: number; capNames: string[] };
 // What's up there, as fleetd last saw it: the VMs that are always there,
 // each slot and the spawn in it, and the memory budget they share (MiB).
+// Each VM says how it's configured, when its host's manifest does: where it
+// is, what it may reach, and what it runs as.
+export type Config = {
+  address: string | null;
+  egress: "open" | "allowlist";
+  allowedDomains: string[];
+  allowedDomainSuffixes: string[];
+  routedEgress: { reason: string; destinations: string[]; tcpPorts: string[]; udpPorts: string[] }[];
+  cores: number | null;
+  capabilities: string[];
+  account: string | null;
+  needsApproval?: boolean;
+};
+// The machine fleetd runs on: what it is and how busy (MiB, seconds).
+export type Host = {
+  name: string;
+  os?: string;
+  kernel?: string;
+  cpu?: string;
+  cores?: number;
+  memory?: number;
+  available?: number;
+  load?: number[];
+  uptime?: number;
+};
 export type Running = {
   budget: number | null;
   used: number;
-  residents: { name: string; brain: string | null; memory: number | null; up: boolean }[];
-  slots: { name: string; spawn: string | null; template: string | null; memory: number | null }[];
+  host?: Host;
+  residents: { name: string; brain: string | null; memory: number | null; up: boolean; config?: Config }[];
+  slots: { name: string; spawn: string | null; template: string | null; memory: number | null; config?: Config }[];
 };
 export type Environment = { name: string; templates: Record<string, Template>; seen: string; running?: Running };
 
@@ -69,6 +97,10 @@ export type Spawn = {
   // Its answer, cut to RESULT characters.
   result?: string;
   stopRequested?: boolean;
+  // A session you talk to (from the phone, or the fleet view) rather than a
+  // task: it runs until it's stopped, and its fleetd serves its conversation
+  // as a bridge does (fleet/fleetd/sessions.ts).
+  interactive?: boolean;
 };
 
 export type SpawnReport = Pick<Spawn, "state" | "slot" | "exit" | "error" | "result">;
@@ -111,14 +143,17 @@ export class Refused extends Error {
 
 // Spawning ---------------------------------------------------------------------------
 
-export type SpawnInput = { template?: unknown; task?: unknown; environment?: unknown; board?: unknown };
+export type SpawnInput = { template?: unknown; task?: unknown; environment?: unknown; board?: unknown; interactive?: unknown };
 
 // A spawn, asked for by the user or a brain: placed, checked against the
 // rule, and given its card.
 export async function spawn(env: Env, user: string, by: string, input: SpawnInput): Promise<Spawn> {
   const u = users(env, user);
   if (typeof input.template !== "string" || !input.template) throw new Refused(400, "template must be a template's name; spawn_status lists them");
-  if (typeof input.task !== "string" || !input.task.trim()) throw new Refused(400, "task must say what the agent should do");
+  const interactive = input.interactive === true;
+  // A session's task is only its first message, which it can go without.
+  if (interactive && input.task === undefined) input.task = "";
+  if (typeof input.task !== "string" || (!interactive && !input.task.trim())) throw new Refused(400, "task must say what the agent should do");
   if (input.task.length > 20_000) throw new Refused(400, "keep the task under 20000 characters");
   const template = input.template;
   const task = input.task.trim();
@@ -148,11 +183,11 @@ export async function spawn(env: Env, user: string, by: string, input: SpawnInpu
 
   const id = newId();
   const agent = `${template}-${id}`;
-  const first = task.split("\n")[0].trim();
+  const first = task.split("\n")[0].trim() || `${template} session`;
   const card = value(
     await boardOf(env, user, key).create({
       title: first.length > 100 ? first.slice(0, 99) + "…" : first,
-      description: `${task}\n\n---\nSpawned agent ${id}: ${template} in ${environment}, asked by ${by}.`,
+      description: `${task}${task ? "\n\n---\n" : ""}${interactive ? "Session" : "Spawned agent"} ${id}: ${template} in ${environment}, asked by ${by}.`,
       status: "ready",
       agent,
       agent_state: "queued",
@@ -160,7 +195,7 @@ export async function spawn(env: Env, user: string, by: string, input: SpawnInpu
       attention: state === "pending-approval" ? `approve: ${by} wants to spawn ${template}, which holds credentials` : null,
     }),
   );
-  return u.addSpawn({ id, template, environment, task, brain: t.brain, by, state, board: key, card: card.id, agent, created: now() });
+  return u.addSpawn({ id, template, environment, task, brain: t.brain, by, state, board: key, card: card.id, agent, created: now(), ...(interactive && { interactive }) });
 }
 
 // A line on the spawn's card, and the card moved along with it. The agent
@@ -218,19 +253,19 @@ async function report(env: Env, user: string, id: string, input: Record<string, 
 }
 
 // fleetd's claim: the spawn, its card token, and the repo to work in (its
-// board's project, if it has one).
+// board's project, if it has one: the claiming environment's clone of it).
 async function claim(env: Env, user: string, props: Props, id: string, environment: unknown, mint: Mint) {
   if (typeof environment !== "string" || !NAME.test(environment)) throw new Invalid("environment must be the claiming environment's name");
   const u = users(env, user);
   const s = value(await u.claimSpawn(id, environment));
   const { token } = await mint(env, props, { kind: "card", board: s.board, card: s.card, agent: s.agent });
-  const repo = (await u.boards()).find((b) => b.key === s.board)?.root ?? null;
+  const repo = await u.rootIn(s.board, environment);
   return { spawn: s, token, repo };
 }
 
 // Routes -----------------------------------------------------------------------------
 
-export type Mint = (env: Env, props: Props, grant: Extract<Grant, { kind: "card" }>) => Promise<{ token: string; expires_at: string }>;
+export type Mint = (env: Env, props: Props, grant: Extract<Grant, { kind: "card" }>) => Promise<{ token: string; expires_at: string | null }>;
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 
@@ -248,6 +283,40 @@ function template(name: string, v: unknown): Template {
   };
 }
 
+// A VM's config as fleetd says it, kept to strings and numbers of sane size;
+// one that isn't an object is none.
+function config(v: unknown): Config | undefined {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return undefined;
+  const c = v as Record<string, unknown>;
+  const str = (x: unknown) => (typeof x === "string" ? x.slice(0, 256) : null);
+  const strs = (x: unknown) => (Array.isArray(x) ? x.slice(0, 64).flatMap((i) => (typeof i === "string" ? [i.slice(0, 256)] : [])) : []);
+  const routed = Array.isArray(c.routedEgress) ? c.routedEgress.slice(0, 16) : [];
+  return {
+    address: str(c.address),
+    egress: c.egress === "open" ? "open" : "allowlist",
+    allowedDomains: strs(c.allowedDomains),
+    allowedDomainSuffixes: strs(c.allowedDomainSuffixes),
+    routedEgress: routed.map((r) => {
+      const e = (r ?? {}) as Record<string, unknown>;
+      return { reason: str(e.reason)?.slice(0, 1000) ?? "", destinations: strs(e.destinations), tcpPorts: strs(e.tcpPorts), udpPorts: strs(e.udpPorts) };
+    }),
+    cores: Number.isFinite(c.cores) ? (c.cores as number) : null,
+    capabilities: strs(c.capabilities),
+    account: typeof c.account === "string" && NAME.test(c.account) ? c.account : null,
+    ...(typeof c.needsApproval === "boolean" && { needsApproval: c.needsApproval }),
+  };
+}
+
+function host(v: unknown): Host | undefined {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return undefined;
+  const h = v as Record<string, unknown>;
+  if (typeof h.name !== "string" || !NAME.test(h.name)) return undefined;
+  const str = (x: unknown) => (typeof x === "string" ? x.slice(0, 128) : undefined);
+  const num = (x: unknown) => (Number.isFinite(x) ? (x as number) : undefined);
+  const load = Array.isArray(h.load) ? h.load.slice(0, 3).filter((n) => Number.isFinite(n)) : undefined;
+  return { name: h.name, os: str(h.os), kernel: str(h.kernel), cpu: str(h.cpu), cores: num(h.cores), memory: num(h.memory), available: num(h.available), load, uptime: num(h.uptime) };
+}
+
 function running(v: unknown): Running {
   if (typeof v !== "object" || v === null || Array.isArray(v)) throw new Invalid("running must be an object");
   const r = v as Record<string, unknown>;
@@ -255,25 +324,40 @@ function running(v: unknown): Running {
   const name = (x: unknown) => (typeof x === "string" && NAME.test(x) ? x : null);
   const id = (x: unknown) => (typeof x === "string" && ID.test(x) ? x : null);
   const list = (x: unknown) => (Array.isArray(x) ? x.slice(0, 64) : []).map((i) => (i ?? {}) as Record<string, unknown>);
+  const h = host(r.host);
   return {
     budget: num(r.budget),
     used: num(r.used) ?? 0,
-    residents: list(r.residents).flatMap((i) => (name(i.name) ? [{ name: name(i.name)!, brain: name(i.brain), memory: num(i.memory), up: i.up === true }] : [])),
-    slots: list(r.slots).flatMap((i) => (name(i.name) ? [{ name: name(i.name)!, spawn: id(i.spawn), template: name(i.template), memory: num(i.memory) }] : [])),
+    ...(h && { host: h }),
+    residents: list(r.residents).flatMap((i) => {
+      const c = config(i.config);
+      return name(i.name) ? [{ name: name(i.name)!, brain: name(i.brain), memory: num(i.memory), up: i.up === true, ...(c && { config: c }) }] : [];
+    }),
+    slots: list(r.slots).flatMap((i) => {
+      const c = config(i.config);
+      return name(i.name) ? [{ name: name(i.name)!, spawn: id(i.spawn), template: name(i.template), memory: num(i.memory), ...(c && { config: c }) }] : [];
+    }),
   };
 }
 
-export async function fleetRoutes(request: Request, env: Env, props: Props, body: () => Promise<Record<string, unknown>>, mint: Mint): Promise<Response> {
+// machine: a machine token's environment, the only one it may speak for,
+// spawn into, or claim, stop and report spawns of. It approves nothing.
+export async function fleetRoutes(request: Request, env: Env, props: Props, body: () => Promise<Record<string, unknown>>, mint: Mint, machine?: string): Promise<Response> {
   const url = new URL(request.url);
   const user = props.userId;
   const u = users(env, user);
   const method = request.method;
+  const mine = (environment: unknown) => {
+    if (machine && environment !== machine) throw new Refused(403, `a machine token is ${machine}'s, not ${environment}'s`);
+  };
   try {
     const e = url.pathname.match(/^\/api\/fleet\/environments(?:\/([^/]+))?$/);
     if (e) {
       if (!e[1]) return method === "GET" ? json(await u.environments()) : json({ error: "method not allowed" }, 405);
-      if (method !== "PUT") return json({ error: "method not allowed" }, 405);
       if (!NAME.test(e[1])) throw new Invalid(`bad environment name ${e[1]}`);
+      mine(e[1]);
+      if (method === "DELETE") return (await u.forgetEnvironment(e[1])) ? new Response(null, { status: 204 }) : json({ error: `no environment ${e[1]}` }, 404);
+      if (method !== "PUT") return json({ error: "method not allowed" }, 405);
       const input = await body();
       if (typeof input.templates !== "object" || input.templates === null || Array.isArray(input.templates)) throw new Invalid("templates must be an object of templates by name");
       const templates = Object.fromEntries(
@@ -299,7 +383,12 @@ export async function fleetRoutes(request: Request, env: Env, props: Props, body
         return json(await u.spawns(url.searchParams.get("environment") ?? undefined, states, limit));
       }
       if (method !== "POST") return json({ error: "method not allowed" }, 405);
-      return json(await spawn(env, user, "user", await body()), 201);
+      const input = await body();
+      if (machine) {
+        if (input.environment !== undefined) mine(input.environment);
+        input.environment = machine;
+      }
+      return json(await spawn(env, user, "user", input), 201);
     }
     if (!ID.test(id)) return json({ error: `no spawn ${id}` }, 404);
     if (!action) {
@@ -308,10 +397,18 @@ export async function fleetRoutes(request: Request, env: Env, props: Props, body
       return s ? json(s) : json({ error: `no spawn ${id}` }, 404);
     }
     if (method !== "POST") return json({ error: "method not allowed" }, 405);
+    if (machine) {
+      if (action === "approve") throw new Refused(403, "only the owner approves a spawn");
+      const s = await u.spawn(id);
+      if (s) mine(s.environment);
+    }
     if (action === "approve") return json(await approve(env, user, id));
     if (action === "stop") return json(await stop(env, user, id));
     const input = await body();
-    if (action === "claim") return json(await claim(env, user, props, id, input.environment, mint));
+    if (action === "claim") {
+      mine(input.environment);
+      return json(await claim(env, user, props, id, input.environment, mint));
+    }
     return json(await report(env, user, id, input));
   } catch (err) {
     if (err instanceof Refused) return json({ error: err.message }, err.status);

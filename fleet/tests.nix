@@ -104,7 +104,7 @@ let
           p = { brain = "pepper"; environments = [ "local" ]; spawnable = true; };
           notSpawned = { brain = "pepper"; capabilities = [ "coding" ]; environments = [ "local" ]; };
         };
-      })).slotEgress == [ "corkboard.matthewjurenka.workers.dev" "github.com" "api.anthropic.com" ];
+      })).slotEgress == [ "portal.corkboard.fyi" "github.com" "api.anthropic.com" ];
 
     # A brain's templates run as its account and mount its memory; a
     # brainless one has neither of its own.

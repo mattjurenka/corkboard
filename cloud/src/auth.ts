@@ -11,6 +11,7 @@ import {
   AuthorizationError,
   CimdFetchError,
   authorizationErrorRedirect,
+  type AuthRequest,
   type ConsentDescription,
 } from "@cloudflare/workers-oauth-provider";
 import type { Env, Props } from "./index";
@@ -118,6 +119,9 @@ async function authorize(request: Request, env: Env): Promise<Response> {
   const oauth = env.OAUTH_PROVIDER;
   if (request.method === "GET") {
     const req = await oauth.parseAuthRequest(request);
+    // The portal (../portal) is ours: a code sent back to this origin
+    // reaches only the portal page, so there's no app to approve.
+    if (req.redirectUri === `${env.ORIGIN}/`) return toGoogle(env, req);
     const details = await oauth.describeConsent(req);
     const consent = await oauth.beginConsent(req);
     return consentPage(details, consent.handle, consent.headers);
@@ -131,8 +135,14 @@ async function authorize(request: Request, env: Env): Promise<Response> {
     return new Response(null, { status: 302, headers: denied.headers });
   }
   const approved = await oauth.approveConsent(request, handle, { scope: form.getAll("scope").map(String) });
+  return toGoogle(env, approved.request, approved.headers);
+}
+
+// On to Google's sign-in, with the approved request saved for /callback.
+async function toGoogle(env: Env, req: AuthRequest, sending?: Headers): Promise<Response> {
+  const oauth = env.OAUTH_PROVIDER;
   const verifier = crypto.randomUUID() + crypto.randomUUID();
-  const { state, headers } = await oauth.beginUpstream(approved.request, { data: { verifier }, headers: approved.headers });
+  const { state, headers } = await oauth.beginUpstream(req, { data: { verifier }, headers: sending });
   const challenge = base64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
   const google = new URL(GOOGLE_AUTHORIZE);
   google.search = new URLSearchParams({
@@ -179,7 +189,8 @@ export const auth = {
     try {
       if (path === "/authorize") return await authorize(request, env);
       if (path === "/callback") return await callback(request, env);
-      return new Response("not found", { status: 404 });
+      // Every other path is the portal's page (../portal, its own Worker).
+      return env.PORTAL ? await env.PORTAL.fetch(request) : new Response("not found", { status: 404 });
     } catch (e) {
       // As the provider's consent-page guide: redirect only to a validated
       // client, render everything else here.

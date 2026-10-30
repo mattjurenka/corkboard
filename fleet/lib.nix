@@ -74,7 +74,7 @@ let
     , nixosSystem ? null
       # corkboard's Worker: every spawned agent reports to its card there,
       # with its spawn token.
-    , corkboardHost ? "corkboard.matthewjurenka.workers.dev"
+    , corkboardHost ? "portal.corkboard.fyi"
     }:
     let
       caps = lib.mapAttrs capability capabilities;

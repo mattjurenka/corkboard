@@ -22,14 +22,18 @@ const KEY_ORDER = [
 ];
 const LISTS = ["assignee", "labels", "dependencies"];
 
+// As util.project_root in the Neovim plugin: the repository's main checkout,
+// or the directory itself outside one.
 function projectRoot(): string {
   try {
-    // The common dir is the main checkout's .git, from any worktree.
-    const git = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+    const [common, top] = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return dirname(git);
+    }).trim().split("\n");
+    // The common dir is the main checkout's .git, from any worktree; a
+    // submodule's is in its parent's .git/modules, so it is its own top level.
+    const root = basename(common) === ".git" ? dirname(common) : top;
+    return root && root !== homedir() ? root : process.cwd();
   } catch {
     return process.cwd();
   }
