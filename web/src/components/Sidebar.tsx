@@ -177,7 +177,7 @@ function Tabs() {
                 variant="ghost"
                 size="cell"
                 title="Close tab"
-                className="hidden w-2ch flex-none px-0 text-muted-foreground group-hover:inline-flex"
+                className="hidden w-2ch flex-none px-0 text-muted-foreground group-hover:inline-flex pointer-coarse:inline-flex"
                 onClick={(e) => {
                   e.stopPropagation();
                   nvim.notify("nvim_command", `${i + 1}tabclose`);
@@ -221,7 +221,8 @@ const VIEW_TABS: Record<string, [string, string | null]> = {
 };
 
 // A cell at the row's end for what the tab is: Claude Code, a shell, one of
-// corkboard's views, or a file. The close button takes its place on hover.
+// corkboard's views, or a file. The close button takes its place on hover,
+// or sits beside it on a touchscreen, which has none.
 // Alt+l or Alt+h from the sidebar: back to Neovim, at the leftmost window
 // or round to the rightmost. False for any other key.
 export function edgeWindow(key: string, nvim: Nvim): boolean {
@@ -242,7 +243,7 @@ function TabMark({ name, label }: { name: string; label?: Tab["label"] }) {
   return (
     <span
       className={cn(
-        "w-2ch flex-none text-center group-hover:hidden",
+        "w-2ch flex-none text-center pointer-fine:group-hover:hidden",
         label?.state === "ready" ? "text-primary" : "text-muted-foreground",
       )}
     >
@@ -261,25 +262,30 @@ function Thinking() {
     const t = setInterval(() => setI((n) => (n + 1) % THINKING_FRAMES.length), 120);
     return () => clearInterval(t);
   }, []);
-  return <span className="w-2ch flex-none text-center text-focus group-hover:hidden" data-ambient>{THINKING_FRAMES[i]}</span>;
+  return <span className="w-2ch flex-none text-center text-focus pointer-fine:group-hover:hidden" data-ambient>{THINKING_FRAMES[i]}</span>;
+}
+
+function tabParts(name: string, label?: Tab["label"]): [string, string | null] {
+  const term = /^term:\/\/(.*?)\/\/\d+:(.*)$/.exec(name);
+  if (VIEW_TABS[name]) return VIEW_TABS[name];
+  if (term) return [label?.title ?? term[2].split(" ")[0].split("/").at(-1)!, term[1]];
+  const slash = name.lastIndexOf("/");
+  return [name.slice(slash + 1), slash > 0 ? name.slice(0, slash) : null];
+}
+
+// The current tab's name alone, for the narrow page's bar (App.tsx).
+export function tabTitle(tabs: NonNullable<ReturnType<typeof store.get>["tabs"]>): string {
+  const i = tabs.tabs.findIndex(({ tab }) => tab.id === tabs.current.id);
+  if (i < 0) return "";
+  const { name, label } = tabs.tabs[i];
+  return PINNED[i] ?? (name ? tabParts(name, label)[0] : "[No Name]");
 }
 
 // preview: the file explorer's preview (untouched, replaced by the next file
 // it opens), in italics as VS Code shows it.
 function TabLabel({ name, label, preview }: { name: string; label?: Tab["label"]; preview?: boolean }) {
   if (!name) return <span className="min-w-0 flex-1 truncate text-muted-foreground">[No Name]</span>;
-  const term = /^term:\/\/(.*?)\/\/\d+:(.*)$/.exec(name);
-  let file: string, dir: string | null;
-  if (VIEW_TABS[name]) {
-    [file, dir] = VIEW_TABS[name];
-  } else if (term) {
-    file = label?.title ?? term[2].split(" ")[0].split("/").at(-1)!;
-    dir = term[1];
-  } else {
-    const slash = name.lastIndexOf("/");
-    file = name.slice(slash + 1);
-    dir = slash > 0 ? name.slice(0, slash) : null;
-  }
+  const [file, dir] = tabParts(name, label);
   return (
     <span className="flex min-w-0 flex-1 flex-col">
       <span className={cn("truncate", preview && "italic")}>{file}</span>

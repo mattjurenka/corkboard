@@ -14,6 +14,7 @@ const COLOR = { working: "text-working", needs: "text-blocked", ready: "text-pri
 // How many finished sessions it shows.
 const READY = 3;
 const WORD = { working: "working", needs: "needs you", ready: "ready", idle: "idle" };
+const id = (s: AwaySession) => (s.bridge ? `${s.bridge}/${s.key}` : `${s.page}:${s.buf}`);
 
 const minutes = (ms: number) => Math.max(0, Math.floor(ms / 60000));
 const clock = (ms: number) => {
@@ -75,7 +76,7 @@ export function Away() {
       const s = sessions[picked];
       if ((e.key === "j" || e.key === "ArrowDown") && picked < sessions.length - 1) setPicked(picked + 1);
       else if ((e.key === "k" || e.key === "ArrowUp") && picked > 0) setPicked(picked - 1);
-      else if (e.key === "Enter" && s) command("go", s.page, s.buf);
+      else if (e.key === "Enter" && s) command("go", ...(s.bridge ? [s.bridge, s.key] : [s.page, s.buf]));
       else if (e.key === " " && away.wake) command("stay");
       else if (!["j", "k", "ArrowDown", "ArrowUp", "Shift"].includes(e.key) && !away.wake) setListed(false);
     };
@@ -102,7 +103,7 @@ export function Away() {
                   <span className="max-w-[24ch] truncate text-right">{g.project}</span>
                   <div className="flex gap-2ch text-[1.5em] leading-[1.5]">
                     {g.sessions.map((s) => (
-                      <span key={`${s.page}:${s.buf}`} className={cn(COLOR[s.state], s.state === "working" && "animate-breathe")}>
+                      <span key={id(s)} className={cn(COLOR[s.state], s.state === "working" && "animate-breathe")}>
                         {GLYPH[s.state]}
                       </span>
                     ))}
@@ -148,7 +149,7 @@ export function Away() {
                 const i = sessions.indexOf(s);
                 return (
                   <li
-                    key={`${s.page}:${s.buf}`}
+                    key={id(s)}
                     className={cn("grid grid-cols-[2ch_3ch_1fr_10ch_6ch]", i === picked && "bg-selection")}
                   >
                     <span />

@@ -32,6 +32,7 @@ import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -79,9 +80,10 @@ fun Header(title: String, sub: String) {
         Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(title, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-        Text(" ─ $sub", style = Small, modifier = Modifier.weight(1f))
-        Text(clock(minute), style = Small)
+        // A long one (a session's name) on one line, cut short.
+        Text(title, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        Text(" ─ $sub", style = Small, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text(clock(minute), style = Small, modifier = Modifier.padding(start = 8.dp))
     }
     Rule()
 }

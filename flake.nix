@@ -20,6 +20,8 @@
       # the droplet's half (fleet/pepper/).
       pepperPlan = import ./fleet/plan.nix { name = "pepper-vm"; interface = "pep0"; octet = 89; mac = "52:54:00:c1:a0:30"; };
       # Plugins the bridge puts on Neovim's runtimepath.
+      # The commit built, for the status line, with no .git to ask.
+      rev = self.shortRev or self.dirtyShortRev or "?";
       pluginPath = pkgs: pkgs.lib.concatStringsSep ":" [ pkgs.vimPlugins.snacks-nvim ];
       # The wasm build (wasm/), on x86_64-linux only, where it has been tried.
       wasmOn = system:
@@ -165,6 +167,8 @@
             share=$out/share/corkboard
             mkdir -p $share/node_modules/@msgpack/msgpack
             cp -r bridge nvim mcp $share/
+            echo ${rev} > $share/bridge/rev
+            echo ${rev} > $share/nvim/rev
             mkdir -p $share/web && cp -r ${web} $share/web/dist
             tar -xzf $msgpack -C $share/node_modules/@msgpack/msgpack --strip-components=1
             makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-bridge \
@@ -243,6 +247,8 @@
         # and the bridge and bun do not need to.
         plugin = pkgs.runCommand "corkboard-nvim-plugin" { } ''
           cp -r ${./nvim} $out
+          chmod u+w $out
+          echo ${rev} > $out/rev
         '';
 
         # The page the Worker serves at /edit/, with no machine behind it

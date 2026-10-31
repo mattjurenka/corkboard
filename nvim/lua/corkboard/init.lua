@@ -486,6 +486,39 @@ function M.open_file(path, tab)
   end)
 end
 
+-- This plugin's commit: its repo's, or the one the flake wrote beside it
+-- (nvim/rev). Asked once, in the background.
+local version
+local function plugin_version()
+  if version then return version end
+  version = "?"
+  local root = vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(debug.getinfo(1, "S").source:sub(2))))
+  vim.system({ "git", "-C", root, "describe", "--always", "--dirty" }, { text = true }, function(r)
+    local v = r.code == 0 and vim.trim(r.stdout) or nil
+    if not v then
+      local f = io.open(root .. "/rev")
+      v = f and vim.trim(f:read("*a")) or "?"
+      if f then f:close() end
+    end
+    version = v
+    vim.schedule(function() vim.cmd.redrawstatus({ bang = true }) end)
+  end)
+  return version
+end
+
+-- The window in the bottom right corner, whose status line ends the screen's.
+local function corner(win)
+  local best, bottom, right
+  for _, w in ipairs(vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(win))) do
+    if vim.api.nvim_win_get_config(w).relative == "" then
+      local pos = vim.api.nvim_win_get_position(w)
+      local b, r = pos[1] + vim.api.nvim_win_get_height(w), pos[2] + vim.api.nvim_win_get_width(w)
+      if not best or b > bottom or (b == bottom and r > right) then best, bottom, right = w, b, r end
+    end
+  end
+  return best == win
+end
+
 -- Each window's status line names what is in it: a terminal by its program
 -- and directory, the board as "Board", a file by its path with ● for unsaved
 -- changes. Line and column only where the cursor means something.
@@ -544,6 +577,12 @@ function M.statusline()
     table.insert(parts, (over and "%#CorkboardStatusWarn#" or "") .. text .. "%*")
   end
   if pos then table.insert(parts, "%l:%c ") end
+  -- The bottom right one ends with corkboard's and the bridge's versions.
+  if corner(win) then
+    local current = win == vim.api.nvim_get_current_win()
+    local text = ("corkboard %s · bridge %s "):format(plugin_version(), vim.env.CORKBOARD_BRIDGE_VERSION or "?")
+    table.insert(parts, " " .. (current and "%#CorkboardStatusDetail#" or "") .. esc(text) .. "%*")
+  end
   return table.concat(parts)
 end
 

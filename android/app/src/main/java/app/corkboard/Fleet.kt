@@ -66,10 +66,10 @@ private fun hostSummary(h: Host) = listOfNotNull(
     h.load.firstOrNull()?.let { "load %.2f".format(it) },
 ).joinToString(" · ").ifEmpty { null }
 
-// working and starting are busy; asking and permission need you.
+// working, starting and background are busy; asking and permission need you.
 fun sessionColor(state: String): Color = when (state) {
     "asking", "permission" -> Monokai.yellow
-    "working", "starting" -> Monokai.cyan
+    "working", "starting", "background" -> Monokai.cyan
     "idle" -> Monokai.base05
     else -> Monokai.base04
 }
@@ -187,7 +187,7 @@ private fun newestFirst(sessions: List<Pair<Bridge, BridgeSession>>) = sessions.
 // running spawns, each saying where it runs.
 @Composable
 private fun ByProject(bridges: List<Bridge>, running: List<Spawn>, open: String?, tap: (String) -> Unit, session: (Bridge, BridgeSession) -> Unit) {
-    val sessions = newestFirst(bridges.flatMap { b -> b.sessions.map { b to it } }).groupBy { it.second.project.ifEmpty { "—" } }
+    val sessions = newestFirst(bridges.flatMap { b -> b.sessions.map { b to it } }).groupBy { it.second.project.ifEmpty { it.second.vm ?: "—" } }
     val spawns = running.sortedByDescending { it.started ?: it.created }.groupBy { it.board.ifEmpty { "—" } }
     // The project with the newest session or spawn first.
     fun newest(project: String) = maxOf(

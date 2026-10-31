@@ -10,7 +10,7 @@
 
 import { hostname } from "node:os";
 import * as away from "./away";
-import { bridgeId, serve, type Hosted } from "./sessions";
+import { bridgeId, serve, type Hosted, type Peer } from "./sessions";
 
 // This machine's, as fleetd names it (fleet/fleetd/queue.ts).
 const ENVIRONMENT = process.env.CORKBOARD_FLEET_ENVIRONMENT ?? hostname();
@@ -26,6 +26,15 @@ function list(): Hosted[] {
   }));
 }
 
+// Another bridge's project, named with its machine if it's another one,
+// else with its port (bridgeId's), the way it differs from this bridge's.
+function peerProject(b: Peer, project: string, host?: string) {
+  if (host) return `${host}:${project}`;
+  if (b.machine !== hostname()) return `${b.machine}:${project}`;
+  const here = `${bridgeId(hostname())}-`;
+  return b.id.startsWith(here) ? `${project} :${b.id.slice(here.length)}` : `${b.id}:${project}`;
+}
+
 let id: string | undefined;
 // This bridge's id at the Worker, once it's serving.
 export const self = () => id;
@@ -36,6 +45,26 @@ export function start(port: number) {
   serve(id, ENVIRONMENT, {
     list,
     watch: away.watch,
+    // For away mode. fleetd's run in VMs, on their own, not in a page.
+    peers: (bridges) =>
+      away.peers(
+        bridges.flatMap((b) =>
+          b.sessions
+            .filter((s) => !s.spawn && s.state)
+            .map((s) => ({
+              bridge: b.id,
+              key: s.key,
+              project: peerProject(b, s.project ?? "", s.host ?? undefined),
+              name: s.name,
+              state: s.state,
+              since: s.since ?? undefined,
+              detail: s.detail ?? undefined,
+              typed: s.typed ?? undefined,
+              attach: s.attach === true,
+              terminal: s.terminal === true,
+            })),
+        ),
+      ),
     screen: (key) => away.ask(at(key)[0], "screen", at(key)[1]),
     say: (key, text, keys) => away.ask(at(key)[0], "say", at(key)[1], text, keys),
     terminals: (to) => {

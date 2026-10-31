@@ -7,7 +7,7 @@ import { attachInput } from "./nvim/input.js";
 import { Rpc } from "./nvim/rpc.js";
 import { EphemeralRpc, WasmRpc } from "./nvim/wasm/rpc";
 import { makeNvim, NvimContext } from "./nvim/context";
-import { store, type Tab, type Toast } from "./store";
+import { NARROW, store, type Tab, type Toast } from "./store";
 import { askPermissionOnGesture, notifyAttention, notifyBack, notifyClaude, notifyMessage } from "./attention";
 import { chime } from "./chime";
 import { openPlan } from "./planWindow";
@@ -292,7 +292,7 @@ new ResizeObserver(() => {
   }
 }).observe(container);
 
-attachInput(canvas, grid, rpc);
+attachInput(canvas, container.querySelector("#keys")!, grid, rpc);
 // Whether this window has focus, which Neovim passes on to terminals that
 // ask (Claude Code holds back notifications while it thinks you're looking).
 const focus = () => rpc.notify("nvim_ui_set_focus", document.hasFocus());
@@ -305,4 +305,12 @@ askPermissionOnGesture();
 // Neovim pushes view state and window layout to whichever channels attach.
 const [chan] = await rpc.request("nvim_get_api_info");
 await rpc.request("nvim_exec_lua", "require('corkboard').attach(...)", [chan]);
+// Narrow, Neovim keeps to one column too (corkboard.set_narrow).
+const narrow = matchMedia(NARROW);
+const sendNarrow = () => rpc.notify("nvim_exec_lua", "require('corkboard').set_narrow(...)", [narrow.matches]);
+narrow.addEventListener("change", () => {
+  store.set({ narrow: narrow.matches, drawer: false, keyboard: false });
+  sendNarrow();
+});
+sendNarrow();
 if (params.has("board")) rpc.notify("nvim_command", "AgentBoard");

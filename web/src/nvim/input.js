@@ -57,8 +57,10 @@ const TYPING = new Set(["insert", "replace", "cmdline_normal", "cmdline_insert",
 // And where there is a selection for Ctrl+C to copy.
 const VISUAL = /^(visual|select)/;
 
-export function attachInput(canvas, grid, rpc) {
-  canvas.addEventListener("keydown", (e) => {
+// keys: the textarea a touchscreen types into (App.tsx), which has the
+// on-screen keyboard while it has focus; a tap on the grid leaves it there.
+export function attachInput(canvas, keys, grid, rpc) {
+  const onKeyDown = (e) => {
     // Paste is left to the browser so the paste event below fires with the
     // system clipboard. Ctrl+Shift+V always; Ctrl+V only where text is being
     // typed, since in normal and visual mode it is Vim's visual block.
@@ -77,12 +79,71 @@ export function attachInput(canvas, grid, rpc) {
     if (key === null) return;
     e.preventDefault();
     rpc.notify("nvim_input", key);
-  });
-
-  canvas.addEventListener("paste", (e) => {
+  };
+  const onPaste = (e) => {
     e.preventDefault();
     rpc.notify("nvim_paste", e.clipboardData.getData("text"), true, -1);
+  };
+  for (const el of [canvas, keys]) {
+    el.addEventListener("keydown", onKeyDown);
+    el.addEventListener("paste", onPaste);
+  }
+
+  // An on-screen keyboard mostly sends key 229 ("Unidentified", no code),
+  // which onKeyDown leaves alone, and then the text as input: that goes on
+  // from here. The textarea keeps two spaces in it, so Backspace always has
+  // something to delete and so fires. A word being composed (predictive
+  // text) goes when it's finished.
+  const type = (text) => rpc.notify("nvim_input", text.replace(/</g, "<lt>").replace(/\n/g, "<CR>"));
+  const reset = () => {
+    keys.value = "  ";
+    keys.setSelectionRange(2, 2);
+  };
+  reset();
+  keys.addEventListener("input", (e) => {
+    if (e.isComposing) return;
+    if (e.inputType === "deleteContentBackward") rpc.notify("nvim_input", "<BS>");
+    else if (e.inputType === "insertLineBreak" || e.inputType === "insertParagraph") rpc.notify("nvim_input", "<CR>");
+    else if (e.data) type(e.data);
+    reset();
   });
+  keys.addEventListener("compositionend", (e) => {
+    if (e.data) type(e.data);
+    reset();
+  });
+  const focusGrid = () => document.activeElement !== keys && canvas.focus();
+
+  // A touch: a tap is a click where it lands; a drag scrolls, a line for
+  // each cell the finger moves. Taking pointerdown stops the browser making
+  // a mouse click of it too.
+  let touch = null;
+  canvas.addEventListener("pointerdown", (e) => {
+    if (e.pointerType !== "touch") return;
+    e.preventDefault();
+    canvas.setPointerCapture(e.pointerId);
+    touch = { id: e.pointerId, x: e.clientX, y: e.clientY, lastY: e.clientY, scrolling: false };
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (touch?.id !== e.pointerId) return;
+    if (!touch.scrolling && Math.hypot(e.clientX - touch.x, e.clientY - touch.y) > grid.cellH / 2) touch.scrolling = true;
+    if (!touch.scrolling) return;
+    while (Math.abs(e.clientY - touch.lastY) >= grid.cellH) {
+      const up = e.clientY > touch.lastY;
+      mouse("wheel", up ? "up" : "down", e);
+      touch.lastY += up ? grid.cellH : -grid.cellH;
+    }
+  });
+  const endTouch = (e) => {
+    if (touch?.id !== e.pointerId) return;
+    if (!touch.scrolling && e.type === "pointerup") {
+      focusGrid();
+      mouse("left", "press", e);
+      mouse("left", "release", e);
+    }
+    touch = null;
+  };
+  canvas.addEventListener("pointerup", endTouch);
+  canvas.addEventListener("pointercancel", endTouch);
 
   const BUTTONS = ["left", "middle", "right"];
   const mods = (e) =>
@@ -95,7 +156,7 @@ export function attachInput(canvas, grid, rpc) {
 
   let held = null;
   canvas.addEventListener("mousedown", (e) => {
-    canvas.focus();
+    focusGrid();
     held = BUTTONS[e.button];
     if (held) mouse(held, "press", e);
     e.preventDefault();

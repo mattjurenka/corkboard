@@ -11,9 +11,11 @@
 -- Below it, the lower half of the column, the files agents attached to those
 -- cards (attach_file), newest first: another HTML panel (b:corkboard_view
 -- "media", web/src/views/Media.tsx), one line a file, the selected one
--- shown. A file that arrives is selected, so it shows as soon as it's sent.
+-- shown. It opens when there's a file to show, or from the Media tool; a
+-- file that arrives opens it and is selected, so it shows as soon as it's sent.
 --
--- It opens when the session's window is the only one in its tab, goes with
+-- It opens when the session's window is the only one in its tab (and the
+-- page isn't narrow; :AgentCards there puts it underneath), goes with
 -- that window, and, closed by hand, stays closed in that tab until
 -- :AgentCards. Not beside Pepper, who shares the day plan's tab.
 
@@ -107,6 +109,7 @@ local media = {} -- Claude Code terminal buffer -> its media panel buffer
 local line_file = {} -- media panel buffer -> line number -> file key
 local picked = {} -- media panel buffer -> the file key its cursor is on
 local newest = {} -- media panel buffer -> the newest file key it has shown
+local seen = {} -- Claude Code terminal buffer -> the newest file key on its cards
 
 -- The board's key, for the files' URLs; nil with card files, which have none.
 local function board_key()
@@ -206,9 +209,34 @@ local function media_buf(src)
   return p
 end
 
+local function setup_win(w)
+  vim.wo[w][require("corkboard").narrow() and "winfixheight" or "winfixwidth"] = true
+  vim.wo[w].number = false
+  vim.wo[w].relativenumber = false
+  vim.wo[w].signcolumn = "no"
+end
+
+-- The media panel under src's cards in pwin, the column's lower half.
+local function show_media(src, pwin)
+  local tab = vim.api.nvim_win_get_tabpage(pwin)
+  local m = media_buf(src)
+  for _, w in ipairs(vim.fn.win_findbuf(m)) do
+    if vim.api.nvim_win_get_tabpage(w) == tab then return end
+  end
+  local mwin = vim.api.nvim_open_win(m, false, { split = "below", win = pwin, height = math.floor(vim.api.nvim_win_get_height(pwin) / 2) })
+  pinned.follow(m, line_file[m] or {}, picked[m])
+  setup_win(mwin)
+end
+
 local function push(src, p)
   render(src, p)
   notify(src, p)
+  -- A new file opens the media panel under the cards.
+  local top = (files(src)[1] or {}).key
+  if top and top ~= seen[src] then
+    seen[src] = top
+    for _, win in ipairs(vim.fn.win_findbuf(p)) do show_media(src, win) end
+  end
   push_media(src)
 end
 
@@ -277,6 +305,7 @@ local function panel_buf(src)
     once = true,
     callback = function()
       panels[src] = nil
+      seen[src] = nil
       line_card[p] = nil
       selected[p] = nil
       vim.schedule(function()
@@ -298,21 +327,17 @@ local function close(win)
   closing = false
 end
 
+-- Narrow, the column goes under the session instead, in its lower half.
 local function open(win)
+  local narrow = require("corkboard").narrow()
   local src = vim.api.nvim_win_get_buf(win)
   local p = panel_buf(src)
-  local pwin = vim.api.nvim_open_win(p, false, { split = "right", win = win, width = width() })
+  local pwin = narrow
+      and vim.api.nvim_open_win(p, false, { split = "below", win = win, height = math.floor(vim.api.nvim_win_get_height(win) / 2) })
+    or vim.api.nvim_open_win(p, false, { split = "right", win = win, width = width() })
   pinned.follow(p, line_card[p] or {}, selected[p])
-  -- The column's lower half.
-  local m = media_buf(src)
-  local mwin = vim.api.nvim_open_win(m, false, { split = "below", win = pwin, height = math.floor(vim.api.nvim_win_get_height(pwin) / 2) })
-  pinned.follow(m, line_file[m] or {}, picked[m])
-  for _, w in ipairs({ pwin, mwin }) do
-    vim.wo[w].winfixwidth = true
-    vim.wo[w].number = false
-    vim.wo[w].relativenumber = false
-    vim.wo[w].signcolumn = "no"
-  end
+  setup_win(pwin)
+  if seen[src] then show_media(src, pwin) end
   local tab = vim.api.nvim_win_get_tabpage(pwin)
   -- Closing the cards closes the column.
   vim.api.nvim_create_autocmd("WinClosed", {
@@ -320,9 +345,15 @@ local function open(win)
     once = true,
     callback = function()
       if not closing and valid_win(win) and vim.api.nvim_tabpage_is_valid(tab) then vim.t[tab].corkboard_cards_off = true end
-      if valid_win(mwin) then vim.schedule(function() close(mwin) end) end
+      local m = media[src]
+      vim.schedule(function()
+        for _, mwin in ipairs(m and vim.api.nvim_buf_is_valid(m) and vim.fn.win_findbuf(m) or {}) do
+          if vim.api.nvim_win_get_tabpage(mwin) == tab then close(mwin) end
+        end
+      end)
     end,
   })
+  return pwin
 end
 
 -- The current tab's windows: its sessions', its panels', and the rest.
@@ -344,7 +375,7 @@ local function windows()
 end
 
 -- A panel whose session's window has left the tab goes too; a session alone
--- in its tab gets one.
+-- in its tab gets one, unless the page is narrow.
 local function sync()
   local sessions, shown, rest = windows()
   for _, pwin in ipairs(shown) do
@@ -352,7 +383,9 @@ local function sync()
     local here = vim.tbl_filter(function(w) return vim.api.nvim_win_get_buf(w) == src end, sessions)
     if #here == 0 then close(pwin) end
   end
-  if #sessions == 1 and rest == 0 and #shown == 0 and not vim.t.corkboard_cards_off then open(sessions[1]) end
+  if #sessions == 1 and rest == 0 and #shown == 0 and not vim.t.corkboard_cards_off and not require("corkboard").narrow() then
+    open(sessions[1])
+  end
 end
 
 local queued = false
@@ -378,6 +411,19 @@ function M.toggle()
   open(sessions[1])
 end
 
+-- The Media tool: the media panel under this tab's session's cards, the
+-- cards opened for it if they aren't.
+function M.media()
+  local sessions, shown = windows()
+  for _, w in ipairs(shown) do
+    local buf = vim.api.nvim_win_get_buf(w)
+    if vim.b[buf].corkboard_view == "cards" then return show_media(vim.b[buf].corkboard_source, w) end
+  end
+  if #sessions == 0 then return vim.notify("corkboard: no Claude Code session in this tab") end
+  vim.t.corkboard_cards_off = nil
+  show_media(vim.api.nvim_win_get_buf(sessions[1]), open(sessions[1]))
+end
+
 -- The open cards, in board order, from corkboard.board.
 function M.set(list)
   cards = vim.deepcopy(list)
@@ -397,9 +443,26 @@ function M.setup()
     group = group,
     callback = later,
   })
+  -- Narrow or wide again: every panel goes, laid out the other way, and the
+  -- one in this tab comes back if it should (the others on TabEnter).
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = "CorkboardNarrow",
+    callback = function()
+      -- Both halves: WinClosed, which takes the lower one with the cards,
+      -- doesn't fire inside this autocmd.
+      for _, list in ipairs({ panels, media }) do
+        for _, p in pairs(list) do
+          for _, win in ipairs(vim.api.nvim_buf_is_valid(p) and vim.fn.win_findbuf(p) or {}) do close(win) end
+        end
+      end
+      later()
+    end,
+  })
   vim.api.nvim_create_autocmd("VimResized", {
     group = group,
     callback = function()
+      if require("corkboard").narrow() then return end
       for src, p in pairs(panels) do
         for _, win in ipairs(vim.api.nvim_buf_is_valid(p) and vim.fn.win_findbuf(p) or {}) do
           vim.api.nvim_win_set_width(win, width())

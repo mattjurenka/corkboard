@@ -49,7 +49,7 @@ private enum class Look(val glyph: String, val color: Color, val word: String) {
 
 private fun look(state: String) = when (state) {
     "asking", "permission" -> Look.Needs
-    "working", "starting" -> Look.Working
+    "working", "starting", "background" -> Look.Working
     "idle" -> Look.Ready
     else -> Look.Idle
 }
@@ -62,7 +62,7 @@ fun ColumnScope.Away(f: Fleet?, open: (Bridge, BridgeSession) -> Unit) {
         .sortedByDescending { it.second.typed ?: it.second.since ?: 0L }
     val finished = recent.filter { look(it.second.state) == Look.Ready || look(it.second.state) == Look.Idle }.drop(READY).toSet()
     val sessions = recent.filter { it !in finished }
-    val groups = sessions.groupBy { it.second.project.ifEmpty { "—" } }
+    val groups = sessions.groupBy { it.second.project.ifEmpty { it.second.vm ?: "—" } }
     val asking = sessions.filter { look(it.second.state) == Look.Needs }
     val approve = f?.spawns.orEmpty().count { it.state == "pending-approval" }
     val counts = listOf(Look.Working, Look.Ready, Look.Needs)
@@ -80,7 +80,7 @@ fun ColumnScope.Away(f: Fleet?, open: (Bridge, BridgeSession) -> Unit) {
             Column(
                 Modifier.fillMaxWidth().border(1.dp, Monokai.yellow).clickable(role = Role.Button) { open(b, s) }.padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
-                Text("▲ ${s.project.ifEmpty { "—" }} · ${s.name}", color = Monokai.yellow, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("▲ ${s.project.ifEmpty { s.vm ?: "—" }} · ${s.name}", color = Monokai.yellow, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(s.detail ?: "waiting on you", maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
         }

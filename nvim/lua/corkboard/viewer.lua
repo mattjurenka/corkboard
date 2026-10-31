@@ -206,7 +206,7 @@ local function open_preview(win, src)
   if valid_win(pwin) then
     if vim.api.nvim_win_get_buf(pwin) ~= p then vim.api.nvim_win_set_buf(pwin, p) end
   else
-    pwin = vim.api.nvim_open_win(p, false, { split = "right", win = win })
+    pwin = vim.api.nvim_open_win(p, false, { split = require("corkboard").narrow() and "below" or "right", win = win })
     vim.wo[pwin].number = false
     vim.wo[pwin].relativenumber = false
     vim.wo[pwin].signcolumn = "no"
@@ -241,6 +241,8 @@ local function sync(win)
   end
   if vim.w[win].corkboard_preview_off == buf then return end
   vim.w[win].corkboard_preview_off = nil
+  -- Narrow, only :MarkdownPreview opens one (below the file).
+  if require("corkboard").narrow() and not valid_win(vim.w[win].corkboard_preview) then return end
   -- A split of a window that already has one (or that window, entered
   -- again from elsewhere) needs no second preview.
   if not valid_win(vim.w[win].corkboard_preview) and #source_wins(buf) > 0 then return end
@@ -317,6 +319,19 @@ function M.setup()
       if valid_win(pwin) then
         vim.schedule(function() pcall(vim.api.nvim_win_close, pwin, true) end)
       end
+    end,
+  })
+  -- Narrow or wide again: the previews go, and come back beside their files
+  -- when wide.
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = "CorkboardNarrow",
+    callback = function()
+      local wins = vim.tbl_filter(function(w) return vim.api.nvim_win_get_config(w).relative == "" end, vim.api.nvim_list_wins())
+      for _, win in ipairs(wins) do
+        if valid_win(win) then close_preview(win) end
+      end
+      for _, win in ipairs(wins) do sync(win) end
     end,
   })
   vim.api.nvim_create_user_command("MarkdownPreview", M.toggle, { desc = "corkboard: toggle markdown preview" })

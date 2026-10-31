@@ -6,6 +6,9 @@ import { useSyncExternalStore } from "react";
 import type { Note } from "./attention";
 import { type Skeleton, load as loadSkeleton } from "./skeleton";
 
+// Where the page goes to one column (narrow, below).
+export const NARROW = "(max-width: 800px)";
+
 export type Ext = { __ext: number; id: number };
 
 // A toast in the editor's corner (corkboard.toast): pending until Neovim
@@ -43,9 +46,12 @@ export type Tab = { tab: Ext; name: string; label?: { title: string; kind: strin
 // sessions, each on page (the bridge's id for it) in terminal buf. at: when
 // it came to its state, on the bridge's clock, whose time now is. ready is
 // finished while you were away; idle, before.
+// A page's by its id and buffer; another bridge's by the bridge and its key.
 export type AwaySession = {
-  page: number;
-  buf: number;
+  page?: number;
+  buf?: number;
+  bridge?: string;
+  key?: string;
   project: string;
   name: string;
   detail?: string;
@@ -88,6 +94,12 @@ export type State = {
   // Focus mode (corkboard/focus.lua): no sidebar, and the grid this many
   // columns wide in the middle of the page. Null when off.
   focus: { width: number } | null;
+  // A narrow page (a phone, a skinny window; NARROW): one column, the
+  // sidebar a drawer over the editor, open while drawer is set.
+  narrow: boolean;
+  drawer: boolean;
+  // Keys go by the on-screen keyboard (#keys in App.tsx), not the canvas.
+  keyboard: boolean;
   // Away mode, while it's on.
   away: Away | null;
   // The tool picker (corkboard.picker.tools), while it's open.
@@ -118,6 +130,9 @@ let state: State = {
   skeleton: loadSkeleton(),
   switching: null,
   focus: null,
+  narrow: matchMedia(NARROW).matches,
+  drawer: false,
+  keyboard: false,
   away: null,
   tools: null,
   projects: null,

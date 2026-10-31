@@ -3,6 +3,7 @@
 
 import { createContext, useContext } from "react";
 import type { Rpc as WsRpc } from "./rpc.js";
+import { store } from "@/store";
 
 // What either connection (rpc.js, or wasm/rpc.ts) is to the page.
 export type Rpc = Pick<WsRpc, "on" | "request" | "notify">;
@@ -15,7 +16,8 @@ export type Nvim = {
   // A file attached to a card, from the bridge's /media, as a blob URL.
   media: (url: string) => Promise<string>;
   openFile: (path: string, tab?: boolean) => void;
-  // Keyboard focus back to the canvas, and so to Neovim.
+  // Keyboard focus back to the canvas (or the on-screen keyboard's
+  // textarea, while it's up), and so to Neovim.
   refocus: () => void;
 };
 
@@ -64,7 +66,7 @@ export function makeNvim(rpc: Rpc, token?: string | null): Nvim {
     blob,
     media,
     openFile: (path, tab = false) => void lua("require('corkboard').open_file(...)", path, tab),
-    refocus: () => document.querySelector<HTMLCanvasElement>("#editor canvas")?.focus(),
+    refocus: () => document.querySelector<HTMLElement>(store.get().keyboard ? "#keys" : "#editor canvas")?.focus(),
   };
 }
 

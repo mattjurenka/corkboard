@@ -42,6 +42,19 @@ const WEB_ROOT = new URL("../web/dist/", import.meta.url).pathname;
 // reload shows the source as it is now.
 const DEV = process.argv.includes("--dev");
 const PLUGIN_ROOT = new URL("../nvim", import.meta.url).pathname;
+// This bridge's commit, as it started: the repo's, or, built by the flake
+// with no repo, the one it wrote beside the code. Neovim shows it in its
+// status line (CORKBOARD_BRIDGE_VERSION).
+const BRIDGE_VERSION = (() => {
+  const dir = new URL(".", import.meta.url).pathname;
+  const git = Bun.spawnSync(["git", "-C", dir, "describe", "--always", "--dirty"], { stderr: "ignore" });
+  if (git.success) return git.stdout.toString().trim();
+  try {
+    return readFileSync(dir + "rev", "utf8").trim();
+  } catch {
+    return "?";
+  }
+})();
 // Third-party plugins (snacks.nvim) as a colon-separated list of plugin
 // directories; the flake's dev shell sets it from nixpkgs.
 const PLUGINS = (process.env.CORKBOARD_PLUGINS ?? "").split(":").filter(Boolean);
@@ -308,7 +321,7 @@ function spawnLocal(data: Session): NonNullable<Session["nvim"]> {
     cwd: data.cwd,
     // corkboard.window: which window this Neovim is for. CORKBOARD_CLOUD:
     // the Worker, for what Neovim starts itself (the plan's Claude Code).
-    env: { ...process.env, CORKBOARD_CLOUD: CLOUD, ...(data.view ? { CORKBOARD_WINDOW: data.view } : {}) },
+    env: { ...process.env, CORKBOARD_CLOUD: CLOUD, CORKBOARD_BRIDGE_VERSION: BRIDGE_VERSION, ...(data.view ? { CORKBOARD_WINDOW: data.view } : {}) },
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -583,7 +596,7 @@ function startWasm(ws: Bun.ServerWebSocket<Session>) {
   const data = ws.data;
   data.toPage = (msg) => ws.send(JSON.stringify(msg, toJson));
   // As spawnLocal gives it to Neovim, which its processes inherit.
-  const env = { ...(process.env as Record<string, string>), CORKBOARD_CLOUD: CLOUD, ...(data.view ? { CORKBOARD_WINDOW: data.view } : {}) };
+  const env = { ...(process.env as Record<string, string>), CORKBOARD_CLOUD: CLOUD, CORKBOARD_BRIDGE_VERSION: BRIDGE_VERSION, ...(data.view ? { CORKBOARD_WINDOW: data.view } : {}) };
   const host = new wasm.Host(
     (code, ...args) => deliver(data, [2, "nvim_exec_lua", [code, args]]),
     (tag, method, params) => data.toPage!([10, tag, method, params]),

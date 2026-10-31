@@ -1,6 +1,7 @@
 // Away mode: every page goes dark but for the Claude Code sessions of every
-// project this bridge has open, and one page chimes when it's time to come
-// back. Each page's Neovim tells the bridge what its sessions are doing
+// project this bridge has open, and every other bridge's (the dev one beside
+// the installed one, another machine's), and one page chimes when it's time
+// to come back. Each page's Neovim tells the bridge what its sessions are doing
 // ("corkboard.sessions", from corkboard/away.lua); this keeps them together,
 // with how long each has been in its state, and decides when to wake you.
 //
@@ -51,19 +52,53 @@ const ids = new Map<Page, number>();
 let nextId = 1;
 
 // While away: when it started, what counts as new (since, or the last
-// "stay away"), why it woke you if it has, and the page that chimes.
+// "stay away"), why it woke you if it has, and the page that chimes. Each
+// bridge's away mode is its own: being away in one doesn't make you away in
+// another, though each shows the other's sessions.
 let away: { since: number; ack: number; wake: string | null; page: Page } | null = null;
 let timer: ReturnType<typeof setInterval> | undefined;
 
+// Another bridge's session, from the Worker (remote.ts): the dev bridge's
+// beside the installed one, or another machine's, its project named so.
+// Its page is the other bridge's, so going to it opens it here: its
+// terminal mirrored, where that can be, else its conversation.
+export type Peered = {
+  bridge: string;
+  key: string;
+  project: string;
+  name: string;
+  state: string;
+  since?: number;
+  detail?: string;
+  typed?: number;
+  attach: boolean;
+  terminal: boolean;
+};
+const peered = new Map<string, Peered & { kind: Kind; since: number }>();
+
+// Every other bridge's sessions, all of them each time.
+export function peers(list: Peered[]) {
+  const was = new Map(peered);
+  peered.clear();
+  for (const p of list) {
+    const k = kind(p.state);
+    const id = `${p.bridge}/${p.key}`;
+    const before = was.get(id);
+    peered.set(id, { ...p, kind: k, since: before?.kind === k ? before.since : (p.since ?? Date.now()) });
+  }
+  if (away) update();
+}
+
 // Every page's sessions, each project named with its machine if it's
-// another one. Away mode can't tell when an attached one is done, so it
-// goes without them.
+// another one, and every other bridge's. Away mode can't tell when an
+// attached one is done, so it goes without them.
 function all() {
-  return [...sessions].flatMap(([page, bufs]) =>
+  const mine = [...sessions].flatMap(([page, bufs]) =>
     [...bufs.values()]
       .filter((s) => s.state !== "attached")
       .map((s) => ({ page, ...s, project: page.host ? `${page.host}:${s.project}` : s.project })),
   );
+  return [...mine, ...[...peered.values()].filter((s) => s.state !== "attached")];
 }
 
 // The page's view of it: each session as working, needs, ready (finished
@@ -75,15 +110,15 @@ function state() {
     since,
     now: Date.now(),
     wake: away.wake,
-    sessions: all().map(({ page, buf, project, name, kind, since: at, detail, typed }) => ({
-      page: ids.get(page),
-      buf,
-      project,
-      name,
-      detail,
-      at,
-      typed,
-      state: kind === "busy" ? "working" : kind === "needs" ? "needs" : at > since ? "ready" : "idle",
+    sessions: all().map((s) => ({
+      // A page's by its id and buffer, another bridge's by the bridge and its key.
+      ...("page" in s ? { page: ids.get(s.page), buf: s.buf } : { bridge: s.bridge, key: s.key }),
+      project: s.project,
+      name: s.name,
+      detail: s.detail,
+      at: s.since,
+      typed: s.typed,
+      state: s.kind === "busy" ? "working" : s.kind === "needs" ? "needs" : s.since > since ? "ready" : "idle",
     })),
   };
 }
@@ -228,8 +263,9 @@ function leave() {
 
 // What a page sends: "leave"; "stay", which keeps you away and counts only
 // what comes after; "go" to a session (its page's id, its buffer), which
-// leaves and brings that session up in its own page; "show", the same
-// without leaving. Its Neovim sends
+// leaves and brings that session up in its own page, or another bridge's
+// (its id, its key) in this one; "show", the same without leaving. Its
+// Neovim sends
 // "answer" to a question (ask).
 export function command(from: Page, op: string, args: unknown[]) {
   if (op === "leave") return leave();
@@ -249,6 +285,15 @@ export function command(from: Page, op: string, args: unknown[]) {
   }
   // "show" is go without away mode: the fleet view's <CR> on a session in
   // another window, which comes forward with it.
+  if ((op === "go" || op === "show") && typeof args[0] === "string") {
+    const p = peered.get(`${args[0]}/${args[1]}`);
+    if (op === "go") leave();
+    const mod = p?.terminal ? "corkboard.mirror" : p?.attach ? "corkboard.conversation" : null;
+    if (!p || !mod) return;
+    from.exec(`require('${mod}').open(...)`, p.bridge, p.key, p.name);
+    if (op === "go") from.notify("corkboard.away_return", true);
+    return;
+  }
   if (op === "go" || op === "show") {
     const [id, buf] = args as [number, number];
     const page = [...ids].find(([, i]) => i === id)?.[0];

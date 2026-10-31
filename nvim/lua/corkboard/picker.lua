@@ -223,6 +223,7 @@ local tools = {
     end,
   },
   { text = "Token usage", hint = "<leader>u", run = function() require("corkboard.usage").show() end },
+  { text = "Media", hint = "", run = function() require("corkboard.claude.cards").media() end },
   { text = "Day plan", hint = "<leader>p", run = function() require("corkboard.plan").show() end },
   { text = "Claude Code", hint = "<C-.>", run = function() require("corkboard.claude").open() end },
   { text = "Away mode", hint = "<leader>a", run = function() require("corkboard.away").enter() end },

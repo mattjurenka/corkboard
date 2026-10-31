@@ -41,7 +41,14 @@ export type Source = {
   // Its terminal, mirrored: given where its bytes go, what to do with a
   // stream's opening, keys (base64), size and closing.
   terminals?(to: TerminalOut): Terminals;
+  // Every other bridge's sessions, as the Worker has them, whenever that
+  // changes. They stay as they were while it can't be reached, so a blip
+  // doesn't look like each of them ending.
+  peers?(bridges: Peer[]): void;
 };
+
+// Another bridge, as the Worker says of it (cloud/src/user.ts's Bridge).
+export type Peer = { id: string; machine: string; sessions: (Hosted & { spawn?: string | null; attach?: boolean; terminal?: boolean })[] };
 
 export type TerminalOut = { out(stream: string, data: string): void; end(stream: string, why: string): void };
 export type Terminals = {
@@ -64,12 +71,14 @@ export function serve(id: string, environment: string, source: Source) {
   const streams = new Map<string, Stream>();
   const send = (m: object) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify(m));
 
-  // Where its log is stays here: only whether it can be followed goes.
+  // Where its log is stays here: only whether it can be followed goes. With
+  // no screen to show, a session is followed before it has a log (fleetd's,
+  // before its first message), which the stream waits for.
   const report = () =>
     send({
       type: "sessions",
       environment,
-      sessions: source.list().map(({ transcript, ...s }) => ({ ...s, attach: !!transcript, terminal: !!source.terminals })),
+      sessions: source.list().map(({ transcript, ...s }) => ({ ...s, attach: !!transcript || !source.screen, terminal: !!source.terminals })),
     });
   source.watch(report);
 
@@ -125,7 +134,7 @@ export function serve(id: string, environment: string, source: Source) {
     const look = () => {
       const session = source.list().find((x) => x.key === s.key);
       if (!session) return end(stream, "that session has ended");
-      if (!session.transcript) return end(stream, "that session has no conversation here");
+      if (!session.transcript) return source.screen ? end(stream, "that session has no conversation here") : undefined;
       if (s.follower?.path !== session.transcript) {
         s.follower = new Follower(session.transcript);
         out(stream, s.follower.read().slice(-FIRST), true);
@@ -133,6 +142,28 @@ export function serve(id: string, environment: string, source: Source) {
     };
     look();
     if (streams.get(stream) === s) s.timer = setInterval(look, 500);
+  };
+
+  // Peers ------------------------------------------------------------------------
+  //
+  // The list once the socket opens, then each bridge as it changes, which
+  // the Worker tells every socket of the user's, this one too.
+
+  const peers = new Map<string, Peer>();
+  const told = () => source.peers?.([...peers.values()]);
+  const peer = (b: any) => {
+    if (typeof b?.id !== "string" || b.id === id) return;
+    if (b.gone || !Array.isArray(b.sessions)) peers.delete(b.id);
+    else peers.set(b.id, b);
+  };
+  const lookUp = async () => {
+    try {
+      const res = await fetch(`${CLOUD}/api/sessions`, { headers: { Authorization: `Bearer ${await token()}` } });
+      if (!res.ok) return;
+      peers.clear();
+      for (const b of (await res.json()) as unknown[]) peer(b);
+      told();
+    } catch {}
   };
 
   // Following ------------------------------------------------------------------------
@@ -146,6 +177,7 @@ export function serve(id: string, environment: string, source: Source) {
       ws.onopen = () => {
         retry = 1000;
         report();
+        if (source.peers) lookUp();
       };
       ws.onmessage = (e) => {
         let m: any;
@@ -159,6 +191,10 @@ export function serve(id: string, environment: string, source: Source) {
         else if (m.type === "detach" && typeof m.stream === "string") end(m.stream);
         else if (m.type === "in" && mirrored.has(m.stream) && typeof m.data === "string") terminals?.input(m.stream, m.data);
         else if (m.type === "size" && mirrored.has(m.stream)) terminals?.size(m.stream, m.rows, m.cols, m.focus === true);
+        else if (m.type === "bridge" && source.peers) {
+          peer(m.bridge);
+          told();
+        }
       };
       ws.onclose = () => {
         clearInterval(ping);
