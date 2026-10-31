@@ -1,9 +1,16 @@
 # The guest a slot boots: one spawned agent, one task (or one session), then off.
 #
-# A slot's addresses are fixed (its plan), what runs in it is not: `mkFleet`
-# builds this module with each spawnable template's modules on top, as
-# `nixosConfigurations."<template>@<slot>"`. Its hostName is the slot's, so
-# the launcher's `run-<slot>-vm` is the same whatever it runs.
+# One guest per spawnable template, `nixosConfigurations."<template>@slot"`
+# (`mkFleet`), that boots in any slot: the launcher says which, in its
+# environment, and nothing of it is built in.
+#
+#   FLEET_DIR           the slot's state dir: share/, outbox/, disk.qcow2,
+#                       console.sock
+#   FLEET_TAP           its tap device, FLEET_MAC the MAC it has there
+#   FLEET_MEMORY        MiB, and FLEET_CORES, if not the template's
+#   QEMU_KERNEL_PARAMS  fleet.address=<guest>/<prefix> fleet.gateway=<host>,
+#                       which fleet-net puts on eth0 and in /etc/hosts as
+#                       fleet-gateway, where the proxy is
 #
 # The task comes in and the result goes out the way they do for every agent
 # VM here: a read-only share that fleetd fills before it starts the slot,
@@ -40,12 +47,12 @@
 #
 # Egress is the slot's allowlist, through the filtering proxy on its
 # gateway; there is no resolver and no route, as for Pepper.
-{ plan, template, ownerUid ? null }:
+{ template, ownerUid ? null }:
 { config, pkgs, lib, modulesPath, ... }:
 let
-  vm = plan;
-
-  proxyUrl = "http://${vm.hostAddress}:${toString vm.proxyPort}";
+  proxyUrl = "http://fleet-gateway:8888";
+  memory = toString config.virtualisation.memorySize;
+  cores = toString config.virtualisation.cores;
   proxyEnv = {
     HTTP_PROXY = proxyUrl;
     HTTPS_PROXY = proxyUrl;
@@ -176,33 +183,60 @@ in
     writableStore = true;
     writableStoreUseTmpfs = false;
 
+    # Shell words in the runner, so the slot's own paths at launch.
     sharedDirectories = lib.mkForce ({
-      share = { source = vm.shareDir; target = "/mnt/share"; writable = false; };
-      outbox = { source = vm.outboxDir; target = "/mnt/outbox"; writable = true; };
+      share = { source = "$FLEET_DIR/share"; target = "/mnt/share"; writable = false; };
+      outbox = { source = "$FLEET_DIR/outbox"; target = "/mnt/outbox"; writable = true; };
     } // lib.mapAttrs (_: s: { inherit (s) source target writable; }) template.shares);
 
-    diskImage = vm.diskImage;
+    diskImage = "$FLEET_DIR/disk.qcow2";
     diskSize = lib.mkDefault (lib.max 8192 template.disk);
     memorySize = lib.mkDefault (lib.max 2048 template.memory);
     cores = lib.mkDefault (lib.max 2 template.cores);
 
     graphics = false;
+    # virtiofs's shared memory, sized at launch: upstream's is the built
+    # memorySize, which a later -m can't change.
+    qemu.enableSharedMemory = false;
     qemu.options = [
+      "-m \${FLEET_MEMORY:-${memory}}"
+      "-smp \${FLEET_CORES:-${cores}}"
+      "-object memory-backend-memfd,id=mem0,size=\${FLEET_MEMORY:-${memory}}M,share=on"
+      "-machine memory-backend=mem0"
       "-serial mon:stdio"
       "-device virtio-serial-pci"
-    ] ++ lib.concatMap
-      (i: [
-        "-chardev socket,id=${vm.consoleChardevId i},path=${vm.consoleSocketFor i},server=on,wait=off"
-        "-device virtconsole,chardev=${vm.consoleChardevId i}"
-      ])
-      vm.consoleIndices;
+      "-chardev socket,id=fleetconsole,path=$FLEET_DIR/console.sock,server=on,wait=off"
+      "-device virtconsole,chardev=fleetconsole"
+    ];
     qemu.networkingOptions = lib.mkForce [
-      "-netdev tap,id=net0,ifname=${vm.interface},script=no,downscript=no"
-      "-device virtio-net-pci,netdev=net0,mac=${vm.mac}"
+      "-netdev tap,id=net0,ifname=$FLEET_TAP,script=no,downscript=no"
+      "-device virtio-net-pci,netdev=net0,mac=$FLEET_MAC"
     ];
   };
 
   systemd.services = {
+    # The slot's address and its gateway's, from the kernel's command line.
+    fleet-net = {
+      description = "The slot's address";
+      wantedBy = [ "network-online.target" ];
+      before = [ "network-online.target" "sshd.service" ];
+      after = [ "sys-subsystem-net-devices-eth0.device" ];
+      requires = [ "sys-subsystem-net-devices-eth0.device" ];
+      path = [ pkgs.iproute2 pkgs.gnugrep pkgs.coreutils ];
+      serviceConfig = { Type = "oneshot"; RemainAfterExit = true; };
+      script = ''
+        address=$(grep -o 'fleet\.address=[^ ]*' /proc/cmdline | cut -d= -f2)
+        gateway=$(grep -o 'fleet\.gateway=[^ ]*' /proc/cmdline | cut -d= -f2)
+        if [ -z "$address" ] || [ -z "$gateway" ]; then
+          echo "no fleet.address or fleet.gateway on the kernel's command line" >&2
+          exit 1
+        fi
+        ip link set eth0 up
+        ip addr replace "$address" dev eth0
+        echo "$gateway fleet-gateway" >> /etc/hosts
+      '';
+    };
+
     fleet-task = {
       description = "The spawned agent's task";
       wantedBy = [ "multi-user.target" ];
@@ -225,10 +259,10 @@ in
     };
 
     fleet-console = {
-      description = "Interactive console on ${vm.consoleDevice 1}";
+      description = "Interactive console on hvc0";
       wantedBy = [ "multi-user.target" ];
-      after = [ "dev-${vm.consoleDevice 1}.device" ];
-      bindsTo = [ "dev-${vm.consoleDevice 1}.device" ];
+      after = [ "dev-hvc0.device" ];
+      bindsTo = [ "dev-hvc0.device" ];
       serviceConfig = {
         ExecStart = "${pkgs.bashInteractive}/bin/bash -il";
         User = "claude";
@@ -238,7 +272,7 @@ in
         StandardOutput = "tty";
         StandardError = "tty";
         Environment = [ "TERM=xterm-256color" ];
-        TTYPath = "/dev/${vm.consoleDevice 1}";
+        TTYPath = "/dev/hvc0";
         TTYReset = true;
         TTYVHangup = true;
         Restart = "always";
@@ -246,31 +280,26 @@ in
       };
       unitConfig.StartLimitIntervalSec = 0;
     };
-    "serial-getty@${vm.consoleDevice 1}".enable = false;
+    "serial-getty@hvc0".enable = false;
   };
 
+  # Written to at boot (fleet-net), so a copy rather than the store's.
+  environment.etc.hosts.mode = "0644";
+
   networking = {
-    hostName = vm.name;
+    # The same in every slot; the runner is `run-agent-vm`.
+    hostName = "agent";
     usePredictableInterfaceNames = false;
     useDHCP = false;
-    interfaces.eth0.ipv4.addresses = [{
-      address = vm.guestAddress;
-      prefixLength = vm.prefixLength;
-    }];
     nameservers = lib.mkForce [ ];
 
+    # Its one link is the host's tap, so ssh from there and nothing else.
     firewall.enable = true;
-    firewall.extraCommands = ''
-      iptables -I nixos-fw 1 -s ${vm.hostAddress} -j nixos-fw-accept
-    '';
-    firewall.extraStopCommands = ''
-      iptables -D nixos-fw -s ${vm.hostAddress} -j nixos-fw-accept || true
-    '';
+    firewall.interfaces.eth0.allowedTCPPorts = [ 22 ];
   };
 
   services.openssh = {
     enable = true;
-    listenAddresses = [{ addr = vm.guestAddress; port = 22; }];
     openFirewall = false;
     settings = {
       PasswordAuthentication = false;

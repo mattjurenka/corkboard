@@ -253,6 +253,15 @@ and the two hosts (`omni-laptop` imports `fleetHost`, a new `pepper-droplet` imp
    control QEMU's command line and the host's evaluation, so it can't be one. Sizes reach QEMU as
    `<stateDir>/size` → `QEMU_OPTS="-m … -smp …"`, after the guest's own. A shell never goes in a
    brain's template (its shares and account). Only the owner's own account, for now.
+
+   **A pool, not two slots (2026-10-31).** `lib.fleet.mkPool { size = 8; }` makes slots
+   `slot-0..7` (taps `fslot<N>`, 10.100-107); omni-laptop has eight, and the budget decides how
+   many run. A slot guest is one per template, `<template>@slot`, that boots in any slot: the
+   launcher passes `FLEET_DIR`, `FLEET_TAP`, `FLEET_MAC`, `FLEET_MEMORY`/`FLEET_CORES` and
+   `fleet.address`/`fleet.gateway` on the kernel command line (`fleet-net` puts them on eth0 and
+   `fleet-gateway` in /etc/hosts, where the proxy is). It also fixes sizing: virtiofs's
+   memory backend was the built memorySize, so a bigger `-m` couldn't boot. The fleet view shows a
+   card per running VM by its agent's name and one "new VM" while a slot is free, never the slots.
 5. **The cloud environment.** The droplet on NixOS with `fleetCloud`; OCI outputs for `oci`
    capabilities; the egress proxy pod. Pepper's resident agent moves there; `pepper-vm` on the
    laptop is retired. The token mint that writes `/var/lib/pepper/corkboard-token` writes a

@@ -62,9 +62,8 @@ let
     , capabilities ? { }
     , environments ? { }
     , templates ? { }
-      # Slots for spawnable templates, as `mkPlan` plans keyed by name, and
-      # modules every slot guest gets (its login keys, say).
-    , slots ? { }
+      # Modules every slot guest gets (its login keys, say). Which slots a
+      # host has is its own (fleet/host, `mkPool`): a slot guest boots in any.
     , slotModules ? [ ]
       # The host user who runs the slots (fleet/host's `owner`). virtiofs
       # passes uids through, so the guest's user has to be this uid to write
@@ -172,15 +171,13 @@ let
 
       runsAsVm = t: lib.any (e: (envs.${e}.kind or null) == "vm") t.environments;
 
-      # A spawnable template on a slot: the slot's guest, then the template.
-      # Named `<template>@<slot>`, which the slot's launcher builds.
-      slotGuests = lib.concatMapAttrs
-        (_: t: lib.mapAttrs'
-          (slot: plan: lib.nameValuePair "${t.name}@${slot}" (checked (nixosSystem {
-            modules = [ (import ./guest/slot.nix { inherit plan ownerUid; template = t; }) ]
-              ++ slotModules ++ t.modules ++ [ (guestCheck t) ];
-          })))
-          slots)
+      # A spawnable template as a slot's guest: the slot guest, then the
+      # template. Named `<template>@slot`, which every slot's launcher builds.
+      slotGuests = lib.mapAttrs'
+        (_: t: lib.nameValuePair "${t.name}@slot" (checked (nixosSystem {
+          modules = [ (import ./guest/slot.nix { inherit ownerUid; template = t; }) ]
+            ++ slotModules ++ t.modules ++ [ (guestCheck t) ];
+        })))
         (lib.filterAttrs (_: t: t.spawnable && runsAsVm t) resolved);
     in
     {

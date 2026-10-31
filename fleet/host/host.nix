@@ -609,11 +609,11 @@ let
 
   # A slot's launcher. The guest is whichever template fleetd claimed the
   # slot for, written into ${stateDir}/template before it starts the unit,
-  # and is built as `nixosConfigurations."<template>@<slot>"`: the template's
-  # modules on this slot's addresses. Every spawn starts from an empty disk,
-  # so nothing one task leaves behind is there for the next. A spawn that
-  # asked for a size has it in ${stateDir}/size ("<MiB> <cores>"), which
-  # QEMU takes over the guest's own: its `-m`/`-smp` come later.
+  # and is built as `nixosConfigurations."<template>@slot"`, the same guest
+  # in every slot: this launcher tells it which (fleet/guest/slot.nix). Every
+  # spawn starts from an empty disk, so nothing one task leaves behind is
+  # there for the next. A spawn that asked for a size has it in
+  # ${stateDir}/size ("<MiB> <cores>").
   slotLauncherFor = name:
     let vm = plans.${name}; in
     pkgs.writeShellApplication {
@@ -632,13 +632,13 @@ let
           exit 1
         fi
 
-        QEMU_OPTS=""
         if read -r mib cores < ${vm.stateDir}/size 2>/dev/null; then
           if [[ "$mib" =~ ^[1-9][0-9]*$ && "$cores" =~ ^[1-9][0-9]*$ ]]; then
-            QEMU_OPTS="-m $mib -smp $cores"
+            export FLEET_MEMORY=$mib FLEET_CORES=$cores
           fi
         fi
-        export QEMU_OPTS
+        export FLEET_DIR=${vm.stateDir} FLEET_TAP=${vm.interface} FLEET_MAC=${vm.mac}
+        export QEMU_KERNEL_PARAMS="fleet.address=${vm.guestAddress}/${toString vm.prefixLength} fleet.gateway=${vm.hostAddress}"
 
         export TMPDIR=${vm.runDir}
         export USE_TMPDIR=1
@@ -646,8 +646,8 @@ let
         rm -f ${vm.spiceSocket} ${lib.concatStringsSep " " vm.consoleSockets} "$TMPDIR"/store.img ${vm.diskImage}
 
         runner=$(nix build --no-link --print-out-paths \
-          "${cfg.flake}#nixosConfigurations.\"$template@${name}\".config.system.build.vm")
-        exec "$runner"/bin/run-${name}-vm "$@"
+          "${cfg.flake}#nixosConfigurations.\"$template@slot\".config.system.build.vm")
+        exec "$runner"/bin/run-agent-vm "$@"
       '';
     };
 

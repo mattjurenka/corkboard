@@ -85,17 +85,16 @@ let
         bad = { capabilities = [ "valheim" ]; environments = [ "cloud" ]; };
       }).templates.good;
 
-    # A spawnable template is a guest per slot, `<template>@<slot>`, and not
-    # one of its own.
-    spawnableTemplatesGetOneGuestPerSlot =
+    # A spawnable template is one slot guest, `<template>@slot`, that boots
+    # in any slot, and not a guest of its own.
+    spawnableTemplatesGetOneSlotGuest =
       builtins.attrNames (mkFleet (base // {
         nixosSystem = args: args;
-        slots = { agent-0 = { }; agent-1 = { }; };
         templates = {
           c = { capabilities = [ "coding" ]; environments = [ "local" ]; spawnable = true; };
           resident = { capabilities = [ "coding" ]; environments = [ "local" ]; };
         };
-      })).nixosConfigurations == [ "c@agent-0" "c@agent-1" "resident" ];
+      })).nixosConfigurations == [ "c@slot" "resident" ];
 
     slotEgressIsEverySpawnableTemplates =
       (mkFleet (base // {

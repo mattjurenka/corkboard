@@ -123,7 +123,9 @@ local function spawn_row(s, where)
     info = fields({
       { "spawn", s.id },
       { "template", s.template },
-      { "in", s.environment .. (nil_if_null(s.slot) and ("/" .. s.slot) or "") },
+      { "in", s.environment },
+      { "memory", nil_if_null(s.memory) and gib(s.memory) },
+      { "cores", nil_if_null(s.cores) },
       { "brain", s.brain },
       { "account", s.account },
       { "asked by", s.by },
@@ -329,21 +331,27 @@ local function by_machine(machine, spawns, shown)
         table.insert(idle, v.name .. " down")
       end
     end
+    -- A VM per running spawn, by its agent's name: which slot it's in is
+    -- fleetd's business (key, for selecting it). Then one to start another
+    -- in, while a slot is free.
+    local free
     for _, sl in ipairs(r and r.slots or {}) do
       local id = nil_if_null(sl.spawn)
       if id then
-        local card = { name = sl.name, label = nil_if_null(sl.template), memory = gib(nil_if_null(sl.memory)), summary = summary(nil_if_null(sl.config)), rows = {} }
+        local card = { name = nil_if_null(sl.template) and (sl.template .. "-" .. id) or id, key = sl.name, memory = gib(nil_if_null(sl.memory)), summary = summary(nil_if_null(sl.config)), rows = {} }
         for _, s in ipairs(spawns) do
           if s.id == id then
+            card.name = nil_if_null(s.agent) or card.name
             table.insert(card.rows, spawn_row(s))
             shown[s.id] = true
           end
         end
         table.insert(cards, card)
       else
-        table.insert(cards, { name = sl.name, label = nil_if_null(sl.template), memory = gib(nil_if_null(sl.memory)), summary = "free", rows = {} })
+        free = free or sl.name
       end
     end
+    if free and next(e.templates or {}) then table.insert(cards, { name = "new VM", key = free, rows = {} }) end
     -- Another machine's sessions on a card of its own; a VM's go below.
     local theirs = vim.iter(remote_sessions()):filter(function(c) return c.environment == e.name end):totable()
     for _, c in ipairs(theirs) do
@@ -360,7 +368,7 @@ local function by_machine(machine, spawns, shown)
     for _, c in ipairs(vim.list_extend(vim.list_slice(e.name == here and sessions or {}), theirs)) do
       local vm = nil_if_null(c.vm)
       if vm then
-        local card = vim.iter(cards):find(function(card) return card.name == vm end)
+        local card = vim.iter(cards):find(function(card) return (card.key or card.name) == vm end)
         if not card then
           card = { name = vm, rows = {} }
           table.insert(cards, card)
@@ -369,7 +377,7 @@ local function by_machine(machine, spawns, shown)
       end
     end
     for _, card in ipairs(cards) do
-      card.id = machine_key(e.name, card.name)
+      card.id = machine_key(e.name, card.key or card.name)
       for _, row in ipairs(card.rows) do row.machine = card.id end
     end
     -- The agents' memory budget; with none, the machine's own memory in use.
@@ -408,7 +416,7 @@ local function by_project(machine, spawns, shown)
   end
   for _, s in ipairs(spawns) do
     if s.state == "running" then
-      local row = spawn_row(s, s.environment .. (nil_if_null(s.slot) and ("/" .. s.slot) or ""))
+      local row = spawn_row(s, s.environment)
       row.machine = nil_if_null(s.slot) and machine_key(s.environment, s.slot)
       add(s.board, row)
       shown[s.id] = true
