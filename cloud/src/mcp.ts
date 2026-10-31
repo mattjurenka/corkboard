@@ -10,12 +10,13 @@
 // Who's calling decides what it sees (grant):
 //   card       a token corkboard made for one agent on one card (POST
 //              /api/tokens): its board, and only its own card to change
-//   owner,     OAuth: every board, named by each tool's board argument
-//   assistant
-//   pepper     a token corkboard made for Pepper's session (POST
-//              /api/tokens/pepper): what assistant sees, and the goals too
-//   brain      a token for another brain's agents (POST /api/tokens/brain):
-//              that brain's memory, its goals included, instead of Pepper's
+//   owner,     OAuth: every board, named by each tool's board argument, in
+//   assistant  the default brain's memory (brains.ts)
+//   brain      a token for a brain's agents (POST /api/brains/:name/tokens):
+//              what assistant sees, in that brain's memory, its goals
+//              included, and the tools of its abilities (Pepper's chat).
+//              Pepper's tokens from before brains were data are read as
+//              the pepper brain's (api.ts)
 
 import type { Result } from "./board";
 import { AGENT_STATES, type Card, type Fields, type LogEntry, PRIORITIES, STATUSES, waitingOn } from "./cards";
@@ -23,19 +24,24 @@ import type { Env } from "./index";
 import { Invalid } from "./cards";
 import { BRAIN_ONLY_KINDS, NOTE_KINDS, OWNER_ONLY_NOTES, chatText, date, note, noteId, projects, proposal, slug, today } from "./plans";
 import { range } from "./dates";
-import type { Brain, Memory } from "./memory";
+import type { Memory } from "./memory";
+import { type ABILITIES, create as createBrain, fieldsOf as brainFields } from "./brains";
 import type { User } from "./user";
 import { Refused, spawn, status, stop } from "./fleet";
 import { MAX_INLINE, MediaError, attach, fileName, fileType, offer } from "./media";
 
 export type Grant =
   | { kind: "card"; board: string; card: string; agent: string }
+  // Stored by tokens from before brains were data; read as Pepper's brain.
   | { kind: "pepper"; agent: string }
-  | { kind: "brain"; brain: Exclude<Brain, "pepper">; agent: string }
+  // id: the brain's, so a token outlives no purge.
+  // abilities: the brain's, read with it on each request, never stored.
+  | { kind: "brain"; brain: string; agent: string; id?: string; abilities?: string[] }
   // A server's (the droplet's): the API, but only its own environment's
   // fleet and sessions (api.ts's machine). Not for the MCP server.
   | { kind: "machine"; environment: string; agent: string }
-  | { kind: "owner" | "assistant"; agent: string };
+  // brain: the default brain, read on each request.
+  | { kind: "owner" | "assistant"; agent: string; brain?: string };
 
 // The board's methods as this file calls them. Typed by hand: through
 // DurableObjectStub, RPC's wrapping of the results defeats inference.
@@ -450,16 +456,17 @@ Put follow-up work you discover in new cards with create_card (parent: the card 
 // (agent-fleet.md, step 6).
 // There's no tool to accept a plan; only the user does that, in corkboard.
 
-// Whose memory a grant works in: a brain token's brain, and Pepper's for
-// every other grant but a card's, as the notes were.
-export const brainOf = (grant: Grant): Brain | undefined => (grant.kind === "card" ? undefined : grant.kind === "brain" ? grant.brain : "pepper");
+// Whose memory a grant works in: a brain token's brain, and the default
+// brain for your own clients (none, if there isn't one). A card's has none.
+export const brainOf = (grant: Grant): string | undefined =>
+  grant.kind === "brain" || grant.kind === "owner" || grant.kind === "assistant" ? grant.brain : grant.kind === "pepper" ? "pepper" : undefined;
 
 // The note kinds a grant can't see in its brain: the goals, to all but the
 // brain's own agents (Pepper's token, or the brain's). To it, those notes
 // don't exist.
 export const hiddenFor = (grant: Grant) => (grant.kind === "pepper" || grant.kind === "brain" ? [] : BRAIN_ONLY_KINDS);
 
-export async function memoryOf(env: Env, user: string, brain: Brain) {
+export async function memoryOf(env: Env, user: string, brain: string) {
   const memory = env.MEMORY.get(env.MEMORY.idFromName(`${user}/${brain}`));
   await memory.open(user, brain);
   return memory;
@@ -470,14 +477,17 @@ type UserTool = {
   description: string;
   properties?: Record<string, object>;
   required?: string[];
-  // Only for Pepper's token: to anyone else the tool doesn't exist.
-  pepper?: true;
+  // Only for a brain whose abilities have this one: to anyone else the
+  // tool doesn't exist.
+  ability?: (typeof ABILITIES)[number];
   // Only for the user's own clients (owner and assistant).
   user?: true;
   run: (a: any, c: UserCall) => Promise<unknown>;
 };
 const reaches = (t: UserTool, grant: Grant) =>
-  grant.kind !== "card" && (!t.pepper || grant.kind === "pepper") && (!t.user || grant.kind === "owner" || grant.kind === "assistant");
+  grant.kind !== "card" &&
+  (!t.ability || (grant.kind === "brain" && !!grant.abilities?.includes(t.ability))) &&
+  (!t.user || grant.kind === "owner" || grant.kind === "assistant");
 
 const day = str("YYYY-MM-DD; today, where the user is, if left out");
 const blockSchema = {
@@ -509,6 +519,21 @@ const VM = {
   needs: strings("Capabilities its VM must have (spawn_status lists them), e.g. gpu"),
   memory: { type: "integer", description: "MiB of RAM, if it needs more than its template's" },
   cores: { type: "integer", description: "vCPUs, if it needs more than its template's" },
+};
+// What a brain is, as the tools take it (brains.ts). Archiving is the user's, in corkboard.
+const BRAIN_FIELDS = {
+  name: str("lowercase letters, digits and -, starting with a letter"),
+  title: str("What it's called"),
+  description: str("What it's for"),
+  account: str("The Claude account its agents run as"),
+  credentials: strings("What it holds, as labels (github, google): a brain spawning with any waits for the user"),
+  egress: strings("Hosts its agents may reach"),
+  abilities: strings("Tools beyond memory: chat (the chat with the user)"),
+  default: { type: "boolean", description: "The brain the user's own sessions remember in" },
+};
+const brainValue = <T>(r: Result<T>): T => {
+  if (!r.ok) throw new ToolError(r.error);
+  return r.value;
 };
 const lineList = (description: string) => ({ type: "array", items: { type: "object" }, description });
 
@@ -665,15 +690,15 @@ const USER_TOOLS: Record<string, UserTool> = {
     description:
       "Read your chat with the user, oldest first: what they said to you from their phone and what you answered. after: only messages after this id; without it, the newest 100.",
     properties: { after: { type: "integer", description: "A message id" } },
-    pepper: true,
+    ability: "chat",
     run: async (a, c) => c.users.chat(Number.isInteger(a.after) && a.after > 0 ? a.after : 0, 100),
   },
   chat_send: {
     description: "Say something to the user in your chat; it reaches their phone at once. Plain text, no markdown.",
     properties: { text: str("What to say") },
     required: ["text"],
-    pepper: true,
-    run: async (a, c) => c.users.post("pepper", chatText(a.text)),
+    ability: "chat",
+    run: async (a, c) => c.users.post(brainOf(c.grant) ?? "pepper", chatText(a.text)),
   },
   spawn_agent: {
     description:
@@ -688,6 +713,25 @@ const USER_TOOLS: Record<string, UserTool> = {
     required: ["task"],
     user: true,
     run: async (a, c) => spawn(c.env, c.user, "user", a),
+  },
+  brain_list: {
+    description: "The brains: who agents work for, each with its memory (notes, entries, episodes), Claude account, what it holds, and its abilities. One is the default, which your own sessions remember in.",
+    user: true,
+    run: async (_a, c) => c.users.brains(),
+  },
+  brain_create: {
+    description: "Make a brain: a memory of its own, and who its agents run as when spawned for it. Its name never changes; its title can.",
+    properties: BRAIN_FIELDS,
+    required: ["name", "title"],
+    user: true,
+    run: async (a, c) => brainValue(await c.users.addBrain(createBrain(a))),
+  },
+  brain_update: {
+    description: "Change a brain: give the updated it has now (brain_list), and only the fields to change.",
+    properties: { ...BRAIN_FIELDS, updated: str("Its updated, as brain_list gave it") },
+    required: ["name", "updated"],
+    user: true,
+    run: async (a, c) => brainValue(await c.users.updateBrain(String(a.name), String(a.updated), brainFields(a))),
   },
   start_session: {
     description:
@@ -782,7 +826,11 @@ async function callTool(env: Env, user: string, grant: Grant, name: string, args
   if (name === "create_board" && grant.kind !== "card") return createBoard(env, user, args);
   if (USER_TOOLS[name] && reaches(USER_TOOLS[name], grant)) {
     try {
-      const memory = await memoryOf(env, user, brainOf(grant)!);
+      const brain = brainOf(grant);
+      // No brain (no default one), no memory: what needs it says so.
+      const memory = brain
+        ? await memoryOf(env, user, brain)
+        : (new Proxy({}, { get: () => { throw new ToolError("there's no default brain to remember in; make one the default in the Brains view"); } }) as DurableObjectStub<Memory>);
       return await USER_TOOLS[name].run({ ...args }, { env, user, users: env.USER.get(env.USER.idFromName(user)), memory, grant, timeZone: env.TIMEZONE });
     } catch (e) {
       if (e instanceof Invalid || e instanceof Refused) throw new ToolError(e.message);

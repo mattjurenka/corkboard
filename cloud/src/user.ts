@@ -12,6 +12,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { BoardInfo, Result } from "./board";
 import { type Dump, dump, restore } from "./dump";
 import { type Environment, type Spawn, type SpawnReport, FINAL, type SpawnState } from "./fleet";
+import { type Brain, PEPPER } from "./brains";
 import {
   type Block,
   type ChatMessage,
@@ -50,6 +51,7 @@ CREATE TABLE IF NOT EXISTS environments (name TEXT PRIMARY KEY, doc TEXT NOT NUL
 CREATE TABLE IF NOT EXISTS spawns (id TEXT PRIMARY KEY, created TEXT NOT NULL, doc TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS bridges (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS board_roots (key TEXT NOT NULL, environment TEXT NOT NULL, root TEXT NOT NULL, PRIMARY KEY (key, environment));
+CREATE TABLE IF NOT EXISTS brains (name TEXT PRIMARY KEY, doc TEXT NOT NULL);
 `;
 
 export class User extends DurableObject {
@@ -58,12 +60,76 @@ export class User extends DurableObject {
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
+    // Every user starts with Pepper, once: the table's first making.
+    const fresh = !this.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'brains'").toArray().length;
     this.sql.exec(SCHEMA);
+    if (fresh) this.saveBrain(PEPPER(now()));
     const boards = this.sql.exec("SELECT name FROM pragma_table_info('boards')").toArray();
     if (!boards.some((c) => c.name === "first_commit")) this.sql.exec("ALTER TABLE boards ADD COLUMN first_commit TEXT");
     if (!boards.some((c) => c.name === "remotes")) this.sql.exec("ALTER TABLE boards ADD COLUMN remotes TEXT");
     // Briefly the portal's Forgejo sign-ins (2026-10-30), now a Worker secret (git.ts).
     this.sql.exec("DROP TABLE IF EXISTS links");
+  }
+
+  // Brains (brains.ts) ------------------------------------------------------
+
+  brains(archived = false): Brain[] {
+    return this.sql
+      .exec("SELECT doc FROM brains ORDER BY name")
+      .toArray()
+      .map((r) => JSON.parse(r.doc as string) as Brain)
+      .filter((b) => archived || !b.archived);
+  }
+
+  brain(name: string): Brain | undefined {
+    const row = this.sql.exec("SELECT doc FROM brains WHERE name = ?", name).toArray()[0];
+    return row ? JSON.parse(row.doc as string) : undefined;
+  }
+
+  // The one your own sessions work in, if there is one.
+  defaultBrain(): Brain | undefined {
+    return this.brains().find((b) => b.default);
+  }
+
+  private saveBrain(b: Brain): Brain {
+    // One default: this one's being so clears it on the rest.
+    if (b.default) for (const o of this.brains(true)) if (o.name !== b.name && o.default) this.sql.exec("UPDATE brains SET doc = ? WHERE name = ?", JSON.stringify({ ...o, default: false }), o.name);
+    this.sql.exec("INSERT INTO brains (name, doc) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET doc = excluded.doc", b.name, JSON.stringify(b));
+    this.broadcast({ type: "brain", brain: b });
+    return b;
+  }
+
+  addBrain(b: Brain): Result<Brain> {
+    const was = this.brain(b.name);
+    if (was) return refuse(409, was.archived ? `there's an archived brain ${b.name}; restore it, or purge it first` : `there's already a brain ${b.name}`);
+    return { ok: true, value: this.saveBrain(b) };
+  }
+
+  updateBrain(name: string, updated: string, f: Partial<Brain>): Result<Brain> {
+    const b = this.brain(name);
+    if (!b) return refuse(404, `no brain ${name}`);
+    if (b.updated !== updated) return { ok: false, status: 409, error: `${name} changed since; here it is now`, brain: b } as Result<never>;
+    const at = now();
+    return { ok: true, value: this.saveBrain({ ...b, ...f, name, created: b.created, updated: at > b.updated ? at : new Date(Date.parse(b.updated) + 1000).toISOString().replace(/\.\d+Z$/, "Z") }) };
+  }
+
+  archiveBrain(name: string): Result<Brain> {
+    const b = this.brain(name);
+    if (!b) return refuse(404, `no brain ${name}`);
+    if (b.archived) return { ok: true, value: b };
+    return { ok: true, value: this.saveBrain({ ...b, archived: now(), default: false }) };
+  }
+
+  restoreBrain(name: string): Result<Brain> {
+    const b = this.brain(name);
+    if (!b) return refuse(404, `no brain ${name}`);
+    const { archived, ...rest } = b;
+    return { ok: true, value: archived ? this.saveBrain(rest) : b };
+  }
+
+  forgetBrain(name: string): void {
+    this.sql.exec("DELETE FROM brains WHERE name = ?", name);
+    this.broadcast({ type: "brain", brain: { name, gone: true } });
   }
 
   // Everything here, to copy it to another account's Worker (dump.ts). The
@@ -75,6 +141,8 @@ export class User extends DurableObject {
   // Into a user with no boards yet.
   restore(d: Dump): Result<number> {
     if (this.boards().length) return refuse(409, "this account already has boards");
+    // The export's brains, not the Pepper a new account starts with.
+    if (d.brains) this.sql.exec("DELETE FROM brains");
     return ok(restore(this.sql, d));
   }
 

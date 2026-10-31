@@ -32,6 +32,8 @@ beforeEach(async () => {
   const { tokens } = await login({ scope: "assistant" });
   vi.restoreAllMocks();
   assistant = tokens!.access_token;
+  // Only Pepper is there to begin with.
+  expect((await call(owner, "POST", "/api/brains", { name: "work", title: "Stable" })).status).toBe(201);
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -158,8 +160,8 @@ describe("brains", () => {
     expect(await (await call(work, "GET", "/memory/context")).text()).toMatch(/^# Memory: work/);
   });
 
-  it("are named, and Pepper's token is Pepper's own", async () => {
-    expect((await brainToken("pepper")).status).toBe(400);
+  it("are named, and Pepper's token is the pepper brain's", async () => {
+    expect((await brainToken("pepper")).status).toBe(201);
     expect((await brainToken("nobody")).status).toBe(400);
     expect((await call(owner, "GET", "/api/notes?brain=nobody")).status).toBe(400);
   });

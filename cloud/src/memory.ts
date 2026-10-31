@@ -25,10 +25,6 @@ import { range } from "./dates";
 import { chunks, embed, namespaceOf, sha, vectorId } from "./vectors";
 import { type Dump, dump, restore } from "./dump";
 
-// The brains there are: a memory is one of these.
-export const BRAINS = ["pepper", "work"] as const;
-export type Brain = (typeof BRAINS)[number];
-
 const ok = <T>(value: T): Result<T> => ({ ok: true, value });
 const fail = (status: number, error: string, note?: Note): Result<never> => ({ ok: false, status, error, note });
 
@@ -139,6 +135,29 @@ export class Memory extends DurableObject<Env> {
       this.setMeta("brain", brain);
     });
     this.backfill();
+  }
+
+  // How much it holds, for the brains' list.
+  stats() {
+    const count = (table: string) => Number(this.sql.exec(`SELECT COUNT(*) AS n FROM ${table}`).one().n);
+    const last = this.sql.exec("SELECT MAX(at) AS at FROM episodes").one().at as string | null;
+    return { notes: count("notes"), entries: count("entries"), episodes: count("episodes"), lastEpisode: last ?? null };
+  }
+
+  // Everything, for good: a purged brain's (brains.ts). Its vectors go first,
+  // while their ids can still be worked out.
+  async purge(): Promise<void> {
+    if (this.vectorsOn() && this.meta("brain")) {
+      const ns = await this.namespace();
+      const ids: string[] = [];
+      for (const r of this.sql.exec("SELECT item, chunks FROM vectors").toArray())
+        for (let i = 0; i < Number(r.chunks); i++) ids.push(await vectorId(ns, r.item as string, i));
+      for (let i = 0; i < ids.length; i += 500) await this.env.VECTORS.deleteByIds(ids.slice(i, i + 500));
+    }
+    await this.ctx.storage.deleteAlarm();
+    await this.ctx.storage.deleteAll();
+    // Empty, as a new one is, for whatever this object is asked next.
+    this.sql.exec(SCHEMA);
   }
 
   // The whole memory, to copy it to another account's Worker (dump.ts),

@@ -32,15 +32,16 @@
 //   POST  /api/memory/entries                { entries: [{ day, at, who, text, key }] }: a log written
 //                                            elsewhere, each entry added once
 //   GET   /api/memory/vectors                { on, queued, embedded }: how far embedding has got
-//                                            (notes and entries are Pepper's brain's, or ?brain='s)
+//                                            (notes and entries are the default brain's, or ?brain='s)
 //   GET, DELETE /api/plans/:date             the day and any proposal (an empty plan if none); gone for good
 //   POST  /api/plans/:date/say               { text }: what to change, for the next proposal
 //   POST  /api/plans/:date/accept            { version, blocks }: the proposal, as the user left it
 //   POST  /api/plans/:date/discard           { version }
 //   PUT   /api/plans/:date/day               { version, blocks }: the day, edited
 //   POST  /api/tokens                        a card token for an agent: { board, card, agent }
-//   POST  /api/tokens/pepper                 a token for Pepper's session: the goals, besides what assistant sees
-//   POST  /api/tokens/brain                  { brain }: a token for another brain's agents, in its memory
+//   POST  /api/tokens/pepper                 the pepper brain's token, as /api/brains/pepper/tokens
+//   POST  /api/tokens/brain                  { brain }: as /api/brains/:brain/tokens
+//   /api/brains                              brains, as data (brains.ts)
 //   POST  /api/tokens/machine                { environment }: a server's token, until revoked: this
 //                                            API but tickets, export and import, and of the fleet
 //                                            and sessions only that environment's
@@ -69,7 +70,7 @@ import type { Dump } from "./dump";
 import { CARD_TOKEN, type Env, type Props } from "./index";
 import { type Grant, brainOf, hiddenFor, mcp, memoryOf } from "./mcp";
 import { blocks, chatText, date, note, noteId } from "./plans";
-import { BRAINS, type Brain } from "./memory";
+import { NAME as BRAIN_NAME, brainRoutes, live } from "./brains";
 import { fleetRoutes } from "./fleet";
 import { MEDIA_ID, forget, mediaKey, serve } from "./media";
 import { gitRoutes } from "./git";
@@ -229,9 +230,11 @@ async function notes(request: Request, memory: Memories): Promise<Response> {
   return error(405, "method not allowed");
 }
 
-function brainNamed(v: unknown): Brain {
-  if (!BRAINS.includes(v as Brain)) throw new Invalid(`brain must be one of ${BRAINS.join(", ")}`);
-  return v as Brain;
+// A brain there is and isn't archived, by name, or the default one.
+async function brainNamed(env: Env, user: string, v: string | null): Promise<string> {
+  const b = v === null ? await env.USER.get(env.USER.idFromName(user)).defaultBrain() : await live(env, user, v);
+  if (!b) throw new Invalid(v === null ? "there's no default brain; say which with ?brain=" : `no brain ${v}`);
+  return b.name;
 }
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -400,11 +403,11 @@ async function tokens(request: Request, env: Env, props: Props, machine?: string
     if (typeof input.environment !== "string" || !ENVIRONMENT.test(input.environment)) throw new Invalid("environment must be the machine's environment name");
     return json(await mintToken(env, props, { kind: "machine", environment: input.environment, agent: input.environment }, null), 201);
   }
-  if (path === "/api/tokens/pepper") return mint(env, props, { kind: "pepper", agent: "pepper" });
-  if (path === "/api/tokens/brain") {
-    const brain = brainNamed(input.brain);
-    if (brain === "pepper") throw new Invalid("Pepper's token is /api/tokens/pepper");
-    return mint(env, props, { kind: "brain", brain, agent: brain });
+  if (path === "/api/tokens/pepper" || path === "/api/tokens/brain") {
+    const name = path === "/api/tokens/pepper" ? "pepper" : String(input.brain ?? "");
+    const b = await live(env, props.userId, name);
+    if (!b) throw new Invalid(`no brain ${name}`);
+    return mint(env, props, { kind: "brain", brain: b.name, agent: b.name, id: b.id });
   }
   if (path !== "/api/tokens") return error(404, "not found");
   const { board: key, card: rawCard, agent } = input;
@@ -466,13 +469,13 @@ async function workspace(request: Request, env: Env, props: Props, users: Users,
 // each brain's memory, table by table (dump.ts). The other Worker takes it
 // only while it has no boards. Sign-ins don't move: every client signs in
 // there again.
-type Account = { version: 1; user: Dump; boards: Record<string, Dump>; memory: Partial<Record<Brain, Dump>> };
+type Account = { version: 1; user: Dump; boards: Record<string, Dump>; memory: Record<string, Dump> };
 
 async function exportAccount(env: Env, userId: string, users: Users): Promise<Account> {
   const boards: Account["boards"] = {};
   for (const b of await users.boards()) boards[b.key] = await env.BOARD.get(env.BOARD.idFromName(`${userId}/${b.key}`)).dump();
   const memory: Account["memory"] = {};
-  for (const brain of BRAINS) memory[brain] = await env.MEMORY.get(env.MEMORY.idFromName(`${userId}/${brain}`)).dump();
+  for (const b of await users.brains(true)) memory[b.name] = await env.MEMORY.get(env.MEMORY.idFromName(`${userId}/${b.name}`)).dump();
   return { version: 1, user: await users.dump(), boards, memory };
 }
 
@@ -490,7 +493,10 @@ async function importAccount(env: Env, userId: string, users: Users, input: Reco
       if (!BOARD_KEY.test(key)) throw new Invalid(`bad board key ${key}`);
       await step(`board ${key}`, await env.BOARD.get(env.BOARD.idFromName(`${userId}/${key}`)).restore(d));
     }
-    for (const [brain, d] of Object.entries(a.memory!)) await step(`memory ${brainNamed(brain)}`, await env.MEMORY.get(env.MEMORY.idFromName(`${userId}/${brain}`)).restore(d!));
+    for (const [brain, d] of Object.entries(a.memory!)) {
+      if (!BRAIN_NAME.test(brain)) throw new Invalid(`bad brain name ${brain}`);
+      await step(`memory ${brain}`, await env.MEMORY.get(env.MEMORY.idFromName(`${userId}/${brain}`)).restore(d!));
+    }
   } catch (e: any) {
     if (e instanceof Invalid) throw e;
     return error(e.status ?? 500, e.message, { restored: counts });
@@ -498,24 +504,35 @@ async function importAccount(env: Env, userId: string, users: Users, input: Reco
   return json({ restored: counts }, 201);
 }
 
-// Who's asking, for the MCP server: a card or Pepper token says; OAuth
-// tokens by scope.
-function grantOf(ctx: OAuthResourceContext<Props>): Grant | undefined {
-  if (ctx.props.grant) return ctx.props.grant.kind === "machine" ? undefined : ctx.props.grant;
-  if (ctx.auth.scope.includes("owner")) return { kind: "owner", agent: "claude" };
-  if (ctx.auth.scope.includes("assistant")) return { kind: "assistant", agent: "assistant" };
+// Who's asking, for the MCP server: a card or brain token says; OAuth
+// tokens by scope, in the default brain. A brain's is read with the brain:
+// its abilities, and refused once it's archived or purged. Pepper's from
+// before brains were data is the pepper brain's.
+async function grantOf(env: Env, ctx: OAuthResourceContext<Props>): Promise<Grant | undefined> {
+  let g = ctx.props.grant;
+  if (g?.kind === "machine") return undefined;
+  if (g?.kind === "pepper") g = { kind: "brain", brain: "pepper", agent: g.agent };
+  if (g?.kind === "brain") {
+    const b = await live(env, ctx.props.userId, g.brain, g.id);
+    return b && { ...g, abilities: b.abilities };
+  }
+  if (g) return g;
+  const kind = ctx.auth.scope.includes("owner") ? "owner" : ctx.auth.scope.includes("assistant") ? "assistant" : undefined;
+  if (!kind) return undefined;
+  const brain = (await env.USER.get(env.USER.idFromName(ctx.props.userId)).defaultBrain())?.name;
+  return { kind, agent: kind === "owner" ? "claude" : "assistant", brain };
 }
 
 export const api = {
   async fetch(request: Request, env: Env, ctx: OAuthResourceContext<Props>): Promise<Response> {
     const path = new URL(request.url).pathname;
     if (path === "/mcp") {
-      const grant = grantOf(ctx);
+      const grant = await grantOf(env, ctx);
       if (!grant) return insufficientScope(ctx.auth, ["assistant"]);
       return mcp(request, env, ctx.props.userId, grant);
     }
     if (path.startsWith("/memory/")) {
-      const grant = grantOf(ctx);
+      const grant = await grantOf(env, ctx);
       const brain = grant && brainOf(grant);
       if (!grant || !brain) return insufficientScope(ctx.auth, ["assistant"]);
       try {
@@ -532,9 +549,12 @@ export const api = {
     try {
       if (path.startsWith("/api/tokens")) return await tokens(request, env, ctx.props, machine);
       if (path.startsWith("/api/spawns") || path.startsWith("/api/fleet/")) return await fleetRoutes(request, env, ctx.props, () => body(request), mintToken, machine);
+      if (path === "/api/brains" || path.startsWith("/api/brains/"))
+        return machine ? error(403, "not with a machine token") : await brainRoutes(request, env, ctx.props, () => body(request), mintToken);
       const users = env.USER.get(env.USER.idFromName(ctx.props.userId));
       if (path === "/api/live") return users.fetch(asMachine(request, machine));
-      const brain = brainNamed(new URL(request.url).searchParams.get("brain") ?? "pepper");
+      const brainParam = new URL(request.url).searchParams.get("brain");
+      const brain = path.startsWith("/api/notes") || path === "/api/goals" || path.startsWith("/api/memory/") ? await brainNamed(env, ctx.props.userId, brainParam) : "";
       if (path.startsWith("/api/notes")) return await notes(request, await memoryOf(env, ctx.props.userId, brain));
       if (path === "/api/goals") {
         if (request.method !== "GET") return error(405, "method not allowed");
