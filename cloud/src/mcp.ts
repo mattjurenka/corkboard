@@ -438,8 +438,9 @@ const HOLD_ALLOWS = new Set(["read_card", "block", "request_user_action", "relea
 const INSTRUCTIONS = (me: string) => `The corkboard project board: one card per task. You are "${me}".
 To pick up work, call next_card (or claim_card for a specific card). While working, log progress with log.
 If you need a human decision, call block with your question and stop. If you need the user to do something
-(log in, approve, test on a device), call request_user_action; both notify them on their desktop. To show them a screenshot, plot,
-recording or PDF, attach it to your card with attach_file; it appears beside your session. When done, call submit_for_review.
+(log in, approve, test on a device), call request_user_action; both notify them on their desktop.
+Whenever you want to show the user media (a screenshot, plot, image, recording, audio clip, PDF), upload it with attach_file
+rather than giving a file path or describing it; it appears on your card beside your session. When done, call submit_for_review.
 Put follow-up work you discover in new cards with create_card (parent: the card you are on).`;
 
 // The user's own tools, for OAuth clients and Pepper, not card agents: the
