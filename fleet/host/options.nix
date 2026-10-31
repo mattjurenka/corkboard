@@ -141,6 +141,17 @@
       '';
     };
 
+    slotRunners = lib.mkOption {
+      type = lib.types.attrsOf lib.types.package;
+      default = { };
+      description = ''
+        Each spawnable template's slot guest (`system.build.vm` of
+        `<template>@slot`), built with the host, so starting a spawn
+        evaluates nothing (fleet/host/corkboard.nix sets it). A template with
+        none here is built from `flake` when a slot starts it.
+      '';
+    };
+
     autostartDelay = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;

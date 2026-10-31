@@ -35,8 +35,14 @@
       # the address plan each VM and the host share; `mkFleet` turns brains,
       # capabilities, environments and templates into checked guests.
       nixosModules.fleetHost = { pkgs, lib, ... }: {
+        # Once, however many modules here import it.
+        key = "corkboard/fleetHost";
         imports = [ ./fleet/host/host.nix ];
         my.agentVms.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.fleet;
+      };
+      # The whole fleet on a host: `services.corkboard.fleet` (fleet/host/corkboard.nix).
+      nixosModules.fleet = {
+        imports = [ self.nixosModules.fleetHost (import ./fleet/host/corkboard.nix { inherit (nixpkgs.lib) nixosSystem; }) ];
       };
       lib.fleet = {
         mkPlan = import ./fleet/plan.nix;

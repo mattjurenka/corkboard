@@ -645,8 +645,13 @@ let
         mkdir -p "$TMPDIR"
         rm -f ${vm.spiceSocket} ${lib.concatStringsSep " " vm.consoleSockets} "$TMPDIR"/store.img ${vm.diskImage}
 
-        runner=$(nix build --no-link --print-out-paths \
-          "${cfg.flake}#nixosConfigurations.\"$template@slot\".config.system.build.vm")
+        case "$template" in
+        ${lib.concatStrings (lib.mapAttrsToList (t: runner: ''
+          ${lib.escapeShellArg t}) runner=${runner} ;;
+        '') cfg.slotRunners)}
+          *) runner=$(nix build --no-link --print-out-paths \
+               "${cfg.flake}#nixosConfigurations.\"$template@slot\".config.system.build.vm") ;;
+        esac
         exec "$runner"/bin/run-agent-vm "$@"
       '';
     };
