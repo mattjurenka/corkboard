@@ -153,6 +153,7 @@ export class Session {
   async call(op: string, args: any[]): Promise<unknown> {
     if (op.startsWith("plan_")) return this.plan(op, args);
     if (op.startsWith("fleet_")) return this.fleet(op, args);
+    if (op.startsWith("brains_")) return this.brains(op, args);
     // Pepper's session (plan/claude.lua): the one token that sees the goals.
     if (op === "pepper_token") {
       const res = await fetch(`${this.cloud.link.cloud}/api/tokens/pepper`, {
@@ -430,6 +431,41 @@ export class Session {
       case "fleet_approve":
       case "fleet_stop":
         return send("POST", `/spawns/${encodeURIComponent(args[0])}/${op === "fleet_approve" ? "approve" : "stop"}`);
+      default:
+        throw new Error(`corkboard cloud: no operation ${op}`);
+    }
+  }
+
+  // The brains view (brains.lua): every brain, archived ones too, and its
+  // changes on the user's socket. A stale edit answers with the brain as it is.
+  private async brains(op: string, args: any[]): Promise<unknown> {
+    const send = async (method: string, path: string, body?: object) => {
+      const res = await fetch(`${this.cloud.link.cloud}/api/brains${path}`, {
+        method,
+        headers: { Authorization: `Bearer ${await this.cloud.link.token()}`, ...(body ? { "Content-Type": "application/json" } : {}) },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const json = res.status === 204 ? null : ((await res.json().catch(() => ({}))) as any);
+      if (res.status === 409 && json?.brain) return { stale: json.brain, error: json.error };
+      if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`);
+      return json;
+    };
+    const name = (n: unknown) => `/${encodeURIComponent(String(n))}`;
+    switch (op) {
+      case "brains_get":
+        await this.cloud.follow(USER, this.listener);
+        this.keys.add(USER);
+        return send("GET", "?archived=1");
+      case "brains_create":
+        return send("POST", "", args[0]);
+      case "brains_update":
+        return send("PATCH", name(args[0]), args[1]);
+      case "brains_archive":
+        return send("DELETE", name(args[0]));
+      case "brains_restore":
+        return send("POST", `${name(args[0])}/restore`, {});
+      case "brains_purge":
+        return send("DELETE", `${name(args[0])}?purge=${encodeURIComponent(String(args[0]))}`);
       default:
         throw new Error(`corkboard cloud: no operation ${op}`);
     }

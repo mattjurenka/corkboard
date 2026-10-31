@@ -81,6 +81,7 @@ function M.attach(chan)
   require("corkboard.claude.cards").push_all()
   require("corkboard.usage").push_all()
   require("corkboard.fleet").push_all()
+  require("corkboard.brains").push_all()
   require("corkboard.plan").push_all()
   require("corkboard.focus").push()
   M.push_layout()
@@ -705,6 +706,8 @@ function M.setup()
   vim.api.nvim_create_user_command("AgentUsage", usage.show, { desc = "corkboard: token usage" })
   local fleet = require("corkboard.fleet")
   vim.api.nvim_create_user_command("AgentFleet", fleet.show, { desc = "corkboard: the fleet" })
+  local brains = require("corkboard.brains")
+  vim.api.nvim_create_user_command("AgentBrains", brains.show, { desc = "corkboard: brains" })
   local plan = require("corkboard.plan")
   vim.keymap.set("n", "<leader>p", M.open_plan, { desc = "corkboard: day plan" })
   vim.api.nvim_create_user_command("AgentPlan", M.open_plan, { desc = "corkboard: day plan" })
@@ -846,7 +849,7 @@ function M.setup()
   })
   status_highlights()
   -- Anything that could have closed or moved a pinned tab: the plan in the
-  -- day plan's window, else the board, usage and the fleet, in order, so each finds the
+  -- day plan's window, else the board, usage, the fleet and brains, in order, so each finds the
   -- ones before it already in place.
   vim.api.nvim_create_autocmd({ "VimEnter", "TabClosed", "TabNewEntered", "TabEnter", "WinClosed" }, {
     group = group,
@@ -856,6 +859,7 @@ function M.setup()
         board.ensure()
         usage.ensure()
         fleet.ensure()
+        brains.ensure()
       end)
     end,
   })

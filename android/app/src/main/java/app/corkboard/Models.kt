@@ -253,3 +253,25 @@ data class CardExtra(val media: List<MediaFile> = emptyList())
 // A card, as much of it as the media screen needs.
 @Serializable
 data class Card(val id: String, val title: String = "", val extra: CardExtra = CardExtra())
+
+// A brain (cloud/src/brains.ts): who agents work for, its memory, and what
+// its spawned agents get. The name never changes; updated is its version.
+@Serializable
+data class Brain(
+    val id: String = "",
+    val name: String,
+    val title: String,
+    val description: String = "",
+    val account: String? = null,
+    val credentials: List<String> = emptyList(),
+    val egress: List<String> = emptyList(),
+    val abilities: List<String> = emptyList(),
+    val default: Boolean = false,
+    val created: String = "",
+    val updated: String = "",
+    val archived: String? = null,
+    val memory: BrainMemory? = null,
+)
+
+@Serializable
+data class BrainMemory(val notes: Int = 0, val entries: Int = 0, val episodes: Int = 0, val lastEpisode: String? = null)

@@ -2,9 +2,9 @@
 // the notifications folded at the foot (a third each when opened).
 //
 // Tabs are drawn from ext_tabline: Neovim stops drawing its own tabline and
-// sends tabline_update instead; gt/gT and :tab* still drive it. Tabs 1 to 3
-// are always the board, token usage and the fleet (corkboard.board, .usage and
-// .fleet keep them there), so they are labelled Board, Usage and Fleet
+// sends tabline_update instead; gt/gT and :tab* still drive it. Tabs 1 to 4
+// are always the board, token usage, the fleet and brains (corkboard.board,
+// .usage, .fleet and .brains keep them there), so they are labelled so
 // whatever window is focused in them, and have no close button. The tabs
 // after them come under a gap. All are numbered as Neovim does, for Alt+<n>.
 // The day plan has a window of its own, opened from the project's header
@@ -22,7 +22,7 @@ import { Notifications } from "./Notifications";
 import { Spinner } from "./Spinner";
 import { openPlan } from "@/planWindow";
 
-const PINNED = ["Board", "Usage", "Fleet"];
+const PINNED = ["Board", "Usage", "Fleet", "Brains"];
 
 // Each tab's ribbon down its left edge, by position, whatever the colorscheme;
 // neighbors far apart in hue.

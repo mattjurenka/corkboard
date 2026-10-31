@@ -42,6 +42,7 @@ object Cloud {
     class NotSignedIn : Exception("not signed in to corkboard")
     class Failed(val status: Int, message: String) : Exception(message)
     class Conflict(val plan: Plan) : Exception("the plan changed; look at it again")
+    class BrainConflict(val brain: Brain, message: String) : Exception(message)
 
     // Signing in ------------------------------------------------------------------------
 
@@ -155,6 +156,9 @@ object Cloud {
             if (res.code == 409 && parsed is JsonObject && parsed["plan"] != null) {
                 throw Conflict(json.decodeFromJsonElement(parsed["plan"]!!))
             }
+            if (res.code == 409 && parsed is JsonObject && parsed["brain"] != null) {
+                throw BrainConflict(json.decodeFromJsonElement(parsed["brain"]!!), parsed["error"]?.jsonPrimitive?.content ?: "it changed since")
+            }
             if (!res.isSuccessful) {
                 val error = (parsed as? JsonObject)?.get("error")?.jsonPrimitive?.content ?: text.take(200)
                 throw Failed(res.code, "$method ${Uri.parse(url).path}: ${res.code} $error")
@@ -247,6 +251,39 @@ object Cloud {
             },
         ),
     )
+
+    // Brains (cloud/src/brains.ts). A brain is sent whole but for its name,
+    // id and times, which the Worker keeps.
+    suspend fun brains(archived: Boolean): List<Brain> =
+        json.decodeFromJsonElement(api("GET", "/api/brains" + if (archived) "?archived=1" else ""))
+
+    private fun brainFields(b: Brain) = buildJsonObject {
+        put("title", b.title)
+        put("description", b.description)
+        put("account", b.account?.let { kotlinx.serialization.json.JsonPrimitive(it) } ?: JsonNull)
+        put("credentials", json.encodeToJsonElement(b.credentials))
+        put("egress", json.encodeToJsonElement(b.egress))
+        put("abilities", json.encodeToJsonElement(b.abilities))
+        put("default", b.default)
+    }
+
+    suspend fun createBrain(b: Brain): Brain = json.decodeFromJsonElement(
+        api("POST", "/api/brains", JsonObject(brainFields(b) + ("name" to kotlinx.serialization.json.JsonPrimitive(b.name)))),
+    )
+
+    // Against the updated it was read with: a stale one is a BrainConflict.
+    suspend fun updateBrain(b: Brain): Brain = json.decodeFromJsonElement(
+        api("PATCH", "/api/brains/${b.name}", JsonObject(brainFields(b) + ("updated" to kotlinx.serialization.json.JsonPrimitive(b.updated)))),
+    )
+
+    suspend fun archiveBrain(name: String): Brain = json.decodeFromJsonElement(api("DELETE", "/api/brains/$name"))
+
+    suspend fun restoreBrain(name: String): Brain = json.decodeFromJsonElement(api("POST", "/api/brains/$name/restore", buildJsonObject {}))
+
+    // An archived one, for good: its memory too.
+    suspend fun purgeBrain(name: String) {
+        api("DELETE", "/api/brains/$name?purge=$name")
+    }
 
     suspend fun bridges(): List<Bridge> = json.decodeFromJsonElement(api("GET", "/api/sessions"))
 

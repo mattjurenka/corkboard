@@ -1,5 +1,6 @@
 import type { Nvim } from "@/nvim/context";
 import { Board } from "./Board";
+import { Brains } from "./Brains";
 import { Cards } from "./Cards";
 import { Fleet } from "./Fleet";
 import { Media } from "./Media";
@@ -15,6 +16,7 @@ export const VIEWS: Record<string, React.ComponentType<ViewProps>> = {
   media: Media,
   usage: Usage,
   fleet: Fleet,
+  brains: Brains,
   plan: Plan,
   "plan-diff": PlanDiff,
   "plan-goals": PlanGoals,

@@ -143,8 +143,9 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
       body: body === undefined ? undefined : JSON.stringify(body),
     })
     if (res.status === 401 && !stale) continue
+    if (res.status === 204) return undefined as T
     const json = await res.json().catch(() => ({}))
-    if (!res.ok) throw new Error(json.error ?? "HTTP " + res.status)
+    if (!res.ok) throw Object.assign(new Error(json.error ?? "HTTP " + res.status), { status: res.status, body: json })
     return json as T
   }
   throw new Error("signed out")
@@ -167,4 +168,19 @@ export type Branch = {
   default: boolean
   ahead: number | null
   behind: number | null
+}
+export type Brain = {
+  id: string
+  name: string
+  title: string
+  description: string
+  account: string | null
+  credentials: string[]
+  egress: string[]
+  abilities: string[]
+  default: boolean
+  created: string
+  updated: string
+  archived?: string
+  memory?: { notes: number; entries: number; episodes: number; lastEpisode: string | null }
 }

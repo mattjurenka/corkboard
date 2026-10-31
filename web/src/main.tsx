@@ -188,6 +188,7 @@ rpc.on("corkboard.away_return", ([here]: any[]) => {
 });
 rpc.on("corkboard.usage",([state]: any[]) => store.set({ views: { ...store.get().views, usage: state } }));
 rpc.on("corkboard.fleet", ([state]: any[]) => store.set({ views: { ...store.get().views, fleet: state } }));
+rpc.on("corkboard.brains", ([state]: any[]) => store.set({ views: { ...store.get().views, brains: state } }));
 // The day and the ranked list are two windows on one state.
 rpc.on("corkboard.plan", ([state]: any[]) => store.set({ views: { ...store.get().views, plan: state, "plan-priority": state } }));
 rpc.on("corkboard.plan_diff", ([state]: any[]) => store.set({ views: { ...store.get().views, "plan-diff": state } }));

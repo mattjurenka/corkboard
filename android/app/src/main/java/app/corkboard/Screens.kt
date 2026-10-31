@@ -65,6 +65,9 @@ sealed interface Screen {
     data object Setup : Screen
     data object Fleet : Screen
     data object Media : Screen
+    data object Brains : Screen
+    // A brain to change, or a new one (Brains.kt).
+    data class EditBrain(val name: String? = null) : Screen
     // One attached file (Media.kt).
     data class Viewing(val board: String, val card: String, val id: String) : Screen
     data class Goals(val id: String? = null) : Screen
@@ -77,6 +80,7 @@ sealed interface Screen {
             "plan" -> Plan
             "fleet" -> Fleet
             "media" -> Media
+            "brains" -> Brains
             "goals" -> Goals()
             "meditate" -> Meditate
             "chat" -> Chat()
@@ -706,11 +710,11 @@ fun AppsScreen(back: () -> Unit) {
     }
 }
 
-private val tabs = listOf("now" to Screen.Home, "plan" to Screen.Plan, "pepper" to Screen.Chat(), "fleet" to Screen.Fleet, "media" to Screen.Media)
+private val tabs = listOf("now" to Screen.Home, "plan" to Screen.Plan, "pepper" to Screen.Chat(), "fleet" to Screen.Fleet, "brains" to Screen.Brains, "media" to Screen.Media)
 
 fun isTab(screen: Screen) = tabs.any { it.second::class == screen::class }
 
-// The tabs along the foot: now, the plan, Pepper, the fleet and media; the
+// The tabs along the foot: now, the plan, Pepper, the fleet, brains and media; the
 // plan and the fleet yellow while something there waits on you.
 @Composable
 fun Tabs(screen: Screen, go: (Screen) -> Unit) {
@@ -731,6 +735,8 @@ fun Tabs(screen: Screen, go: (Screen) -> Unit) {
                 },
                 fontWeight = if (here) FontWeight.SemiBold else FontWeight.Normal,
                 textAlign = TextAlign.Center,
+                maxLines = 1,
+                softWrap = false,
                 modifier = Modifier.weight(1f).clickable(role = Role.Button) { go(to) }.padding(vertical = 14.dp),
             )
         }

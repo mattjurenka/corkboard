@@ -56,6 +56,8 @@ object Repo {
     val chatReady = MutableStateFlow(true)
     // Null until it's first heard.
     val fleet = MutableStateFlow<Fleet?>(null)
+    // Bumped on each brain the Worker says changed, for the brains tab to read again.
+    val brainsChanged = MutableStateFlow(0)
     // Read with the plan; they change only when Pepper rewrites a goal note.
     val goals = MutableStateFlow<List<Goal>>(emptyList())
 
@@ -181,6 +183,7 @@ object Repo {
             "fleet" -> setEnvironment(Cloud.json.decodeFromJsonElement(e["environment"]!!))
             "spawn" -> setSpawn(Cloud.json.decodeFromJsonElement(e["spawn"]!!))
             "bridge" -> setBridge(Cloud.json.decodeFromJsonElement(e["bridge"]!!))
+            "brain" -> brainsChanged.value++
         }
     }
 }

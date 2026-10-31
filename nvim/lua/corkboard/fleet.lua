@@ -564,6 +564,8 @@ function M.cloud_event(event)
   if event.type == "conversation" or event.type == "conversation_end" then return require("corkboard.conversation").event(event) end
   -- A terminal mirrored here (corkboard.mirror).
   if event.type == "terminal" or event.type == "terminal_end" then return require("corkboard.mirror").event(event) end
+  -- The brains view follows the same socket.
+  if event.type == "brain" or event.type == "reconnected" then require("corkboard.brains").cloud_event(event) end
   if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
   if event.type == "spawn" or event.type == "fleet" or event.type == "reconnected" then reload() end
   -- Another bridge's sessions, as they change.

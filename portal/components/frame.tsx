@@ -52,6 +52,7 @@ export function Frame({ children }: { children: React.ReactNode }) {
           <nav className="flex gap-[2ch]">
             {view("/", "boards", pathname === "/")}
             {view("/files", "files", pathname.startsWith("/files"))}
+            {view("/brains", "brains", pathname.startsWith("/brains"))}
           </nav>
         </div>
         {state === "in" && (

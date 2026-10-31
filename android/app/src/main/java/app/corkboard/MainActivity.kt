@@ -45,6 +45,7 @@ class MainActivity : ComponentActivity() {
                     BackHandler(screen != Screen.Home) {
                         screen = when (screen) {
                             is Screen.Session, is Screen.NewSession -> Screen.Fleet
+                            is Screen.EditBrain -> Screen.Brains
                             is Screen.Goals -> Screen.Plan
                             is Screen.Viewing -> Screen.Media
                             else -> Screen.Home
@@ -60,6 +61,7 @@ class MainActivity : ComponentActivity() {
                             Box(Modifier.weight(1f)) {
                                 when (val s = screen) {
                                     Screen.Fleet -> FleetScreen(go)
+                                    Screen.Brains -> BrainsScreen(go)
                                     Screen.Media -> MediaScreen(go)
                                     Screen.Plan -> PlanScreen(go)
                                     is Screen.Chat -> ChatScreen(s.draft)
@@ -72,7 +74,8 @@ class MainActivity : ComponentActivity() {
                             if (!WindowInsets.isImeVisible) Tabs(screen, go)
                         }
                         else -> when (val s = screen) {
-                            Screen.Home, Screen.Fleet, Screen.Media, Screen.Plan, is Screen.Chat -> {}
+                            Screen.Home, Screen.Fleet, Screen.Brains, Screen.Media, Screen.Plan, is Screen.Chat -> {}
+                            is Screen.EditBrain -> EditBrainScreen(s.name) { screen = Screen.Brains }
                             is Screen.Goals -> GoalsScreen(s.id) { screen = Screen.Plan }
                             Screen.Meditate -> MeditateScreen(home)
                             Screen.Apps -> AppsScreen(home)

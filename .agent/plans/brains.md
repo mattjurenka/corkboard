@@ -1,6 +1,6 @@
 # Brains as data: a list you can change, not a constant
 
-**Written:** 2026-10-31. Proposed, not built.
+**Written:** 2026-10-31. Steps 1, 2, 3 and 5 built the same day (commits 0c118f3 and after); step 4, the fleet, is next.
 
 Today a brain is hardcoded in four places that have to agree by hand:
 
@@ -149,6 +149,15 @@ BRAINS                                    a new · e edit · d archive · <CR> i
    hooks in the slot guest, host bindings in place of brains in Nix, and `*-coding` templates
    retired.
 5. **Archive and purge**, with the memory object emptied and its vectors deleted.
+
+**Built 2026-10-31 (1, 2, 3, 5).** `cloud/src/brains.ts` and a `brains` table in UserDO; only
+`pepper` is seeded (decided: every user starts with just Pepper; an existing `work` memory needs
+its record made once, `POST /api/brains`). Each brain has a random `id` that its tokens carry, so
+a purge-and-remake in the same second still locks old tokens out. Pepper's chat tools are the
+`chat` ability; there is no `plans` ability, since no other tool was Pepper's alone. The view is
+on three surfaces: the Brains tab (`nvim/lua/corkboard/brains.lua`, fourth pinned, with
+`web/src/views/Brains.tsx` over it; `:AgentBrains`), the portal's `/brains`, and the Android
+app's `brains` tab. `<CR>` edits, not "opens its memory": a memory browser is still to do.
 
 Steps 1–3 change nothing a running agent sees. Step 4 is the first that changes spawns.
 
