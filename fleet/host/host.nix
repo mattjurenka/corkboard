@@ -1318,6 +1318,18 @@ in
   config = {
     assertions = [
       {
+        # A spawn may be sized up to the offer, and its slot's cgroup has to
+        # hold that, QEMU's 512 MiB and the 1 GiB throttle band, or the VM
+        # it was promised is OOM-killed instead.
+        assertion = cfg.offer.memory == null || lib.all
+          (inst: inst.memoryMax == null || inst.memoryMax >= cfg.offer.memory + 1536)
+          (lib.attrValues (lib.filterAttrs (_: inst: inst.slot) active));
+        message = ''
+          my.agentVms: offer.memory is ${toString cfg.offer.memory} MiB, so every
+          slot's memoryMax needs to be at least ${toString ((if cfg.offer.memory == null then 0 else cfg.offer.memory) + 1536)}.
+        '';
+      }
+      {
         assertion = lib.all
           (inst: inst.egress != "allowlist"
             || inst.allowedDomains != [ ]
