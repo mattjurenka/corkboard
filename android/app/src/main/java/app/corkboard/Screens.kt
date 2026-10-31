@@ -64,6 +64,9 @@ sealed interface Screen {
     data object Apps : Screen
     data object Setup : Screen
     data object Fleet : Screen
+    data object Media : Screen
+    // One attached file (Media.kt).
+    data class Viewing(val board: String, val card: String, val id: String) : Screen
     data class Goals(val id: String? = null) : Screen
     data class Chat(val draft: String = "") : Screen
     data class Session(val bridge: String, val key: String) : Screen
@@ -73,6 +76,7 @@ sealed interface Screen {
         fun named(name: String?): Screen? = when (name) {
             "plan" -> Plan
             "fleet" -> Fleet
+            "media" -> Media
             "goals" -> Goals()
             "meditate" -> Meditate
             "chat" -> Chat()
@@ -702,11 +706,11 @@ fun AppsScreen(back: () -> Unit) {
     }
 }
 
-private val tabs = listOf("now" to Screen.Home, "plan" to Screen.Plan, "pepper" to Screen.Chat(), "fleet" to Screen.Fleet)
+private val tabs = listOf("now" to Screen.Home, "plan" to Screen.Plan, "pepper" to Screen.Chat(), "fleet" to Screen.Fleet, "media" to Screen.Media)
 
 fun isTab(screen: Screen) = tabs.any { it.second::class == screen::class }
 
-// The four tabs along the foot: now, the plan, Pepper and the fleet; the
+// The tabs along the foot: now, the plan, Pepper, the fleet and media; the
 // plan and the fleet yellow while something there waits on you.
 @Composable
 fun Tabs(screen: Screen, go: (Screen) -> Unit) {

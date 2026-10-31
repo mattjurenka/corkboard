@@ -241,3 +241,15 @@ fun ago(iso: String?): String {
         else -> "${secs / 86400}d ago"
     }
 }
+
+// A file an agent attached to a card (attach_file; cloud/src/media.ts's
+// Media): size in bytes, at its ISO time, who the agent.
+@Serializable
+data class MediaFile(val id: String, val name: String, val type: String = "", val size: Long = 0, val at: String = "", val who: String = "")
+
+@Serializable
+data class CardExtra(val media: List<MediaFile> = emptyList())
+
+// A card, as much of it as the media screen needs.
+@Serializable
+data class Card(val id: String, val title: String = "", val extra: CardExtra = CardExtra())

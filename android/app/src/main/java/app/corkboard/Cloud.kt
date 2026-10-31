@@ -214,6 +214,25 @@ object Cloud {
 
     suspend fun boards(): List<BoardInfo> = json.decodeFromJsonElement(api("GET", "/api/boards"))
 
+    suspend fun cards(board: String): List<Card> = json.decodeFromJsonElement(api("GET", "/api/boards/$board/cards"))
+
+    // A file attached to a card, written to `to`; there first, it's kept,
+    // since a file's id is never reused.
+    suspend fun download(board: String, card: String, id: String, to: java.io.File) {
+        if (to.exists()) return
+        val token = token()
+        withContext(Dispatchers.IO) {
+            val req = Request.Builder().url("$ORIGIN/api/boards/$board/cards/$card/media/$id").header("Authorization", "Bearer $token").build()
+            http.newCall(req).execute().use { res ->
+                if (!res.isSuccessful) throw Failed(res.code, "the file: ${res.code}")
+                to.parentFile?.mkdirs()
+                val part = java.io.File(to.path + ".part")
+                part.outputStream().use { res.body!!.byteStream().copyTo(it) }
+                part.renameTo(to)
+            }
+        }
+    }
+
     // A session in one of an environment's VMs (cloud/src/fleet.ts's interactive spawn).
     suspend fun startSession(environment: String, template: String, board: String?, task: String): Spawn = json.decodeFromJsonElement(
         api(

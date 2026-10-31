@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
                         screen = when (screen) {
                             is Screen.Session, is Screen.NewSession -> Screen.Fleet
                             is Screen.Goals -> Screen.Plan
+                            is Screen.Viewing -> Screen.Media
                             else -> Screen.Home
                         }
                     }
@@ -53,12 +54,13 @@ class MainActivity : ComponentActivity() {
                     when {
                         !signedIn -> SignInScreen()
                         !setupDone && !Setup.locking(this@MainActivity) -> SetupScreen(resumed) { setupDone = true }
-                        // The four tabs, with the bar along the foot; it steps
+                        // The tabs, with the bar along the foot; it steps
                         // aside for the keyboard.
                         isTab(screen) -> Column(Modifier.fillMaxSize()) {
                             Box(Modifier.weight(1f)) {
                                 when (val s = screen) {
                                     Screen.Fleet -> FleetScreen(go)
+                                    Screen.Media -> MediaScreen(go)
                                     Screen.Plan -> PlanScreen(go)
                                     is Screen.Chat -> ChatScreen(s.draft)
                                     else -> {
@@ -70,11 +72,12 @@ class MainActivity : ComponentActivity() {
                             if (!WindowInsets.isImeVisible) Tabs(screen, go)
                         }
                         else -> when (val s = screen) {
-                            Screen.Home, Screen.Fleet, Screen.Plan, is Screen.Chat -> {}
+                            Screen.Home, Screen.Fleet, Screen.Media, Screen.Plan, is Screen.Chat -> {}
                             is Screen.Goals -> GoalsScreen(s.id) { screen = Screen.Plan }
                             Screen.Meditate -> MeditateScreen(home)
                             Screen.Apps -> AppsScreen(home)
                             Screen.Setup -> SetupScreen(resumed, home)
+                            is Screen.Viewing -> ViewingScreen(s) { screen = Screen.Media }
                             is Screen.Session -> SessionScreen(s) { screen = Screen.Fleet }
                             is Screen.NewSession -> NewSessionScreen(s.environment, go) { screen = Screen.Fleet }
                         }
