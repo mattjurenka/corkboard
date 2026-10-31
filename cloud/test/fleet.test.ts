@@ -84,6 +84,36 @@ describe("spawning", () => {
   });
 });
 
+describe("bringing your own VM", () => {
+  beforeEach(async () => {
+    const templates = { ...TEMPLATES, gpu: { brain: null, needsApproval: false, memory: 8192, cores: 4, capNames: ["coding", "gpu"] } };
+    await send("PUT", "/api/fleet/environments/local", { templates, offer: { memory: 16384, cores: 6 } });
+  });
+
+  it("picks the smallest brainless template with every need, and keeps the shell and size", async () => {
+    const plain = (await send("POST", "/api/spawns", { task: "x", packages: ["ffmpeg", "python3Packages.numpy"] })).body;
+    expect(plain).toMatchObject({ template: "coding", environment: "local", shell: { packages: ["ffmpeg", "python3Packages.numpy"] } });
+    const gpu = (await send("POST", "/api/spawns", { task: "x", needs: ["gpu"], shell: "github:me/envs#cuda", memory: 12000, cores: 2 })).body;
+    // Never smaller than the template.
+    expect(gpu).toMatchObject({ template: "gpu", shell: { flake: "github:me/envs#cuda" }, memory: 12000, cores: 4 });
+    expect((await card("fleet", gpu.card)).description).toContain("gpu in local, with github:me/envs#cuda");
+  });
+
+  it("refuses what no host offers, a bad shell, and a shell beside a brain", async () => {
+    expect((await send("POST", "/api/spawns", { task: "x", needs: ["valheim"] })).body.error).toContain("has a VM with valheim; there are coding, gpu");
+    expect((await send("POST", "/api/spawns", { task: "x", memory: 32768 })).body.error).toContain("local gives at most 16384 MiB, 6 cores");
+    expect((await send("POST", "/api/spawns", { task: "x", packages: ["a; rm -rf /"] })).status).toBe(400);
+    expect((await send("POST", "/api/spawns", { task: "x", shell: "x y" })).status).toBe(400);
+    expect((await send("POST", "/api/spawns", { template: "work-coding", task: "x", packages: ["jq"] })).body.error).toContain("brainless");
+  });
+
+  it("from MCP", async () => {
+    const s = await tool(owner, "spawn_agent", { task: "render it", needs: ["gpu"], packages: ["blender"] });
+    expect(s).toMatchObject({ template: "gpu", shell: { packages: ["blender"] } });
+    expect((await tool(owner, "spawn_status")).environments[0].offer).toEqual({ memory: 16384, cores: 6 });
+  });
+});
+
 describe("sessions", () => {
   it("queues an interactive spawn without a task, named for its template", async () => {
     const s = await send("POST", "/api/spawns", { template: "coding", interactive: true, board: BOARD });

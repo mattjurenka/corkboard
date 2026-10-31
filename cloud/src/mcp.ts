@@ -502,6 +502,14 @@ const blockSchema = {
     required: ["id", "start", "stop", "title", "kind"],
   },
 };
+// What a spawn brings to its VM: its tools, and its size.
+const VM = {
+  packages: strings("nixpkgs attribute names to have, e.g. nodejs_22, postgresql"),
+  shell: str('A flake ref whose devShell it runs in, e.g. github:me/envs#rust, or ".#" for its repo\'s own'),
+  needs: strings("Capabilities its VM must have (spawn_status lists them), e.g. gpu"),
+  memory: { type: "integer", description: "MiB of RAM, if it needs more than its template's" },
+  cores: { type: "integer", description: "vCPUs, if it needs more than its template's" },
+};
 const lineList = (description: string) => ({ type: "array", items: { type: "object" }, description });
 
 function writable(id: string, grant: Grant) {
@@ -669,14 +677,15 @@ const USER_TOOLS: Record<string, UserTool> = {
   },
   spawn_agent: {
     description:
-      "Start an agent on a task, in a VM of its own: a coding agent to fix something, a brain's agent to work with its memory. It gets a card of its own (on the board you name, or Fleet), works through it and leaves its answer there; with a board that is a project, it works in that project's repo and its commits come back as the branch fleet/<id>. spawn_status lists the templates and where they run. It may wait for room on the machine; it doesn't wait for you.",
+      "Start an agent on a task, in a VM of its own: a coding agent to fix something, a brain's agent to work with its memory. It gets a card of its own (on the board you name, or Fleet), works through it and leaves its answer there; with a board that is a project, it works in that project's repo and its commits come back as the branch fleet/<id>. spawn_status lists the templates and where they run. Bring its tools with packages or shell (built inside its VM), and size it with memory and cores, within what its machine offers. It may wait for room on the machine; it doesn't wait for you.",
     properties: {
-      template: str("A template's name, from spawn_status"),
+      template: str("A template's name, from spawn_status; left out, the smallest one with no brain that has every need"),
       task: str("What the agent should do, in full: it knows only this and its repo"),
       environment: str("Where to run it; the first that has the template, if left out"),
       board: str("The board's key, from list_boards: its card goes there, and a project board's repo is what it works in"),
+      ...VM,
     },
-    required: ["template", "task"],
+    required: ["task"],
     user: true,
     run: async (a, c) => spawn(c.env, c.user, "user", a),
   },
@@ -684,14 +693,15 @@ const USER_TOOLS: Record<string, UserTool> = {
     description:
       "Start a Claude Code session in a VM of its own, for the user to talk to from their phone or the fleet view, rather than an agent on a task: it runs until stopped (spawn_stop), and its commits come back as the branch fleet/<id>. It gets a card on the board you name. spawn_status lists the templates (VM types) and where they run.",
     properties: {
-      template: str("A template's name, from spawn_status: the VM type"),
+      template: str("A template's name, from spawn_status: the VM type; left out, the smallest one with no brain that has every need"),
       board: str("The board's key, from list_boards: its project's repo is what the session works in"),
       environment: str("Where to run it; the first that has the template, if left out"),
       message: str("What to say to it first, if anything"),
+      ...VM,
     },
-    required: ["template", "board"],
+    required: ["board"],
     user: true,
-    run: async (a, c) => spawn(c.env, c.user, "user", { template: a.template, board: a.board, environment: a.environment, task: a.message ?? "", interactive: true }),
+    run: async (a, c) => spawn(c.env, c.user, "user", { ...a, task: a.message ?? "", interactive: true }),
   },
   spawn_status: {
     description: "One spawned agent: its state, its card, and its answer when done. Without an id, the newest spawns, and the templates each environment can run.",

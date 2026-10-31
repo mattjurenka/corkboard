@@ -2,12 +2,15 @@
 // whoever asked, is a row in the user's object (user.ts) tied to a card, and
 // each environment's fleetd (fleet/fleetd) claims the ones for it.
 //
-//   PUT   /api/fleet/environments/:name      { templates, running? }: what fleetd there can run, and runs
+//   PUT   /api/fleet/environments/:name      { templates, offer?, running? }: what fleetd there can run, the
+//                                            most one VM there may have, and what runs
 //   GET   /api/fleet/environments            each environment and its templates
 //   DELETE /api/fleet/environments/:name     one no fleetd runs as any more
 //   GET   /api/spawns                        newest first: ?environment=, ?state=a,b, ?limit=
-//   POST  /api/spawns                        { template, task, environment?, board?, interactive? }: the user's;
-//                                            interactive, a session you talk to (task its first message, if any)
+//   POST  /api/spawns                        { template?, task, environment?, board?, interactive?, shell?,
+//                                            packages?, needs?, memory?, cores? }: the user's; interactive, a
+//                                            session you talk to (task its first message, if any); with no
+//                                            template, the smallest brainless one with every need
 //   GET   /api/spawns/:id
 //   POST  /api/spawns/:id/approve            a brain's spawn of a template with credentials
 //   POST  /api/spawns/:id/stop
@@ -71,7 +74,16 @@ export type Running = {
   residents: { name: string; brain: string | null; memory: number | null; up: boolean; config?: Config }[];
   slots: { name: string; spawn: string | null; template: string | null; memory: number | null; config?: Config }[];
 };
-export type Environment = { name: string; templates: Record<string, Template>; seen: string; running?: Running };
+// The most one spawn there may ask for (MiB, vCPUs), as its host says; null
+// for no more than its budget, or its cores.
+export type Offer = { memory: number | null; cores: number | null };
+export type Environment = { name: string; templates: Record<string, Template>; seen: string; offer?: Offer; running?: Running };
+
+// What the agent's tools are, brought by whoever spawns it: packages from the
+// guest's own nixpkgs, or a flake's devShell ("." is its repo's). The guest
+// builds it (fleet/guest/slot.nix); its host only hands the words in, so a
+// shell can't reach anything of the host's.
+export type Shell = { packages: string[] } | { flake: string };
 
 export type Spawn = {
   id: string;
@@ -101,6 +113,10 @@ export type Spawn = {
   // task: it runs until it's stopped, and its fleetd serves its conversation
   // as a bridge does (fleet/fleetd/sessions.ts).
   interactive?: boolean;
+  shell?: Shell;
+  // Its VM's size, when asked for: at least the template's, at most the offer.
+  memory?: number;
+  cores?: number;
 };
 
 export type SpawnReport = Pick<Spawn, "state" | "slot" | "exit" | "error" | "result">;
@@ -143,30 +159,94 @@ export class Refused extends Error {
 
 // Spawning ---------------------------------------------------------------------------
 
-export type SpawnInput = { template?: unknown; task?: unknown; environment?: unknown; board?: unknown; interactive?: unknown };
+export type SpawnInput = {
+  template?: unknown;
+  task?: unknown;
+  environment?: unknown;
+  board?: unknown;
+  interactive?: unknown;
+  // A flake ref, or { packages } / { flake }.
+  shell?: unknown;
+  packages?: unknown;
+  // Capabilities the VM must have (a template's capNames), when no template is named.
+  needs?: unknown;
+  memory?: unknown;
+  cores?: unknown;
+};
+
+const PACKAGE = /^[A-Za-z_][\w.+-]{0,127}$/;
+const FLAKE = /^[\w.+:/#?=&@~,%-]{1,512}$/;
+
+function shellOf(input: SpawnInput): Shell | undefined {
+  let s = input.shell;
+  if (s === undefined || s === null || s === "") s = input.packages === undefined ? undefined : { packages: input.packages };
+  else if (typeof s === "string") s = { flake: s };
+  if (s === undefined) return undefined;
+  const o = s as Record<string, unknown>;
+  if (Array.isArray(o.packages)) {
+    if (!o.packages.length || o.packages.length > 64) throw new Refused(400, "packages must be 1 to 64 nixpkgs attribute names");
+    const bad = o.packages.find((p) => typeof p !== "string" || !PACKAGE.test(p));
+    if (bad !== undefined) throw new Refused(400, `${JSON.stringify(bad)} isn't a nixpkgs attribute name`);
+    return { packages: o.packages as string[] };
+  }
+  if (typeof o.flake === "string" && FLAKE.test(o.flake)) return { flake: o.flake };
+  throw new Refused(400, 'shell must be a flake ref (".#name" for the repo\'s own) or { packages: [...] }');
+}
+
+function size(v: unknown, what: string, max: number): number | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (!Number.isInteger(v) || (v as number) < 1 || (v as number) > max) throw new Refused(400, `${what} must be a whole number from 1 to ${max}`);
+  return v as number;
+}
 
 // A spawn, asked for by the user or a brain: placed, checked against the
 // rule, and given its card.
 export async function spawn(env: Env, user: string, by: string, input: SpawnInput): Promise<Spawn> {
   const u = users(env, user);
-  if (typeof input.template !== "string" || !input.template) throw new Refused(400, "template must be a template's name; spawn_status lists them");
+  if (input.template !== undefined && input.template !== null && (typeof input.template !== "string" || !NAME.test(input.template)))
+    throw new Refused(400, "template must be a template's name; spawn_status lists them");
   const interactive = input.interactive === true;
   // A session's task is only its first message, which it can go without.
   if (interactive && input.task === undefined) input.task = "";
   if (typeof input.task !== "string" || (!interactive && !input.task.trim())) throw new Refused(400, "task must say what the agent should do");
   if (input.task.length > 20_000) throw new Refused(400, "keep the task under 20000 characters");
-  const template = input.template;
   const task = input.task.trim();
+  const shell = shellOf(input);
+  const memory = size(input.memory, "memory (MiB)", 1 << 20);
+  const cores = size(input.cores, "cores", 256);
+  const needs = Array.isArray(input.needs) ? input.needs.map(String) : [];
 
   const envs = await u.environments();
   const asked = typeof input.environment === "string" && input.environment ? input.environment : undefined;
-  const where = envs.filter((e) => (!asked || e.name === asked) && e.templates[template]);
-  if (!where.length) {
-    const known = [...new Set(envs.flatMap((e) => Object.keys(e.templates)))].sort();
-    throw new Refused(400, `no ${asked ? `${asked} environment runs` : "environment runs"} ${template}; there are ${known.join(", ") || "none yet (no fleetd has said what it runs)"}`);
+  // Named, the template; else the smallest brainless one with every need.
+  const named = typeof input.template === "string" ? input.template : undefined;
+  const fits = (e: Environment, t: Template) =>
+    (!memory || !e.offer?.memory || Math.max(memory, t.memory) <= e.offer.memory) && (!cores || !e.offer?.cores || Math.max(cores, t.cores) <= e.offer.cores);
+  const candidates = envs
+    .filter((e) => !asked || e.name === asked)
+    .flatMap((e) =>
+      Object.entries(e.templates)
+        .filter(([name, t]) => (named ? name === named : !t.brain && needs.every((n) => t.capNames.includes(n))))
+        .map(([name, t]) => ({ e, name, t })),
+    )
+    .sort((a, b) => a.t.capNames.length - b.t.capNames.length || a.t.memory - b.t.memory);
+  if (!candidates.length) {
+    if (named) {
+      const known = [...new Set(envs.flatMap((e) => Object.keys(e.templates)))].sort();
+      throw new Refused(400, `no ${asked ? `${asked} environment runs` : "environment runs"} ${named}; there are ${known.join(", ") || "none yet (no fleetd has said what it runs)"}`);
+    }
+    const offered = [...new Set(envs.flatMap((e) => Object.values(e.templates).filter((t) => !t.brain).flatMap((t) => t.capNames)))].sort();
+    throw new Refused(400, `no ${asked ? `${asked} environment` : "environment"} has a VM with ${needs.join(", ") || "room for it"}; there are ${offered.join(", ") || "none"}`);
   }
-  const environment = where[0].name;
-  const t = where[0].templates[template];
+  const placed = candidates.find((c) => fits(c.e, c.t));
+  if (!placed) {
+    const offers = [...new Set(candidates.map((c) => c.e))].map((e) => `${e.name} gives at most ${e.offer?.memory ?? "?"} MiB, ${e.offer?.cores ?? "?"} cores`);
+    throw new Refused(400, `no VM that big: ${offers.join("; ")}`);
+  }
+  const { e: where, name: template, t } = placed;
+  const environment = where.name;
+  // A shell is the spawner's code, so never beside a brain's memory and credentials.
+  if (shell && t.brain) throw new Refused(400, `${template} is the ${t.brain} brain's; a shell of your own goes in a brainless template`);
 
   // The rule: a brain's own templates or brainless ones, and those with
   // credentials only once the user says.
@@ -187,7 +267,7 @@ export async function spawn(env: Env, user: string, by: string, input: SpawnInpu
   const card = value(
     await boardOf(env, user, key).create({
       title: first.length > 100 ? first.slice(0, 99) + "…" : first,
-      description: `${task}${task ? "\n\n---\n" : ""}${interactive ? "Session" : "Spawned agent"} ${id}: ${template} in ${environment}, asked by ${by}.`,
+      description: `${task}${task ? "\n\n---\n" : ""}${interactive ? "Session" : "Spawned agent"} ${id}: ${template} in ${environment}${shell ? `, with ${"flake" in shell ? shell.flake : shell.packages.join(" ")}` : ""}, asked by ${by}.`,
       status: "ready",
       agent,
       agent_state: "queued",
@@ -195,7 +275,23 @@ export async function spawn(env: Env, user: string, by: string, input: SpawnInpu
       attention: state === "pending-approval" ? `approve: ${by} wants to spawn ${template}, which holds credentials` : null,
     }),
   );
-  return u.addSpawn({ id, template, environment, task, brain: t.brain, by, state, board: key, card: card.id, agent, created: now(), ...(interactive && { interactive }) });
+  return u.addSpawn({
+    id,
+    template,
+    environment,
+    task,
+    brain: t.brain,
+    by,
+    state,
+    board: key,
+    card: card.id,
+    agent,
+    created: now(),
+    ...(interactive && { interactive }),
+    ...(shell && { shell }),
+    ...(memory && { memory: Math.max(memory, t.memory) }),
+    ...(cores && { cores: Math.max(cores, t.cores) }),
+  });
 }
 
 // A line on the spawn's card, and the card moved along with it. The agent
@@ -367,6 +463,11 @@ export async function fleetRoutes(request: Request, env: Env, props: Props, body
         }),
       );
       const environment: Environment = { name: e[1], templates, seen: now() };
+      if (typeof input.offer === "object" && input.offer !== null) {
+        const o = input.offer as Record<string, unknown>;
+        const n = (x: unknown) => (Number.isInteger(x) && (x as number) > 0 ? (x as number) : null);
+        environment.offer = { memory: n(o.memory), cores: n(o.cores) };
+      }
       if (input.running !== undefined) environment.running = running(input.running);
       return json(await u.putEnvironment(environment));
     }
@@ -428,6 +529,7 @@ export async function status(env: Env, user: string, id?: string) {
     name: e.name,
     seen: e.seen,
     running: e.running,
+    offer: e.offer,
     templates: Object.entries(e.templates).map(([name, t]) => ({ name, brain: t.brain, holdsCredentials: t.needsApproval, memory: t.memory, capabilities: t.capNames })),
   }));
   return { environments, spawns: (await u.spawns(undefined, [], 20)).map(({ task, ...s }) => ({ ...s, task: task.slice(0, 200) })) };

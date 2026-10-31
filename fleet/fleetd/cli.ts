@@ -1,6 +1,7 @@
 // corkboard-fleet: spawn agents into this machine's slots, and see them.
 //
-//   corkboard-fleet spawn <template> [--repo DIR] [--account NAME] <task...>
+//   corkboard-fleet spawn <template> [--repo DIR] [--account NAME] [--packages a,b | --shell FLAKE]
+//                         [--memory MiB] [--cores N] <task...>
 //   corkboard-fleet list
 //   corkboard-fleet show <id>          its state, and its answer when done
 //   corkboard-fleet attach <id>        a shell in its slot while it runs
@@ -36,10 +37,18 @@ switch (cmd) {
     const [template, ...rest] = args;
     let repo: string | undefined;
     let asked: string | undefined;
+    let shell: Spawn["shell"];
+    let memory: number | undefined;
+    let cores: number | undefined;
+    const int = (v: string | undefined, what: string) => (v && /^[1-9]\d*$/.test(v) ? Number(v) : die(`${what} needs a whole number`));
     const words: string[] = [];
     for (let i = 0; i < rest.length; i++) {
       if (rest[i] === "--repo") repo = resolve(rest[++i] ?? die("--repo needs a directory"));
       else if (rest[i] === "--account") asked = rest[++i] ?? die("--account needs a name");
+      else if (rest[i] === "--packages") shell = { packages: (rest[++i] ?? die("--packages needs a,b,c")).split(",").filter(Boolean) };
+      else if (rest[i] === "--shell") shell = { flake: rest[++i] ?? die("--shell needs a flake ref") };
+      else if (rest[i] === "--memory") memory = int(rest[++i], "--memory");
+      else if (rest[i] === "--cores") cores = int(rest[++i], "--cores");
       else words.push(rest[i]);
     }
     const m = manifest();
@@ -52,7 +61,20 @@ switch (cmd) {
     } catch (e: any) {
       die(e.message);
     }
-    const s: Spawn = { id: newId(), template, task: words.join(" "), repo, by: "user", account, state: "queued", created: new Date().toISOString() };
+    const t = m.templates[template];
+    const s: Spawn = {
+      id: newId(),
+      template,
+      task: words.join(" "),
+      repo,
+      by: "user",
+      account,
+      state: "queued",
+      created: new Date().toISOString(),
+      ...(shell && { shell }),
+      ...(memory && { memory: Math.max(memory, t.memory) }),
+      ...(cores && { cores: Math.max(cores, t.cores) }),
+    };
     write(s);
     const waiting = schedule(m, spawns(), new Set()).waiting;
     console.log(s.id + (waiting?.id === s.id ? `  (queued: ${waiting.reason})` : ""));

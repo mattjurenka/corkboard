@@ -25,6 +25,9 @@ export type Manifest = {
   owner: string;
   // MiB the agents may have between them, or null for no limit.
   memoryBudget: number | null;
+  // The most one spawn's VM may ask for (MiB, vCPUs), or null for no more
+  // than the budget (and the host's cores).
+  offer?: { memory: number | null; cores: number | null };
   slots: Record<string, { guestAddress: string; stateDir: string; shareDir: string; outboxDir: string; unit: string; network?: Network }>;
   // VMs that are always there: they count against the budget while up.
   residents: Record<
@@ -70,7 +73,17 @@ export type Spawn = {
   reported?: State;
   // The branch its commits were fetched into, in its repo.
   fetched?: string;
+  // What the spawner brought: the tools the guest builds itself (a nixpkgs
+  // package list, or a flake's devShell), and the VM's size if not the
+  // template's. The host never evaluates the shell; see fleet/guest/slot.nix.
+  shell?: { packages: string[] } | { flake: string };
+  memory?: number;
+  cores?: number;
 };
+
+// The MiB a spawn's VM is given, and what it costs the budget.
+export const memoryOf = (m: Manifest, s: Spawn) => s.memory ?? m.templates[s.template]?.memory ?? 0;
+export const coresOf = (m: Manifest, s: Spawn) => s.cores ?? m.templates[s.template]?.cores ?? null;
 
 export const MANIFEST = process.env.CORKBOARD_FLEET_MANIFEST ?? "/etc/corkboard/fleet.json";
 export const STATE = process.env.CORKBOARD_FLEET_STATE ?? join(homedir(), ".local/state/corkboard/fleet");
@@ -157,19 +170,19 @@ export function occupancy(m: Manifest, all: Spawn[], active: Set<string>): Occup
     const t = s && m.templates[s.template];
     const config: Config | undefined = slot.network && {
       ...slot.network,
-      cores: t?.cores ?? null,
+      cores: s ? coresOf(m, s) : (t?.cores ?? null),
       capabilities: t?.capNames ?? [],
       account: s?.account ?? null,
       ...(t && { needsApproval: t.needsApproval }),
     };
-    return { name, spawn: s?.id ?? null, template: s?.template ?? null, memory: s ? (t?.memory ?? 0) + OVERHEAD : null, ...(config && { config }) };
+    return { name, spawn: s?.id ?? null, template: s?.template ?? null, memory: s ? memoryOf(m, s) + OVERHEAD : null, ...(config && { config }) };
   });
   // A running spawn whose slot left the manifest still takes its memory.
   const lost = all.filter((s) => s.state === "running" && !m.slots[s.slot!]);
   const used =
     residents.reduce((n, r) => n + (r.up ? r.memory ?? 0 : 0), 0) +
     slots.reduce((n, s) => n + (s.memory ?? 0), 0) +
-    lost.reduce((n, s) => n + (m.templates[s.template]?.memory ?? 0) + OVERHEAD, 0);
+    lost.reduce((n, s) => n + memoryOf(m, s) + OVERHEAD, 0);
   return { budget: m.memoryBudget, used, residents, slots };
 }
 
@@ -189,7 +202,20 @@ export function schedule(m: Manifest, all: Spawn[], active: Set<string>): Plan {
       plan.fail.push({ id: s.id, error: `no spawnable template ${s.template} here` });
       continue;
     }
-    const need = t.memory + OVERHEAD;
+    const need = memoryOf(m, s) + OVERHEAD;
+    const offer = m.offer;
+    if (s.memory && offer?.memory && s.memory > offer.memory) {
+      plan.fail.push({ id: s.id, error: `asks for ${s.memory} MiB; one VM here gets at most ${offer.memory}` });
+      continue;
+    }
+    if (s.cores && offer?.cores && s.cores > offer.cores) {
+      plan.fail.push({ id: s.id, error: `asks for ${s.cores} cores; one VM here gets at most ${offer.cores}` });
+      continue;
+    }
+    if (s.shell && t.brain) {
+      plan.fail.push({ id: s.id, error: `${s.template} is the ${t.brain} brain's; a shell of your own goes in a brainless template` });
+      continue;
+    }
     if (m.memoryBudget !== null && need > m.memoryBudget) {
       plan.fail.push({ id: s.id, error: `${s.template} needs ${need} MiB; the budget is ${m.memoryBudget}` });
       continue;

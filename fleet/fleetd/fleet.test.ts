@@ -125,3 +125,22 @@ test("each VM's config: a resident's own, a slot's as the template it runs", () 
   expect(o.slots[1].config).toEqual({ ...network, cores: null, capabilities: [], account: null });
   expect(occupancy(base, [], new Set()).residents[0].config).toBeUndefined();
 });
+
+test("a spawn sized bigger than its template counts at its own size", () => {
+  const s = { ...spawn("coding", "running", "agent-0"), memory: 8192, cores: 4 };
+  const o = occupancy(m(null), [s], new Set(["agent-0.service"]));
+  expect(o.used).toBe(8192 + OVERHEAD);
+  const p = schedule(m(8192 + OVERHEAD + 4096), [s, spawn("coding")], new Set(["agent-0.service"]));
+  expect(p.waiting?.reason).toContain("needs");
+});
+
+test("past the host's offer a spawn fails", () => {
+  const big = { ...spawn("coding"), memory: 9000 }, wide = { ...spawn("coding"), cores: 8 };
+  const p = schedule({ ...m(null), offer: { memory: 8192, cores: 4 } }, [big, wide], new Set());
+  expect(p.fail.map((f) => f.error)).toEqual(["asks for 9000 MiB; one VM here gets at most 8192", "asks for 8 cores; one VM here gets at most 4"]);
+});
+
+test("a shell of the spawner's never goes in a brain's template", () => {
+  const s = { ...spawn("work-coding"), shell: { packages: ["ffmpeg"] } };
+  expect(schedule(m(null), [s], new Set()).fail[0].error).toContain("brainless");
+});

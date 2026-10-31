@@ -63,6 +63,27 @@
       '';
     };
 
+    offer = {
+      memory = lib.mkOption {
+        type = lib.types.nullOr lib.types.ints.positive;
+        default = null;
+        example = 8192;
+        description = ''
+          The most MiB one spawned agent's VM may ask for, over its
+          template's own. Null for whatever fits the budget.
+        '';
+      };
+      cores = lib.mkOption {
+        type = lib.types.nullOr lib.types.ints.positive;
+        default = null;
+        example = 4;
+        description = ''
+          The most vCPUs one spawned agent's VM may ask for. Null for no limit
+          but QEMU's.
+        '';
+      };
+    };
+
     package = lib.mkOption {
       type = lib.types.nullOr lib.types.package;
       default = null;

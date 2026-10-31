@@ -15,6 +15,11 @@
 #   /mnt/share/mcp.json      optional: corkboard's MCP server, with the spawn
 #                            token for the agent's card (a spawn from the
 #                            Worker's queue)
+#   /mnt/share/shell.json    optional: the tools the spawner brought, built
+#                            here and run in: { "packages": [...] } from this
+#                            guest's nixpkgs, or { "flake": ref }'s devShell
+#                            ("." is the repo's). Only ever evaluated in the
+#                            guest, so a shell can't reach the host's secrets
 #   /mnt/share/session       for a session you talk to rather than a task:
 #                            Claude Code keeps going, reading each message
 #                            fleetd puts in /mnt/share/inbox/ (a file a stream-
@@ -25,6 +30,7 @@
 #   /mnt/outbox/result.json  Claude Code's `--output-format json`
 #   /mnt/outbox/work.bundle  the commits it made, if it was given a repo
 #   /mnt/outbox/exit         its exit status
+#   /mnt/outbox/shell.log    building its shell, if it brought one
 #   /mnt/outbox/events.jsonl a session's output, as stream-json
 #   /mnt/outbox/projects/    a session's Claude Code logs, which fleetd
 #                            follows while it runs (fleet/fleetd/sessions.ts)
@@ -84,6 +90,23 @@ let
       mcp=()
       if [ -f /mnt/share/mcp.json ]; then mcp=(--mcp-config /mnt/share/mcp.json); fi
 
+      # The spawner's tools, built first so a shell that doesn't build says
+      # so rather than leaving Claude Code without them.
+      run=()
+      if [ -f /mnt/share/shell.json ]; then
+        if flake=$(jq -er '.flake // empty' /mnt/share/shell.json); then
+          run=(nix develop "$flake" --command)
+        else
+          mapfile -t pkgs < <(jq -r '.packages[] | "nixpkgs#" + .' /mnt/share/shell.json)
+          run=(nix shell "''${pkgs[@]}" --command)
+        fi
+        if ! "''${run[@]}" true > "$out/shell.log" 2>&1; then
+          jq -n --arg log "$(tail -c 4000 "$out/shell.log")" '{result: ("Its shell did not build:\n" + $log)}' > "$out/result.json"
+          echo 1 > "$out/exit"
+          exit 0
+        fi
+      fi
+
       status=0
       if [ -f /mnt/share/session ]; then
         # Its logs where fleetd can follow them.
@@ -107,7 +130,7 @@ let
           done
         }
         inbox \
-          | claude -p "''${mcp[@]}" \
+          | "''${run[@]}" claude -p "''${mcp[@]}" \
               --input-format stream-json \
               --output-format stream-json \
               --verbose \
@@ -116,7 +139,7 @@ let
         # Its last answer, where a task's goes.
         jq -s '[.[] | select(.type == "result")] | last // {}' "$out/events.jsonl" > "$out/result.json" || true
       else
-        claude -p "$(cat /mnt/share/task.md)" "''${mcp[@]}" \
+        "''${run[@]}" claude -p "$(cat /mnt/share/task.md)" "''${mcp[@]}" \
           --output-format json \
           --dangerously-skip-permissions \
           > "$out/result.json" || status=$?

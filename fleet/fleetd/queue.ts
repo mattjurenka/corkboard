@@ -14,7 +14,7 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { CLOUD, token } from "../../bridge/cloud";
 import { host, steady, type Host } from "../../bridge/host";
-import { accountFor, answer, manifest, occupancy, read, SPAWNS, spawns, write, type Manifest, type Occupancy, type Spawn, type State } from "./fleet";
+import { accountFor, answer, manifest, occupancy, OVERHEAD, read, SPAWNS, spawns, write, type Manifest, type Occupancy, type Spawn, type State } from "./fleet";
 
 // This machine's name, unless told otherwise.
 export const ENVIRONMENT = process.env.CORKBOARD_FLEET_ENVIRONMENT ?? hostname();
@@ -123,7 +123,7 @@ export class Queue {
   private async look() {
     const m = manifest();
     const running = this.running;
-    await ok("PUT", `/api/fleet/environments/${ENVIRONMENT}`, { templates: m.templates, running });
+    await ok("PUT", `/api/fleet/environments/${ENVIRONMENT}`, { templates: m.templates, offer: m.offer ?? { memory: m.memoryBudget && m.memoryBudget - OVERHEAD, cores: null }, running });
     this.told = running && told(running);
     const listed = (await ok("GET", `/api/spawns?environment=${ENVIRONMENT}&state=queued,running,stopped&limit=100`)) as Remote[];
     for (const r of listed) {
@@ -139,7 +139,11 @@ export class Queue {
     // Taken already, or no longer queued: nothing to do.
     if (c.status === 409) return;
     if (c.status >= 400) throw new Error(`claiming ${r.id}: ${c.json.error ?? c.status}`);
-    const { spawn, token: cardToken, repo } = c.json as { spawn: Remote & { board: string; card: string; agent: string }; token: string; repo: string | null };
+    const { spawn, token: cardToken, repo } = c.json as {
+      spawn: Remote & { board: string; card: string; agent: string; interactive?: boolean } & Pick<Spawn, "shell" | "memory" | "cores">;
+      token: string;
+      repo: string | null;
+    };
     const s: Spawn = {
       id: spawn.id,
       template: spawn.template,
@@ -150,7 +154,10 @@ export class Queue {
       state: "queued",
       created: now(),
       remote: { board: spawn.board, card: spawn.card, agent: spawn.agent, token: cardToken },
-      ...((spawn as { interactive?: boolean }).interactive && { interactive: true }),
+      ...(spawn.interactive && { interactive: true }),
+      ...(spawn.shell && { shell: spawn.shell }),
+      ...(spawn.memory && { memory: spawn.memory }),
+      ...(spawn.cores && { cores: spawn.cores }),
     };
     try {
       s.account = accountFor(m, s.template, s.by);

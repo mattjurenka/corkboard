@@ -611,7 +611,9 @@ let
   # slot for, written into ${stateDir}/template before it starts the unit,
   # and is built as `nixosConfigurations."<template>@<slot>"`: the template's
   # modules on this slot's addresses. Every spawn starts from an empty disk,
-  # so nothing one task leaves behind is there for the next.
+  # so nothing one task leaves behind is there for the next. A spawn that
+  # asked for a size has it in ${stateDir}/size ("<MiB> <cores>"), which
+  # QEMU takes over the guest's own: its `-m`/`-smp` come later.
   slotLauncherFor = name:
     let vm = plans.${name}; in
     pkgs.writeShellApplication {
@@ -629,6 +631,14 @@ let
           echo "Spawnable here: ${lib.concatStringsSep ", " spawnable}" >&2
           exit 1
         fi
+
+        QEMU_OPTS=""
+        if read -r mib cores < ${vm.stateDir}/size 2>/dev/null; then
+          if [[ "$mib" =~ ^[1-9][0-9]*$ && "$cores" =~ ^[1-9][0-9]*$ ]]; then
+            QEMU_OPTS="-m $mib -smp $cores"
+          fi
+        fi
+        export QEMU_OPTS
 
         export TMPDIR=${vm.runDir}
         export USE_TMPDIR=1
@@ -654,7 +664,7 @@ let
   # there (they count against the budget while they run), the templates a
   # slot can take, and the budget itself.
   manifest = {
-    inherit (cfg) flake owner memoryBudget brains defaultAccount;
+    inherit (cfg) flake owner memoryBudget brains defaultAccount offer;
     slots = lib.mapAttrs
       (name: inst:
         let vm = plans.${name}; in {

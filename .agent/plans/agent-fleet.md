@@ -240,6 +240,19 @@ and the two hosts (`omni-laptop` imports `fleetHost`, a new `pepper-droplet` imp
      Worker's, `list` this machine's (claimed ones included).
    - A brain template's spawn gets no brain token yet, so its hooks have no memory; the memory
      plan's step 4 adds it to the claim.
+4b. **Bring your own VM (2026-10-31).** A host decides what it lends: its brainless spawnable
+   templates are the VMs it offers (their capabilities: `gpu`, `coding`, ...), `memoryBudget`
+   the total, and `my.agentVms.offer.{memory,cores}` the most one VM may ask for (in the
+   manifest, sent to the Worker as the environment's `offer`). The spawner decides what's in it:
+   `needs` (capabilities), `memory`/`cores` (never under the template's), and a `shell`,
+   either `packages` from the guest's own pinned nixpkgs or a flake ref whose devShell it runs in
+   (`.#` for the repo's). With no template named, the Worker picks the smallest brainless one
+   with every need that fits an offer. The shell is never evaluated on the host: fleetd writes
+   it to `/mnt/share/shell.json`, and the guest builds it (`nix shell`/`nix develop`, log in
+   `/mnt/outbox/shell.log`) and runs Claude Code in it; a NixOS module from the spawner would
+   control QEMU's command line and the host's evaluation, so it can't be one. Sizes reach QEMU as
+   `<stateDir>/size` → `QEMU_OPTS="-m … -smp …"`, after the guest's own. A shell never goes in a
+   brain's template (its shares and account). Only the owner's own account, for now.
 5. **The cloud environment.** The droplet on NixOS with `fleetCloud`; OCI outputs for `oci`
    capabilities; the egress proxy pod. Pepper's resident agent moves there; `pepper-vm` on the
    laptop is retired. The token mint that writes `/var/lib/pepper/corkboard-token` writes a
