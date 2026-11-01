@@ -103,7 +103,7 @@ describe("spawning", () => {
     expect(free).toMatchObject({ state: "queued", brain: null, account: "personal" });
     const held = await spawn(env as any, USER, "pepper", { template: "coding", brain: "pepper", task: "read my mail" });
     expect(held).toMatchObject({ state: "pending-approval", brain: "pepper", by: "pepper", account: "personal" });
-    expect((await card("fleet", held.card)).attention).toBe("approve: pepper wants to spawn coding for the pepper brain, which holds credentials");
+    expect((await card("fleet", held.card)).attention).toBe("approve: pepper wants to spawn coding for the pepper brain, which holds corkboard, google");
 
     // Claiming waits for the approval, which clears the card's attention.
     expect((await send("POST", `/api/spawns/${held.id}/claim`, { environment: "local" })).status).toBe(409);

@@ -53,6 +53,7 @@ export function Frame({ children }: { children: React.ReactNode }) {
             {view("/", "boards", pathname === "/")}
             {view("/files", "files", pathname.startsWith("/files"))}
             {view("/brains", "brains", pathname.startsWith("/brains"))}
+            {view("/holds", "holds", pathname.startsWith("/holds"))}
           </nav>
         </div>
         {state === "in" && (

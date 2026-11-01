@@ -49,6 +49,8 @@ object Monokai {
     val orange = Color(0xFFFD971F) // base09: locked, still to do
     val yellow = Color(0xFFF4BF75) // base0A
     val cyan = Color(0xFF66D9EF) // base0D: planned work, done
+    val green = Color(0xFFA6E22E) // base0B
+    val red = Color(0xFFF92672) // base08
     val purple = Color(0xFFAE81FF) // base0E: Pepper
     val workTint = Color(0xFF304341) // cyan over base00
 }
@@ -74,7 +76,7 @@ val Small = TextStyle(fontFamily = Mono, fontSize = 12.sp, lineHeight = 16.sp, c
 
 // The bar along the top: where you are on the left, the time on the right.
 @Composable
-fun Header(title: String, sub: String) {
+fun Header(title: String, sub: String, end: (@Composable () -> Unit)? = null) {
     val minute by ticking()
     Row(
         Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 16.dp),
@@ -83,6 +85,7 @@ fun Header(title: String, sub: String) {
         // A long one (a session's name) on one line, cut short.
         Text(title, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
         Text(" ─ $sub", style = Small, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        end?.invoke()
         Text(clock(minute), style = Small, modifier = Modifier.padding(start = 8.dp))
     }
     Rule()

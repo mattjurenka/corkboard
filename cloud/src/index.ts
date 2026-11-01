@@ -26,6 +26,8 @@ export type Env = {
   VECTORS: VectorizeIndex;
   MEMORY_VECTORS?: string;
   OAUTH_KV: KVNamespace;
+  // What brains hold, and its secrets (holds.ts).
+  HOLDS: KVNamespace;
   // Files attached to cards (media.ts).
   MEDIA: R2Bucket;
   OAUTH_PROVIDER: OAuthHelpers;

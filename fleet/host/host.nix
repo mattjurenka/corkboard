@@ -695,7 +695,7 @@ let
         })
       (lib.filterAttrs (_: inst: inst.headless && !inst.slot) active);
     templates = lib.mapAttrs
-      (_: t: { inherit (t) memory cores needsApproval capNames; })
+      (_: t: { inherit (t) memory cores needsApproval capNames credentials; })
       (lib.filterAttrs (_: t: t.spawnable or false) cfg.templates);
   };
 

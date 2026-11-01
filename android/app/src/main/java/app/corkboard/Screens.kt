@@ -68,6 +68,9 @@ sealed interface Screen {
     data object Brains : Screen
     // A brain to change, or a new one (Brains.kt).
     data class EditBrain(val name: String? = null) : Screen
+    // What brains hold, and one of them to change or a new one (Holds.kt).
+    data object Holds : Screen
+    data class EditHold(val name: String? = null) : Screen
     // One attached file (Media.kt).
     data class Viewing(val board: String, val card: String, val id: String) : Screen
     data class Goals(val id: String? = null) : Screen
@@ -81,6 +84,7 @@ sealed interface Screen {
             "fleet" -> Fleet
             "media" -> Media
             "brains" -> Brains
+            "holds" -> Holds
             "goals" -> Goals()
             "meditate" -> Meditate
             "chat" -> Chat()
@@ -712,7 +716,7 @@ fun AppsScreen(back: () -> Unit) {
 
 private val tabs = listOf("now" to Screen.Home, "plan" to Screen.Plan, "pepper" to Screen.Chat(), "fleet" to Screen.Fleet, "brains" to Screen.Brains, "media" to Screen.Media)
 
-fun isTab(screen: Screen) = tabs.any { it.second::class == screen::class }
+fun isTab(screen: Screen) = screen is Screen.Holds || tabs.any { it.second::class == screen::class }
 
 // The tabs along the foot: now, the plan, Pepper, the fleet, brains and media; the
 // plan and the fleet yellow while something there waits on you.
@@ -724,7 +728,7 @@ fun Tabs(screen: Screen, go: (Screen) -> Unit) {
     Rule()
     Row(Modifier.fillMaxWidth()) {
         for ((label, to) in tabs) {
-            val here = screen::class == to::class
+            val here = screen::class == to::class || (to == Screen.Brains && screen is Screen.Holds)
             Text(
                 if (here) "[$label]" else label,
                 color = when {

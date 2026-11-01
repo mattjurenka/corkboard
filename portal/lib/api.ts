@@ -183,3 +183,27 @@ export type Brain = {
   archived?: string
   memory?: { notes: number; entries: number; episodes: number; lastEpisode: string | null }
 }
+// A name brains and templates hold (cloud/src/holds.ts): secret is when it
+// was set here, never what it is; one with no record has recorded false and
+// no created or updated.
+export type Hold = {
+  name: string
+  about: string
+  where: string | null
+  secret: string | null
+  recorded: boolean
+  created?: string
+  updated?: string
+  brains: string[]
+  templates: string[]
+}
+export type Spawn = {
+  id: string
+  template: string
+  environment: string
+  task: string
+  brain: string | null
+  by: string
+  state: string
+  created: string
+}

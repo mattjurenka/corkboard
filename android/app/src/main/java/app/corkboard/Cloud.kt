@@ -43,6 +43,7 @@ object Cloud {
     class Failed(val status: Int, message: String) : Exception(message)
     class Conflict(val plan: Plan) : Exception("the plan changed; look at it again")
     class BrainConflict(val brain: Brain, message: String) : Exception(message)
+    class HoldConflict(val hold: Hold, message: String) : Exception(message)
 
     // Signing in ------------------------------------------------------------------------
 
@@ -158,6 +159,9 @@ object Cloud {
             }
             if (res.code == 409 && parsed is JsonObject && parsed["brain"] != null) {
                 throw BrainConflict(json.decodeFromJsonElement(parsed["brain"]!!), parsed["error"]?.jsonPrimitive?.content ?: "it changed since")
+            }
+            if (res.code == 409 && parsed is JsonObject && parsed["hold"] != null) {
+                throw HoldConflict(json.decodeFromJsonElement(parsed["hold"]!!), parsed["error"]?.jsonPrimitive?.content ?: "it changed since")
             }
             if (!res.isSuccessful) {
                 val error = (parsed as? JsonObject)?.get("error")?.jsonPrimitive?.content ?: text.take(200)
@@ -282,6 +286,40 @@ object Cloud {
     // An archived one, for good: its memory too.
     suspend fun purgeBrain(name: String) {
         api("DELETE", "/api/brains/$name?purge=$name")
+    }
+
+    // Holds (cloud/src/holds.ts): what brains hold. A secret is sent, never
+    // read back; null forgets it.
+    suspend fun holds(): List<Hold> = json.decodeFromJsonElement(api("GET", "/api/holds"))
+
+    private fun holdFields(about: String, where: String?, secret: String?) = buildJsonObject {
+        put("about", about)
+        put("where", where?.let { kotlinx.serialization.json.JsonPrimitive(it) } ?: JsonNull)
+        secret?.let { put("secret", it) }
+    }
+
+    suspend fun createHold(name: String, about: String, where: String?, secret: String?): Hold = json.decodeFromJsonElement(
+        api("POST", "/api/holds", JsonObject(holdFields(about, where, secret) + ("name" to kotlinx.serialization.json.JsonPrimitive(name)))),
+    )
+
+    // Against the updated it was read with: a stale one is a HoldConflict.
+    suspend fun updateHold(name: String, updated: String, rename: String?, about: String, where: String?, secret: String?): Hold = json.decodeFromJsonElement(
+        api(
+            "PATCH",
+            "/api/holds/${Uri.encode(name)}",
+            JsonObject(
+                holdFields(about, where, secret) + ("updated" to kotlinx.serialization.json.JsonPrimitive(updated)) +
+                    listOfNotNull(rename?.let { "name" to kotlinx.serialization.json.JsonPrimitive(it) }),
+            ),
+        ),
+    )
+
+    suspend fun forgetSecret(name: String, updated: String): Hold = json.decodeFromJsonElement(
+        api("PATCH", "/api/holds/${Uri.encode(name)}", buildJsonObject { put("updated", updated); put("secret", JsonNull) }),
+    )
+
+    suspend fun deleteHold(name: String) {
+        api("DELETE", "/api/holds/${Uri.encode(name)}")
     }
 
     suspend fun bridges(): List<Bridge> = json.decodeFromJsonElement(api("GET", "/api/sessions"))

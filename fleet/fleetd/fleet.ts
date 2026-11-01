@@ -34,7 +34,7 @@ export type Manifest = {
     string,
     { unit: string; memory: number | null; brain?: string | null; account?: string | null; cores?: number | null; capNames?: string[]; network?: Network }
   >;
-  templates: Record<string, { memory: number; cores: number; needsApproval: boolean; capNames: string[] }>;
+  templates: Record<string, { memory: number; cores: number; needsApproval: boolean; capNames: string[]; credentials?: string[] }>;
   // The brains whose memory this host has, by name: the shares a spawn for
   // one mounts, in the guest `<template>+<brain>`. A brain with none runs
   // here in its template's own guest. Absent from a manifest written before
@@ -69,8 +69,9 @@ export type Spawn = {
   error?: string;
   stopRequested?: boolean;
   // From the Worker's queue: its card, the spawn token for it, and its
-  // brain's token if it has one (each emptied once it's revoked, at the end).
-  remote?: { board: string; card: string; agent: string; token: string; brainToken?: string };
+  // brain's token if it has one (each emptied once it's revoked, at the end),
+  // and the secrets of what it holds (dropped then too).
+  remote?: { board: string; card: string; agent: string; token: string; brainToken?: string; secrets?: Record<string, string> };
   // A session you talk to rather than a task (sessions.ts); when it was
   // asked to finish, if it has been.
   interactive?: boolean;

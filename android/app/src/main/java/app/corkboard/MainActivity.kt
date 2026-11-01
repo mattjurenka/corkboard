@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
                         screen = when (screen) {
                             is Screen.Session, is Screen.NewSession -> Screen.Fleet
                             is Screen.EditBrain -> Screen.Brains
+                            is Screen.EditHold -> Screen.Holds
                             is Screen.Goals -> Screen.Plan
                             is Screen.Viewing -> Screen.Media
                             else -> Screen.Home
@@ -62,6 +63,7 @@ class MainActivity : ComponentActivity() {
                                 when (val s = screen) {
                                     Screen.Fleet -> FleetScreen(go)
                                     Screen.Brains -> BrainsScreen(go)
+                                    Screen.Holds -> HoldsScreen(go)
                                     Screen.Media -> MediaScreen(go)
                                     Screen.Plan -> PlanScreen(go)
                                     is Screen.Chat -> ChatScreen(s.draft)
@@ -74,8 +76,9 @@ class MainActivity : ComponentActivity() {
                             if (!WindowInsets.isImeVisible) Tabs(screen, go)
                         }
                         else -> when (val s = screen) {
-                            Screen.Home, Screen.Fleet, Screen.Brains, Screen.Media, Screen.Plan, is Screen.Chat -> {}
+                            Screen.Home, Screen.Fleet, Screen.Brains, Screen.Holds, Screen.Media, Screen.Plan, is Screen.Chat -> {}
                             is Screen.EditBrain -> EditBrainScreen(s.name) { screen = Screen.Brains }
+                            is Screen.EditHold -> EditHoldScreen(s.name) { screen = Screen.Holds }
                             is Screen.Goals -> GoalsScreen(s.id) { screen = Screen.Plan }
                             Screen.Meditate -> MeditateScreen(home)
                             Screen.Apps -> AppsScreen(home)

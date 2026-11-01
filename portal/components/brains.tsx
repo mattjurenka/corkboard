@@ -6,7 +6,7 @@ import { Status } from "@/components/frame"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { api, type Brain } from "@/lib/api"
+import { api, type Brain, type Hold } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
 // Who agents work for (cloud/src/brains.ts): a pane per brain, its title in
@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils"
 
 type ApiError = Error & { status?: number; body?: { brain?: Brain } }
 
-const ago = (iso: string | null | undefined) => {
+export const ago = (iso: string | null | undefined) => {
   if (!iso) return null
   const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000)
   if (s < 60) return "now"
@@ -85,7 +85,7 @@ export function Brains() {
   )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex gap-[1ch]">
       <span className="w-[8ch] flex-none text-dim">{label}</span>
@@ -264,9 +264,15 @@ function BrainForm({ brain, brains, onClose, onSaved }: { brain: Brain | null; b
   const [named, setNamed] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [held, setHeld] = useState<string[]>([])
+  useEffect(() => {
+    api<Hold[]>("GET", "/api/holds")
+      .then((hs) => setHeld(hs.map((h) => h.name)))
+      .catch(() => {})
+  }, [])
   const set = (f: Partial<Draft>) => setD((x) => ({ ...x, ...f }))
   const accounts = uniq([...brains.map((b) => b.account), d.account])
-  const labels = uniq([...brains.flatMap((b) => b.credentials), ...d.credentials])
+  const labels = uniq([...brains.flatMap((b) => b.credentials), ...held, ...d.credentials])
 
   const start = (b: Brain | null) => {
     setFrom(b?.name ?? null)
@@ -434,7 +440,7 @@ function BrainForm({ brain, brains, onClose, onSaved }: { brain: Brain | null; b
   )
 }
 
-const input = "h-auto border-rule bg-transparent px-[1ch] py-[2px]"
+export const input = "h-auto border-rule bg-transparent px-[1ch] py-[2px]"
 
 // A tag, lit when it's picked.
 function Tag({ on, mark, onClick, children }: { on: boolean; mark: string; onClick: () => void; children: React.ReactNode }) {

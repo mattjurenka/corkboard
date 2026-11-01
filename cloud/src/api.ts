@@ -48,6 +48,7 @@
 //                                            on that (fleet/pepper/pepperd.ts); then this and the next go
 //   POST  /api/tokens/brain                  old: { brain }, as /api/brains/:brain/tokens
 //   /api/brains                              brains, as data (brains.ts)
+//   /api/holds                               what they hold, and its secrets (holds.ts)
 //   POST  /api/tokens/machine                { environment }: a server's token, until revoked: this
 //                                            API but tickets, export and import, and of the fleet
 //                                            and sessions only that environment's
@@ -81,6 +82,7 @@ import { CARD_TOKEN, type Env, type Props } from "./index";
 import { type Grant, brainOf, hiddenFor, mcp, memoryOf } from "./mcp";
 import { blocks, chatText, date, note, noteId } from "./plans";
 import { NAME as BRAIN_NAME, brainRoutes, live } from "./brains";
+import { dumpHolds, holdRoutes, restoreHolds, type HoldsDump } from "./holds";
 import { fleetRoutes } from "./fleet";
 import { MEDIA_ID, forget, mediaKey, serve } from "./media";
 import { gitRoutes } from "./git";
@@ -516,17 +518,17 @@ async function workspace(request: Request, env: Env, props: Props, users: Users,
 
 // The whole account, to move it to a Worker on another Cloudflare account,
 // where Durable Objects can't follow: the user's object, each board's and
-// each brain's memory, table by table (dump.ts). The other Worker takes it
-// only while it has no boards. Sign-ins don't move: every client signs in
-// there again.
-type Account = { version: 1; user: Dump; boards: Record<string, Dump>; memory: Record<string, Dump> };
+// each brain's memory, table by table (dump.ts), and the holds with their
+// secrets (holds.ts). The other Worker takes it only while it has no boards.
+// Sign-ins don't move: every client signs in there again.
+type Account = { version: 1; user: Dump; boards: Record<string, Dump>; memory: Record<string, Dump>; holds?: HoldsDump };
 
 async function exportAccount(env: Env, userId: string, users: Users): Promise<Account> {
   const boards: Account["boards"] = {};
   for (const b of await users.boards()) boards[b.key] = await env.BOARD.get(env.BOARD.idFromName(`${userId}/${b.key}`)).dump();
   const memory: Account["memory"] = {};
   for (const b of await users.brains(true)) memory[b.name] = await env.MEMORY.get(env.MEMORY.idFromName(`${userId}/${b.name}`)).dump();
-  return { version: 1, user: await users.dump(), boards, memory };
+  return { version: 1, user: await users.dump(), boards, memory, holds: await dumpHolds(env, userId) };
 }
 
 async function importAccount(env: Env, userId: string, users: Users, input: Record<string, unknown>): Promise<Response> {
@@ -547,6 +549,7 @@ async function importAccount(env: Env, userId: string, users: Users, input: Reco
       if (!BRAIN_NAME.test(brain)) throw new Invalid(`bad brain name ${brain}`);
       await step(`memory ${brain}`, await env.MEMORY.get(env.MEMORY.idFromName(`${userId}/${brain}`)).restore(d!));
     }
+    if (a.holds) counts.holds = await restoreHolds(env, userId, a.holds);
   } catch (e: any) {
     if (e instanceof Invalid) throw e;
     return error(e.status ?? 500, e.message, { restored: counts });
@@ -601,6 +604,8 @@ export const api = {
       if (path.startsWith("/api/spawns") || path.startsWith("/api/fleet/")) return await fleetRoutes(request, env, ctx.props, () => body(request), mintToken, machine);
       if (path === "/api/brains" || path.startsWith("/api/brains/"))
         return machine ? error(403, "not with a machine token") : await brainRoutes(request, env, ctx.props, () => body(request), mintToken);
+      if (path === "/api/holds" || path.startsWith("/api/holds/"))
+        return machine ? error(403, "not with a machine token") : await holdRoutes(request, env, ctx.props.userId, () => body(request));
       const users = env.USER.get(env.USER.idFromName(ctx.props.userId));
       if (path === "/api/live") return users.fetch(asMachine(request, machine));
       const brainParam = new URL(request.url).searchParams.get("brain");

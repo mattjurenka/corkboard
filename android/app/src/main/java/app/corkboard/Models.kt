@@ -274,3 +274,19 @@ data class Brain(
 
 @Serializable
 data class BrainMemory(val notes: Int = 0, val entries: Int = 0, val episodes: Int = 0, val lastEpisode: String? = null)
+
+// A hold (cloud/src/holds.ts): what a brain holds. secret is when it was
+// set here, never the value; where, where it's kept when not here. One
+// that's not recorded is a label something holds with no record yet.
+@Serializable
+data class Hold(
+    val name: String,
+    val about: String = "",
+    val where: String? = null,
+    val secret: String? = null,
+    val recorded: Boolean = true,
+    val brains: List<String> = emptyList(),
+    val templates: List<String> = emptyList(),
+    val created: String = "",
+    val updated: String = "",
+)

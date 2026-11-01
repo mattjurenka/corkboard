@@ -15,7 +15,7 @@
 //   GET   /api/spawns/:id
 //   POST  /api/spawns/:id/approve            a brain's spawn of a template with credentials
 //   POST  /api/spawns/:id/stop
-//   POST  /api/spawns/:id/claim              { environment }: fleetd's; { spawn, token, repo, brainToken? }
+//   POST  /api/spawns/:id/claim              { environment }: fleetd's; { spawn, token, repo, brainToken?, secrets? }
 //   POST  /api/spawns/:id/report             { state, slot?, exit?, error?, result? }: fleetd's
 //
 // A spawn is a template (the VM) and, if it works for one, a brain
@@ -37,6 +37,7 @@ import type { Result } from "./board";
 import { type Card, type Fields, Invalid } from "./cards";
 import type { Env, Props } from "./index";
 import { NAME as BRAIN, live } from "./brains";
+import { LABEL, secretsFor } from "./holds";
 import type { Grant } from "./mcp";
 import type { User } from "./user";
 
@@ -46,7 +47,9 @@ export const FINAL: readonly SpawnState[] = ["done", "failed", "stopped"];
 
 // What a template is, as its environment's fleetd describes it (the host's
 // manifest, from mkFleet): enough to place a spawn and apply the rule.
-export type Template = { needsApproval: boolean; memory: number; cores: number; capNames: string[] };
+// credentials: the holds its capabilities have (holds.ts); absent from a
+// manifest from before they were sent.
+export type Template = { needsApproval: boolean; memory: number; cores: number; capNames: string[]; credentials?: string[] };
 // What every slot there may reach: anything, or the hosts and the domains
 // under the suffixes all of them allow.
 export type Egress = { open: boolean; domains: string[]; suffixes: string[] };
@@ -280,7 +283,8 @@ export async function spawn(env: Env, user: string, by: string, input: SpawnInpu
   const environment = where.name;
 
   // The rule, second half: what holds credentials runs once the user says.
-  const held = t.needsApproval || !!b?.credentials.length;
+  const holds = [...new Set([...(b?.credentials ?? []), ...(t.credentials ?? [])])].sort();
+  const held = t.needsApproval || holds.length > 0;
   const state: SpawnState = !job && by !== "user" && held ? "pending-approval" : "queued";
 
   const key = typeof input.board === "string" && input.board ? input.board : FLEET_BOARD;
@@ -303,7 +307,7 @@ export async function spawn(env: Env, user: string, by: string, input: SpawnInpu
       agent,
       agent_state: "queued",
       labels: ["fleet"],
-      attention: state === "pending-approval" ? `approve: ${by} wants to spawn ${what}, which holds credentials` : null,
+      attention: state === "pending-approval" ? `approve: ${by} wants to spawn ${what}, which holds ${holds.join(", ") || "credentials"}` : null,
     }),
   );
   return u.addSpawn({
@@ -384,7 +388,8 @@ async function report(env: Env, user: string, id: string, input: Record<string, 
 // fleetd's claim: the spawn, its card token, and the repo to work in (its
 // board's project, if it has one: the claiming environment's clone of it).
 // A brain's spawn also gets a token for the brain, unless the brain has gone
-// since, which fails it.
+// since, which fails it, and every spawn the secrets of what it holds, its
+// brain's and its template's, those set here (holds.ts).
 async function claim(env: Env, user: string, props: Props, id: string, environment: unknown, mint: Mint) {
   if (typeof environment !== "string" || !NAME.test(environment)) throw new Invalid("environment must be the claiming environment's name");
   const u = users(env, user);
@@ -398,7 +403,9 @@ async function claim(env: Env, user: string, props: Props, id: string, environme
   const { token } = await mint(env, props, { kind: "card", board: s.board, card: s.card, agent: s.agent });
   const brainToken = b && (await mint(env, props, { kind: "brain", brain: b.name, agent: s.agent, id: b.id })).token;
   const repo = await u.rootIn(s.board, environment);
-  return { spawn: s, token, repo, ...(brainToken && { brainToken }) };
+  const t = (await u.environments()).find((e) => e.name === environment)?.templates[s.template];
+  const secrets = s.job ? {} : await secretsFor(env, user, [...(b?.credentials ?? []), ...(t?.credentials ?? [])]);
+  return { spawn: s, token, repo, ...(brainToken && { brainToken }), ...(Object.keys(secrets).length && { secrets }) };
 }
 
 // Routes -----------------------------------------------------------------------------
@@ -423,6 +430,7 @@ function template(name: string, v: unknown): Template | undefined {
     memory: num("memory"),
     cores: num("cores"),
     capNames: Array.isArray(t.capNames) ? t.capNames.map(String) : [],
+    ...(Array.isArray(t.credentials) && { credentials: t.credentials.map(String).filter((c) => LABEL.test(c)).slice(0, 64) }),
   };
 }
 

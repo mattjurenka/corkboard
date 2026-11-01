@@ -17,7 +17,7 @@ const call = (token: string, method: string, path: string, body?: unknown) =>
   });
 
 describe("export and import", () => {
-  it("copies boards, cards and their logs, memory, plans and chat", async () => {
+  it("copies boards, cards and their logs, memory, plans, chat and holds", async () => {
     let owner = await ownerToken();
     await call(owner, "PUT", "/api/boards/corkboard", { root: "/home/matthew/corkboard", environment: "laptop", remotes: ["git@github.com:m/corkboard.git"] });
     const card = await (await call(owner, "POST", "/api/boards/corkboard/cards", { title: "move the Worker" })).json<{ id: string }>();
@@ -25,23 +25,29 @@ describe("export and import", () => {
     await call(owner, "POST", "/api/boards/corkboard/cards", { title: "second" });
     await call(owner, "PUT", "/api/notes/who-am-i", { kind: "reference", title: "Who", body: "Matt" });
     await call(owner, "POST", "/api/chat", { text: "hello Pepper" });
+    await call(owner, "POST", "/api/holds", { name: "github", about: "push to m/corkboard", secret: "ghp_x" });
 
     const exported = await (await call(owner, "GET", "/api/export")).json<any>();
     expect(Object.keys(exported.boards)).toEqual(["corkboard"]);
     expect(exported.boards.corkboard.cards).toHaveLength(2);
     expect(exported.memory.pepper.notes.map((n: any) => n.id)).toContain("who-am-i");
+    expect(exported.holds.records.github).toMatchObject({ about: "push to m/corkboard" });
+    expect(exported.holds.secrets).toEqual({ github: "ghp_x" });
 
     // A new Worker: nothing in it, and the same Google account signing in.
     await reset();
     owner = await ownerToken();
     const imported = await call(owner, "POST", "/api/import", exported);
     expect(imported.status).toBe(201);
+    expect((await imported.json<any>()).restored.holds).toBe(1);
     expect(await (await call(owner, "GET", "/api/export")).json()).toEqual(exported);
 
     const boards = await (await call(owner, "GET", "/api/boards")).json<any[]>();
     expect(boards[0]).toMatchObject({ key: "corkboard", remotes: ["git@github.com:m/corkboard.git"], environments: ["laptop"] });
     const got = await (await call(owner, "GET", `/api/boards/corkboard/cards/${card.id}`)).json<any>();
     expect(got.log.map((l: any) => l.note)).toContain("started");
+    // Holds keep their secrets.
+    expect(await (await call(owner, "GET", "/api/holds/github")).json()).toMatchObject({ about: "push to m/corkboard", recorded: true });
     // Search still finds the note: its index is filled as it goes in.
     const found = await (await call(owner, "GET", "/api/notes?q=Matt")).json<any[]>();
     expect(found.map((n) => n.id)).toEqual(["who-am-i"]);

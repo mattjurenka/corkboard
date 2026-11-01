@@ -39,7 +39,7 @@ const server = Bun.serve({
     const m = url.pathname.match(/^\/api\/spawns\/(\w+)\/(claim|report)$/);
     const s = remote.find((x) => x.id === m?.[1]);
     if (!s) return Response.json({ error: "no" }, { status: 404 });
-    if (m![2] === "claim") return Response.json({ spawn: s, token: `cbc_${s.id}`, repo: s.board === "proj" ? repo : null, ...(s.brain && { brainToken: `cbb_${s.id}` }) });
+    if (m![2] === "claim") return Response.json({ spawn: s, token: `cbc_${s.id}`, repo: s.board === "proj" ? repo : null, ...(s.brain && { brainToken: `cbb_${s.id}`, secrets: { github: "ghp_x" } }) });
     s.state = body.state;
     return Response.json(s);
   },
@@ -114,7 +114,7 @@ test("says what it runs, and claims what's queued for it as a spawn of its own",
   expect(fleet.read("aaaaaa2")!.repo).toBeUndefined();
   expect(fleet.read("aaaaaa3")).toBeUndefined();
   // A brain's has the brain's token.
-  expect(fleet.read("aaaaaa4")).toMatchObject({ brain: "work", account: "work", remote: { token: "cbc_aaaaaa4", brainToken: "cbb_aaaaaa4" } });
+  expect(fleet.read("aaaaaa4")).toMatchObject({ brain: "work", account: "work", remote: { token: "cbc_aaaaaa4", brainToken: "cbb_aaaaaa4", secrets: { github: "ghp_x" } } });
   expect(fleet.read("aaaaaa1")!.remote!.brainToken).toBeUndefined();
 });
 
@@ -155,6 +155,7 @@ test("passes a stop on, and reports a run, fetching its commits and revoking its
   await queue.step();
   expect(calls.filter((c) => c.path === "/api/tokens/revoke").map((c) => c.body.token)).toEqual(["cbc_aaaaaa4", "cbb_aaaaaa4"]);
   expect(fleet.read("aaaaaa4")!.remote).toMatchObject({ token: "", brainToken: "" });
+  expect(fleet.read("aaaaaa4")!.remote!.secrets).toBeUndefined();
 
   // Nothing new, nothing said.
   calls.length = 0;

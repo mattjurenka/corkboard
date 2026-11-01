@@ -57,6 +57,10 @@ async function start(m: Manifest, s: Spawn, slot: string) {
     writeFileSync(join(sl.shareDir, "mcp.json"), JSON.stringify(mcp, null, 2) + "\n", { mode: 0o600 });
   }
   if (s.remote?.brainToken) writeFileSync(join(sl.shareDir, "brain-token"), s.remote.brainToken + "\n", { mode: 0o600 });
+  if (s.remote?.secrets) {
+    mkdirSync(join(sl.shareDir, "secrets"), { mode: 0o700 });
+    for (const [name, v] of Object.entries(s.remote.secrets)) writeFileSync(join(sl.shareDir, "secrets", name), v, { mode: 0o600 });
+  }
   if (s.repo) {
     const b = await run(["git", "-C", s.repo, "bundle", "create", join(sl.shareDir, "repo.bundle"), "HEAD", "--branches"]);
     if (!b.ok) throw new Error(`couldn't bundle ${s.repo}: ${b.out}`);
@@ -75,14 +79,19 @@ async function start(m: Manifest, s: Spawn, slot: string) {
 const sessionNote = (s: Spawn) => `
 
 ---
-This session is corkboard card ${s.remote!.card} on the ${s.remote!.board} board, and you are its agent, ${s.remote!.agent}. The corkboard MCP server is connected for it.
+This session is corkboard card ${s.remote!.card} on the ${s.remote!.board} board, and you are its agent, ${s.remote!.agent}. The corkboard MCP server is connected for it.${secretsNote(s)}
 `;
 
 const cardNote = (s: Spawn) => `
 
 ---
-This task is corkboard card ${s.remote!.card} on the ${s.remote!.board} board, and you are its agent, ${s.remote!.agent}. The corkboard MCP server is connected for it: claim_card it first, log progress there as you go, use block or request_user_action if you need the user, and submit_for_review when you're done. Your final answer is posted to the card too.
+This task is corkboard card ${s.remote!.card} on the ${s.remote!.board} board, and you are its agent, ${s.remote!.agent}. The corkboard MCP server is connected for it: claim_card it first, log progress there as you go, use block or request_user_action if you need the user, and submit_for_review when you're done. Your final answer is posted to the card too.${secretsNote(s)}
 `;
+
+const secretsNote = (s: Spawn) => {
+  const names = Object.keys(s.remote?.secrets ?? {});
+  return names.length ? `\n\nWhat you hold is in /mnt/share/secrets/, a file each: ${names.join(", ")}.` : "";
+};
 
 // Its outbox, into the spawn's own directory, before the slot is reused.
 function collect(m: Manifest, s: Spawn) {

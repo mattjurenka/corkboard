@@ -32,7 +32,11 @@
   "vectorize": [{ "binding": "VECTORS", "index_name": "corkboard-memory" }],
   // Files agents attach to cards (src/media.ts).
   "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "corkboard-media" }],
-  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "8f69c7790e394751a12b04353f29adc9" }],
+  "kv_namespaces": [
+    { "binding": "OAUTH_KV", "id": "8f69c7790e394751a12b04353f29adc9" },
+    // What brains hold, and their secrets (src/holds.ts).
+    { "binding": "HOLDS", "id": "20209fd6bce6426e8459f7aa20f5d8eb" }
+  ],
   // The editor with no machine behind it (wasm/edit-page.ts), at /edit/:
   // deploy.sh builds it, on this machine's plugins. Served before the
   // Worker runs, for the paths it has.

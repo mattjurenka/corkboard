@@ -49,13 +49,16 @@ import kotlinx.coroutines.launch
 
 private val ABILITIES = listOf("chat")
 
+// Live or archived, kept while the holds view is open beside it.
+val brainsArchived = mutableStateOf(false)
+
 private fun plural(n: Int, one: String, many: String) = "${if (n >= 1000) "%.1fk".format(n / 1000.0) else "$n"} ${if (n == 1) one else many}"
 
 @Composable
 fun BrainsScreen(go: (Screen) -> Unit) {
     val changed by Repo.brainsChanged.collectAsState()
     val scope = rememberCoroutineScope()
-    var archived by remember { mutableStateOf(false) }
+    var archived by brainsArchived
     var brains by remember { mutableStateOf<List<Brain>?>(null) }
     var open by remember { mutableStateOf<String?>(null) }
     var confirm by remember { mutableStateOf<String?>(null) }
@@ -100,6 +103,7 @@ fun BrainsScreen(go: (Screen) -> Unit) {
                     modifier = Modifier.clickable(role = Role.Tab) { archived = value; open = null; confirm = null },
                 )
             }
+            Text("holds", color = Monokai.base04, modifier = Modifier.clickable(role = Role.Tab) { go(Screen.Holds) })
         }
         Rule(Monokai.base01)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {

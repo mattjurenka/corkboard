@@ -27,6 +27,9 @@
 #                            which the memory hooks send, so each session
 #                            starts with the brain's context and ends as one
 #                            of its episodes (fleet/memory-hooks.nix)
+#   /mnt/share/secrets/      optional: a file per hold the spawn has (its
+#                            brain's and its template's) whose secret is
+#                            kept in corkboard (cloud/src/holds.ts)
 #   /mnt/share/shell.json    optional: the tools the spawner brought, built
 #                            here and run in: { "packages": [...] } from this
 #                            guest's nixpkgs, or { "flake": ref }'s devShell
