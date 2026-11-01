@@ -14,6 +14,10 @@
 //             the end of a session and before it compacts. Kept, never
 //             summarised away: the record everything else is made from.
 //
+// The consolidator (consolidate.ts) makes the log from the episodes, and the
+// long-term memory from the log; this object's alarm spawns it when there's
+// work for it.
+//
 // Pepper's brain started as the notes in its user's object (user.ts); the
 // first open() brings them over.
 
@@ -24,6 +28,9 @@ import { DAY_STARTS_HOUR, type Note, type NoteInput, today } from "./plans";
 import { range } from "./dates";
 import { chunks, embed, namespaceOf, sha, vectorId } from "./vectors";
 import { type Dump, dump, restore } from "./dump";
+import { live } from "./brains";
+import { FINAL, spawn } from "./fleet";
+import { ATTEMPTS, DAY_CHARS, QUIET, ROLLUP_DAYS, bullets, flushInput, flushPrompt, parseRollup, render, rollupInput, rollupPrompt } from "./consolidate";
 
 const ok = <T>(value: T): Result<T> => ({ ok: true, value });
 const fail = (status: number, error: string, note?: Note): Result<never> => ({ ok: false, status, error, note });
@@ -68,6 +75,7 @@ CREATE TABLE IF NOT EXISTS episodes (
   at TEXT NOT NULL, bytes INTEGER NOT NULL, parts INTEGER NOT NULL, consolidated INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS episode_parts (episode TEXT NOT NULL, seq INTEGER NOT NULL, text TEXT NOT NULL, PRIMARY KEY (episode, seq));
+CREATE TABLE IF NOT EXISTS consolidated_sessions (session TEXT PRIMARY KEY, through TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS vector_queue (item TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS vectors (item TEXT PRIMARY KEY, hash TEXT NOT NULL, chunks INTEGER NOT NULL);
 `;
@@ -95,11 +103,16 @@ export class Memory extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
+    this.migrate();
+  }
+
+  private migrate() {
     this.sql.exec(SCHEMA);
     // Columns added since the first objects were made.
     const has = (table: string, column: string) => this.sql.exec(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`, table, column).toArray().length > 0;
     if (!has("notes", "path")) this.sql.exec("ALTER TABLE notes ADD COLUMN path TEXT");
     if (!has("entries", "key")) this.sql.exec("ALTER TABLE entries ADD COLUMN key TEXT");
+    if (!has("episodes", "attempts")) this.sql.exec("ALTER TABLE episodes ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0");
     this.sql.exec("CREATE UNIQUE INDEX IF NOT EXISTS entries_key ON entries (key)");
   }
 
@@ -157,7 +170,7 @@ export class Memory extends DurableObject<Env> {
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
     // Empty, as a new one is, for whatever this object is asked next.
-    this.sql.exec(SCHEMA);
+    this.migrate();
   }
 
   // The whole memory, to copy it to another account's Worker (dump.ts),
@@ -324,9 +337,14 @@ export class Memory extends DurableObject<Env> {
 
   private wake() {
     if (!this.vectorsOn()) return;
-    void this.ctx.storage.getAlarm().then((a) => {
-      if (a === null) return this.ctx.storage.setAlarm(Date.now() + 2000);
-    });
+    void this.schedule(Date.now() + 2000);
+  }
+
+  // The alarm is for embedding and for the consolidator both: set for `at`,
+  // unless it's set for sooner.
+  private async schedule(at: number) {
+    const a = await this.ctx.storage.getAlarm();
+    if (a === null || a > at) await this.ctx.storage.setAlarm(at);
   }
 
   // Everything, once: a memory made before vectors, or one just opened.
@@ -354,6 +372,11 @@ export class Memory extends DurableObject<Env> {
   }
 
   async alarm() {
+    await this.tend();
+    await this.embedQueued();
+  }
+
+  private async embedQueued() {
     if (!this.vectorsOn()) return;
     const items = this.sql.exec("SELECT item FROM vector_queue LIMIT 40").toArray().map((r) => r.item as string);
     if (!items.length) return;
@@ -395,7 +418,7 @@ export class Memory extends DurableObject<Env> {
       }
       for (const item of items) this.sql.exec("DELETE FROM vector_queue WHERE item = ?", item);
     });
-    if (this.sql.exec("SELECT 1 FROM vector_queue LIMIT 1").toArray().length) await this.ctx.storage.setAlarm(Date.now() + 500);
+    if (this.sql.exec("SELECT 1 FROM vector_queue LIMIT 1").toArray().length) await this.schedule(Date.now() + 500);
   }
 
   // How many items wait to be embedded, and how many are: for a sync to
@@ -555,6 +578,9 @@ export class Memory extends DurableObject<Env> {
       for (let i = 0; i < parts; i++)
         this.sql.exec("INSERT INTO episode_parts (episode, seq, text) VALUES (?, ?, ?)", id, i, e.transcript.slice(i * PART, (i + 1) * PART));
     });
+    // Read once it's quiet.
+    this.setMeta("consolidate_at", String(Date.now() + QUIET));
+    await this.schedule(Date.now() + QUIET);
     return ok({ id, added: true });
   }
 
@@ -568,6 +594,178 @@ export class Memory extends DurableObject<Env> {
   episode(id: string): Result<{ id: string; transcript: string }> {
     const rows = this.sql.exec("SELECT text FROM episode_parts WHERE episode = ? ORDER BY seq", id).toArray();
     return rows.length ? ok({ id, transcript: rows.map((r) => r.text).join("") }) : fail(404, `no episode ${id}`);
+  }
+
+  // Consolidation ---------------------------------------------------------------------
+
+  // The day an instant is on, as entries are (the day turns over at 4am).
+  private dayOf(at: string) {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: this.env.TIMEZONE }).format(new Date(Date.parse(at) - DAY_STARTS_HOUR * 3600_000));
+  }
+
+  // The days the next rollup reads: those since the last one's, up to
+  // yesterday, and never more than ROLLUP_DAYS of them.
+  private rollupDays(): { from: string; through: string } | null {
+    const through = before(this.today(), 1);
+    const last = this.meta("rolled");
+    const earliest = before(through, ROLLUP_DAYS - 1);
+    const from = last && last >= earliest ? before(last, -1) : earliest;
+    return from <= through ? { from, through } : null;
+  }
+
+  private sessionThrough(session: string) {
+    return this.sql.exec("SELECT through FROM consolidated_sessions WHERE session = ?", session).toArray()[0]?.through as string | undefined;
+  }
+
+  // An episode done with: so is its session, up to its last record.
+  private finish(id: string, session: string, through: string | null) {
+    this.sql.exec("UPDATE episodes SET consolidated = 1 WHERE id = ?", id);
+    if (through)
+      this.sql.exec(
+        "INSERT INTO consolidated_sessions (session, through) VALUES (?, ?) ON CONFLICT (session) DO UPDATE SET through = max(through, excluded.through)",
+        session,
+        through,
+      );
+  }
+
+  // What the consolidator does next: a few of the episodes waiting, each
+  // the part of its session not yet read (it asks again once it has written
+  // them); with none waiting, the log of the days since the last rollup and
+  // the long-term memory to rewrite from it. Each is a system prompt and the
+  // input for one run with no tools. An episode with nothing to read is done
+  // with here; one handed out ATTEMPTS times without an answer, let go of.
+  async consolidation() {
+    const user = this.meta("user");
+    const brain = this.meta("brain") ?? "?";
+    const b = user ? await live(this.env, user, brain) : undefined;
+    const who = { name: brain, title: b?.title ?? brain, description: b?.description ?? "", timezone: this.env.TIMEZONE };
+    const memory = this.findNote("memory");
+    const episodes: { id: string; prompt: string; input: string }[] = [];
+    while (episodes.length < 3) {
+      const e = this.sql
+        .exec(`SELECT id, session, at, attempts FROM episodes WHERE consolidated = 0${episodes.length ? ` AND id NOT IN (${episodes.map(() => "?").join(", ")})` : ""} ORDER BY at LIMIT 1`, ...episodes.map((e) => e.id))
+        .toArray()[0] as { id: string; session: string; at: string; attempts: number } | undefined;
+      if (!e) break;
+      const t = this.episode(e.id);
+      const { text, through } = render(t.ok ? t.value.transcript : "", this.sessionThrough(e.session));
+      // Older than the rollup reaches (sent before there was a consolidator),
+      // kept as it is.
+      const old = e.at < before(this.today(), ROLLUP_DAYS) + "T00:00:00Z";
+      if (!text.trim() || e.attempts >= ATTEMPTS || old) {
+        if (text.trim() && !old) console.error(`consolidate: ${brain}: let go of episode ${e.id} after ${e.attempts} tries`);
+        this.finish(e.id, e.session, through);
+        continue;
+      }
+      this.sql.exec("UPDATE episodes SET attempts = attempts + 1 WHERE id = ?", e.id);
+      episodes.push({ id: e.id, prompt: flushPrompt(who), input: flushInput(memory?.body ?? "", text) });
+    }
+    if (episodes.length) return { episodes, rollup: null };
+
+    const days = this.rollupDays();
+    const log = days ? this.entries(days.from, days.through) : [];
+    if (days && !log.length) this.setMeta("rolled", days.through);
+    if (!days || !log.length) return { episodes, rollup: null };
+    return {
+      episodes,
+      rollup: { through: days.through, version: memory?.version ?? 0, prompt: rollupPrompt(who), input: rollupInput(memory?.body ?? "", this.logText(log, false, DAY_CHARS)) },
+    };
+  }
+
+  // An episode's answer: its bullets in the log, on the day its part of the
+  // session ended, each kept once however often it's sent.
+  consolidated(id: string, text: string): Result<{ entries: number }> {
+    const e = this.sql.exec("SELECT session, agent, at, consolidated FROM episodes WHERE id = ?", id).toArray()[0] as
+      | { session: string; agent: string; at: string; consolidated: number }
+      | undefined;
+    if (!e) return fail(404, `no episode ${id}; a newer upload of its session may have replaced it`);
+    if (e.consolidated) return ok({ entries: 0 });
+    const t = this.episode(id);
+    const { through } = render(t.ok ? t.value.transcript : "", this.sessionThrough(e.session));
+    const at = through ?? e.at;
+    const list = bullets(text).map((b, n) => ({ at, day: this.dayOf(at), who: e.agent, text: b, key: `episode:${id}:${n}` }));
+    let entries = 0;
+    this.ctx.storage.transactionSync(() => {
+      entries = this.addEntries(list);
+      this.finish(id, e.session, through);
+    });
+    return ok({ entries });
+  }
+
+  // A rollup's answer: the long-term memory rewritten, over the version it
+  // was given; suggestions for the soul go in the log for the user to take
+  // up by hand, since the soul is never the consolidator's to write.
+  rolledUp(through: string, version: number, text: string): Result<Note> {
+    const days = this.rollupDays();
+    if (!days || through < days.from || through > days.through) return fail(409, `nothing to roll up through ${through}`);
+    const was = this.findNote("memory");
+    const r = parseRollup(text, was?.body ?? "");
+    if ("error" in r) return fail(422, r.error);
+    const put = this.putNote("memory", { kind: "memory", title: was?.title ?? "Long-term memory", body: r.memory }, version);
+    if (!put.ok) return put;
+    for (const s of r.suggestions) this.remember("consolidator", `Suggested for the soul: ${s}`);
+    this.setMeta("rolled", through);
+    return put;
+  }
+
+  // From the alarm: the consolidator spawned once the episodes waiting have
+  // gone quiet, or a day has turned over with a log not yet rolled up. One at
+  // a time; after one that didn't finish, the next waits an hour, then two,
+  // up to a day.
+  private async tend() {
+    const user = this.meta("user");
+    const brain = this.meta("brain");
+    if (!user || !brain) return;
+    const at = this.consolidateAt();
+    if (at === null) return;
+    if (at > Date.now()) return this.schedule(at);
+    const last = this.meta("consolidator");
+    const s = last ? await this.env.USER.get(this.env.USER.idFromName(user)).spawn(last) : undefined;
+    if (s && !FINAL.includes(s.state)) return this.schedule(Date.now() + 10 * 60_000);
+    if (s) {
+      const failures = s.state === "done" ? 0 : Number(this.meta("consolidate_failures") ?? 0) + 1;
+      const wait = failures ? Math.min(3600_000 * 2 ** (failures - 1), 86_400_000) : 0;
+      this.setMeta("consolidate_failures", String(failures));
+      this.setMeta("consolidate_after", String(Date.parse(s.ended ?? s.created) + wait));
+      this.setMeta("consolidator", "");
+    }
+    const after = Number(this.meta("consolidate_after") ?? 0);
+    if (after > Date.now()) return this.schedule(after);
+    try {
+      const made = await spawn(this.env, user, "memory", { brain, task: `Consolidate the ${brain} brain's memory` }, "consolidate");
+      this.setMeta("consolidator", made.id);
+      await this.schedule(Date.now() + 10 * 60_000);
+    } catch (e) {
+      console.error(`consolidate: ${brain}: couldn't spawn the consolidator: ${e instanceof Error ? e.message : e}`);
+      this.setMeta("consolidate_after", String(Date.now() + 3600_000));
+      await this.schedule(Date.now() + 3600_000);
+    }
+  }
+
+  // When the consolidator is next worth running: once the episodes waiting
+  // are quiet; now, for a rollup due; else in an hour while there's a log a
+  // day could turn over on. Never for an empty memory.
+  private consolidateAt(): number | null {
+    if (this.sql.exec("SELECT 1 FROM episodes WHERE consolidated = 0 LIMIT 1").toArray().length) return Number(this.meta("consolidate_at") ?? 0);
+    if (!this.sql.exec("SELECT 1 FROM entries LIMIT 1").toArray().length) return null;
+    const days = this.rollupDays();
+    if (days && this.sql.exec("SELECT 1 FROM entries WHERE day BETWEEN ? AND ? LIMIT 1", days.from, days.through).toArray().length) return 0;
+    if (days) this.setMeta("rolled", days.through);
+    return Date.now() + 3600_000;
+  }
+
+  // Entries as Markdown, a heading a day, each day cut to `cap` characters.
+  private logText(log: Entry[], newestFirst: boolean, cap = Infinity) {
+    const clock = new Intl.DateTimeFormat("en-GB", { timeZone: this.env.TIMEZONE, hour: "2-digit", minute: "2-digit" });
+    const byDay = new Map<string, Entry[]>();
+    for (const e of log) byDay.set(e.day, [...(byDay.get(e.day) ?? []), e]);
+    const days = [...byDay];
+    if (newestFirst) days.reverse();
+    return days
+      .map(([day, es]) => {
+        const text = es.map((e) => `- ${clock.format(new Date(e.at))} ${e.who}: ${e.text.replace(/\n/g, "\n  ")}`).join("\n");
+        return `### ${day}\n\n${text.length > cap ? text.slice(0, cap) + "\n…(cut)" : text}\n`;
+      })
+      .join("\n");
   }
 
   // Context ---------------------------------------------------------------------------
@@ -596,19 +794,10 @@ export class Memory extends DurableObject<Env> {
       sections.push(t);
       left -= t.length;
     };
-    const clock = new Intl.DateTimeFormat("en-GB", { timeZone: this.env.TIMEZONE, hour: "2-digit", minute: "2-digit" });
     const asNote = (n: Note) => `## ${n.title} (${n.id})\n\n${n.body.trim()}\n`;
     core.forEach((n) => add(asNote(n)));
     goals.forEach((n) => add(asNote(n)));
-    if (log.length) {
-      const byDay = new Map<string, Entry[]>();
-      for (const e of log) byDay.set(e.day, [...(byDay.get(e.day) ?? []), e]);
-      const text = [...byDay]
-        .reverse()
-        .map(([day, es]) => `### ${day}\n\n${es.map((e) => `- ${clock.format(new Date(e.at))} ${e.who}: ${e.text.replace(/\n/g, "\n  ")}`).join("\n")}\n`)
-        .join("\n");
-      add(`## Log, newest day first (day turns over at ${DAY_STARTS_HOUR}am)\n\n${text}`);
-    }
+    if (log.length) add(`## Log, newest day first (day turns over at ${DAY_STARTS_HOUR}am)\n\n${this.logText(log, true)}`);
     dayNotes.forEach((n) => add(asNote(n)));
     learned.forEach((n) => add(asNote(n)));
     return `# Memory: ${this.meta("brain") ?? "?"}, today ${d}\n\n${sections.join("\n")}`;

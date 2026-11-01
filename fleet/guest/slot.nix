@@ -32,6 +32,8 @@
 #                            guest's nixpkgs, or { "flake": ref }'s devShell
 #                            ("." is the repo's). Only ever evaluated in the
 #                            guest, so a shell can't reach the host's secrets
+#   /mnt/share/job           for a job of the Worker's rather than an agent:
+#                            "consolidate", the brain's consolidator (below)
 #   /mnt/share/session       for a session you talk to rather than a task:
 #                            Claude Code keeps going, reading each message
 #                            fleetd puts in /mnt/share/inbox/ (a file a stream-
@@ -69,10 +71,82 @@ let
 
   env = claudeCodeEnv;
 
+  url = "https://${corkboardHost}";
+
   memoryHooks = import ../memory-hooks.nix {
-    inherit pkgs lib;
-    url = "https://${corkboardHost}";
+    inherit pkgs lib url;
     tokenFile = "/mnt/share/brain-token";
+  };
+
+  # A brain's consolidator (cloud/src/consolidate.ts): asks the Worker for
+  # its next job, thinks about each part with Claude Code given no tools, no
+  # MCP and no settings but the managed ones, and sends back what it said,
+  # until there's nothing left. The Worker decides what it sees and what its
+  # answers become; this only carries them. An empty answer fails the run,
+  # and the Worker waits longer before the next. The memory hooks stay out of
+  # it, or its own sessions would be episodes to consolidate.
+  consolidate = pkgs.writeShellApplication {
+    name = "corkboard-consolidate";
+    runtimeInputs = [ pkgs.curl pkgs.jq pkgs.coreutils ];
+    text = ''
+      out=$1
+      export CORKBOARD_NO_MEMORY=1
+      token=$(tr -d '\n' < /mnt/share/brain-token)
+      tmp=$(mktemp -d)
+
+      # A request to the Worker; prints the body, and returns its status.
+      api() {
+        local path=$1 code
+        shift
+        code=$(curl -sS --max-time 120 -o "$tmp/body" -w '%{http_code}' \
+          -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
+          "$@" "${url}$path") || code=000
+        cat "$tmp/body" 2>/dev/null || true
+        echo "$code" > "$tmp/code"
+      }
+      code() { cat "$tmp/code"; }
+
+      # A system prompt and, on stdin, the input: the answer.
+      think() {
+        printf '%s' "$1" > "$tmp/prompt"
+        claude -p --tools "" --strict-mcp-config --setting-sources "" \
+          --system-prompt-file "$tmp/prompt" --output-format json | jq -r '.result // empty'
+      }
+
+      finish() {
+        jq -n --arg result "$1" '{ result: $result }' > "$out/result.json"
+        exit "$2"
+      }
+
+      count=0
+      rolled=""
+      for _ in $(seq 50); do
+        job=$(api /memory/consolidate)
+        [ "$(code)" = 200 ] || finish "Couldn't get the job: $(code) $job" 1
+        n=$(jq '.episodes | length' <<< "$job")
+        for i in $(seq 0 $((n - 1))); do
+          id=$(jq -r ".episodes[$i].id" <<< "$job")
+          answer=$(jq -r ".episodes[$i].input" <<< "$job" | think "$(jq -r ".episodes[$i].prompt" <<< "$job")") || true
+          [ -n "$answer" ] || finish "No answer for episode $id after $count read." 1
+          said=$(jq -n --arg text "$answer" '{ text: $text }' | api "/memory/consolidate/episodes/$id" --data-binary @-)
+          # 404: a newer upload of its session replaced it, and is read next.
+          case $(code) in 200 | 404) ;; *) finish "Episode $id: $(code) $said" 1 ;; esac
+          count=$((count + 1))
+        done
+        [ "$n" -eq 0 ] || continue
+        if [ "$(jq '.rollup != null' <<< "$job")" = true ]; then
+          through=$(jq -r .rollup.through <<< "$job")
+          answer=$(jq -r .rollup.input <<< "$job" | think "$(jq -r .rollup.prompt <<< "$job")") || true
+          [ -n "$answer" ] || finish "No answer for the rollup through $through after $count episodes read." 1
+          said=$(jq -n --arg text "$answer" --arg through "$through" --argjson version "$(jq .rollup.version <<< "$job")" \
+            '{ through: $through, version: $version, text: $text }' | api /memory/consolidate/rollup --data-binary @-)
+          [ "$(code)" = 200 ] || finish "The rollup through $through: $(code) $said" 1
+          rolled=$through
+        fi
+        break
+      done
+      finish "Read $count episodes''${rolled:+, and rewrote the long-term memory from the log through $rolled}." 0
+    '';
   };
 
   # corkboard's session hook, which here only keeps the context under its
@@ -128,7 +202,9 @@ let
       fi
 
       status=0
-      if [ -f /mnt/share/session ]; then
+      if [ -f /mnt/share/job ]; then
+        ${lib.getExe consolidate} "$out" || status=$?
+      elif [ -f /mnt/share/session ]; then
         # Its logs where fleetd can follow them.
         mkdir -p "$out/projects" "$HOME/.claude"
         rm -rf "$HOME/.claude/projects"

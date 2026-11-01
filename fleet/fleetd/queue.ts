@@ -151,7 +151,7 @@ export class Queue {
     if (c.status === 409) return;
     if (c.status >= 400) throw new Error(`claiming ${r.id}: ${c.json.error ?? c.status}`);
     const { spawn, token: cardToken, repo, brainToken } = c.json as {
-      spawn: Remote & { board: string; card: string; agent: string; interactive?: boolean } & Pick<Spawn, "shell" | "memory" | "cores">;
+      spawn: Remote & { board: string; card: string; agent: string; interactive?: boolean } & Pick<Spawn, "shell" | "memory" | "cores" | "job">;
       token: string;
       repo: string | null;
       brainToken?: string;
@@ -171,6 +171,7 @@ export class Queue {
       ...(spawn.shell && { shell: spawn.shell }),
       ...(spawn.memory && { memory: spawn.memory }),
       ...(spawn.cores && { cores: spawn.cores }),
+      ...(spawn.job && { job: spawn.job }),
     };
     try {
       s.account = accountFor(m, spawn.account);

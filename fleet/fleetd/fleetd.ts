@@ -62,6 +62,7 @@ async function start(m: Manifest, s: Spawn, slot: string) {
     if (!b.ok) throw new Error(`couldn't bundle ${s.repo}: ${b.out}`);
   }
   if (s.shell) writeFileSync(join(sl.shareDir, "shell.json"), JSON.stringify(s.shell) + "\n");
+  if (s.job) writeFileSync(join(sl.shareDir, "job"), s.job + "\n");
   writeFileSync(join(sl.stateDir, "template"), guestOf(m, s) + "\n");
   // "<MiB> <cores>", which the launcher passes to QEMU over the guest's own.
   const size = join(sl.stateDir, "size");

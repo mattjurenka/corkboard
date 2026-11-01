@@ -10,7 +10,8 @@
 #
 # The token is the brain's (the Worker reads the brain from it), read from
 # `tokenFile` at each hook. No token, no memory: the hooks do nothing, and
-# never fail a session.
+# never fail a session. Nor with CORKBOARD_NO_MEMORY set: the consolidator's
+# own sessions (fleet/guest/slot.nix), which are no episodes.
 #
 # Gives back `hooks`, for a guest's Claude Code managed settings.
 { pkgs, lib, url ? "https://portal.corkboard.fyi", tokenFile }:
@@ -20,6 +21,7 @@ let
     runtimeInputs = [ pkgs.curl pkgs.coreutils ];
     text = ''
       cat > /dev/null
+      [ -z "''${CORKBOARD_NO_MEMORY:-}" ] || exit 0
       [ -s ${tokenFile} ] || exit 0
       curl -fsS --max-time 15 \
         -H "Authorization: Bearer $(tr -d '\n' < ${tokenFile})" \
@@ -33,6 +35,7 @@ let
     text = ''
       # The hook's input: session_id, transcript_path, and the event's name.
       input=$(cat)
+      [ -z "''${CORKBOARD_NO_MEMORY:-}" ] || exit 0
       [ -s ${tokenFile} ] || exit 0
       transcript=$(jq -r '.transcript_path // empty' <<< "$input")
       if [ -z "$transcript" ] || [ ! -s "$transcript" ]; then exit 0; fi

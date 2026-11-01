@@ -68,6 +68,10 @@
 //   POST  /memory/episodes                   { session, trigger?, transcript }: a session's transcript
 //   GET   /memory/episodes                   ?pending=1 for those not yet consolidated, ?limit=
 //   GET   /memory/episodes/:id               { id, transcript }
+//   GET   /memory/consolidate                the consolidator's next job: { episodes: [{ id, prompt, input }],
+//                                            rollup: { through, version, prompt, input } | null }
+//   POST  /memory/consolidate/episodes/:id   { text }: an episode's answer, as log entries
+//   POST  /memory/consolidate/rollup         { through, version, text }: the long-term memory rewritten
 
 import { insufficientScope, type OAuthResourceContext } from "@cloudflare/workers-oauth-provider";
 import { Invalid, cardId, fields, imported, logEntry } from "./cards";
@@ -287,7 +291,8 @@ async function browse(request: Request, memory: Memories): Promise<Response> {
 }
 
 // What a brain's hooks call (memory.ts), with any token but a card's: the
-// context a session starts with, and the transcript it ends with.
+// context a session starts with, and the transcript it ends with; and the
+// consolidator's, which runs as the brain (fleet/guest/slot.nix).
 async function memoryRoutes(request: Request, memory: Memories, grant: Grant): Promise<Response> {
   const url = new URL(request.url);
   const hide = hiddenFor(grant);
@@ -311,6 +316,20 @@ async function memoryRoutes(request: Request, memory: Memories, grant: Grant): P
   }
   const one = url.pathname.match(/^\/memory\/episodes\/([0-9a-f]{32})$/);
   if (one && request.method === "GET") return reply(await memory.episode(one[1]));
+  if (url.pathname === "/memory/consolidate" && request.method === "GET") return json(await memory.consolidation());
+  const answer = url.pathname.match(/^\/memory\/consolidate\/episodes\/([0-9a-f]{32})$/);
+  if (answer && request.method === "POST") {
+    const { text } = await body(request);
+    if (typeof text !== "string") throw new Invalid("text must be the flush's answer");
+    return reply(await memory.consolidated(answer[1], text));
+  }
+  if (url.pathname === "/memory/consolidate/rollup" && request.method === "POST") {
+    const { through, version, text } = await body(request);
+    if (typeof through !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(through)) throw new Invalid("through must be the rollup's last day");
+    if (!Number.isInteger(version) || (version as number) < 0) throw new Invalid("version must be the memory's version the rollup was given");
+    if (typeof text !== "string") throw new Invalid("text must be the rollup's answer");
+    return reply(await memory.rolledUp(through, version as number, text));
+  }
   return error(404, "not found");
 }
 

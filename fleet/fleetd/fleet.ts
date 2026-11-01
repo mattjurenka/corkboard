@@ -85,6 +85,9 @@ export type Spawn = {
   shell?: { packages: string[] } | { flake: string };
   memory?: number;
   cores?: number;
+  // A job of the Worker's that the guest runs instead of an agent:
+  // "consolidate", a brain's consolidator (fleet/guest/slot.nix).
+  job?: "consolidate";
 };
 
 // The MiB a spawn's VM is given, and what it costs the budget.

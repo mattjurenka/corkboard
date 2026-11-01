@@ -146,6 +146,25 @@ being the source of truth and becomes a working copy.
 4. **The consolidator.** Extraction into typed memories with supersession, the daily rollup into
    MEMORY, on the brain's account via the fleet queue. Retire `memory_flush.py` and
    `memory-reflect`.
+
+   **Built 2026-11-01, not deployed.** A port of second-brain's `memory_flush.py` and
+   `memory_reflect.py`, not typed memories: episodes become log bullets, and the log becomes the
+   long-term memory (the note `memory`). The model runs with no tools, no MCP and no settings but
+   the managed ones; the Worker decides what it's shown and parses what it says, so a transcript
+   that talks it into something reaches the log and nothing else. `cloud/src/consolidate.ts` has
+   the prompts, `render` (a transcript as what was said, tool output dropped, after a per-session
+   watermark so a resumed session is read from where it left off) and the parsers. The `Memory`
+   object's alarm spawns the job (`spawn(..., "consolidate")`, by `memory`, never pending approval)
+   30 minutes after the last episode, or when a day has turned over with an unrolled log; one at a
+   time, backing off 1h, 2h … 24h after failures. `GET /memory/consolidate` hands out three
+   episodes at a time, then the rollup (the days since the last one, at most 7); the answers go to
+   `POST /memory/consolidate/episodes/:id` and `/memory/consolidate/rollup`, which refuses a stale
+   version, a memory over 20000 characters, or one keeping under 45% of what it was. Soul
+   suggestions go in the log. An episode is let go of after 3 tries; ones older than 7 days when
+   first seen are skipped unread (the backlog from before). In the slot, `/mnt/share/job` runs
+   `corkboard-consolidate` (`fleet/guest/slot.nix`) instead of an agent, with
+   `CORKBOARD_NO_MEMORY=1` so its own sessions aren't episodes. Every run makes a card on the fleet
+   board. `memory_flush.py`/`memory_reflect.py` stay until brain-vm posts episodes.
 5. **The Obsidian mirror** in the bridge, both ways.
 
 Steps 1–2 depend on nothing in the fleet plan; step 4 needs its step 4 (the Worker's queue).

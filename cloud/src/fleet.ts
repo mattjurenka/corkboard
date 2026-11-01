@@ -131,6 +131,10 @@ export type Spawn = {
   // Its VM's size, when asked for: at least the template's, at most the offer.
   memory?: number;
   cores?: number;
+  // A job of the Worker's own rather than an agent's task: "consolidate" is
+  // a brain's consolidator (memory.ts), a run with no tools that its slot
+  // starts instead of an agent (fleet/guest/slot.nix). Never from input.
+  job?: "consolidate";
 };
 
 export type SpawnReport = Pick<Spawn, "state" | "slot" | "exit" | "error" | "result">;
@@ -216,8 +220,10 @@ function size(v: unknown, what: string, max: number): number | undefined {
 }
 
 // A spawn, asked for by the user or a brain: placed, checked against the
-// rule, and given its card.
-export async function spawn(env: Env, user: string, by: string, input: SpawnInput): Promise<Spawn> {
+// rule, and given its card. A job is asked for by the Worker (by "memory",
+// for input.brain), which the rule has nothing to say about: it runs with no
+// tools, so nothing to approve.
+export async function spawn(env: Env, user: string, by: string, input: SpawnInput, job?: Spawn["job"]): Promise<Spawn> {
   const u = users(env, user);
   if (input.template !== undefined && input.template !== null && (typeof input.template !== "string" || !NAME.test(input.template)))
     throw new Refused(400, "template must be a template's name; spawn_status lists them");
@@ -236,12 +242,12 @@ export async function spawn(env: Env, user: string, by: string, input: SpawnInpu
 
   // The rule, first half: a brain spawns for itself or for no brain.
   const asks = typeof input.brain === "string" && input.brain ? input.brain : null;
-  if (by !== "user" && asks && asks !== by) throw new Refused(403, `${by} may spawn for itself or for no brain, not for ${asks}`);
+  if (!job && by !== "user" && asks && asks !== by) throw new Refused(403, `${by} may spawn for itself or for no brain, not for ${asks}`);
   const b = asks ? await live(env, user, asks) : undefined;
   if (asks && !b) throw new Refused(400, `no brain ${asks}; brain_list lists them`);
   // A shell is the spawner's code, so never beside a brain's memory and credentials.
   if (shell && b) throw new Refused(400, `a shell of your own never goes beside the ${b.name} brain's memory; spawn it for no brain`);
-  const account = b ? b.account : by !== "user" ? ((await live(env, user, by))?.account ?? null) : null;
+  const account = b ? b.account : !job && by !== "user" ? ((await live(env, user, by))?.account ?? null) : null;
 
   const envs = await u.environments();
   const asked = typeof input.environment === "string" && input.environment ? input.environment : undefined;
@@ -275,7 +281,7 @@ export async function spawn(env: Env, user: string, by: string, input: SpawnInpu
 
   // The rule, second half: what holds credentials runs once the user says.
   const held = t.needsApproval || !!b?.credentials.length;
-  const state: SpawnState = by !== "user" && held ? "pending-approval" : "queued";
+  const state: SpawnState = !job && by !== "user" && held ? "pending-approval" : "queued";
 
   const key = typeof input.board === "string" && input.board ? input.board : FLEET_BOARD;
   const boards = await u.boards();
@@ -317,6 +323,7 @@ export async function spawn(env: Env, user: string, by: string, input: SpawnInpu
     ...(shell && { shell }),
     ...(memory && { memory: Math.max(memory, t.memory) }),
     ...(cores && { cores: Math.max(cores, t.cores) }),
+    ...(job && { job }),
   });
 }
 

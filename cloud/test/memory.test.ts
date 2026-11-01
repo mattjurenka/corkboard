@@ -1,8 +1,10 @@
-import { reset, runInDurableObject } from "cloudflare:test";
+import { reset, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env as bindings } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/index";
 import { google, login, ownerToken, worker } from "./login";
+import { bullets, parseRollup, render } from "../src/consolidate";
+import { today } from "../src/plans";
 
 const USER = "sub-me@example.com";
 const env = bindings as unknown as Env;
@@ -236,5 +238,116 @@ describe("the brains view", () => {
     expect((await get("/api/memory/recall?brain=work&q=PR%20191"))[0].day).toBe("2026-10-26");
     expect((await call(owner, "GET", "/api/memory/recall?brain=work")).status).toBe(400);
     expect((await call(assistant, "GET", "/api/memory/days?brain=work")).status).toBe(403);
+  });
+});
+
+describe("consolidation", () => {
+  const at = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
+  const line = (type: "user" | "assistant", text: string, when: string) => JSON.stringify({ type, timestamp: when, message: { content: [{ type: "text", text }] } });
+  const day = (daysAgo: number) => new Date(Date.parse(`${today("America/Phoenix")}T12:00:00Z`) - daysAgo * 86_400_000).toISOString().slice(0, 10);
+  const memoryStub = () => env.MEMORY.get(env.MEMORY.idFromName(`${USER}/pepper`));
+
+  it("renders a transcript as what was said, after a watermark", () => {
+    const t = [
+      line("user", "Book the dentist", "2026-10-30T10:00:00Z"),
+      JSON.stringify({ type: "assistant", timestamp: "2026-10-30T10:01:00Z", message: { content: [{ type: "tool_use", name: "Bash", input: { command: "cal" } }] } }),
+      JSON.stringify({ type: "user", timestamp: "2026-10-30T10:02:00Z", message: { content: [{ type: "tool_result", content: "a calendar" }] } }),
+      line("assistant", "Booked for Friday.", "2026-10-30T10:03:00Z"),
+      "not json",
+    ].join("\n");
+    const all = render(t);
+    expect(all.through).toBe("2026-10-30T10:03:00Z");
+    expect(all.text).toContain("USER (2026-10-30T10:00:00Z): Book the dentist");
+    expect(all.text).toContain("[tool: Bash cal]");
+    expect(all.text).not.toContain("a calendar");
+    expect(render(t, "2026-10-30T10:02:00Z").text).toBe("AGENT (2026-10-30T10:03:00Z): Booked for Friday.");
+  });
+
+  it("takes bullets with what's nested under them, and NOTHING as none", () => {
+    expect(bullets("- Chose X\n  - **Why:** Y\n- Learned Z")).toEqual(["Chose X\n  - **Why:** Y", "Learned Z"]);
+    expect(bullets("NOTHING")).toEqual([]);
+    expect(bullets("Preamble\n- One")).toEqual(["Preamble", "One"]);
+  });
+
+  it("refuses a rollup without its fence, too long, or throwing most away", () => {
+    expect(parseRollup("no fence", "")).toEqual({ error: expect.stringMatching(/no ===MEMORY===/) });
+    expect(parseRollup(`===MEMORY===\n${"x".repeat(20_001)}`, "")).toEqual({ error: expect.stringMatching(/over 20000/) });
+    expect(parseRollup("===MEMORY===\nshort", "y".repeat(3000))).toEqual({ error: expect.stringMatching(/too much thrown away/) });
+    expect(parseRollup("===MEMORY===\n```markdown\n# Memory\n```\n===SOUL-SUGGESTIONS===\n- Be terser", "")).toEqual({ memory: "# Memory\n", suggestions: ["Be terser"] });
+  });
+
+  it("writes an episode's bullets to the log, and reads a session on from where it left off", async () => {
+    const pepper = await pepperToken();
+    const first = [line("user", "Plan the trip", at(20)), line("assistant", "Chose Flagstaff", at(19))].join("\n") + "\n";
+    await call(pepper, "POST", "/memory/episodes", { session: "s1", transcript: first });
+    const job = await (await call(pepper, "GET", "/memory/consolidate")).json<any>();
+    expect(job.rollup).toBeNull();
+    expect(job.episodes).toHaveLength(1);
+    expect(job.episodes[0].prompt).toMatch(/memory flush/);
+    expect(job.episodes[0].input).toContain("Chose Flagstaff");
+    const answered = await call(pepper, "POST", `/memory/consolidate/episodes/${job.episodes[0].id}`, { text: "- Chose Flagstaff for the trip\n  - **Why:** closer" });
+    expect(await answered.json<any>()).toEqual({ entries: 1 });
+    // Sent again, kept once.
+    expect(await (await call(pepper, "POST", `/memory/consolidate/episodes/${job.episodes[0].id}`, { text: "- again" })).json<any>()).toEqual({ entries: 0 });
+    const hits = await tool(pepper, "memory_grep", { text: "Flagstaff for the trip" });
+    expect(hits).toHaveLength(1);
+    expect((await (await call(pepper, "GET", "/memory/consolidate")).json<any>()).episodes).toEqual([]);
+
+    await call(pepper, "POST", "/memory/episodes", { session: "s1", transcript: first + line("user", "Book the cabin too", at(5)) + "\n" });
+    const next = await (await call(pepper, "GET", "/memory/consolidate")).json<any>();
+    expect(next.episodes[0].input).toContain("Book the cabin too");
+    expect(next.episodes[0].input).not.toContain("Chose Flagstaff\n");
+    expect(next.episodes[0].input).not.toContain("Plan the trip");
+  });
+
+  it("lets go of an episode after three tries", async () => {
+    const pepper = await pepperToken();
+    await call(pepper, "POST", "/memory/episodes", { session: "s1", transcript: line("user", "hello", at(5)) + "\n" });
+    for (let i = 0; i < 3; i++) expect((await (await call(pepper, "GET", "/memory/consolidate")).json<any>()).episodes).toHaveLength(1);
+    expect((await (await call(pepper, "GET", "/memory/consolidate")).json<any>()).episodes).toEqual([]);
+    expect(await (await call(pepper, "GET", "/memory/episodes?pending=1")).json<any[]>()).toEqual([]);
+  });
+
+  it("rewrites the long-term memory from the days since the last rollup", async () => {
+    const pepper = await pepperToken();
+    const was = "# Memory\n\n" + "- An old fact worth keeping.\n".repeat(100);
+    expect((await call(owner, "PUT", "/api/notes/memory", { kind: "memory", title: "Long-term memory", body: was })).status).toBe(200);
+    await call(owner, "POST", "/api/memory/entries", { entries: [{ day: day(1), at: at(24 * 60), key: "k1", who: "pepper", text: "Moved the dentist to Monday." }] });
+    const job = await (await call(pepper, "GET", "/memory/consolidate")).json<any>();
+    expect(job.rollup).toMatchObject({ through: day(1), version: 1 });
+    expect(job.rollup.input).toContain("Moved the dentist to Monday.");
+    expect(job.rollup.input).toContain("An old fact worth keeping.");
+
+    const roll = (version: number, text: string) => call(pepper, "POST", "/memory/consolidate/rollup", { through: day(1), version, text });
+    expect((await roll(1, "===MEMORY===\nTiny.")).status).toBe(422);
+    expect((await roll(0, `===MEMORY===\n${was}`)).status).toBe(409);
+    const ok = await roll(1, `===MEMORY===\n${was}- The dentist is on Mondays (${day(1)}).\n===SOUL-SUGGESTIONS===\n- Mention appointments a day ahead`);
+    expect(ok.status).toBe(200);
+    expect((await (await call(owner, "GET", "/api/notes/memory")).json<any>()).body).toContain("The dentist is on Mondays");
+    expect(await tool(pepper, "memory_grep", { text: "Suggested for the soul" })).toHaveLength(1);
+    expect((await (await call(pepper, "GET", "/memory/consolidate")).json<any>()).rollup).toBeNull();
+    expect((await roll(2, `===MEMORY===\n${was}`)).status).toBe(409);
+  });
+
+  it("is spawned from the alarm once the episodes are quiet, one at a time", async () => {
+    const pepper = await pepperToken();
+    const templates = { coding: { needsApproval: true, memory: 4096, cores: 2, capNames: ["coding"] } };
+    expect((await call(owner, "PUT", "/api/fleet/environments/local", { templates })).status).toBe(200);
+    await call(pepper, "POST", "/memory/episodes", { session: "s1", transcript: line("user", "hello", at(5)) + "\n" });
+    const spawns = async () => (await (await call(owner, "GET", "/api/spawns")).json<any[]>()).filter((s) => s.job === "consolidate");
+
+    // Not quiet yet.
+    await runDurableObjectAlarm(memoryStub());
+    expect(await spawns()).toEqual([]);
+
+    await runInDurableObject(memoryStub(), (_o, state) => {
+      state.storage.sql.exec("UPDATE meta SET value = ? WHERE key = 'consolidate_at'", String(Date.now() - 1000));
+    });
+    await runDurableObjectAlarm(memoryStub());
+    const [made] = await spawns();
+    expect(made).toMatchObject({ brain: "pepper", by: "memory", state: "queued", job: "consolidate" });
+    await runInDurableObject(memoryStub(), (_o, state) => state.storage.setAlarm(Date.now()));
+    await runDurableObjectAlarm(memoryStub());
+    expect(await spawns()).toHaveLength(1);
   });
 });
