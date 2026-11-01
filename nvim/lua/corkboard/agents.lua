@@ -241,6 +241,9 @@ function M.hook(ev)
     if vim.b[buf].corkboard_claude_session ~= ev.session_id then pending[buf], waking[buf] = nil, nil end
     vim.b[buf].corkboard_claude_session = ev.session_id
     vim.b[buf].corkboard_claude_transcript = ev.transcript_path
+    -- Saved now: a /clear changes no window, so nothing else would, and a
+    -- reload would resume the session it cleared (a handoff's full one).
+    require("corkboard.restore").save()
   end
   if ev.event == "SessionStart" and id and ev.session_id then remember(id, ev.session_id, ev.transcript_path) end
   -- A session corkboard didn't start on a card took one (claim_card,
