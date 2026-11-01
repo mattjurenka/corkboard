@@ -1,9 +1,10 @@
 // /speech: Kokoro (kokoro-js, on onnxruntime-node) saying a sentence for
-// the avatar panel. With CORKBOARD_SPEECH_MODEL (the Nix package sets it to
-// the fp16 model as bridge/kokoro-gpu.py patches it) it's on the GPU, through
-// ONNX Runtime's WebGPU EP, about 3.5 times as fast as it's said and leaving
-// the CPU alone; otherwise, or if that fails, on the CPU's physical cores,
-// about 4 times. Loaded the first time it's asked for (the CPU's model,
+// the avatar panel, on the CPU's physical cores, about 4 times as fast as
+// it's said. With CORKBOARD_SPEECH_MODEL (the speech-model package: the fp16
+// model as bridge/kokoro-gpu.py patches it) it's on the GPU instead, through
+// ONNX Runtime's WebGPU EP; on an integrated GPU that's no faster, and the
+// page's drawing stalls while it runs, so it isn't the default. If that
+// fails, the CPU. Loaded the first time it's asked for (the CPU's model,
 // 325 MB, is downloaded once into ~/.cache/corkboard/models, not into
 // node_modules, which in the Nix package can't be written), and one
 // sentence is made at a time.

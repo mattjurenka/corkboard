@@ -165,7 +165,8 @@
           installPhase = "cp -r web/dist $out";
         };
 
-        # The avatar's voice on the GPU: Kokoro's fp16 model as
+        # The avatar's voice on the GPU, if CORKBOARD_SPEECH_MODEL is set to it
+        # (bridge/speech.ts): Kokoro's fp16 model as
         # bridge/kokoro-gpu.py patches it for ONNX Runtime's WebGPU EP.
         speech-model = pkgs.runCommand "corkboard-speech-model" {
           src = pkgs.fetchurl {
@@ -222,7 +223,6 @@
               --add-flags $share/bridge/server.ts \
               --suffix PATH : ${pkgs.lib.makeBinPath [ pkgs.neovim pkgs.bun pkgs.ripgrep pkgs.fd ]} \
               --suffix CORKBOARD_PLUGINS : ${pluginPath pkgs} \
-              --set-default CORKBOARD_SPEECH_MODEL ${speech-model}/model.onnx \
               --suffix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader ]} \
               ${pkgs.lib.optionalString (nvimWasm != null) "--set-default CORKBOARD_NVIM_WASM ${nvimWasm}/lib/nvim-wasm"}
             # A brain's vault into its memory in the Worker (bridge/memory-sync.ts).
