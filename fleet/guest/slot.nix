@@ -75,6 +75,17 @@ let
     tokenFile = "/mnt/share/brain-token";
   };
 
+  # corkboard's session hook, which here only keeps the context under its
+  # limit and puts a handoff in $CORKBOARD_HANDOFF (nvim/hooks/claude-session.lua).
+  contextHook = {
+    type = "command";
+    command = "${pkgs.neovim-unwrapped}/bin/nvim --clean --headless -l ${pkgs.runCommand "corkboard-session-hook" { } ''
+      mkdir -p $out/hooks $out/lua/corkboard
+      cp ${../../nvim/hooks/claude-session.lua} $out/hooks/claude-session.lua
+      cp ${../../nvim/lua/corkboard/context.lua} $out/lua/corkboard/context.lua
+    ''}/hooks/claude-session.lua";
+  };
+
   runTask = pkgs.writeShellApplication {
     name = "fleet-task";
     runtimeInputs = [ pkgs.git pkgs.coreutils pkgs.jq ];
@@ -148,10 +159,24 @@ let
         # Its last answer, where a task's goes.
         jq -s '[.[] | select(.type == "result")] | last // {}' "$out/events.jsonl" > "$out/result.json" || true
       else
-        "''${run[@]}" claude -p "$(cat /mnt/share/task.md)" "''${mcp[@]}" \
-          --output-format json \
-          --dangerously-skip-permissions \
-          > "$out/result.json" || status=$?
+        # A task that fills its context hands off (the session hook keeps
+        # what it wrote in handoff.md) and goes on in a fresh one, up to 10.
+        # Without corkboard's MCP it has no handoff tool, so none of that.
+        if [ ''${#mcp[@]} -gt 0 ]; then export CORKBOARD_HANDOFF=$out/handoff.md; fi
+        prompt=$(cat /mnt/share/task.md)
+        for n in $(seq 10); do
+          rm -f "$out/handoff.md"
+          status=0
+          "''${run[@]}" claude -p "$prompt" "''${mcp[@]}" \
+            --output-format json \
+            --dangerously-skip-permissions \
+            > "$out/result.json" || status=$?
+          if [ ! -s "$out/handoff.md" ]; then break; fi
+          mv "$out/handoff.md" "$out/handoff-$n.md"
+          prompt="$(cat /mnt/share/task.md)
+
+      Carry on from where the last session on this task left off: its handoff is in $out/handoff-$n.md, so read that first."
+        done
       fi
 
       if [ -n "''${base:-}" ]; then
@@ -317,8 +342,9 @@ in
   environment.sessionVariables = env;
   environment.etc."claude-code/managed-settings.json".text = builtins.toJSON {
     env = claudeCodeEnv;
-    # A brain's spawn's memory, which does nothing without its token.
-    hooks = memoryHooks.hooks;
+    hooks = lib.genAttrs [ "PreToolUse" "PostToolUse" "UserPromptSubmit" ] (_: [ { hooks = [ contextHook ]; } ])
+      # A brain's spawn's memory, which does nothing without its token.
+      // memoryHooks.hooks;
   };
   # Where its brain's memory is, read as managed memory by every session.
   environment.etc."claude-code/CLAUDE.md" = lib.mkIf (shares != { }) {

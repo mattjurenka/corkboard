@@ -180,6 +180,12 @@ async function claim(c: Call, cardId: string, force = false): Promise<Card> {
 }
 
 const read = async (c: Call, cardId: string) => full(unwrap(await c.board.get(cardId)));
+
+// A session near its context limit (nvim/lua/corkboard/context.lua) is told
+// to call handoff; corkboard then clears it and starts the next from it.
+const HANDOFF_DESCRIPTION =
+  "Hand your work to a fresh session when your context is nearly full: the goal, what's done and verified, what's left, and what you learned that the next session would otherwise have to find again. On a card, it goes in the card's log. Then end your turn.";
+const HANDED_OFF = "Handed off. End your turn now: this session will be cleared and the next started from your handoff.";
 const brief = async (c: Call, card: Card) => summary(card, await c.cards());
 
 const TOOLS: Record<string, Tool> = {
@@ -299,6 +305,16 @@ const TOOLS: Record<string, Tool> = {
           x.logs.push(`${a.summary}\nVerified: ${a.verification}`);
         }),
       ),
+  },
+  handoff: {
+    description: HANDOFF_DESCRIPTION,
+    properties: { id: str("The card you're on, if any"), text: str("The handoff, markdown") },
+    required: ["text"],
+    card: "own",
+    run: async (a, c) => {
+      unwrap(await c.board.appendLog(a.id, c.me, `handoff:\n${String(a.text).trim()}`));
+      return HANDED_OFF;
+    },
   },
   update_card: {
     description:
@@ -848,6 +864,12 @@ async function callTool(env: Env, user: string, grant: Grant, name: string, args
       if (e instanceof Invalid || e instanceof Refused) throw new ToolError(e.message);
       throw e;
     }
+  }
+  // A handoff off any card is the session's alone, for corkboard to start the
+  // next one from.
+  if (name === "handoff" && args.id === undefined) {
+    if (grant.kind !== "card") return HANDED_OFF;
+    args.id = grant.card;
   }
   const tool = TOOLS[name];
   if (!tool || (grant.kind === "card" && !tool.card)) throw new ToolError(`unknown tool ${name}`);

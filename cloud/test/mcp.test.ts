@@ -151,6 +151,15 @@ describe("a card agent", () => {
     expect(blocked).toMatchObject({ agent_state: "blocked", attention: "Which API?" });
   });
 
+  it("hands off into its card's log, named or not", async () => {
+    const token = await cardToken();
+    await tool(token, "claim_card", { id: "TASK-1" });
+    expect(await tool(token, "handoff", { text: "done: a\nleft: b" })).toMatch(/^Handed off/);
+    await tool(token, "handoff", { id: "TASK-1", text: "again" });
+    expect((await tool(token, "handoff", { id: "TASK-2", text: "x" })).error).toMatch(/works on TASK-1/);
+    expect((await card("TASK-1")).log.slice(-2).map((e: any) => e.note)).toEqual(["handoff:\ndone: a\nleft: b", "handoff:\nagain"]);
+  });
+
   it("keeps to the rules mcp/board.ts had", async () => {
     const token = await cardToken();
     expect((await tool(token, "submit_for_review", { id: "TASK-1", summary: "s", verification: "v" })).error).toMatch(/claim it first/);
@@ -181,6 +190,11 @@ describe("an OAuth client", () => {
     expect((await tool(owner, "read_card", { board: BOARD, id: "TASK-2" })).title).toBe("Someone else's");
     expect((await tool(owner, "read_card", { id: "TASK-2" })).error).toMatch(/which board/);
     expect((await tool(owner, "read_card", { board: "nope", id: "TASK-2" })).error).toMatch(/no such board/);
+  });
+
+  it("hands off off any card without naming a board", async () => {
+    expect(await tool(owner, "handoff", { text: "x" })).toMatch(/^Handed off/);
+    expect((await card("TASK-1")).log).toEqual([]);
   });
 
   it("archives cards nobody is working on, which a card agent can't", async () => {

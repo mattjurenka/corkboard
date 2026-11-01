@@ -131,33 +131,8 @@ local function asking(ev)
   end
 end
 
--- Past this, a session's context is worth starting fresh (/clear, or a new
--- session with a handoff in the card's log): every request re-reads it all.
--- g:corkboard_context_limit, in tokens.
-function M.context_limit() return vim.g.corkboard_context_limit or 200000 end
-
--- The context of a session's last request: its input, cache writes and
--- cache reads, from the last main-thread assistant record in the
--- transcript. Only the file's end is read, so a long session costs no more.
-local TAIL = 512 * 1024
-local function last_context(path)
-  local fd = path and vim.uv.fs_open(vim.fn.expand(path), "r", 0)
-  if not fd then return nil end
-  local size = vim.uv.fs_fstat(fd).size
-  local text = vim.uv.fs_read(fd, math.min(size, TAIL), math.max(0, size - TAIL)) or ""
-  vim.uv.fs_close(fd)
-  local lines = vim.split(text, "\n", { plain = true, trimempty = true })
-  for i = #lines, 1, -1 do
-    local line = lines[i]
-    if line:find('"type":"assistant"', 1, true) and line:find('"usage"', 1, true) then
-      local record = vim.F.npcall(vim.json.decode, line)
-      local usage = record and not record.isSidechain and type(record.message) == "table" and record.message.usage
-      if type(usage) == "table" then
-        return (usage.input_tokens or 0) + (usage.cache_creation_input_tokens or 0) + (usage.cache_read_input_tokens or 0)
-      end
-    end
-  end
-end
+-- Past this a session's context is worth starting fresh (corkboard.context).
+function M.context_limit() return require("corkboard.context").limit() end
 
 -- After each request (and when a session starts afresh, as after /clear):
 -- the session's context for its status line, and a word once when it
@@ -166,13 +141,13 @@ local function track_context(buf, ev)
   if ev.event == "SessionStart" then vim.b[buf].corkboard_context = nil end
   if ev.event ~= "Stop" and ev.event ~= "PostToolUse" then return vim.cmd.redrawstatus({ bang = true }) end
   local was = vim.b[buf].corkboard_context
-  local now = last_context(ev.transcript_path)
+  local now = require("corkboard.context").last(ev.transcript_path)
   if not now then return end
   vim.b[buf].corkboard_context = now
   local limit = M.context_limit()
   if now >= limit and (was or 0) < limit then
     vim.notify(string.format(
-      "corkboard: this Claude session's context is %dk. If the task has changed or it's past %dk, /clear or start a new session, with a short handoff in the card's log.",
+      "corkboard: this Claude session's context is %dk, past %dk, and it hasn't handed off. /clear it, or start a new session.",
       math.floor(now / 1000 + 0.5), math.floor(limit / 1000)), vim.log.levels.WARN)
   end
   vim.cmd.redrawstatus({ bang = true })
@@ -183,21 +158,64 @@ end
 -- leaves the card. g:corkboard_clear_when_done = false keeps sessions as
 -- they are.
 local clearing = {} -- terminal buffer -> the done card it waits to be cleared of
+local handing = {} -- terminal buffer -> { path, session } of the handoff it waits to be cleared for
+local resuming = {} -- terminal buffer -> { path, session } of the handoff the next session starts from
 
 local function between_turns(buf) return live[buf] == nil or live[buf] == "idle" or live[buf] == "ready" end
+
+-- Types a line into the session and sends it. Claude Code opens its command
+-- menu on a /, and takes fast input as a paste; Enter once it has.
+local function type_line(buf, text)
+  local chan = terminal.job(buf)
+  vim.fn.chansend(chan, text)
+  vim.defer_fn(function()
+    if terminal.alive(buf) then vim.fn.chansend(chan, "\r") end
+  end, 200)
+end
 
 local function clear(buf)
   local id = clearing[buf]
   clearing[buf] = nil
   if not (id and terminal.alive(buf)) then return end
   if vim.b[buf].corkboard_card == id then M.link(buf, nil) end
-  local chan = terminal.job(buf)
-  vim.fn.chansend(chan, "/clear")
-  -- Claude Code opens its command menu on the /; Enter once it has.
-  vim.defer_fn(function()
-    if terminal.alive(buf) then vim.fn.chansend(chan, "\r") end
-  end, 200)
+  -- Its card is done, so there's nothing for a handoff to go on with.
+  handing[buf], resuming[buf] = nil, nil
+  type_line(buf, "/clear")
   vim.notify("corkboard: " .. id .. " is done, so its session was cleared for the next task")
+end
+
+-- A session near its context limit hands off (the corkboard MCP's handoff,
+-- asked for by hooks/claude-session.lua): corkboard keeps what it wrote in a
+-- file, types /clear once it's between turns, and starts the session that
+-- follows on it. It keeps its card.
+
+local function hand_off(buf, ev)
+  local dir = vim.fs.joinpath(vim.fn.stdpath("state"), "corkboard", "handoffs")
+  vim.fn.mkdir(dir, "p", tonumber("700", 8))
+  local path = vim.fs.joinpath(dir, (ev.session_id or tostring(os.time())) .. ".md")
+  vim.fn.writefile(vim.split(ev.handoff, "\n", { plain = true }), path)
+  handing[buf] = { path = path, session = ev.session_id }
+end
+
+local function restart(buf)
+  local h = handing[buf]
+  handing[buf] = nil
+  if not (h and terminal.alive(buf)) then return end
+  resuming[buf] = h
+  type_line(buf, "/clear")
+end
+
+local function resume(buf)
+  local h = resuming[buf]
+  resuming[buf] = nil
+  if not terminal.alive(buf) then return end
+  local id = vim.b[buf].corkboard_card
+  local text = "Carry on from where the last session left off: its handoff is in " .. h.path .. ", so read that first."
+    .. (id and (" You are still on corkboard card " .. id .. ", and still hold it.") or "")
+  -- After /clear Claude Code redraws; the prompt waits for it.
+  vim.defer_fn(function()
+    if terminal.alive(buf) then type_line(buf, text) end
+  end, 500)
 end
 
 -- Whenever the board changes.
@@ -257,6 +275,11 @@ function M.hook(ev)
     -- The tab's mark: a session in a tab off screen draws nothing that
     -- would push it.
     require("corkboard").push_layout()
+  end
+  if ev.handoff then hand_off(buf, ev) end
+  if handing[buf] and between_turns(buf) and not clearing[buf] then vim.schedule(function() restart(buf) end) end
+  if resuming[buf] and ev.event == "SessionStart" and ev.session_id ~= resuming[buf].session then
+    vim.schedule(function() resume(buf) end)
   end
   -- Its card was done while it was mid-turn.
   if clearing[buf] and between_turns(buf) then return vim.schedule(function() clear(buf) end) end

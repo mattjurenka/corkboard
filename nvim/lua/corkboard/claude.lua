@@ -106,10 +106,12 @@ function M.start(opts)
         require("corkboard.mirror").output(buf, data)
       end
     end)(),
-    -- CORKBOARD_BUF tells the hooks which terminal the session is in;
+    -- CORKBOARD_BUF tells the hooks which terminal the session is in, and
+    -- CORKBOARD_CONTEXT_LIMIT when to hand off;
     -- CORKBOARD_LIVE and CORKBOARD_SESSION, the mod what to draw.
     env = vim.tbl_extend("force", opts.env or {}, {
       CORKBOARD_BUF = tostring(buf),
+      CORKBOARD_CONTEXT_LIMIT = tostring(require("corkboard.context").limit()),
       CORKBOARD_LIVE = require("corkboard.live").path(),
       CORKBOARD_SESSION = opts.kind or "project",
     }),

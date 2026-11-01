@@ -167,6 +167,18 @@ const TOOLS: Record<string, Tool> = {
     required: ["id", "note"],
     run: (a) => summary(change(a.id, (c) => log(c, a.note))),
   },
+  // A session near its context limit (nvim/lua/corkboard/context.lua) is
+  // told to call this; corkboard then clears it and starts the next from it.
+  handoff: {
+    description:
+      "Hand your work to a fresh session when your context is nearly full: the goal, what's done and verified, what's left, and what you learned that the next session would otherwise have to find again. On a card, it goes in the card's log. Then end your turn.",
+    properties: { id: str("The card you're on, if any"), text: str("The handoff, markdown") },
+    required: ["text"],
+    run: (a) => {
+      if (a.id !== undefined) change(String(a.id), (c) => log(c, `handoff:\n${String(a.text).trim()}`));
+      return "Handed off. End your turn now: this session will be cleared and the next started from your handoff.";
+    },
+  },
   block: {
     description:
       "You need a human decision: marks the card blocked, logs your question and sends the user a desktop notification. Stop working on it until it is answered.",
