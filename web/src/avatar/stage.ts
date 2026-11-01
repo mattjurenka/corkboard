@@ -61,7 +61,22 @@ export class Stage {
     VRMUtils.removeUnnecessaryVertices(gltf.scene);
     VRMUtils.combineSkeletons(gltf.scene);
     VRMUtils.rotateVRM0(vrm);
-    vrm.scene.traverse((o) => (o.frustumCulled = false));
+    // VRoid's exports ask for no mipmaps, so its 2K textures drawn a few
+    // hundred pixels across shimmer and look low-resolution.
+    const anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+    vrm.scene.traverse((o) => {
+      o.frustumCulled = false;
+      for (const m of [(o as THREE.Mesh).material ?? []].flat()) {
+        const uniforms = Object.values((m as THREE.ShaderMaterial).uniforms ?? {}).map((u) => u.value);
+        for (const t of [...Object.values(m), ...uniforms]) {
+          if (!(t instanceof THREE.Texture)) continue;
+          t.minFilter = THREE.LinearMipmapLinearFilter;
+          t.generateMipmaps = true;
+          t.anisotropy = anisotropy;
+          t.needsUpdate = true;
+        }
+      }
+    });
     if (this.vrm) {
       this.scene.remove(this.vrm.scene);
       VRMUtils.deepDispose(this.vrm.scene);
