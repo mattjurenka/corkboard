@@ -533,6 +533,15 @@ function M.statusline()
   local cwd, cmd = name:match("^term://(.-)//%d+:(.*)$")
   if vim.b[buf].corkboard_plan_claude then
     title, detail, pos = "Pepper", "beside the day plan", false
+  elseif vim.b[buf].corkboard_vm then
+    -- A session elsewhere: its name, then the brain it runs as and its VM,
+    -- where they say more than the name does.
+    title, pos = vim.b[buf].corkboard_name or require("corkboard.claude").title(buf), false
+    local where = {}
+    for _, s in ipairs({ vim.b[buf].corkboard_brain or false, vim.b[buf].corkboard_vm }) do
+      if s and s:lower() ~= title:lower() and not vim.tbl_contains(where, s) then table.insert(where, s) end
+    end
+    detail = #where > 0 and table.concat(where, " · ") or nil
   elseif cwd then
     title = vim.fs.basename(vim.split(cmd, " ", { trimempty = true })[1] or "terminal")
     detail, pos = vim.fn.fnamemodify(cwd, ":~"), false

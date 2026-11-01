@@ -90,8 +90,9 @@ local function follow(c)
   end
 end
 
--- Open a session's conversation in a tab, or go to it if it's open.
-function M.open(bridge, key, name)
+-- Open a session's conversation in a tab, or go to it if it's open. vm:
+-- the VM it runs in, for its status line.
+function M.open(bridge, key, name, vm)
   local id = bridge .. "/" .. key
   local c = open[id]
   if c and vim.api.nvim_buf_is_valid(c.buf) then
@@ -110,6 +111,7 @@ function M.open(bridge, key, name)
   vim.bo[buf].swapfile = false
   vim.bo[buf].modifiable = false
   vim.b[buf].corkboard_name = name
+  vim.b[buf].corkboard_vm = vm
   vim.wo.wrap = true
   vim.wo.linebreak = true
   vim.wo.number = false

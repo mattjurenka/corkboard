@@ -654,7 +654,7 @@ local function open_slot(m)
   if m.spawn then
     for _, c in ipairs(remote_sessions()) do
       if nil_if_null(c.vm) == m.name and c.environment == m.environment and c.attach then
-        return require("corkboard.conversation").open(c.bridge, c.key, c.name)
+        return require("corkboard.conversation").open(c.bridge, c.key, c.name, m.name)
       end
     end
     return vim.notify("corkboard: " .. m.name .. "'s spawn has no conversation to follow")
@@ -719,7 +719,7 @@ local function open_vm(m)
   local shell = vim.list_extend(vim.list_extend({ "ssh", "-t" }, GUEST_SSH), {
     login, "cd " .. vim.fn.shellescape(GUEST_WORK .. project) .. " 2>/dev/null; exec bash -l",
   })
-  require("corkboard.claude").start({ attach = cmd, vm = m.name, shell = shell, args = { "--name", m.brain or m.name } })
+  require("corkboard.claude").start({ attach = cmd, vm = m.name, brain = m.brain, shell = shell, args = { "--name", m.brain or m.name } })
 end
 
 -- A project's clone on this machine, the first of the account's projects

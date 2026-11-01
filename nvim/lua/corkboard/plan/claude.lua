@@ -21,6 +21,7 @@ local function start(opts)
   return require("corkboard.claude").start(vim.tbl_extend("force", opts or {}, {
     attach = ATTACH,
     vm = "pepper",
+    brain = "pepper",
     kind = "pepper",
     args = { "--name", "Pepper" },
   }))

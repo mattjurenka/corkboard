@@ -50,7 +50,8 @@ local NOTIFY_PROMPT = table.concat({
 -- corkboard's hooks and mod are files on this machine, so that session goes
 -- without them), attach (a command that joins a session already running
 -- elsewhere, run as it is: prompt and args don't apply), vm (the VM via or
--- attach reaches, for the fleet view), shell (a command for a shell where
+-- attach reaches, for the fleet view and its status line), brain (the brain
+-- it runs as, for its status line), shell (a command for a shell where
 -- the session runs, which <C-`> opens there). The tab closes with the session,
 -- unless a shell in it is still running.
 function M.start(opts)
@@ -72,6 +73,7 @@ function M.start(opts)
   -- What it is, for corkboard.claude.cards, which opens beside it.
   vim.b[buf].corkboard_claude = opts.kind or "project"
   vim.b[buf].corkboard_vm = opts.vm
+  vim.b[buf].corkboard_brain = opts.brain
   vim.b[buf].corkboard_shell = opts.shell
   -- Its --name, for away mode's list (corkboard.away).
   local args = opts.args or {}
@@ -164,7 +166,7 @@ local function follow_spawn(spawn, label)
       for _, c in ipairs(b.sessions or {}) do
         if slot and c.vm == slot and b.environment == spawn.environment and c.attach then
           ui.toast("session-" .. spawn.id, "done", label .. " is running in " .. slot)
-          return require("corkboard.conversation").open(b.id, c.key, c.name or label)
+          return require("corkboard.conversation").open(b.id, c.key, c.name or label, slot)
         end
       end
     end
