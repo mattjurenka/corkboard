@@ -2,7 +2,8 @@
 // facing you, drawn with three.js. Nothing is keyframed: it breathes, sways,
 // blinks and looks at you; it moves its mouth to what the voice is saying
 // and nods along; working, it looks off and up as if thinking; asking, it
-// looks at you with its head on one side.
+// looks at you with its head on one side. Talking, its face follows the
+// line (glad, sorry, asking) and its hands and shoulders move with it.
 
 import { MToonMaterial, type VRM, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import * as THREE from "three";
@@ -16,6 +17,22 @@ const VISEMES: Viseme[] = ["aa", "ih", "ou", "ee", "oh"];
 // The clothes' color, lit and in shade; their painted texture is soft.
 const CLOTH = new THREE.Color(0xc8102e);
 const CLOTH_SHADE = new THREE.Color(0x6e0718);
+// The body's skin in shade; the model's own is barely darker than lit.
+const SKIN_SHADE = new THREE.Color(0xd9a3ad);
+
+type Feeling = "happy" | "sad" | "surprised";
+const FEELINGS: Feeling[] = ["happy", "sad", "surprised"];
+
+// What a line sounds like it means, roughly.
+function feeling(line: string): Feeling | null {
+  if (/\b(sorry|unfortunately|fail(s|ed|ing)?|broken?|can't|cannot|couldn't|won't|wrong|lost)\b/i.test(line)) return "sad";
+  if (/!/.test(line)) return "happy";
+  if (/\?/.test(line)) return "surprised";
+  return null;
+}
+
+// Up and back down over a span of seconds, since a moment.
+const swell = (since: number, span: number) => (since > 0 && since < span ? Math.sin((since / span) * Math.PI) : 0);
 
 // A texture's shape only: white wherever it isn't see-through, for a
 // cut-out material to be one color.
@@ -57,6 +74,14 @@ export class Stage {
   private look = new THREE.Vector2();
   private tilt = 0;
   private smile = 0;
+  private line = "";
+  private feel: Record<Feeling, number> = { happy: 0, sad: 0, surprised: 0 };
+  private felt: Feeling | null = null;
+  private beatAt = -10;
+  private beatSide = 1;
+  private shrugAt = -10;
+  private dart = new THREE.Vector2();
+  private dartAt = 1;
   mood: Mood = "idle";
 
   constructor(
@@ -69,12 +94,12 @@ export class Stage {
     // A warm key from above one side, a cool fill from the other, and one
     // from behind for an edge on the hair and shoulders.
     const key = new THREE.DirectionalLight(0xfff1e0, Math.PI * 0.55);
-    key.position.set(1, 1.6, 2);
+    key.position.set(1.6, 1.5, 1.2);
     const fill = new THREE.DirectionalLight(0xd8e4ff, Math.PI * 0.12);
     fill.position.set(-1.5, 0.6, 1.5);
     const back = new THREE.DirectionalLight(0xffffff, Math.PI * 0.3);
     back.position.set(-0.5, 1.5, -2);
-    this.scene.add(key, fill, back, new THREE.AmbientLight(0xffffff, 0.3), this.camera, this.gaze);
+    this.scene.add(key, fill, back, new THREE.AmbientLight(0xffffff, 0.22), this.camera, this.gaze);
     const loop = () => {
       this.frame = requestAnimationFrame(loop);
       this.tick(Math.min(this.clock.getDelta(), 0.1));
@@ -102,6 +127,14 @@ export class Stage {
             m.map = m.shadeMultiplyTexture = silhouette(m.map);
             m.color.copy(CLOTH);
             m.shadeColorFactor.copy(CLOTH_SHADE);
+          }
+          // Harder-edged shade, and on the body a deeper one, with its
+          // modelled detail (navel, collarbones) brought out.
+          m.shadingToonyFactor = 0.95;
+          if (/Body.*SKIN/.test(m.name)) {
+            m.shadeColorFactor.copy(SKIN_SHADE);
+            m.shadingShiftFactor = -0.2;
+            m.normalScale.setScalar(2.5);
           }
           // A soft light at the silhouette's edge.
           m.parametricRimColorFactor.setRGB(0.35, 0.35, 0.4);
@@ -181,6 +214,25 @@ export class Stage {
       this.lastMark = at;
     }
     this.nod = ease(this.nod, 0, 4, dt);
+    // Each new line: now and then a beat of one hand, one side then the
+    // other; a shrug on a question; and a feeling for the face.
+    if (this.voice.text !== this.line) {
+      this.line = this.voice.text;
+      this.felt = feeling(this.line);
+      if (this.line && Math.random() < 0.6) {
+        this.beatAt = t;
+        this.beatSide = -this.beatSide;
+      }
+      if (/\?\s*$/.test(this.line) && Math.random() < 0.5) this.shrugAt = t;
+    }
+    const beat = swell(t - this.beatAt, 0.9) * 0.45;
+    const shrug = swell(t - this.shrugAt, 1.1) * 0.15;
+    // Its eyes flick about a little, as eyes do.
+    if (t > this.dartAt) {
+      this.dartAt = t + 0.6 + Math.random() * 2.5;
+      if (Math.random() < 0.4) this.dart.set(0, 0);
+      else this.dart.set((Math.random() - 0.5) * 0.08, (Math.random() - 0.5) * 0.05);
+    }
 
     const thinking = this.mood === "thinking" && !talking;
     const asking = this.mood === "asking" && !talking;
@@ -212,10 +264,10 @@ export class Stage {
     // Arms down from the T-pose, a little apart, moving with the breath;
     // talking, a little more.
     const lift = talking ? 0.06 * Math.sin(t * 1.9) : 0;
-    set("leftUpperArm", 0, 0, -1.2 + breath * 0.02 + lift);
-    set("rightUpperArm", 0, 0, 1.2 - breath * 0.02 - lift * 0.7);
-    set("leftLowerArm", -0.45, -0.25, -0.1);
-    set("rightLowerArm", -0.45, 0.25, 0.1);
+    set("leftUpperArm", 0, -0.12, -1.32 + breath * 0.02 + lift);
+    set("rightUpperArm", 0, 0.12, 1.32 - breath * 0.02 - lift * 0.7);
+    set("leftLowerArm", -0.45, -0.4 - (this.beatSide < 0 ? beat : 0), -0.1);
+    set("rightLowerArm", -0.45, 0.4 + (this.beatSide > 0 ? beat : 0), 0.1);
     // Hands at rest: the fingers curled a little, more toward the little
     // finger, the thumb in.
     for (const [side, d] of [["left", -1], ["right", 1]] as const) {
@@ -228,11 +280,12 @@ export class Stage {
       set(`${side}ThumbProximal`, 0, -d * 0.25, 0);
       set(`${side}ThumbDistal`, 0, -d * 0.2, 0);
     }
-    set("leftShoulder", 0, 0, breath * 0.01);
-    set("rightShoulder", 0, 0, -breath * 0.01);
+    set("leftShoulder", 0, 0, breath * 0.01 + shrug);
+    set("rightShoulder", 0, 0, -breath * 0.01 - shrug);
 
     // Its eyes: the camera, or off and up while it thinks.
-    this.gaze.position.copy(this.camera.position).add(new THREE.Vector3(this.look.x * 1.5, this.look.y * 1.5, 0));
+    const eyes = this.look.clone().add(this.dart).multiplyScalar(1.5);
+    this.gaze.position.copy(this.camera.position).add(new THREE.Vector3(eyes.x, eyes.y, 0));
   }
 
   private face(vrm: VRM, dt: number) {
@@ -253,7 +306,13 @@ export class Stage {
       ex.setValue(v, this.mouth[v]);
     }
     this.smile = ease(this.smile, this.voice.speaking ? 0.25 : this.mood === "idle" ? 0.15 : 0, 2, dt);
-    ex.setValue("happy", this.smile);
-    ex.setValue("surprised", this.mood === "asking" && !this.voice.speaking ? 0.2 : 0);
+    const felt = this.voice.speaking ? this.felt : null;
+    for (const f of FEELINGS) this.feel[f] = ease(this.feel[f], f === felt ? 1 : 0, 3, dt);
+    ex.setValue("happy", this.smile + this.feel.happy * 0.6);
+    ex.setValue("sad", this.feel.sad * 0.45);
+    // VRoid's surprise is a custom expression, not the preset.
+    const surprised = (this.mood === "asking" && !this.voice.speaking ? 0.2 : 0) + this.feel.surprised * 0.45;
+    if (ex.getExpression("Surprised")) ex.setValue("Surprised", surprised);
+    else ex.setValue("surprised", surprised);
   }
 }
