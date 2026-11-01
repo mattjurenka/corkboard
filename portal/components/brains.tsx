@@ -10,8 +10,10 @@ import { api, type Brain } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
 // Who agents work for (cloud/src/brains.ts): a pane per brain, its title in
-// the top rule as a TUI draws one, with its memory and what it holds.
-// Archived ones, when shown, are dim, and only they can be purged.
+// the top rule as a TUI draws one, what it's for, its particulars as
+// labelled fields, and what you can do with it along its foot. Archived
+// ones, when shown, are dim under their own heading, and only they can be
+// purged.
 
 type ApiError = Error & { status?: number; body?: { brain?: Brain } }
 
@@ -25,6 +27,7 @@ const ago = (iso: string | null | undefined) => {
 }
 
 const count = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
+const plural = (n: number, one: string, many: string) => `${count(n)} ${n === 1 ? one : many}`
 
 export function Brains() {
   const [brains, setBrains] = useState<Brain[] | null>(null)
@@ -45,20 +48,36 @@ export function Brains() {
     refresh()
   }, [refresh])
 
+  const live = brains?.filter((b) => !b.archived)
+  const gone = brains?.filter((b) => b.archived)
+  const grid = (list?: Brain[]) =>
+    !!list?.length && (
+      <div className="grid grid-cols-1 gap-x-[2ch] gap-y-[22px] pt-[11px] lg:grid-cols-2">
+        {list.map((b) => (
+          <BrainCard key={b.name} brain={b} onChanged={refresh} onEdit={() => setEditing(b)} />
+        ))}
+      </div>
+    )
+
   return (
     <>
       {error && <p className="text-blocked">{error}</p>}
       {brains === null && !error && <p className="text-dim">…</p>}
-      <div className="grid grid-cols-1 gap-x-[2ch] gap-y-[22px] pt-[11px] lg:grid-cols-2">
-        {brains?.map((b) => <BrainCard key={b.name} brain={b} onChanged={refresh} onEdit={() => setEditing(b)} />)}
-      </div>
+      {live?.length === 0 && <p className="text-dim">No brains.</p>}
+      {grid(live)}
+      {!!gone?.length && (
+        <>
+          <h2 className="pt-[22px] text-dim">Archived</h2>
+          {grid(gone)}
+        </>
+      )}
       <Status>
-        <span>{brains ? `${brains.length} ${brains.length === 1 ? "brain" : "brains"}` : ""}</span>
+        <span>{live ? `${live.length} ${live.length === 1 ? "brain" : "brains"}` : ""}</span>
         <button className="hover:underline" onClick={() => setArchived(!archived)}>
           <span className="text-ink">{archived ? "■" : "□"}</span> archived
         </button>
         <button className="ml-auto text-link hover:underline" onClick={() => setEditing("new")}>
-          + brain
+          + new brain
         </button>
       </Status>
       {editing && <BrainForm brain={editing === "new" ? null : editing} onClose={() => setEditing(null)} onSaved={refresh} />}
@@ -69,8 +88,8 @@ export function Brains() {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex gap-[1ch]">
-      <span className="w-[12ch] flex-none text-dim">{label}</span>
-      <span className="min-w-0 break-words">{children}</span>
+      <span className="w-[8ch] flex-none text-dim">{label}</span>
+      <span className="flex min-w-0 flex-wrap gap-x-[1ch] break-words">{children}</span>
     </div>
   )
 }
@@ -97,29 +116,54 @@ function BrainCard({ brain: b, onChanged, onEdit }: { brain: Brain; onChanged: (
   }
 
   const m = b.memory
-  const label = [b.default && "default", b.account].filter(Boolean).join(" · ")
+  const tags = (items: string[]) =>
+    items.map((t) => (
+      <span key={t} className="bg-raise px-[1ch]">
+        {t}
+      </span>
+    ))
 
   return (
     <section className={cn("pane", b.archived && "opacity-60")}>
       <div className="pane-title">
-        <span className="font-bold">{b.name}</span>
-        {label && <span className="text-dim">{label}</span>}
+        <span>
+          <span className="font-bold">{b.title}</span>
+          {b.name !== b.title.toLowerCase() && <span className="text-dim"> {b.name}</span>}
+        </span>
       </div>
+      {b.default && (
+        <span className="pane-title-end text-working" title="Your own sessions remember here">
+          ● default
+        </span>
+      )}
+      {b.archived && <span className="pane-title-end text-dim">archived {ago(b.archived)}</span>}
       <div className="flex flex-col pt-[2px]">
-        <span className="font-bold">{b.title}</span>
-        {b.description && <p className="whitespace-pre-wrap text-dim">{b.description}</p>}
-        {m && (
-          <span>
-            {count(m.notes)} notes · {count(m.entries)} entries · {count(m.episodes)} episodes
-            {m.lastEpisode && <span className="text-dim"> · {ago(m.lastEpisode)}</span>}
-          </span>
-        )}
-        {!!b.credentials.length && <Field label="holds">{b.credentials.join(" ")}</Field>}
-        {!!b.abilities.length && <Field label="abilities">{b.abilities.join(" ")}</Field>}
-        {!!b.egress.length && <Field label="egress">{b.egress.join(" ")}</Field>}
-        {b.archived && <Field label="archived">{ago(b.archived)}</Field>}
+        {b.description && <p className="whitespace-pre-wrap">{b.description}</p>}
+        <div className="flex flex-col pt-[4px]">
+          {m && (
+            <Field label="memory">
+              {m.notes + m.entries + m.episodes === 0 ? (
+                <span className="text-dim">empty</span>
+              ) : (
+                <span>
+                  {plural(m.notes, "note", "notes")} · {plural(m.entries, "log entry", "log entries")} · {plural(m.episodes, "session", "sessions")}
+                </span>
+              )}
+            </Field>
+          )}
+          {m?.lastEpisode && <Field label="active">{ago(m.lastEpisode)}</Field>}
+          <Field label="runs as">{b.account ?? <span className="text-dim">the machine's default account</span>}</Field>
+          {!!b.credentials.length && (
+            <Field label="holds">
+              {tags(b.credentials)}
+              <span className="text-review">its spawns wait for you</span>
+            </Field>
+          )}
+          {!!b.abilities.length && <Field label="can">{tags(b.abilities)}</Field>}
+          <Field label="reaches">{b.egress.length ? b.egress.join("  ") : <span className="text-dim">only what its machine allows</span>}</Field>
+        </div>
         {problem && <p className="text-blocked">{problem}</p>}
-        <div className="mt-[4px] flex flex-wrap items-center gap-x-[2ch]">
+        <div className="mt-[6px] flex flex-wrap items-center gap-x-[2ch] border-t border-rule pt-[4px]">
           {!b.archived && asking === null && (
             <>
               <button className="text-link hover:underline" onClick={onEdit}>

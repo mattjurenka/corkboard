@@ -57,6 +57,8 @@ local function count(n)
   return tostring(n)
 end
 
+local function plural(n, one, many) return count(n) .. " " .. (n == 1 and one or many) end
+
 local function list(v) return type(v) == "table" and v or {} end
 
 local function find(name)
@@ -90,22 +92,40 @@ end
 local function render_text()
   if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
   local s = state()
-  local lines, map = { "Brains     j/k · <CR> memory · a new · e edit · d archive · u restore · P purge · R refresh", "" }, {}
+  local lines, map = { "Brains" .. string.rep(" ", 40) .. "a new brain", "" }, {}
   if s.problem then table.insert(lines, "  " .. s.problem) end
   if s.loading then table.insert(lines, "  asking the Worker…") end
   if s.asking then table.insert(lines, "  archive " .. s.asking.name .. "?  y yes · n no") end
+  if not s.loading and not s.problem and not vim.iter(s.cards):any(function(c) return not c.archived end) then
+    table.insert(lines, "  No brains.")
+  end
+  local function field(label, value) table.insert(lines, string.format("    %-8s %s", label, value)) end
+  local archived = false
   for _, c in ipairs(s.cards) do
-    local head = { c.name, c.title }
-    if c.default then table.insert(head, "default") end
-    if c.account then table.insert(head, c.account) end
+    if c.archived and not archived then
+      archived = true
+      table.insert(lines, "Archived")
+    end
+    local head = { c.title }
+    if c.name ~= c.title:lower() then table.insert(head, c.name) end
+    if c.default then table.insert(head, "● default") end
     if c.archived then table.insert(head, "archived " .. c.archived) end
-    table.insert(lines, "  " .. table.concat(head, "  · "))
+    table.insert(lines, "  " .. table.concat(head, "  "))
     map[#lines] = c.name
     if c.description and c.description ~= "" then table.insert(lines, "    " .. (c.description:match("^[^\n]*") or "")) end
     local m = c.memory
-    table.insert(lines, string.format("    %s notes · %s entries · %s episodes%s", count(m.notes), count(m.entries), count(m.episodes), m.last and (" · " .. m.last) or ""))
-    local holds = vim.list_extend(vim.list_slice(c.credentials), c.abilities)
-    if #holds > 0 then table.insert(lines, "    " .. table.concat(holds, " ")) end
+    if m.notes + m.entries + m.episodes == 0 then
+      field("memory", "empty")
+    else
+      field("memory", string.format("%s · %s · %s", plural(m.notes, "note", "notes"), plural(m.entries, "log entry", "log entries"),
+        plural(m.episodes, "session", "sessions")))
+    end
+    if m.last then field("active", m.last) end
+    field("runs as", c.account or "the machine's default account")
+    if #c.credentials > 0 then field("holds", table.concat(c.credentials, " ") .. "  its spawns wait for you") end
+    if #c.abilities > 0 then field("can", table.concat(c.abilities, " ")) end
+    field("reaches", #c.egress > 0 and table.concat(c.egress, " ") or "only what its machine allows")
+    table.insert(lines, c.archived and "    u restore · P purge" or "    <CR> open memory · e edit · d archive")
     table.insert(lines, "")
   end
   pinned.set_lines(buf, lines)
@@ -300,6 +320,17 @@ function M.select(name, win)
   if lnum then vim.api.nvim_win_set_cursor(0, { lnum, 2 }) end
 end
 
+-- A button on a brain in the browser: select it, then do what.
+function M.act(name, what, win)
+  M.select(name, win)
+  if selected ~= name then
+    selected = name
+    redraw()
+  end
+  local f = ({ memory = M.memory, edit = M.edit, archive = M.archive, restore = M.restore, purge = M.purge })[what]
+  if f then f() end
+end
+
 -- Memory -----------------------------------------------------------------------
 --
 -- One buffer per brain, its state in mem[buf]: what the Worker gave, which
@@ -385,7 +416,7 @@ local function render_memory(b)
     if #s.days == 0 then table.insert(lines, "  none") end
     for _, d in ipairs(s.days) do item(d.key, "  " .. d.day .. "  " .. entries(d.entries)) end
     table.insert(lines, "")
-    table.insert(lines, "Episodes")
+    table.insert(lines, "Sessions")
     if #s.episodes == 0 then table.insert(lines, "  none") end
     for _, e in ipairs(s.episodes) do
       item(e.key, string.format("  %-8s %-16s %-8s %-8s%s", e.ago or "", e.agent, e.trigger, e.size, e.pending and "  pending" or ""))

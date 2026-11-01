@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
@@ -27,20 +28,19 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
 // Brains (cloud/src/brains.ts): who agents work for, a panel each with its
-// memory and what its agents get. Tapped, one opens to its description and
-// egress, to edit or archive; an archived one, to restore or purge, its
-// name typed again. The Worker says when one changes, and the list is read
-// again.
+// title on the border, what it's for and its particulars as labelled rows.
+// Tapped, one opens in full, to edit or archive; an archived one, to restore
+// or purge, its name typed again. The Worker says when one changes, and the
+// list is read again.
 
 private val ABILITIES = listOf("chat")
 
-private fun counts(m: BrainMemory?) = m?.let {
-    listOfNotNull("${it.notes} notes", "${it.entries} entries", "${it.episodes} episodes", it.lastEpisode?.let { at -> ago(at) }).joinToString(" · ")
-}
+private fun plural(n: Int, one: String, many: String) = "${if (n >= 1000) "%.1fk".format(n / 1000.0) else "$n"} ${if (n == 1) one else many}"
 
 @Composable
 fun BrainsScreen(go: (Screen) -> Unit) {
@@ -95,7 +95,7 @@ fun BrainsScreen(go: (Screen) -> Unit) {
         Rule(Monokai.base01)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
             Spacer(Modifier.height(12.dp))
-            if (brains != null && shown.isEmpty()) Text(if (archived) "none archived" else "no brains", color = Monokai.base04)
+            if (brains != null && shown.isEmpty()) Text(if (archived) "None archived." else "No brains.", color = Monokai.base04)
             for (b in shown) {
                 BrainPanel(b, b.name == open) { open = if (open == b.name) null else b.name; confirm = null; typed = ""; error = null }
                 Spacer(Modifier.height(16.dp))
@@ -134,22 +134,59 @@ fun BrainsScreen(go: (Screen) -> Unit) {
 
 @Composable
 private fun BrainPanel(b: Brain, open: Boolean, tap: () -> Unit) {
-    val label = listOfNotNull(b.name, "default".takeIf { b.default }, b.archived?.let { "archived ${ago(it)}" }).joinToString(" · ")
-    Panel(label, Modifier.alpha(if (b.archived != null) 0.6f else 1f).clickable(role = Role.Button, onClick = tap)) {
+    val label = if (b.name == b.title.lowercase()) b.title else "${b.title}  ${b.name}"
+    val end = when {
+        b.archived != null -> "archived ${ago(b.archived)}"
+        b.default -> "● default"
+        else -> null
+    }
+    Panel(
+        label,
+        Modifier.alpha(if (b.archived != null) 0.6f else 1f).clickable(role = Role.Button, onClick = tap),
+        border = if (open) Monokai.cyan else Monokai.base02,
+        labelColor = if (open) Monokai.cyan else Monokai.base05,
+        end = end,
+        endColor = if (b.archived == null) Monokai.base05 else Monokai.base04,
+    ) {
         Column(Modifier.padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(b.title, color = if (open) Monokai.cyan else Monokai.base05, fontWeight = if (b.default) FontWeight.SemiBold else FontWeight.Normal)
-            Text(listOfNotNull(b.account ?: "no account", counts(b.memory)).joinToString(" · "), style = Small)
-            val holds = (b.credentials + b.abilities).joinToString(" ")
-            if (holds.isNotEmpty()) Text(holds, style = Small)
-            if (open) {
-                if (b.description.isNotEmpty()) Text(b.description, modifier = Modifier.padding(top = 6.dp))
-                if (b.egress.isNotEmpty()) {
-                    Text("egress", style = Small, modifier = Modifier.padding(top = 6.dp))
-                    for (h in b.egress) Text("  $h", style = Small)
-                }
-                Text(listOfNotNull("made ${ago(b.created)}", "changed ${ago(b.updated)}").joinToString(" · "), style = Small, modifier = Modifier.padding(top = 6.dp))
+            if (b.description.isNotEmpty()) Text(b.description, maxLines = if (open) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 6.dp))
+            val m = b.memory ?: BrainMemory()
+            Labelled("memory") {
+                if (m.notes + m.entries + m.episodes == 0) Text("empty", style = Small)
+                else Text("${plural(m.notes, "note", "notes")} · ${plural(m.entries, "log entry", "log entries")} · ${plural(m.episodes, "session", "sessions")}", style = Small.copy(color = Monokai.base05))
             }
+            m.lastEpisode?.let { Labelled("active") { Text(ago(it), style = Small.copy(color = Monokai.base05)) } }
+            Labelled("runs as") {
+                if (b.account != null) Text(b.account, style = Small.copy(color = Monokai.base05)) else Text("the machine's default account", style = Small)
+            }
+            if (b.credentials.isNotEmpty()) Labelled("holds") {
+                Column {
+                    Text(b.credentials.joinToString("  "), style = Small.copy(color = Monokai.base05))
+                    Text("its spawns wait for you", style = Small.copy(color = Monokai.orange))
+                }
+            }
+            if (b.abilities.isNotEmpty()) Labelled("can") { Text(b.abilities.joinToString("  "), style = Small.copy(color = Monokai.base05)) }
+            Labelled("reaches") {
+                when {
+                    b.egress.isEmpty() -> Text("only what its machine allows", style = Small)
+                    open || b.egress.size <= 2 -> Column { for (h in b.egress) Text(h, style = Small.copy(color = Monokai.base05)) }
+                    else -> Column {
+                        for (h in b.egress.take(2)) Text(h, style = Small.copy(color = Monokai.base05))
+                        Text("+${b.egress.size - 2} more", style = Small)
+                    }
+                }
+            }
+            if (open) Text(listOfNotNull("made ${ago(b.created)}", "changed ${ago(b.updated)}").joinToString(" · "), style = Small, modifier = Modifier.padding(top = 6.dp))
         }
+    }
+}
+
+// A label, dim, and its value beside it.
+@Composable
+private fun Labelled(label: String, value: @Composable () -> Unit) {
+    Row {
+        Text(label, style = Small, modifier = Modifier.width(64.dp))
+        value()
     }
 }
 

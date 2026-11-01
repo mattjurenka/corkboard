@@ -104,18 +104,32 @@ fun ticking(): androidx.compose.runtime.State<Int> {
     return state
 }
 
-// A box with its label set into the top border, like a TUI panel.
+// A box with its label set into the top border, like a TUI panel; end, if
+// any, at the border's other end.
 @Composable
-fun Panel(label: String, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+fun Panel(
+    label: String,
+    modifier: Modifier = Modifier,
+    border: Color = Monokai.base02,
+    labelColor: Color = Monokai.base04,
+    end: String? = null,
+    endColor: Color = Monokai.base04,
+    content: @Composable ColumnScope.() -> Unit,
+) {
     Box(modifier.padding(top = 8.dp)) {
         Column(
-            Modifier.fillMaxWidth().border(1.dp, Monokai.base02).padding(top = 14.dp, bottom = 8.dp),
+            Modifier.fillMaxWidth().border(1.dp, border).padding(top = 14.dp, bottom = 8.dp),
             content = content,
         )
         Text(
             label,
-            style = Small,
+            style = Small.copy(color = labelColor),
             modifier = Modifier.offset(x = 10.dp, y = (-8).dp).background(Monokai.base00).padding(horizontal = 6.dp),
+        )
+        if (end != null) Text(
+            end,
+            style = Small.copy(color = endColor),
+            modifier = Modifier.align(Alignment.TopEnd).offset(x = (-10).dp, y = (-8).dp).background(Monokai.base00).padding(horizontal = 6.dp),
         )
     }
 }
