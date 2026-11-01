@@ -9,6 +9,10 @@
 -- STOP of it, the only tools it may use are the ones that do. Only where
 -- something starts the next session from the handoff: a corkboard Neovim,
 -- or a fleet slot's task ($CORKBOARD_HANDOFF).
+--
+-- And while the session's avatar panel is open and not muted
+-- (corkboard.avatar), each prompt comes with a word that the reply will be
+-- heard, not read.
 
 local ok, input = pcall(vim.json.decode, io.read("a"))
 if not ok or type(input) ~= "table" then return end
@@ -28,6 +32,7 @@ if used and input.hook_event_name == "PostToolUse" and input.tool_name == "ToolS
   pcall(vim.fn.writefile, {}, missing)
 end
 if used and vim.uv.fs_stat(missing) then used = nil end
+local out
 if used then
   local limit = context.limit()
   local k = math.floor(used / 1000 + 0.5)
@@ -35,7 +40,6 @@ if used then
     .. " the goal, what's done and verified, what's left, and anything you learned that it would otherwise have to find again."
     .. " Then end your turn: corkboard clears this session and starts the next one from your handoff."
   local HANDOFF_TOOLS = { ToolSearch = true, mcp__corkboard__handoff = true }
-  local out
   if input.hook_event_name == "PreToolUse" and used >= limit * context.STOP and not HANDOFF_TOOLS[input.tool_name] then
     out = {
       hookSpecificOutput = {
@@ -53,7 +57,6 @@ if used then
       },
     }
   end
-  if out then io.write(vim.json.encode(out)) end
 end
 
 local tool = type(input.tool_name) == "string" and input.tool_name:match("^mcp__corkboard__(.+)$")
@@ -67,7 +70,20 @@ end
 
 local addr = os.getenv("NVIM")
 local buf = tonumber(os.getenv("CORKBOARD_BUF") or "")
-if not (addr and buf) then return end
+local chan = addr and buf and vim.F.npcall(vim.fn.sockconnect, "pipe", addr, { rpc = true }) or nil
+if chan == 0 then chan = nil end
+
+local HEARD = "The avatar panel is open on this session, so the text you end your turn with is read aloud to the user rather than read."
+  .. " Write it for the ear: plain talk in short sentences, the answer or outcome first, a few sentences unless they ask for more."
+  .. " Leave out markdown, lists, tables, code, file paths, URLs and long identifiers; say what a thing is instead (\"the bridge's speech route\")."
+  .. " The work itself, and what you pass to tools, is as usual."
+if chan and input.hook_event_name == "UserPromptSubmit"
+  and vim.F.npcall(vim.rpcrequest, chan, "nvim_exec_lua", "return require('corkboard.avatar').heard(...)", { buf }) then
+  local said = out and out.hookSpecificOutput.additionalContext
+  out = { hookSpecificOutput = { hookEventName = "UserPromptSubmit", additionalContext = said and said .. "\n\n" .. HEARD or HEARD } }
+end
+if out then io.write(vim.json.encode(out)) end
+if not chan then return end
 
 -- The card a corkboard MCP tool took or let go of: the first id in its
 -- result, which is the card's JSON when it worked (an error is plain text).
@@ -96,8 +112,6 @@ if input.hook_event_name == "PostToolUse" then
   wakeup = input.tool_name == "ScheduleWakeup" and args.stop ~= true
 end
 
-local chan = vim.F.npcall(vim.fn.sockconnect, "pipe", addr, { rpc = true })
-if not chan or chan == 0 then return end
 -- A notification, not a request: the session needn't wait on Neovim.
 pcall(vim.rpcnotify, chan, "nvim_exec_lua", "require('corkboard.agents').hook(...)", {
   {

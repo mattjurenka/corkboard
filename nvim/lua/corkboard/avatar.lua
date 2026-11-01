@@ -194,6 +194,13 @@ function M.changed(src)
   if panels[src] then push(src) end
 end
 
+-- Whether what the session says next is heard: its panel is open and not
+-- muted. The session hook asks, to have the reply written to be heard.
+function M.heard(src)
+  local a = panels[src]
+  return a ~= nil and not a.muted and vim.api.nvim_buf_is_valid(a.buf) and #vim.fn.win_findbuf(a.buf) > 0
+end
+
 function M.setup()
   vim.api.nvim_create_user_command("Avatar", M.toggle, { desc = "corkboard: a face for this tab's Claude Code session" })
 end
