@@ -141,7 +141,7 @@
           dontFixup = true;
           outputHashMode = "recursive";
           outputHash = {
-            x86_64-linux = "sha256-Mv/bAYY0hFsLa/RHebGFg8rUi4FvRWLNrGtCdmZcFnw=";
+            x86_64-linux = "sha256-CpRN9FzNzoVBpIZiuxuIjFFwbh3IZ6UXwumRhvrWIgw=";
           }.${pkgs.stdenv.hostPlatform.system} or pkgs.lib.fakeHash;
         };
 
@@ -164,6 +164,19 @@
           '';
           installPhase = "cp -r web/dist $out";
         };
+
+        # The avatar's voice on the GPU: Kokoro's fp16 model as
+        # bridge/kokoro-gpu.py patches it for ONNX Runtime's WebGPU EP.
+        speech-model = pkgs.runCommand "corkboard-speech-model" {
+          src = pkgs.fetchurl {
+            url = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/1939ad2a8e416c0acfeecc08a694d14ef25f2231/onnx/model_fp16.onnx";
+            hash = "sha256-ukUnqHS0KyHjX0aMENMm/f88f8jKwfhenrbA38NcM0o=";
+          };
+          nativeBuildInputs = [ (pkgs.python3.withPackages (p: [ p.onnx p.numpy ])) ];
+        } ''
+          mkdir $out
+          python3 -I ${./bridge/kokoro-gpu.py} $src $out/model.onnx
+        '';
 
         default = pkgs.stdenvNoCC.mkDerivation {
           pname = "corkboard";
@@ -199,7 +212,7 @@
             done
             chmod -R u+w $share/node_modules
             arch=${if pkgs.stdenv.hostPlatform.isAarch64 then "arm64" else "x64"}
-            ort=$share/node_modules/onnxruntime-node/bin/napi-v3
+            ort=$share/node_modules/onnxruntime-node/bin/napi-v6
             find $ort -mindepth 2 -maxdepth 2 ! -path "$ort/linux/$arch" -exec rm -r {} +
             # transformers.js wants sharp, for images, to be there; speech never calls it.
             mkdir -p $share/node_modules/sharp
@@ -209,6 +222,8 @@
               --add-flags $share/bridge/server.ts \
               --suffix PATH : ${pkgs.lib.makeBinPath [ pkgs.neovim pkgs.bun pkgs.ripgrep pkgs.fd ]} \
               --suffix CORKBOARD_PLUGINS : ${pluginPath pkgs} \
+              --set-default CORKBOARD_SPEECH_MODEL ${speech-model}/model.onnx \
+              --suffix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader ]} \
               ${pkgs.lib.optionalString (nvimWasm != null) "--set-default CORKBOARD_NVIM_WASM ${nvimWasm}/lib/nvim-wasm"}
             # A brain's vault into its memory in the Worker (bridge/memory-sync.ts).
             makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-memory-sync \
