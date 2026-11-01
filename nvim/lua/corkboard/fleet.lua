@@ -22,7 +22,7 @@ local blocks = {} -- the queue and each card, in order: { first, last } line num
 local selected
 local fleet -- { environments, spawns, machine } as the bridge answers
 local sessions = {} -- every page's, as the bridge last said
-local by = "machine" -- or "project"
+local by = "project" -- or "machine"
 local problem
 local following = false
 local asking -- { id, task }: x's "stop it?", until it's answered
