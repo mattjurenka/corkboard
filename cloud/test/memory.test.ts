@@ -329,10 +329,13 @@ describe("consolidation", () => {
     expect((await roll(2, `===MEMORY===\n${was}`)).status).toBe(409);
   });
 
-  it("is spawned from the alarm once the episodes are quiet, one at a time", async () => {
+  it("is spawned from the alarm once the episodes are quiet, one at a time, where a fleetd runs it", async () => {
     const pepper = await pepperToken();
     const templates = { coding: { needsApproval: true, memory: 4096, cores: 2, capNames: ["coding"] } };
-    expect((await call(owner, "PUT", "/api/fleet/environments/local", { templates })).status).toBe(200);
+    expect((await call(owner, "PUT", "/api/fleet/environments/local", { templates, jobs: ["consolidate"] })).status).toBe(200);
+    // Smaller, so it would be placed there, but its fleetd doesn't say it runs jobs.
+    const small = { "cloud-coding": { needsApproval: false, memory: 1536, cores: 1, capNames: ["coding"] } };
+    expect((await call(owner, "PUT", "/api/fleet/environments/cloud", { templates: small })).status).toBe(200);
     await call(pepper, "POST", "/memory/episodes", { session: "s1", transcript: line("user", "hello", at(5)) + "\n" });
     const spawns = async () => (await (await call(owner, "GET", "/api/spawns")).json<any[]>()).filter((s) => s.job === "consolidate");
 
@@ -345,7 +348,7 @@ describe("consolidation", () => {
     });
     await runDurableObjectAlarm(memoryStub());
     const [made] = await spawns();
-    expect(made).toMatchObject({ brain: "pepper", by: "memory", state: "queued", job: "consolidate" });
+    expect(made).toMatchObject({ brain: "pepper", by: "memory", state: "queued", job: "consolidate", environment: "local" });
     await runInDurableObject(memoryStub(), (_o, state) => state.storage.setAlarm(Date.now()));
     await runDurableObjectAlarm(memoryStub());
     expect(await spawns()).toHaveLength(1);

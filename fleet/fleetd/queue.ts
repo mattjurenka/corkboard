@@ -133,6 +133,8 @@ export class Queue {
       offer: m.offer ?? { memory: m.memoryBudget && m.memoryBudget - OVERHEAD, cores: null },
       egress: egressOf(m),
       bindings: Object.keys(m.bindings ?? {}),
+      // What its guests run instead of an agent (fleet/guest/slot.nix).
+      jobs: ["consolidate"],
       running,
     });
     this.told = running && told(running);

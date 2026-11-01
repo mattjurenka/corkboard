@@ -2,9 +2,10 @@
 // whoever asked, is a row in the user's object (user.ts) tied to a card, and
 // each environment's fleetd (fleet/fleetd) claims the ones for it.
 //
-//   PUT   /api/fleet/environments/:name      { templates, offer?, egress?, bindings?, running? }: what fleetd
-//                                            there can run, the most one VM there may have, what every slot
-//                                            may reach, the brains whose memory it mounts, and what runs
+//   PUT   /api/fleet/environments/:name      { templates, offer?, egress?, bindings?, jobs?, running? }: what
+//                                            fleetd there can run, the most one VM there may have, what every
+//                                            slot may reach, the brains whose memory it mounts, the Worker's
+//                                            jobs its slots know, and what runs
 //   GET   /api/fleet/environments            each environment and its templates
 //   DELETE /api/fleet/environments/:name     one no fleetd runs as any more
 //   GET   /api/spawns                        newest first: ?environment=, ?state=a,b, ?limit=
@@ -91,7 +92,18 @@ export type Running = {
 // for no more than its budget, or its cores.
 export type Offer = { memory: number | null; cores: number | null };
 // bindings: the brains whose memory its host mounts in their spawns' slots.
-export type Environment = { name: string; templates: Record<string, Template>; seen: string; offer?: Offer; egress?: Egress; bindings?: string[]; running?: Running };
+// jobs: the Worker's jobs (Spawn's job) its slots run; a fleetd that doesn't
+// say runs none, since its guests would start an agent instead.
+export type Environment = {
+  name: string;
+  templates: Record<string, Template>;
+  seen: string;
+  offer?: Offer;
+  egress?: Egress;
+  bindings?: string[];
+  jobs?: string[];
+  running?: Running;
+};
 
 // What the agent's tools are, brought by whoever spawns it: packages from the
 // guest's own nixpkgs, or a flake's devShell ("." is its repo's). The guest
@@ -259,7 +271,7 @@ export async function spawn(env: Env, user: string, by: string, input: SpawnInpu
   const fits = (e: Environment, t: Template) =>
     (!memory || !e.offer?.memory || Math.max(memory, t.memory) <= e.offer.memory) && (!cores || !e.offer?.cores || Math.max(cores, t.cores) <= e.offer.cores);
   const candidates = envs
-    .filter((e) => !asked || e.name === asked)
+    .filter((e) => (!asked || e.name === asked) && (!job || !!e.jobs?.includes(job)))
     .flatMap((e) =>
       Object.entries(e.templates)
         .filter(([name, t]) => (named ? name === named : needs.every((n) => t.capNames.includes(n))))
@@ -535,6 +547,10 @@ export async function fleetRoutes(request: Request, env: Env, props: Props, body
       if (input.bindings !== undefined) {
         if (!Array.isArray(input.bindings) || input.bindings.some((b) => typeof b !== "string" || !BRAIN.test(b))) throw new Invalid("bindings must be a list of brains' names");
         environment.bindings = [...new Set(input.bindings as string[])].slice(0, 64);
+      }
+      if (input.jobs !== undefined) {
+        if (!Array.isArray(input.jobs) || input.jobs.some((j) => typeof j !== "string" || !NAME.test(j))) throw new Invalid("jobs must be a list of jobs' names");
+        environment.jobs = [...new Set(input.jobs as string[])].slice(0, 16);
       }
       if (input.running !== undefined) environment.running = running(input.running);
       return json(await u.putEnvironment(environment));
