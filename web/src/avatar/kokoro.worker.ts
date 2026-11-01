@@ -1,7 +1,8 @@
 // Kokoro, the speech model, off the page's thread: given a sentence and a
 // voice, its audio (24kHz mono). The model comes from Hugging Face the
-// first time (about 90MB) and from the browser's cache after; on WebGPU
-// where there is one, else wasm.
+// first time (about 90MB) and from the browser's cache after; on wasm, since
+// ONNX Runtime's WebGPU gets some of Kokoro's ConvTransposes wrong (see
+// bridge/kokoro-gpu.py).
 
 import { KokoroTTS } from "kokoro-js";
 
@@ -9,9 +10,8 @@ const MODEL = "onnx-community/Kokoro-82M-v1.0-ONNX";
 
 let tts: Promise<KokoroTTS> | undefined;
 
-async function load() {
-  const gpu = "gpu" in navigator && (await (navigator as any).gpu.requestAdapter().catch(() => null));
-  return KokoroTTS.from_pretrained(MODEL, gpu ? { dtype: "fp32", device: "webgpu" } : { dtype: "q8", device: "wasm" });
+function load() {
+  return KokoroTTS.from_pretrained(MODEL, { dtype: "q8", device: "wasm" });
 }
 
 self.onmessage = async (e: MessageEvent<{ id: number; text: string; voice: string }>) => {

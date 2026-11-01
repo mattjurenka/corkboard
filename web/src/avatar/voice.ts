@@ -20,6 +20,9 @@ type Line = { text: string; from: string; clip?: Promise<Clip | null> };
 const CPS = 14;
 // Sentences longer than this are said in parts.
 const LONG = 200;
+// and ones longer than this a clause at a time where they can be, so the
+// first is heard sooner.
+const CLAUSE = 90;
 // The loudness is taken this many times a second.
 const LOUD_HZ = 60;
 // How many sentences are made ahead of the one playing.
@@ -40,7 +43,7 @@ export function speakable(md: string): string {
 
 export function sentences(md: string): string[] {
   const out: string[] = [];
-  for (const part of speakable(md).split(/(?<=[.!?:])\s+|\n+/)) {
+  for (const part of speakable(md).split(/(?<=[.!?:])\s+|\n+/).flatMap(clauses)) {
     let s = part.trim();
     if (!s) continue;
     while (s.length > LONG) {
@@ -57,6 +60,15 @@ export function sentences(md: string): string[] {
   return out;
 }
 
+function clauses(s: string): string[] {
+  if (s.length <= CLAUSE) return [s];
+  const out = [""];
+  for (const c of s.split(/(?<=[,;—])\s+/)) {
+    if (out[out.length - 1] && out[out.length - 1].length + c.length >= CLAUSE) out.push(c);
+    else out[out.length - 1] += (out[out.length - 1] && " ") + c;
+  }
+  return out;
+}
 
 // One worker and one audio context for every panel. The context starts
 // suspended until the page is clicked or typed in, as browsers require.
