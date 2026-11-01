@@ -1,7 +1,12 @@
 package app.corkboard
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -12,6 +17,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
@@ -23,11 +30,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -191,20 +200,78 @@ private fun Field(value: String, modifier: Modifier = Modifier, minHeight: Int =
     )
 }
 
-private fun words(s: String) = s.split(Regex("[\\s,]+")).filter { it.isNotEmpty() }
+private val LABEL = Regex("^[\\w.-]{1,64}$")
 
-// A new brain, or one to change. A change goes with the updated it was read
-// with; if the brain changed since, the form shows it as it is now.
+// A title as a name: lowercase, dashes, starting with a letter, at most 32.
+private fun slug(title: String) =
+    title.lowercase().replace(Regex("[^a-z0-9]+"), "-").replace(Regex("^[^a-z]+"), "").take(32).trimEnd('-')
+
+// A tag to tap, lit when it's picked.
+@Composable
+private fun Tag(text: String, on: Boolean, dashed: Boolean = false, onClick: () -> Unit) {
+    Box(
+        Modifier.heightIn(min = 44.dp)
+            .then(if (on) Modifier.background(Monokai.workTint) else Modifier)
+            .border(1.dp, if (on) Monokai.cyan else if (dashed) Monokai.base03 else Monokai.base02)
+            .clickable(role = Role.Button, onClick = onClick).padding(horizontal = 14.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, color = if (on) Monokai.base05 else Monokai.base04)
+    }
+}
+
+// Tags, wrapped, then + what, which turns into a field for one: done adds it.
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun Tags(what: String, onAdd: (String) -> Unit, tags: @Composable () -> Unit) {
+    var typing by remember { mutableStateOf<String?>(null) }
+    FlowRow(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        tags()
+        val t = typing
+        if (t == null) Tag("+ $what", on = false, dashed = true) { typing = "" }
+        else {
+            val add = {
+                if (LABEL.matches(t.trim())) onAdd(t.trim())
+                typing = null
+            }
+            Box(Modifier.heightIn(min = 44.dp).width(160.dp).border(1.dp, if (t.isEmpty() || LABEL.matches(t.trim())) Monokai.cyan else Monokai.orange), contentAlignment = Alignment.CenterStart) {
+                BasicTextField(
+                    value = t,
+                    onValueChange = { typing = it },
+                    singleLine = true,
+                    textStyle = LocalTextStyle.current,
+                    cursorBrush = SolidColor(Monokai.cyan),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { add() }),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                )
+            }
+        }
+    }
+}
+
+// A new brain, or one to change. The account and what it holds are tags
+// from the live brains', or one added; a new brain names itself from its
+// title and may start from another, taking its account, what it holds and
+// its abilities. A change goes with the updated it was read with; if the
+// brain changed since, the form shows it as it is now.
 @Composable
 fun EditBrainScreen(name: String?, back: () -> Unit) {
     val scope = rememberCoroutineScope()
     var was by remember { mutableStateOf<Brain?>(null) }
-    var loaded by remember { mutableStateOf(name == null) }
+    var others by remember { mutableStateOf<List<Brain>>(emptyList()) }
+    var loaded by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
+    var named by remember { mutableStateOf(false) }
+    var from by remember { mutableStateOf<String?>(null) }
     var title by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
-    var account by remember { mutableStateOf("") }
-    var credentials by remember { mutableStateOf("") }
+    var account by remember { mutableStateOf<String?>(null) }
+    var credentials by remember { mutableStateOf(listOf<String>()) }
     var abilities by remember { mutableStateOf(setOf<String>()) }
     var default by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
@@ -213,46 +280,91 @@ fun EditBrainScreen(name: String?, back: () -> Unit) {
         was = b
         title = b.title
         description = b.description
-        account = b.account.orEmpty()
-        credentials = b.credentials.joinToString(" ")
+        account = b.account
+        credentials = b.credentials
         abilities = b.abilities.toSet()
         default = b.default
     }
+    fun start(b: Brain?) {
+        from = b?.name
+        account = b?.account
+        credentials = b?.credentials ?: emptyList()
+        abilities = b?.abilities?.toSet() ?: emptySet()
+    }
     LaunchedEffect(name) {
-        if (name == null) return@LaunchedEffect
         try {
-            Cloud.brains(true).firstOrNull { it.name == name }?.let(::fill) ?: run { error = "no brain $name" }
+            others = Cloud.brains(false)
+            if (name != null) others.firstOrNull { it.name == name }?.let(::fill) ?: run { error = "no brain $name" }
         } catch (e: Exception) {
             error = e.message
         }
         loaded = true
     }
+    val accounts = (others.mapNotNull { it.account } + listOfNotNull(account)).distinct().sorted()
+    val labels = (others.flatMap { it.credentials } + credentials).distinct().sorted()
 
     Page {
         Header(if (name == null) "new brain" else "brain", name ?: "")
         Problem()
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
             Spacer(Modifier.height(12.dp))
-            if (name == null) {
-                Panel("name") { Field(newName) { newName = it.lowercase() } }
+            if (name == null && others.isNotEmpty()) {
+                Panel("start from") {
+                    PanelRow({ start(null) }) {
+                        Check(from == null)
+                        Text("blank")
+                    }
+                    for (b in others) PanelRow({ start(b) }) {
+                        Check(from == b.name)
+                        Text("like ${b.title}")
+                    }
+                }
                 Spacer(Modifier.height(16.dp))
             }
-            Panel("title") { Field(title) { title = it } }
+            Panel("title") {
+                Field(title) {
+                    title = it
+                    if (name == null && !named) newName = slug(it)
+                }
+            }
             Spacer(Modifier.height(16.dp))
-            Panel("description") { Field(description, minHeight = 88) { description = it } }
+            if (name == null) {
+                Panel("name") {
+                    Field(newName) {
+                        named = true
+                        newName = it.lowercase()
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+            }
+            Panel("about") { Field(description, minHeight = 88) { description = it } }
             Spacer(Modifier.height(16.dp))
-            Panel("account") { Field(account) { account = it.trim() } }
+            Panel("runs as") {
+                Tags("account", onAdd = { account = it }) {
+                    for (a in accounts) Tag(if (account == a) "● $a" else "○ $a", on = account == a) { account = a }
+                    Tag(if (account == null) "● machine default" else "○ machine default", on = account == null) { account = null }
+                }
+            }
             Spacer(Modifier.height(16.dp))
-            Panel("credentials") { Field(credentials) { credentials = it } }
+            Panel("holds") {
+                Tags("label", onAdd = { if (it !in credentials) credentials = credentials + it }) {
+                    for (l in labels) {
+                        val on = l in credentials
+                        Tag(if (on) "✓ $l" else "+ $l", on = on) { credentials = if (on) credentials - l else credentials + l }
+                    }
+                }
+                if (credentials.isNotEmpty()) Text(
+                    "agents need your OK to spawn it",
+                    style = Small.copy(color = Monokai.orange),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
             Spacer(Modifier.height(16.dp))
-            Panel("abilities") {
+            Panel("can") {
                 for (a in ABILITIES) PanelRow({ abilities = if (a in abilities) abilities - a else abilities + a }) {
                     Check(a in abilities)
                     Text(a)
                 }
-            }
-            Spacer(Modifier.height(16.dp))
-            Panel("default") {
                 PanelRow({ default = !default }) {
                     Check(default)
                     Text("default")
@@ -270,8 +382,8 @@ fun EditBrainScreen(name: String?, back: () -> Unit) {
                     name = name ?: newName.trim(),
                     title = title.trim(),
                     description = description.trim(),
-                    account = account.ifEmpty { null },
-                    credentials = words(credentials),
+                    account = account,
+                    credentials = credentials,
                     abilities = ABILITIES.filter { it in abilities },
                     default = default,
                     updated = was?.updated ?: "",

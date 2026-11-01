@@ -13,6 +13,21 @@ export type Ext = { __ext: number; id: number };
 
 // A toast in the editor's corner (corkboard.toast): pending until Neovim
 // says how it ended.
+// A brain as the form edits it (corkboard.brains fields()).
+export type BrainFields = {
+  name: string;
+  title: string;
+  description: string;
+  account: string | null;
+  credentials: string[];
+  abilities: string[];
+  default: boolean;
+  updated?: string;
+};
+// What a, or e on one, opens: the brain, none for a new one, the live
+// brains to pick accounts and labels from or start from, and the abilities.
+export type BrainFormData = { brain?: BrainFields; brains: BrainFields[]; abilities: string[] };
+
 export type Toast = { id: string; kind: "pending" | "done" | "error"; text: string };
 
 // A window that shows a view buffer, or a float, in grid cells
@@ -104,6 +119,8 @@ export type State = {
   away: Away | null;
   // The tool picker (corkboard.picker.tools), while it's open.
   tools: { leader: string; tools: { text: string; hint: string }[] } | null;
+  // The brain form (corkboard.brains), while it's open.
+  brainForm: BrainFormData | null;
   // Open project (corkboard.picker), while it's open. here: this window has a
   // project, so the one chosen opens in a window of its own.
   projects: { here: boolean } | null;
@@ -135,6 +152,7 @@ let state: State = {
   keyboard: false,
   away: null,
   tools: null,
+  brainForm: null,
   projects: null,
   windows: [],
   toasts: [],

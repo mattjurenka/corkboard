@@ -7,6 +7,7 @@
 // keys an on-screen keyboard lacks, and the keyboard itself.
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { BrainForm } from "@/components/BrainForm";
 import { Away } from "@/components/Away";
 import { Panels } from "@/components/Panels";
 import { Projects } from "@/components/Projects";
@@ -35,7 +36,7 @@ export function App() {
   const gutter = focus ? `max(0px, calc((100% - var(--cell-w) * ${focus.width} - 1px) / 2))` : undefined;
   // The drawer closes once it has done its job: another tab, or a picker.
   const tab = useStore((s) => s.tabs?.current.id);
-  const picking = useStore((s) => !!s.tools || !!s.projects);
+  const picking = useStore((s) => !!s.tools || !!s.projects || !!s.brainForm);
   useEffect(() => {
     if (store.get().drawer) store.set({ drawer: false });
   }, [tab, picking]);
@@ -103,6 +104,7 @@ export function App() {
       )}
       <Tools />
       <Projects />
+      <BrainForm />
       <Away />
     </div>
   );

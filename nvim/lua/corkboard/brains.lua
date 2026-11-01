@@ -5,8 +5,8 @@
 -- The view is the agent://brains buffer, fourth among the tabs after the
 -- fleet: a plain listing with the browser's HTML drawn over it. The cursor's
 -- line selects a brain. <CR> opens its memory beside the listing; a makes
--- one and e edits it, in a buffer of its fields written with :w; d archives
--- it (asked first), u restores it, and P purges an archived one, its name
+-- one and e edits it, in the page's form (in a bare Neovim, a buffer of its
+-- fields written with :w); d archives it (asked first), u restores it, and P purges an archived one, its name
 -- typed again. It follows the user's socket, which says when a brain changes.
 --
 -- A brain's memory is agent://brains/<name>, drawn over by the browser too:
@@ -266,11 +266,48 @@ local function edit(b)
   vim.api.nvim_win_set_buf(0, e)
 end
 
-function M.new() edit(nil) end
+-- On the page, a form of its own (web/src/components/BrainForm.tsx) over
+-- the view: accounts and labels are picked from the live brains', and a new
+-- brain may start from one of them. It saves with save().
+local ABILITIES = { "chat" }
+
+local function fields(b)
+  return {
+    name = b.name, title = b.title, description = nil_if_null(b.description) or "", account = nil_if_null(b.account),
+    credentials = list(b.credentials), abilities = list(b.abilities), default = b.default == true, updated = nil_if_null(b.updated),
+  }
+end
+
+local function form(b)
+  local corkboard = require("corkboard")
+  if not corkboard.attached() then return edit(b) end
+  local live = vim.iter(brains or {}):filter(function(x) return not nil_if_null(x.archived) end):map(fields):totable()
+  corkboard.notify("corkboard.brain_form", { brain = b and fields(b) or nil, brains = live, abilities = ABILITIES })
+end
+
+-- The form's save: name, and the updated it was read with, for a change;
+-- neither for a new one. What came of it: { name }, { stale, problem } with
+-- the brain as it is now, or { problem }.
+function M.save(name, updated, f)
+  name = nil_if_null(name)
+  local ok, res
+  if name then
+    ok, res = pcall(cloud().call, "brains_update", name, vim.tbl_extend("force", f, { updated = updated }))
+  else
+    ok, res = pcall(cloud().call, "brains_create", f)
+  end
+  if not ok then return { problem = tostring(res) } end
+  if res.stale then return { stale = fields(res.stale), problem = (nil_if_null(res.error) or "it changed since") .. "; this is it now" } end
+  selected = res.name or name
+  reload()
+  return { name = selected }
+end
+
+function M.new() form(nil) end
 
 function M.edit()
   local b = selected and find(selected)
-  if b then edit(b) end
+  if b then form(b) end
 end
 
 function M.archive()
