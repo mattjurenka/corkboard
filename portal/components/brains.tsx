@@ -156,7 +156,7 @@ function BrainCard({ brain: b, onChanged, onEdit }: { brain: Brain; onChanged: (
           {!!b.credentials.length && (
             <Field label="holds">
               {tags(b.credentials)}
-              <span className="text-review">its spawns wait for you</span>
+              <span className="text-review">agents need your OK to spawn it</span>
             </Field>
           )}
           {!!b.abilities.length && <Field label="can">{tags(b.abilities)}</Field>}

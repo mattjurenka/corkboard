@@ -122,7 +122,7 @@ local function render_text()
     end
     if m.last then field("active", m.last) end
     field("runs as", c.account or "the machine's default account")
-    if #c.credentials > 0 then field("holds", table.concat(c.credentials, " ") .. "  its spawns wait for you") end
+    if #c.credentials > 0 then field("holds", table.concat(c.credentials, " ") .. "  agents need your OK to spawn it") end
     if #c.abilities > 0 then field("can", table.concat(c.abilities, " ")) end
     table.insert(lines, c.archived and "    u restore · P purge" or "    <CR> open memory · e edit · d archive")
     table.insert(lines, "")

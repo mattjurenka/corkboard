@@ -162,7 +162,7 @@ private fun BrainPanel(b: Brain, open: Boolean, tap: () -> Unit) {
             if (b.credentials.isNotEmpty()) Labelled("holds") {
                 Column {
                     Text(b.credentials.joinToString("  "), style = Small.copy(color = Monokai.base05))
-                    Text("its spawns wait for you", style = Small.copy(color = Monokai.orange))
+                    Text("agents need your OK to spawn it", style = Small.copy(color = Monokai.orange))
                 }
             }
             if (b.abilities.isNotEmpty()) Labelled("can") { Text(b.abilities.joinToString("  "), style = Small.copy(color = Monokai.base05)) }

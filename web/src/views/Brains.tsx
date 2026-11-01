@@ -129,7 +129,7 @@ function BrainCard({
         {c.credentials.length > 0 && (
           <Field label="holds">
             <Tags items={c.credentials} />
-            <span className="text-review">its spawns wait for you</span>
+            <span className="text-review">agents need your OK to spawn it</span>
           </Field>
         )}
         {c.abilities.length > 0 && (
