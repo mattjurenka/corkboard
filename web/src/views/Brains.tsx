@@ -19,7 +19,6 @@ type Card = {
   archived?: string;
   credentials: string[];
   abilities: string[];
-  egress: string[];
   memory: { notes: number; entries: number; episodes: number; last?: string };
 };
 type BrainsState = { cards: Card[]; selected?: string; asking?: { name: string }; problem?: string; loading?: boolean };
@@ -90,7 +89,6 @@ function BrainCard({
 }) {
   const m = c.memory;
   const empty = m.notes + m.entries + m.episodes === 0;
-  const reach = on ? c.egress : c.egress.slice(0, 2);
   const button = (k: string, what: Act, label: string, danger?: boolean) => (
     <Button k={k} lit={on} danger={danger} onClick={() => onAct(c.name, what)}>
       {label}
@@ -139,16 +137,6 @@ function BrainCard({
             <Tags items={c.abilities} />
           </Field>
         )}
-        <Field label="reaches">
-          {c.egress.length === 0 ? (
-            <span className="text-muted-foreground">only what its machine allows</span>
-          ) : (
-            <span className={on ? "break-words" : "truncate"}>
-              {reach.join("  ")}
-              {reach.length < c.egress.length && <span className="text-muted-foreground">  +{c.egress.length - reach.length} more</span>}
-            </span>
-          )}
-        </Field>
       </dl>
       <p className="mt-half flex flex-wrap gap-x-2ch border-t pt-half">
         {c.archived ? (

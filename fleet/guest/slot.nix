@@ -10,8 +10,8 @@
 #   FLEET_TAP           its tap device, FLEET_MAC the MAC it has there
 #   FLEET_MEMORY        MiB, and FLEET_CORES, if not the template's
 #   QEMU_KERNEL_PARAMS  fleet.address=<guest>/<prefix> fleet.gateway=<host>,
-#                       which fleet-net puts on eth0 and in /etc/hosts as
-#                       fleet-gateway, where the proxy is
+#                       which fleet-net puts on eth0, as its default route
+#                       and in /etc/hosts as fleet-gateway
 #
 # The task comes in and the result goes out the way they do for every agent
 # VM here: a read-only share that fleetd fills before it starts the slot,
@@ -51,25 +51,15 @@
 # binding's `shares`), writable where the binding says, and the same for
 # every agent of it.
 #
-# Egress is the slot's allowlist, through the filtering proxy on its
-# gateway; there is no resolver and no route, as for Pepper.
+# Egress is the public internet, routed and NATed by the host, whose
+# firewall keeps everything private (its LAN, the host itself) out of reach.
 { template, ownerUid ? null, brain ? null, shares ? { }, corkboardHost ? "portal.corkboard.fyi" }:
 { config, pkgs, lib, modulesPath, ... }:
 let
-  proxyUrl = "http://fleet-gateway:8888";
   memory = toString config.virtualisation.memorySize;
   cores = toString config.virtualisation.cores;
-  proxyEnv = {
-    HTTP_PROXY = proxyUrl;
-    HTTPS_PROXY = proxyUrl;
-    http_proxy = proxyUrl;
-    https_proxy = proxyUrl;
-    NO_PROXY = "localhost,127.0.0.1";
-    no_proxy = "localhost,127.0.0.1";
-  };
-
-  # Claude Code features whose hosts are not on any allowlist, off, so they
-  # never start a request the proxy will refuse.
+  # Claude Code features a spawned agent has no use for: claude.ai's MCP
+  # servers, artifacts, telemetry, and updating itself (Nix does that).
   claudeCodeEnv = {
     ENABLE_CLAUDEAI_MCP_SERVERS = "false";
     CLAUDE_CODE_DISABLE_ARTIFACT = "1";
@@ -77,7 +67,7 @@ let
     DISABLE_AUTOUPDATER = "1";
   };
 
-  env = proxyEnv // claudeCodeEnv;
+  env = claudeCodeEnv;
 
   memoryHooks = import ../memory-hooks.nix {
     inherit pkgs lib;
@@ -245,6 +235,7 @@ in
         fi
         ip link set eth0 up
         ip addr replace "$address" dev eth0
+        ip route replace default via "$gateway" dev eth0
         echo "$gateway fleet-gateway" >> /etc/hosts
       '';
     };
@@ -303,7 +294,7 @@ in
     hostName = "agent";
     usePredictableInterfaceNames = false;
     useDHCP = false;
-    nameservers = lib.mkForce [ ];
+    nameservers = [ "1.1.1.1" "9.9.9.9" ];
 
     # Its one link is the host's tap, so ssh from there and nothing else.
     firewall.enable = true;

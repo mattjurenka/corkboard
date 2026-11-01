@@ -35,7 +35,7 @@ const TEMPLATES = {
 };
 // What every slot in local may reach: Pepper's hosts, and Microsoft's.
 const EGRESS = { open: false, domains: ["portal.corkboard.fyi", "oauth2.googleapis.com", "www.googleapis.com", "gmail.googleapis.com"], suffixes: ["microsoft.com"] };
-const WORK = { name: "work", title: "Stable", account: "work", credentials: ["graph"], egress: ["graph.microsoft.com"] };
+const WORK = { name: "work", title: "Stable", account: "work", credentials: ["graph"] };
 
 beforeEach(async () => {
   owner = await ownerToken();
@@ -93,20 +93,6 @@ describe("spawning", () => {
     await send("DELETE", "/api/brains/work");
     expect((await send("POST", "/api/spawns", { template: "coding", brain: "work", task: "x" })).body.error).toContain("no brain work");
     expect((await send("POST", "/api/spawns", { template: "coding", brain: "pepper", task: "x", packages: ["jq"] })).body.error).toContain("for no brain");
-  });
-
-  it("goes only where every slot reaches what the brain does", async () => {
-    await send("POST", "/api/brains", { ...WORK, egress: ["graph.microsoft.com", "mail.example.com"] });
-    expect((await send("POST", "/api/spawns", { brain: "work", task: "x" })).body.error).toBe(
-      "the work brain reaches hosts no slot there may: local lacks mail.example.com",
-    );
-    // An environment that reaches them is where it goes.
-    await send("PUT", "/api/fleet/environments/cloud", { templates: TEMPLATES, egress: { open: true, domains: [], suffixes: [] } });
-    expect((await send("POST", "/api/spawns", { brain: "work", task: "x" })).body.environment).toBe("cloud");
-    // One whose fleetd doesn't say what its slots reach runs none.
-    await send("PUT", "/api/fleet/environments/old", { templates: TEMPLATES });
-    expect((await send("POST", "/api/spawns", { brain: "pepper", task: "x", environment: "old" })).body.error).toContain("predates brains");
-    expect((await send("POST", "/api/spawns", { task: "x", environment: "old" })).status).toBe(201);
   });
 
   it("lets a brain spawn for itself or for no brain, and holds one that holds credentials", async () => {

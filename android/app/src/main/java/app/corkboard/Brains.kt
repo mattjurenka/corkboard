@@ -166,16 +166,6 @@ private fun BrainPanel(b: Brain, open: Boolean, tap: () -> Unit) {
                 }
             }
             if (b.abilities.isNotEmpty()) Labelled("can") { Text(b.abilities.joinToString("  "), style = Small.copy(color = Monokai.base05)) }
-            Labelled("reaches") {
-                when {
-                    b.egress.isEmpty() -> Text("only what its machine allows", style = Small)
-                    open || b.egress.size <= 2 -> Column { for (h in b.egress) Text(h, style = Small.copy(color = Monokai.base05)) }
-                    else -> Column {
-                        for (h in b.egress.take(2)) Text(h, style = Small.copy(color = Monokai.base05))
-                        Text("+${b.egress.size - 2} more", style = Small)
-                    }
-                }
-            }
             if (open) Text(listOfNotNull("made ${ago(b.created)}", "changed ${ago(b.updated)}").joinToString(" · "), style = Small, modifier = Modifier.padding(top = 6.dp))
         }
     }
@@ -215,7 +205,6 @@ fun EditBrainScreen(name: String?, back: () -> Unit) {
     var description by remember { mutableStateOf("") }
     var account by remember { mutableStateOf("") }
     var credentials by remember { mutableStateOf("") }
-    var egress by remember { mutableStateOf("") }
     var abilities by remember { mutableStateOf(setOf<String>()) }
     var default by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
@@ -226,7 +215,6 @@ fun EditBrainScreen(name: String?, back: () -> Unit) {
         description = b.description
         account = b.account.orEmpty()
         credentials = b.credentials.joinToString(" ")
-        egress = b.egress.joinToString("\n")
         abilities = b.abilities.toSet()
         default = b.default
     }
@@ -257,8 +245,6 @@ fun EditBrainScreen(name: String?, back: () -> Unit) {
             Spacer(Modifier.height(16.dp))
             Panel("credentials") { Field(credentials) { credentials = it } }
             Spacer(Modifier.height(16.dp))
-            Panel("egress") { Field(egress, minHeight = 64) { egress = it } }
-            Spacer(Modifier.height(16.dp))
             Panel("abilities") {
                 for (a in ABILITIES) PanelRow({ abilities = if (a in abilities) abilities - a else abilities + a }) {
                     Check(a in abilities)
@@ -286,7 +272,6 @@ fun EditBrainScreen(name: String?, back: () -> Unit) {
                     description = description.trim(),
                     account = account.ifEmpty { null },
                     credentials = words(credentials),
-                    egress = words(egress),
                     abilities = ABILITIES.filter { it in abilities },
                     default = default,
                     updated = was?.updated ?: "",

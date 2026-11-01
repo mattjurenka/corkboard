@@ -527,7 +527,6 @@ const BRAIN_FIELDS = {
   description: str("What it's for"),
   account: str("The Claude account its agents run as"),
   credentials: strings("What it holds, as labels (github, google): a brain spawning with any waits for the user"),
-  egress: strings("Hosts its agents may reach"),
   abilities: strings("Tools beyond memory: chat (the chat with the user)"),
   default: { type: "boolean", description: "The brain the user's own sessions remember in" },
 };

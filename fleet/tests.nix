@@ -10,7 +10,6 @@ let
       pepper = { };
       work.shares.vault = { source = "/home/me/vault"; target = "/mnt/vault"; writable = true; };
     };
-    egress = [ "api.anthropic.com" ];
     capabilities = {
       coding = { memory = 4096; cores = 2; egress = [ "github.com" ]; targets = [ "vm" "oci" ]; };
       mail = { egress = [ "gmail.googleapis.com" ]; credentials = [ "google" ]; targets = [ "vm" "oci" ]; };
@@ -98,14 +97,6 @@ let
           resident = { capabilities = [ "coding" ]; environments = [ "local" ]; };
         };
       })).nixosConfigurations == [ "c+work@slot" "c@slot" "resident" ];
-
-    slotEgressIsEverySpawnableTemplatesAndTheBrains =
-      (mkFleet (base // {
-        templates = {
-          c = { capabilities = [ "coding" ]; environments = [ "local" ]; spawnable = true; };
-          notSpawned = { capabilities = [ "mail" ]; environments = [ "local" ]; };
-        };
-      })).slotEgress == [ "portal.corkboard.fyi" "github.com" "api.anthropic.com" ];
 
     bindingsListTheirShares =
       (fleet { }).bindings == { pepper.shares = [ ]; work.shares = [ "vault" ]; };

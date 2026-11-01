@@ -264,7 +264,6 @@ data class Brain(
     val description: String = "",
     val account: String? = null,
     val credentials: List<String> = emptyList(),
-    val egress: List<String> = emptyList(),
     val abilities: List<String> = emptyList(),
     val default: Boolean = false,
     val created: String = "",

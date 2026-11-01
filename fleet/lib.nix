@@ -67,10 +67,6 @@ let
       # passes uids through, so the guest's user has to be this uid to write
       # to the outbox or a brain's memory.
     , ownerUid ? null
-      # Hosts every slot may reach besides its templates': what the brains
-      # spawned here reach (their records' egress), since a slot's filter is
-      # fixed when its host is built.
-    , egress ? [ ]
       # The installing flake's, so guests are built from its nixpkgs.
     , nixosSystem ? null
       # corkboard's Worker: every spawned agent reports to its card there,
@@ -189,11 +185,6 @@ let
         (_: t: checked (nixosSystem { modules = t.modules ++ [ (guestCheck t) ]; }))
         (lib.filterAttrs (_: t: runsAsVm t && !t.spawnable) resolved)
       // slotGuests;
-
-      # Every host a slot may need to reach: corkboard's Worker, the union
-      # of the spawnable templates' egress, and the brains', for the slots'
-      # allowlist.
-      slotEgress = unique ([ corkboardHost ] ++ concatMap (t: t.egress) (lib.attrValues (lib.filterAttrs (_: t: t.spawnable) resolved)) ++ egress);
     };
 
   # Capabilities corkboard provides, for an installing flake to use as they

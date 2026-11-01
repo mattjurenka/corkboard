@@ -262,7 +262,6 @@ object Cloud {
         put("description", b.description)
         put("account", b.account?.let { kotlinx.serialization.json.JsonPrimitive(it) } ?: JsonNull)
         put("credentials", json.encodeToJsonElement(b.credentials))
-        put("egress", json.encodeToJsonElement(b.egress))
         put("abilities", json.encodeToJsonElement(b.abilities))
         put("default", b.default)
     }

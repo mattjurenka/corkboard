@@ -27,7 +27,7 @@ let
 
   fleet = fleetLib.mkFleet {
     inherit nixosSystem;
-    inherit (cfg) bindings egress corkboardHost;
+    inherit (cfg) bindings corkboardHost;
     capabilities = {
       # Every agent is Claude Code. Its package is the host's to give
       # (guestModules); these are the hosts it talks to.
@@ -54,8 +54,10 @@ in
   imports = [
     ./host.nix
     (lib.mkRemovedOptionModule [ "services" "corkboard" "fleet" "brains" ] ''
-      A brain is corkboard's now (its Brains tab), with its account, credentials and egress.
-      What stays here: bindings.<brain>.shares for its memory, and egress for the hosts its agents reach.'')
+      A brain is corkboard's now (its Brains tab), with its account and credentials.
+      What stays here: bindings.<brain>.shares for its memory.'')
+    (lib.mkRemovedOptionModule [ "services" "corkboard" "fleet" "egress" ] ''
+      Every slot reaches the whole public internet now, so there is no list of hosts to keep.'')
   ];
 
   options.services.corkboard.fleet = with lib; {
@@ -147,17 +149,6 @@ in
       '';
     };
 
-    egress = mkOption {
-      type = types.listOf types.str;
-      default = [ ];
-      example = [ "graph.microsoft.com" ];
-      description = ''
-        Hosts every slot may reach besides its templates': the brains'
-        egress. A spawn for a brain that reaches a host the slots can't is
-        refused, not run with less.
-      '';
-    };
-
     defaultAccount = mkOption {
       type = types.nullOr types.str;
       default = null;
@@ -186,8 +177,8 @@ in
       instances = lib.mapAttrs
         (_: _: {
           slot = true;
-          egress = "allowlist";
-          allowedDomains = fleet.slotEgress;
+          # The public internet, and nothing private (host.nix).
+          egress = "open";
           sshLogin = true;
           memoryMax = largest + 1536;
         })

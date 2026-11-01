@@ -12,7 +12,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { BoardInfo, Result } from "./board";
 import { type Dump, dump, restore } from "./dump";
 import { type Environment, type Spawn, type SpawnReport, FINAL, type SpawnState } from "./fleet";
-import { type Brain, PEPPER } from "./brains";
+import { type Brain, brainOf, PEPPER } from "./brains";
 import {
   type Block,
   type ChatMessage,
@@ -77,13 +77,13 @@ export class User extends DurableObject {
     return this.sql
       .exec("SELECT doc FROM brains ORDER BY name")
       .toArray()
-      .map((r) => JSON.parse(r.doc as string) as Brain)
+      .map((r) => brainOf(r.doc as string))
       .filter((b) => archived || !b.archived);
   }
 
   brain(name: string): Brain | undefined {
     const row = this.sql.exec("SELECT doc FROM brains WHERE name = ?", name).toArray()[0];
-    return row ? JSON.parse(row.doc as string) : undefined;
+    return row ? brainOf(row.doc as string) : undefined;
   }
 
   // The one your own sessions work in, if there is one.

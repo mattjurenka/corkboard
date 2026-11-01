@@ -190,3 +190,11 @@ which fleetd boots for its spawns. MCP: `brain` on `spawn_agent`/`start_session`
 - **Abilities:** generalised; Pepper's chat tools are the `chat` ability, the only one so far.
 - **Default brain:** one you pick (Pepper, seeded so); with none, the memory tools say so.
 - **The view:** a Neovim tab and a page in the portal, and the Android app's tab.
+
+**Changed 2026-11-01: no egress.** Every slot is `egress = "open"` (the public internet, nothing
+private: host.nix's forward rules and NAT), with a default route and public resolvers in the guest
+and no proxy. A brain has no `egress` (dropped from the record, API, MCP tools and views; stored
+ones are stripped on read, `brainOf`), the Worker no longer places a brain's spawn by what slots
+reach, and `services.corkboard.fleet.egress` is a removed option. Decided by the user over keeping
+an allowlist: an injected agent beside a brain's credentials can now send them anywhere; the
+approval of a brain's own spawns is what's left of that guard.

@@ -73,7 +73,7 @@ local function state()
     table.insert(cards, {
       name = b.name, title = b.title, description = nil_if_null(b.description), account = nil_if_null(b.account),
       default = b.default or nil, archived = nil_if_null(b.archived) and ago(b.archived) or nil,
-      credentials = list(b.credentials), abilities = list(b.abilities), egress = list(b.egress),
+      credentials = list(b.credentials), abilities = list(b.abilities),
       memory = { notes = m.notes or 0, entries = m.entries or 0, episodes = m.episodes or 0, last = ago(nil_if_null(m.lastEpisode)) },
     })
   end
@@ -124,7 +124,6 @@ local function render_text()
     field("runs as", c.account or "the machine's default account")
     if #c.credentials > 0 then field("holds", table.concat(c.credentials, " ") .. "  its spawns wait for you") end
     if #c.abilities > 0 then field("can", table.concat(c.abilities, " ")) end
-    field("reaches", #c.egress > 0 and table.concat(c.egress, " ") or "only what its machine allows")
     table.insert(lines, c.archived and "    u restore · P purge" or "    <CR> open memory · e edit · d archive")
     table.insert(lines, "")
   end
@@ -189,7 +188,7 @@ end
 -- A brain as lines, `key: value`, lists comma-separated, the description
 -- last and as long as it likes. :w makes it (a new one) or changes it.
 
-local FIELDS = { "name", "title", "account", "default", "credentials", "abilities", "egress" }
+local FIELDS = { "name", "title", "account", "default", "credentials", "abilities" }
 
 local function to_lines(b)
   local out = {}
@@ -221,7 +220,7 @@ local function from_lines(lines)
   local out = { name = b.name, title = b.title, description = vim.trim(table.concat(desc, "\n")) }
   out.account = (b.account and b.account ~= "") and b.account or vim.NIL
   out.default = b.default == "true"
-  for _, k in ipairs({ "credentials", "abilities", "egress" }) do
+  for _, k in ipairs({ "credentials", "abilities" }) do
     out[k] = vim.iter(vim.split(b[k] or "", ",")):map(vim.trim):filter(function(x) return x ~= "" end):totable()
   end
   return out
@@ -229,7 +228,7 @@ end
 
 local function edit(b)
   local new = b == nil
-  b = b or { name = "", title = "", default = false, credentials = {}, abilities = {}, egress = {} }
+  b = b or { name = "", title = "", default = false, credentials = {}, abilities = {} }
   local e = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_name(e, "agent://brain/" .. (new and "new" or b.name))
   vim.bo[e].buftype = "acwrite"

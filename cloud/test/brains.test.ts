@@ -48,9 +48,9 @@ describe("brains", () => {
   });
 
   it("are made, read, changed against their version, and named for good", async () => {
-    const made = await send("POST", "/api/brains", { name: "work", title: "Stable", account: "work", credentials: ["github"], egress: ["API.github.com"] });
+    const made = await send("POST", "/api/brains", { name: "work", title: "Stable", account: "work", credentials: ["github"] });
     expect(made.status).toBe(201);
-    expect(made.body).toMatchObject({ name: "work", default: false, egress: ["api.github.com"], abilities: [] });
+    expect(made.body).toMatchObject({ name: "work", default: false, abilities: [] });
     expect((await send("POST", "/api/brains", { name: "work", title: "Again" })).status).toBe(409);
     expect((await send("POST", "/api/brains", { name: "Work!", title: "x" })).status).toBe(400);
     expect((await send("POST", "/api/brains", { name: "x", title: "x", abilities: ["fly"] })).status).toBe(400);

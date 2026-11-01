@@ -160,7 +160,6 @@ function BrainCard({ brain: b, onChanged, onEdit }: { brain: Brain; onChanged: (
             </Field>
           )}
           {!!b.abilities.length && <Field label="can">{tags(b.abilities)}</Field>}
-          <Field label="reaches">{b.egress.length ? b.egress.join("  ") : <span className="text-dim">only what its machine allows</span>}</Field>
         </div>
         {problem && <p className="text-blocked">{problem}</p>}
         <div className="mt-[6px] flex flex-wrap items-center gap-x-[2ch] border-t border-rule pt-[4px]">
@@ -228,7 +227,7 @@ function BrainCard({ brain: b, onChanged, onEdit }: { brain: Brain; onChanged: (
 
 const words = (s: string) => s.split(/[\s,]+/).filter(Boolean)
 
-type Draft = { name: string; title: string; description: string; account: string; credentials: string; egress: string; chat: boolean; default: boolean }
+type Draft = { name: string; title: string; description: string; account: string; credentials: string; chat: boolean; default: boolean }
 
 const draftOf = (b: Brain | null): Draft => ({
   name: b?.name ?? "",
@@ -236,7 +235,6 @@ const draftOf = (b: Brain | null): Draft => ({
   description: b?.description ?? "",
   account: b?.account ?? "",
   credentials: b?.credentials.join(" ") ?? "",
-  egress: b?.egress.join(" ") ?? "",
   chat: b?.abilities.includes("chat") ?? false,
   default: b?.default ?? false,
 })
@@ -258,7 +256,6 @@ function BrainForm({ brain, onClose, onSaved }: { brain: Brain | null; onClose: 
       description: d.description,
       account: d.account.trim() || null,
       credentials: words(d.credentials),
-      egress: words(d.egress),
       abilities: d.chat ? ["chat"] : [],
       default: d.default,
     }
@@ -306,7 +303,6 @@ function BrainForm({ brain, onClose, onSaved }: { brain: Brain | null; onClose: 
           )}
           {row("account", <Input value={d.account} onChange={(e) => set("account", e.target.value)} autoComplete="off" spellCheck={false} className={input} />)}
           {row("holds", <Input value={d.credentials} onChange={(e) => set("credentials", e.target.value)} placeholder="github google" autoComplete="off" spellCheck={false} className={input} />)}
-          {row("egress", <Input value={d.egress} onChange={(e) => set("egress", e.target.value)} placeholder="api.github.com" autoComplete="off" spellCheck={false} className={input} />)}
           <div className="flex gap-[2ch] pl-[13ch]">
             <label className="flex cursor-pointer items-center gap-[1ch]">
               <input type="checkbox" checked={d.chat} onChange={(e) => set("chat", e.target.checked)} />

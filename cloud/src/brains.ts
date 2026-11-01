@@ -1,11 +1,12 @@
 // Brains as data (.agent/plans/brains.md): who agents work for, as rows in
 // the user's object (user.ts) rather than a constant. A brain is its memory
-// (memory.ts, one object per `<user>/<name>`), the Claude account and
-// egress its spawned agents get (fleet.ts), what it holds, and the tools
-// beyond memory its agents may use. Every user starts with Pepper.
+// (memory.ts, one object per `<user>/<name>`), the Claude account its
+// spawned agents run as (fleet.ts), what it holds, and the tools beyond
+// memory its agents may use. Every user starts with Pepper. Its agents
+// reach the whole public internet, as every slot does.
 //
 //   GET    /api/brains                  every brain, each with its memory's counts; ?archived=1 too
-//   POST   /api/brains                  { name, title, description?, account?, credentials?, egress?,
+//   POST   /api/brains                  { name, title, description?, account?, credentials?,
 //                                          abilities?, default? }
 //   GET    /api/brains/:name
 //   PATCH  /api/brains/:name            { updated, ...fields }: 409 + the brain on a stale updated
@@ -31,7 +32,6 @@ export type Brain = {
   description: string;
   account: string | null;
   credentials: string[];
-  egress: string[];
   abilities: string[];
   default: boolean;
   created: string;
@@ -49,7 +49,6 @@ export const PEPPER = (at: string): Brain => ({
   description: "The user's personal assistant.",
   account: "personal",
   credentials: ["google", "corkboard"],
-  egress: ["portal.corkboard.fyi", "oauth2.googleapis.com", "www.googleapis.com", "gmail.googleapis.com"],
   abilities: ["chat"],
   default: true,
   created: at,
@@ -58,7 +57,6 @@ export const PEPPER = (at: string): Brain => ({
 
 export const NAME = /^[a-z][a-z0-9-]{0,31}$/;
 const LABEL = /^[\w.-]{1,64}$/;
-const HOST = /^[a-z0-9.-]{1,253}$/i;
 
 const now = () => new Date().toISOString().replace(/\.\d+Z$/, "Z");
 const json = (body: unknown, status = 200) => Response.json(body, { status });
@@ -88,7 +86,6 @@ export function fieldsOf(input: Record<string, unknown>): Partial<Brain> {
     f.account = input.account as string | null;
   }
   if (input.credentials !== undefined) f.credentials = list(input.credentials, "credentials", LABEL);
-  if (input.egress !== undefined) f.egress = list(input.egress, "egress", HOST, 256).map((h) => h.toLowerCase());
   if (input.abilities !== undefined) f.abilities = list(input.abilities, "abilities", new RegExp(`^(${ABILITIES.join("|")})$`));
   if (input.default !== undefined) {
     if (typeof input.default !== "boolean") throw new Invalid("default must be true or false");
@@ -97,11 +94,18 @@ export function fieldsOf(input: Record<string, unknown>): Partial<Brain> {
   return f;
 }
 
+// A brain as the user's object keeps it, less the egress one made before
+// every slot was open had.
+export function brainOf(doc: string): Brain {
+  const { egress: _, ...b } = JSON.parse(doc) as Brain & { egress?: string[] };
+  return b;
+}
+
 export function create(input: Record<string, unknown>, at = now()): Brain {
   if (typeof input.name !== "string" || !NAME.test(input.name)) throw new Invalid("name must be lowercase letters, digits and -, starting with a letter, at most 32");
   const f = fieldsOf(input);
   if (!f.title) throw new Invalid("a brain needs a title");
-  return { id: crypto.randomUUID(), name: input.name, description: "", account: null, credentials: [], egress: [], abilities: [], default: false, ...f, title: f.title, created: at, updated: at };
+  return { id: crypto.randomUUID(), name: input.name, description: "", account: null, credentials: [], abilities: [], default: false, ...f, title: f.title, created: at, updated: at };
 }
 
 // A brain token's brain, as a grant says it, if it's there and not archived.

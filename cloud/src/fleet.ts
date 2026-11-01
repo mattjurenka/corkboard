@@ -26,10 +26,6 @@
 // or for no brain, and a brainless spawn of a brain's runs as its account.
 // The user's own spawns run.
 //
-// A slot's egress filter is fixed when its host is built, so a brain whose
-// egress an environment's slots can't reach is refused there, with the
-// hosts they lack, rather than run with less.
-//
 // Its card says what it's for and how it went: the agent queued on it,
 // a log line per state, the result at the end. The token fleetd is handed
 // when it claims one is a card token for that card (the spawn token): the
@@ -219,10 +215,6 @@ function size(v: unknown, what: string, max: number): number | undefined {
   return v as number;
 }
 
-// The hosts of a brain's egress that slots allowing e can't reach.
-const lacks = (e: Egress, hosts: string[]) =>
-  e.open ? [] : hosts.filter((h) => !e.domains.includes(h) && !e.suffixes.some((s) => h === s || h.endsWith("." + s)));
-
 // A spawn, asked for by the user or a brain: placed, checked against the
 // rule, and given its card.
 export async function spawn(env: Env, user: string, by: string, input: SpawnInput): Promise<Spawn> {
@@ -273,19 +265,9 @@ export async function spawn(env: Env, user: string, by: string, input: SpawnInpu
     const offered = [...new Set(envs.flatMap((e) => Object.values(e.templates).flatMap((t) => t.capNames)))].sort();
     throw new Refused(400, `no ${asked ? `${asked} environment` : "environment"} has a VM with ${needs.join(", ") || "room for it"}; there are ${offered.join(", ") || "none"}`);
   }
-  // A brain's spawn goes where every slot reaches what the brain does.
-  let reach = candidates;
-  if (b) {
-    const where = (cs: typeof candidates) => [...new Set(cs.map((c) => c.e))];
-    const told = candidates.filter((c) => c.e.egress);
-    if (!told.length) throw new Refused(400, `${where(candidates).map((e) => e.name).join(", ")} can't run a spawn for a brain: its fleetd predates brains on spawns`);
-    reach = told.filter((c) => !lacks(c.e.egress!, b.egress).length);
-    if (!reach.length)
-      throw new Refused(400, `the ${b.name} brain reaches hosts no slot there may: ${where(told).map((e) => `${e.name} lacks ${lacks(e.egress!, b.egress).join(", ")}`).join("; ")}`);
-  }
-  const placed = reach.find((c) => fits(c.e, c.t));
+  const placed = candidates.find((c) => fits(c.e, c.t));
   if (!placed) {
-    const offers = [...new Set(reach.map((c) => c.e))].map((e) => `${e.name} gives at most ${e.offer?.memory ?? "?"} MiB, ${e.offer?.cores ?? "?"} cores`);
+    const offers = [...new Set(candidates.map((c) => c.e))].map((e) => `${e.name} gives at most ${e.offer?.memory ?? "?"} MiB, ${e.offer?.cores ?? "?"} cores`);
     throw new Refused(400, `no VM that big: ${offers.join("; ")}`);
   }
   const { e: where, name: template, t } = placed;

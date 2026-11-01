@@ -176,7 +176,6 @@ export type Brain = {
   description: string
   account: string | null
   credentials: string[]
-  egress: string[]
   abilities: string[]
   default: boolean
   created: string
