@@ -18,6 +18,10 @@ const VISEMES: Viseme[] = ["aa", "ih", "ou", "ee", "oh"];
 // The clothes' color, lit and in shade; their painted texture is soft.
 const CLOTH = new THREE.Color(0xc8102e);
 const CLOTH_SHADE = new THREE.Color(0x6e0718);
+// Blonde hair: its darkest strands, its lightest, and in shade.
+const HAIR_DARK = new THREE.Color(0xb98a3e);
+const HAIR_LIGHT = new THREE.Color(0xfff1c2);
+const HAIR_SHADE = new THREE.Color(0xe0b878);
 // The body's skin in shade; the model's own is barely darker than lit.
 const SKIN_SHADE = new THREE.Color(0xd9a3ad);
 
@@ -47,6 +51,42 @@ function silhouette(t: THREE.Texture): THREE.Texture {
   g.globalCompositeOperation = "source-in";
   g.fillStyle = "#fff";
   g.fillRect(0, 0, c.width, c.height);
+  const out = new THREE.CanvasTexture(c);
+  out.flipY = t.flipY;
+  out.colorSpace = t.colorSpace;
+  out.wrapS = t.wrapS;
+  out.wrapT = t.wrapT;
+  return out;
+}
+
+// A texture recolored from dark to light by its own lightness, the
+// darkest of it dark and the lightest light; see-through stays so.
+function recolor(t: THREE.Texture, dark: THREE.Color, light: THREE.Color): THREE.Texture {
+  const img = t.image as CanvasImageSource & { width: number; height: number };
+  const c = document.createElement("canvas");
+  c.width = img.width;
+  c.height = img.height;
+  const g = c.getContext("2d")!;
+  g.drawImage(img, 0, 0);
+  const data = g.getImageData(0, 0, c.width, c.height);
+  const px = data.data;
+  let lo = 255;
+  let hi = 0;
+  for (let i = 0; i < px.length; i += 4) {
+    if (px[i + 3] < 8) continue;
+    const l = 0.3 * px[i] + 0.59 * px[i + 1] + 0.11 * px[i + 2];
+    lo = Math.min(lo, l);
+    hi = Math.max(hi, l);
+  }
+  const span = Math.max(1, hi - lo);
+  const [d, l] = [dark, light].map((k) => k.clone().convertLinearToSRGB());
+  for (let i = 0; i < px.length; i += 4) {
+    const u = (0.3 * px[i] + 0.59 * px[i + 1] + 0.11 * px[i + 2] - lo) / span;
+    px[i] = (d.r + (l.r - d.r) * u) * 255;
+    px[i + 1] = (d.g + (l.g - d.g) * u) * 255;
+    px[i + 2] = (d.b + (l.b - d.b) * u) * 255;
+  }
+  g.putImageData(data, 0, 0);
   const out = new THREE.CanvasTexture(c);
   out.flipY = t.flipY;
   out.colorSpace = t.colorSpace;
@@ -94,6 +134,7 @@ export class Stage {
   private pointer?: THREE.Vector2;
   private ray = new THREE.Raycaster();
   mood: Mood = "idle";
+  private was: Mood = "idle";
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -138,6 +179,11 @@ export class Stage {
             m.map = m.shadeMultiplyTexture = silhouette(m.map);
             m.color.copy(CLOTH);
             m.shadeColorFactor.copy(CLOTH_SHADE);
+          }
+          if (/HAIR/.test(m.name) && m.map) {
+            m.map = m.shadeMultiplyTexture = recolor(m.map, HAIR_DARK, HAIR_LIGHT);
+            m.color.setRGB(1, 1, 1);
+            m.shadeColorFactor.copy(HAIR_SHADE);
           }
           // Harder-edged shade, and on the body a deeper one, with its
           // modelled detail (navel, collarbones) brought out.
@@ -273,11 +319,20 @@ export class Stage {
     const asking = this.mood === "asking" && !talking;
     this.tilt = ease(this.tilt, asking ? 0.12 : thinking ? -0.06 : 0, 3, dt);
 
-    // Left alone and quiet, now and then it does something.
-    if (talking || this.mood !== "idle" || this.acts.length) this.idleAt = Math.max(this.idleAt, t + 4);
+    // Done working: pleased with herself.
+    if (this.was === "thinking" && this.mood === "idle" && !this.acts.length) this.play("proud");
+    this.was = this.mood;
+    // Quiet, now and then she does something: left alone, whatever she
+    // likes; thinking, a hand to her chin; waiting on you, arms folded.
+    if (talking || this.acts.length) this.idleAt = Math.max(this.idleAt, t + 4);
     else if (t > this.idleAt) {
       this.idleAt = t + 9 + Math.random() * 12;
-      const pick: ActName[] = ["shift", "shift", "stretch", "snub", "huff"];
+      const pick: ActName[] =
+        this.mood === "thinking"
+          ? ["ponder"]
+          : this.mood === "asking"
+            ? ["fold", "glance"]
+            : ["shift", "shift", "stretch", "snub", "huff", "fold", "yawn", "glance", "sway", "sway"];
       this.play(pick[Math.floor(Math.random() * pick.length)]);
     }
     let since = t - this.actAt;
@@ -390,7 +445,7 @@ export class Stage {
     const [shape, open] = this.voice.mouth();
     for (const v of VISEMES) {
       this.mouth[v] = ease(this.mouth[v], v === shape ? open : 0, 22, dt);
-      ex.setValue(v, this.mouth[v]);
+      ex.setValue(v, v === "aa" && this.act?.face?.aa !== undefined ? this.mouth[v] + (this.act.face.aa - this.mouth[v]) * w : this.mouth[v]);
     }
     this.smile = ease(this.smile, this.voice.speaking ? 0.25 : this.mood === "idle" ? 0.15 : 0, 2, dt);
     const felt = this.voice.speaking ? this.felt : null;
