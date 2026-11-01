@@ -14,7 +14,7 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { CLOUD, token } from "../../bridge/cloud";
 import { host, steady, type Host } from "../../bridge/host";
-import { accountFor, answer, manifest, occupancy, OVERHEAD, read, SPAWNS, spawns, write, type Manifest, type Occupancy, type Spawn, type State } from "./fleet";
+import { accountFor, answer, egressOf, manifest, occupancy, OVERHEAD, read, SPAWNS, spawns, write, type Manifest, type Occupancy, type Spawn, type State } from "./fleet";
 
 // This machine's name, unless told otherwise.
 export const ENVIRONMENT = process.env.CORKBOARD_FLEET_ENVIRONMENT ?? hostname();
@@ -27,6 +27,8 @@ type Remote = {
   template: string;
   task: string;
   by: string;
+  brain?: string | null;
+  account?: string | null;
   state: "pending-approval" | "queued" | "running" | State;
   stopRequested?: boolean;
 };
@@ -118,12 +120,21 @@ export class Queue {
     }
   }
 
-  // What this environment runs, then the spawns for it: the queued ones
+  // What this environment runs (its templates, what its slots may reach,
+  // the brains it has memory for), then the spawns for it: the queued ones
   // claimed, and a stop asked for there passed on here.
   private async look() {
     const m = manifest();
     const running = this.running;
-    await ok("PUT", `/api/fleet/environments/${ENVIRONMENT}`, { templates: m.templates, offer: m.offer ?? { memory: m.memoryBudget && m.memoryBudget - OVERHEAD, cores: null }, running });
+    // As the manifest has them: one still a brain's (a manifest from before
+    // brains were spawns') the Worker won't offer.
+    await ok("PUT", `/api/fleet/environments/${ENVIRONMENT}`, {
+      templates: m.templates,
+      offer: m.offer ?? { memory: m.memoryBudget && m.memoryBudget - OVERHEAD, cores: null },
+      egress: egressOf(m),
+      bindings: Object.keys(m.bindings ?? {}),
+      running,
+    });
     this.told = running && told(running);
     const listed = (await ok("GET", `/api/spawns?environment=${ENVIRONMENT}&state=queued,running,stopped&limit=100`)) as Remote[];
     for (const r of listed) {
@@ -139,10 +150,11 @@ export class Queue {
     // Taken already, or no longer queued: nothing to do.
     if (c.status === 409) return;
     if (c.status >= 400) throw new Error(`claiming ${r.id}: ${c.json.error ?? c.status}`);
-    const { spawn, token: cardToken, repo } = c.json as {
+    const { spawn, token: cardToken, repo, brainToken } = c.json as {
       spawn: Remote & { board: string; card: string; agent: string; interactive?: boolean } & Pick<Spawn, "shell" | "memory" | "cores">;
       token: string;
       repo: string | null;
+      brainToken?: string;
     };
     const s: Spawn = {
       id: spawn.id,
@@ -150,17 +162,18 @@ export class Queue {
       task: spawn.task,
       repo: repo && existsSync(join(repo, ".git")) ? repo : undefined,
       by: spawn.by,
+      ...(spawn.brain && { brain: spawn.brain }),
       account: "",
       state: "queued",
       created: now(),
-      remote: { board: spawn.board, card: spawn.card, agent: spawn.agent, token: cardToken },
+      remote: { board: spawn.board, card: spawn.card, agent: spawn.agent, token: cardToken, ...(brainToken && { brainToken }) },
       ...(spawn.interactive && { interactive: true }),
       ...(spawn.shell && { shell: spawn.shell }),
       ...(spawn.memory && { memory: spawn.memory }),
       ...(spawn.cores && { cores: spawn.cores }),
     };
     try {
-      s.account = accountFor(m, s.template, s.by);
+      s.account = accountFor(m, spawn.account);
       write(s);
       console.log(`${s.id}: claimed ${s.template} from the queue (card ${s.remote!.card} on ${s.remote!.board})`);
     } catch (e) {
@@ -170,7 +183,7 @@ export class Queue {
 
   // Each spawn from the queue whose state the Worker hasn't heard yet. One
   // that's over has its commits fetched into its repo first (as fleet/<id>),
-  // and its token revoked after.
+  // and its tokens revoked after.
   private async report() {
     for (const s of spawns()) {
       if (!s.remote || s.state === "queued" || s.reported === s.state) continue;
@@ -192,8 +205,8 @@ export class Queue {
         result: result.trim() || undefined,
       });
       if (r.status >= 400 && r.status !== 409) throw new Error(`reporting ${s.id}: ${r.json.error ?? r.status}`);
-      const remote = over ? { ...s.remote, token: "" } : s.remote;
-      if (over && s.remote.token) await api("POST", "/api/tokens/revoke", { token: s.remote.token }).catch(() => {});
+      const remote = over ? { ...s.remote, token: "", ...(s.remote.brainToken !== undefined && { brainToken: "" }) } : s.remote;
+      if (over) for (const t of [s.remote.token, s.remote.brainToken]) if (t) await api("POST", "/api/tokens/revoke", { token: t }).catch(() => {});
       write({ ...read(s.id)!, reported: s.state, remote });
     }
   }

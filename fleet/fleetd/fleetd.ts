@@ -3,17 +3,18 @@
 // (fleet/host), polling every two seconds; the slots are system units it
 // may start and stop by a polkit rule.
 //
-// Starting one: the template goes in the slot's state dir (its launcher
-// reads it), with the VM's size if the spawn asked for one; the task, its
+// Starting one: the guest goes in the slot's state dir (its launcher reads
+// it), with the VM's size if the spawn asked for one; the task, its
 // account's Claude Code token, the repo bundle and the shell the guest
 // builds in its share, then `systemctl start`. The guest runs the task and
 // powers off, which ends the unit. A spawn from the Worker's queue
 // (queue.ts) also gets corkboard's MCP server with its spawn token, and is
-// told which card is its own.
+// told which card is its own; a brain's, the brain's token, which the
+// guest's memory hooks send (fleet/memory-hooks.nix).
 
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { coresOf, manifest, memoryOf, schedule, SPAWNS, spawns, tokenFor, write, type Manifest, type Spawn } from "./fleet";
+import { coresOf, guestOf, manifest, memoryOf, schedule, SPAWNS, spawns, tokenFor, write, type Manifest, type Spawn } from "./fleet";
 import { Queue } from "./queue";
 import { end, message, post, serveSessions } from "./sessions";
 import { CLOUD } from "../../bridge/cloud";
@@ -55,12 +56,13 @@ async function start(m: Manifest, s: Spawn, slot: string) {
     const mcp = { mcpServers: { corkboard: { type: "http", url: `${CLOUD}/mcp`, headers: { Authorization: `Bearer ${s.remote.token}` } } } };
     writeFileSync(join(sl.shareDir, "mcp.json"), JSON.stringify(mcp, null, 2) + "\n", { mode: 0o600 });
   }
+  if (s.remote?.brainToken) writeFileSync(join(sl.shareDir, "brain-token"), s.remote.brainToken + "\n", { mode: 0o600 });
   if (s.repo) {
     const b = await run(["git", "-C", s.repo, "bundle", "create", join(sl.shareDir, "repo.bundle"), "HEAD", "--branches"]);
     if (!b.ok) throw new Error(`couldn't bundle ${s.repo}: ${b.out}`);
   }
   if (s.shell) writeFileSync(join(sl.shareDir, "shell.json"), JSON.stringify(s.shell) + "\n");
-  writeFileSync(join(sl.stateDir, "template"), s.template + "\n");
+  writeFileSync(join(sl.stateDir, "template"), guestOf(m, s) + "\n");
   // "<MiB> <cores>", which the launcher passes to QEMU over the guest's own.
   const size = join(sl.stateDir, "size");
   if (s.memory || s.cores) writeFileSync(size, `${memoryOf(m, s)} ${coresOf(m, s) ?? 1}\n`);

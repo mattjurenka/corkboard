@@ -156,7 +156,7 @@ export class Session {
     if (op.startsWith("brains_")) return this.brains(op, args);
     // Pepper's session (plan/claude.lua): the one token that sees the goals.
     if (op === "pepper_token") {
-      const res = await fetch(`${this.cloud.link.cloud}/api/tokens/pepper`, {
+      const res = await fetch(`${this.cloud.link.cloud}/api/brains/pepper/tokens`, {
         method: "POST",
         headers: { Authorization: `Bearer ${await this.cloud.link.token()}`, "Content-Type": "application/json" },
         body: "{}",
@@ -168,10 +168,10 @@ export class Session {
     // Another brain's VM (fleet.lua's open_vm): its sessions' MCP and memory.
     if (op === "brain_token") {
       const [brain] = args;
-      const res = await fetch(`${this.cloud.link.cloud}/api/tokens/brain`, {
+      const res = await fetch(`${this.cloud.link.cloud}/api/brains/${encodeURIComponent(brain)}/tokens`, {
         method: "POST",
         headers: { Authorization: `Bearer ${await this.cloud.link.token()}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ brain }),
+        body: "{}",
       });
       const json = (await res.json().catch(() => ({}))) as any;
       if (!res.ok) throw new Error(`corkboard cloud: ${json.error ?? `HTTP ${res.status}`}`);
@@ -451,7 +451,29 @@ export class Session {
       return json;
     };
     const name = (n: unknown) => `/${encodeURIComponent(String(n))}`;
+    // A brain's memory (its <CR> in the view): /api/notes and /api/memory, ?brain=.
+    const read = async (path: string, params: Record<string, string> = {}) => {
+      const q = new URLSearchParams({ brain: String(args[0]), ...params });
+      const res = await fetch(`${this.cloud.link.cloud}/api/${path}?${q}`, { headers: { Authorization: `Bearer ${await this.cloud.link.token()}` } });
+      const json = (await res.json().catch(() => ({}))) as any;
+      if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`);
+      return json;
+    };
     switch (op) {
+      case "brains_notes":
+        return read("notes", { limit: "200" });
+      case "brains_note":
+        return read(`notes${name(args[1])}`);
+      case "brains_days":
+        return read("memory/days");
+      case "brains_entries":
+        return read("memory/entries", { day: String(args[1]) });
+      case "brains_episodes":
+        return read("memory/episodes");
+      case "brains_episode":
+        return read(`memory/episodes${name(args[1])}`);
+      case "brains_recall":
+        return read("memory/recall", { q: String(args[1]) });
       case "brains_get":
         await this.cloud.follow(USER, this.listener);
         this.keys.add(USER);

@@ -546,6 +546,8 @@ function M.statusline()
     title, detail, pos = "Goals", nil, false
   elseif vim.b[buf].corkboard_view == "plan-priority" then
     title, detail, pos = "Priority", nil, false
+  elseif vim.b[buf].corkboard_view == "brain-memory" then
+    title, detail, pos = "Memory", name:match("^agent://brains/(.+)$"), false
   elseif vim.b[buf].corkboard_view == "markdown" then
     local src = vim.b[buf].corkboard_source
     local file = src and vim.api.nvim_buf_is_valid(src) and vim.api.nvim_buf_get_name(src) or ""

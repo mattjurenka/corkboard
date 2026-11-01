@@ -704,7 +704,8 @@ const USER_TOOLS: Record<string, UserTool> = {
     description:
       "Start an agent on a task, in a VM of its own: a coding agent to fix something, a brain's agent to work with its memory. It gets a card of its own (on the board you name, or Fleet), works through it and leaves its answer there; with a board that is a project, it works in that project's repo and its commits come back as the branch fleet/<id>. spawn_status lists the templates and where they run. Bring its tools with packages or shell (built inside its VM), and size it with memory and cores, within what its machine offers. It may wait for room on the machine; it doesn't wait for you.",
     properties: {
-      template: str("A template's name, from spawn_status; left out, the smallest one with no brain that has every need"),
+      template: str("A template's name, from spawn_status: the VM type; left out, the smallest one that has every need"),
+      brain: str("The brain it works for, from spawn_status: it starts with the brain's memory and runs as its account; left out, none"),
       task: str("What the agent should do, in full: it knows only this and its repo"),
       environment: str("Where to run it; the first that has the template, if left out"),
       board: str("The board's key, from list_boards: its card goes there, and a project board's repo is what it works in"),
@@ -718,6 +719,17 @@ const USER_TOOLS: Record<string, UserTool> = {
     description: "The brains: who agents work for, each with its memory (notes, entries, episodes), Claude account, what it holds, and its abilities. One is the default, which your own sessions remember in.",
     user: true,
     run: async (_a, c) => c.users.brains(),
+  },
+  brain_read: {
+    description: "One brain: its record, and its memory's counts (notes, entries, episodes, the last episode).",
+    properties: { name: str("The brain's name") },
+    required: ["name"],
+    user: true,
+    run: async (a, c) => {
+      const b = await c.users.brain(String(a.name));
+      if (!b) throw new ToolError(`no brain ${a.name}; brain_list lists them`);
+      return { ...b, memory: await c.env.MEMORY.get(c.env.MEMORY.idFromName(`${c.user}/${b.name}`)).stats() };
+    },
   },
   brain_create: {
     description: "Make a brain: a memory of its own, and who its agents run as when spawned for it. Its name never changes; its title can.",
@@ -737,7 +749,8 @@ const USER_TOOLS: Record<string, UserTool> = {
     description:
       "Start a Claude Code session in a VM of its own, for the user to talk to from their phone or the fleet view, rather than an agent on a task: it runs until stopped (spawn_stop), and its commits come back as the branch fleet/<id>. It gets a card on the board you name. spawn_status lists the templates (VM types) and where they run.",
     properties: {
-      template: str("A template's name, from spawn_status: the VM type; left out, the smallest one with no brain that has every need"),
+      template: str("A template's name, from spawn_status: the VM type; left out, the smallest one that has every need"),
+      brain: str("The brain it works for, from spawn_status: it starts with the brain's memory and runs as its account; left out, none"),
       board: str("The board's key, from list_boards: its project's repo is what the session works in"),
       environment: str("Where to run it; the first that has the template, if left out"),
       message: str("What to say to it first, if anything"),

@@ -297,6 +297,14 @@ export class Memory extends DurableObject<Env> {
     return this.sql.exec("SELECT * FROM entries WHERE day BETWEEN ? AND ? ORDER BY id", from, to).toArray() as Entry[];
   }
 
+  // The days the log has, newest first, each with how many entries.
+  days(limit: number): { day: string; entries: number }[] {
+    return this.sql
+      .exec("SELECT day, COUNT(*) AS entries FROM entries GROUP BY day ORDER BY day DESC LIMIT ?", limit)
+      .toArray()
+      .map((r) => ({ day: r.day as string, entries: Number(r.entries) }));
+  }
+
   // Vectors ---------------------------------------------------------------------------
   //
   // What changed waits in vector_queue, as "note:<id>" or "entry:<id>", and

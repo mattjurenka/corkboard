@@ -1,5 +1,6 @@
-import { reset } from "cloudflare:test";
+import { env, reset } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { tokenKey } from "../src/api";
 import { google, login, ownerToken, worker } from "./login";
 
 let owner: string;
@@ -78,8 +79,8 @@ describe("brains", () => {
     expect(await names(await tokenFor("work"))).not.toContain("chat_send");
     expect(await names(assistant)).not.toContain("chat_send");
     // A token from before brains were data is still Pepper's.
-    const old = (await send("POST", "/api/tokens/pepper", {})).body.token;
-    expect(await names(old)).toContain("chat_send");
+    await (env as any).OAUTH_KV.put(await tokenKey("cbc_old"), JSON.stringify({ userId: "sub-me@example.com", email: "me@example.com", grant: { kind: "pepper", agent: "pepper" } }));
+    expect(await names("cbc_old")).toContain("chat_send");
   });
 
   it("archived, are out of lists and their tokens stop; restored, both come back", async () => {
@@ -124,6 +125,9 @@ describe("brain tools", () => {
     expect(made.name).toBe("garden");
     expect((await tool(assistant, "brain_update", { name: "garden", updated: made.updated, title: "The garden" })).title).toBe("The garden");
     expect((await tool(assistant, "brain_update", { name: "garden", updated: made.updated, title: "x" })).error).toMatch(/changed since/);
+    expect(await tool(assistant, "brain_read", { name: "garden" })).toMatchObject({ title: "The garden", memory: { notes: 0, entries: 0, episodes: 0, lastEpisode: null } });
+    expect((await tool(assistant, "brain_read", { name: "nobody" })).error).toMatch(/no brain nobody/);
     expect(await names(await tokenFor("pepper"))).not.toContain("brain_create");
+    expect(await names(await tokenFor("pepper"))).not.toContain("brain_read");
   });
 });

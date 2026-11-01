@@ -31,6 +31,11 @@
 //   GET   /api/goals                         the goal notes, read into their parts (goals.ts)
 //   POST  /api/memory/entries                { entries: [{ day, at, who, text, key }] }: a log written
 //                                            elsewhere, each entry added once
+//   GET   /api/memory/entries                ?day=, or ?from=&to=: the log, oldest first
+//   GET   /api/memory/days                   the days the log has, newest first, with their counts
+//   GET   /api/memory/episodes               the sessions' transcripts, newest first: ?pending=1, ?limit=
+//   GET   /api/memory/episodes/:id           { id, transcript }
+//   GET   /api/memory/recall                 ?q=: notes and entries about it, best first
 //   GET   /api/memory/vectors                { on, queued, embedded }: how far embedding has got
 //                                            (notes and entries are the default brain's, or ?brain='s)
 //   GET, DELETE /api/plans/:date             the day and any proposal (an empty plan if none); gone for good
@@ -39,8 +44,9 @@
 //   POST  /api/plans/:date/discard           { version }
 //   PUT   /api/plans/:date/day               { version, blocks }: the day, edited
 //   POST  /api/tokens                        a card token for an agent: { board, card, agent }
-//   POST  /api/tokens/pepper                 the pepper brain's token, as /api/brains/pepper/tokens
-//   POST  /api/tokens/brain                  { brain }: as /api/brains/:brain/tokens
+//   POST  /api/tokens/pepper                 old: /api/brains/pepper/tokens, until the droplet's pepperd is
+//                                            on that (fleet/pepper/pepperd.ts); then this and the next go
+//   POST  /api/tokens/brain                  old: { brain }, as /api/brains/:brain/tokens
 //   /api/brains                              brains, as data (brains.ts)
 //   POST  /api/tokens/machine                { environment }: a server's token, until revoked: this
 //                                            API but tickets, export and import, and of the fleet
@@ -253,6 +259,31 @@ async function importEntries(request: Request, memory: Memories): Promise<Respon
     return { day: e.day, at: e.at, key: e.key, text: e.text.trim(), who: typeof e.who === "string" && e.who.trim() ? e.who.trim().slice(0, 80) : "import" };
   });
   return json({ added: await memory.addEntries(entries) });
+}
+
+// A brain's memory as the owner reads it (the brains view): its log by day,
+// its episodes, and recall over it. Nothing is hidden from the owner.
+async function browse(request: Request, memory: Memories): Promise<Response> {
+  if (request.method !== "GET") return error(405, "method not allowed");
+  const url = new URL(request.url);
+  const limit = (fallback: number, max: number) => Math.min(Number(url.searchParams.get("limit")) || fallback, max);
+  if (url.pathname === "/api/memory/days") return json(await memory.days(limit(60, 400)));
+  if (url.pathname === "/api/memory/entries") {
+    const from = url.searchParams.get("from") ?? url.searchParams.get("day");
+    const to = url.searchParams.get("to") ?? from;
+    if (!from || !DAY.test(from) || !to || !DAY.test(to)) throw new Invalid("day, or from and to, must be YYYY-MM-DD");
+    if (Date.parse(to) - Date.parse(from) > 92 * 86_400_000) throw new Invalid("at most 92 days at once");
+    return json(await memory.entries(from, to));
+  }
+  if (url.pathname === "/api/memory/episodes") return json(await memory.episodes(limit(50, 200), url.searchParams.get("pending") === "1"));
+  const one = url.pathname.match(/^\/api\/memory\/episodes\/([0-9a-f]{32})$/);
+  if (one) return reply(await memory.episode(one[1]));
+  if (url.pathname === "/api/memory/recall") {
+    const q = url.searchParams.get("q")?.trim();
+    if (!q) throw new Invalid("q must say what to recall");
+    return json(await memory.recall(q, limit(20, 50)));
+  }
+  return error(404, "not found");
 }
 
 // What a brain's hooks call (memory.ts), with any token but a card's: the
@@ -560,8 +591,9 @@ export const api = {
         if (request.method !== "GET") return error(405, "method not allowed");
         return json(goals(await (await memoryOf(env, ctx.props.userId, brain)).goalNotes()));
       }
-      if (path === "/api/memory/entries") return await importEntries(request, await memoryOf(env, ctx.props.userId, brain));
+      if (path === "/api/memory/entries" && request.method === "POST") return await importEntries(request, await memoryOf(env, ctx.props.userId, brain));
       if (path === "/api/memory/vectors") return json(await (await memoryOf(env, ctx.props.userId, brain)).vectorState());
+      if (path.startsWith("/api/memory/")) return await browse(request, await memoryOf(env, ctx.props.userId, brain));
       if (path.startsWith("/api/plans/")) return await plans(request, users);
       if (path === "/api/chat") return await chat(request, users);
       if (path.startsWith("/api/sessions")) return await sessions(request, users, machine);

@@ -1,8 +1,9 @@
 # The guest a slot boots: one spawned agent, one task (or one session), then off.
 #
 # One guest per spawnable template, `nixosConfigurations."<template>@slot"`
-# (`mkFleet`), that boots in any slot: the launcher says which, in its
-# environment, and nothing of it is built in.
+# (`mkFleet`), and one per template and brain whose memory the host binds,
+# `"<template>+<brain>@slot"`, that boots in any slot: the launcher says
+# which, in its environment, and nothing of it is built in.
 #
 #   FLEET_DIR           the slot's state dir: share/, outbox/, disk.qcow2,
 #                       console.sock
@@ -22,6 +23,10 @@
 #   /mnt/share/mcp.json      optional: corkboard's MCP server, with the spawn
 #                            token for the agent's card (a spawn from the
 #                            Worker's queue)
+#   /mnt/share/brain-token   optional: a token for the brain it works for,
+#                            which the memory hooks send, so each session
+#                            starts with the brain's context and ends as one
+#                            of its episodes (fleet/memory-hooks.nix)
 #   /mnt/share/shell.json    optional: the tools the spawner brought, built
 #                            here and run in: { "packages": [...] } from this
 #                            guest's nixpkgs, or { "flake": ref }'s devShell
@@ -42,12 +47,13 @@
 #   /mnt/outbox/projects/    a session's Claude Code logs, which fleetd
 #                            follows while it runs (fleet/fleetd/sessions.ts)
 #
-# A template with a brain also mounts the brain's memory (its `shares`),
-# writable where the brain says, and the same for every agent of it.
+# A guest for a brain also mounts the brain's memory on this host (its
+# binding's `shares`), writable where the binding says, and the same for
+# every agent of it.
 #
 # Egress is the slot's allowlist, through the filtering proxy on its
 # gateway; there is no resolver and no route, as for Pepper.
-{ template, ownerUid ? null }:
+{ template, ownerUid ? null, brain ? null, shares ? { }, corkboardHost ? "portal.corkboard.fyi" }:
 { config, pkgs, lib, modulesPath, ... }:
 let
   proxyUrl = "http://fleet-gateway:8888";
@@ -72,6 +78,12 @@ let
   };
 
   env = proxyEnv // claudeCodeEnv;
+
+  memoryHooks = import ../memory-hooks.nix {
+    inherit pkgs lib;
+    url = "https://${corkboardHost}";
+    tokenFile = "/mnt/share/brain-token";
+  };
 
   runTask = pkgs.writeShellApplication {
     name = "fleet-task";
@@ -187,7 +199,7 @@ in
     sharedDirectories = lib.mkForce ({
       share = { source = "$FLEET_DIR/share"; target = "/mnt/share"; writable = false; };
       outbox = { source = "$FLEET_DIR/outbox"; target = "/mnt/outbox"; writable = true; };
-    } // lib.mapAttrs (_: s: { inherit (s) source target writable; }) template.shares);
+    } // lib.mapAttrs (_: s: { inherit (s) source target writable; }) shares);
 
     diskImage = "$FLEET_DIR/disk.qcow2";
     diskSize = lib.mkDefault (lib.max 8192 template.disk);
@@ -312,16 +324,20 @@ in
 
   systemd.globalEnvironment = env;
   environment.sessionVariables = env;
-  environment.etc."claude-code/managed-settings.json".text = builtins.toJSON { env = claudeCodeEnv; };
+  environment.etc."claude-code/managed-settings.json".text = builtins.toJSON {
+    env = claudeCodeEnv;
+    # A brain's spawn's memory, which does nothing without its token.
+    hooks = memoryHooks.hooks;
+  };
   # Where its brain's memory is, read as managed memory by every session.
-  environment.etc."claude-code/CLAUDE.md" = lib.mkIf (template.shares != { }) {
+  environment.etc."claude-code/CLAUDE.md" = lib.mkIf (shares != { }) {
     text = ''
       # Your brain's memory
 
-      You work for the `${template.brain}` brain. Its memory is mounted here,
+      You work for the `${brain}` brain. Its memory is mounted here,
       shared with its other agents, so what you write there they will see:
 
-      ${lib.concatStrings (lib.mapAttrsToList (n: s: "- `${s.target}`${lib.optionalString (!s.writable) " (read-only)"}: ${if s.description != "" then s.description else n}\n") template.shares)}
+      ${lib.concatStrings (lib.mapAttrsToList (n: s: "- `${s.target}`${lib.optionalString (!s.writable) " (read-only)"}: ${if s.description != "" then s.description else n}\n") shares)}
     '';
   };
 

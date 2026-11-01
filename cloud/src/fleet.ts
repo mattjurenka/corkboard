@@ -2,34 +2,45 @@
 // whoever asked, is a row in the user's object (user.ts) tied to a card, and
 // each environment's fleetd (fleet/fleetd) claims the ones for it.
 //
-//   PUT   /api/fleet/environments/:name      { templates, offer?, running? }: what fleetd there can run, the
-//                                            most one VM there may have, and what runs
+//   PUT   /api/fleet/environments/:name      { templates, offer?, egress?, bindings?, running? }: what fleetd
+//                                            there can run, the most one VM there may have, what every slot
+//                                            may reach, the brains whose memory it mounts, and what runs
 //   GET   /api/fleet/environments            each environment and its templates
 //   DELETE /api/fleet/environments/:name     one no fleetd runs as any more
 //   GET   /api/spawns                        newest first: ?environment=, ?state=a,b, ?limit=
-//   POST  /api/spawns                        { template?, task, environment?, board?, interactive?, shell?,
-//                                            packages?, needs?, memory?, cores? }: the user's; interactive, a
-//                                            session you talk to (task its first message, if any); with no
-//                                            template, the smallest brainless one with every need
+//   POST  /api/spawns                        { template?, brain?, task, environment?, board?, interactive?,
+//                                            shell?, packages?, needs?, memory?, cores? }: the user's;
+//                                            interactive, a session you talk to (task its first message, if
+//                                            any); with no template, the smallest one with every need
 //   GET   /api/spawns/:id
 //   POST  /api/spawns/:id/approve            a brain's spawn of a template with credentials
 //   POST  /api/spawns/:id/stop
-//   POST  /api/spawns/:id/claim              { environment }: fleetd's; { spawn, token, repo }
+//   POST  /api/spawns/:id/claim              { environment }: fleetd's; { spawn, token, repo, brainToken? }
 //   POST  /api/spawns/:id/report             { state, slot?, exit?, error?, result? }: fleetd's
 //
-// A spawn's brain is the template's, and who asked is the requesting
-// token's, never an argument: a brain may only spawn its own templates or
-// brainless ones, and one that holds credentials waits for the user to
-// approve it (its card asks, with attention). The user's own spawns run.
+// A spawn is a template (the VM) and, if it works for one, a brain
+// (brains.ts), whose record stamps it: the Claude account it runs as, and
+// whether a brain asking for it waits for the user (the brain or the
+// template holds credentials; its card asks, with attention). Who asked is
+// the requesting token's, never an argument: a brain may spawn for itself
+// or for no brain, and a brainless spawn of a brain's runs as its account.
+// The user's own spawns run.
+//
+// A slot's egress filter is fixed when its host is built, so a brain whose
+// egress an environment's slots can't reach is refused there, with the
+// hosts they lack, rather than run with less.
 //
 // Its card says what it's for and how it went: the agent queued on it,
 // a log line per state, the result at the end. The token fleetd is handed
 // when it claims one is a card token for that card (the spawn token): the
-// agent reports back through it, and it's the only corkboard grant it gets.
+// agent reports back through it. A brain's spawn also gets a token for the
+// brain, which its memory hooks send, so it starts with the brain's context
+// and its transcript becomes one of the brain's episodes.
 
 import type { Result } from "./board";
 import { type Card, type Fields, Invalid } from "./cards";
 import type { Env, Props } from "./index";
+import { NAME as BRAIN, live } from "./brains";
 import type { Grant } from "./mcp";
 import type { User } from "./user";
 
@@ -39,7 +50,10 @@ export const FINAL: readonly SpawnState[] = ["done", "failed", "stopped"];
 
 // What a template is, as its environment's fleetd describes it (the host's
 // manifest, from mkFleet): enough to place a spawn and apply the rule.
-export type Template = { brain: string | null; needsApproval: boolean; memory: number; cores: number; capNames: string[] };
+export type Template = { needsApproval: boolean; memory: number; cores: number; capNames: string[] };
+// What every slot there may reach: anything, or the hosts and the domains
+// under the suffixes all of them allow.
+export type Egress = { open: boolean; domains: string[]; suffixes: string[] };
 // What's up there, as fleetd last saw it: the VMs that are always there,
 // each slot and the spawn in it, and the memory budget they share (MiB).
 // Each VM says how it's configured, when its host's manifest does: where it
@@ -72,12 +86,13 @@ export type Running = {
   used: number;
   host?: Host;
   residents: { name: string; brain: string | null; memory: number | null; up: boolean; config?: Config }[];
-  slots: { name: string; spawn: string | null; template: string | null; memory: number | null; config?: Config }[];
+  slots: { name: string; spawn: string | null; template: string | null; brain?: string | null; memory: number | null; config?: Config }[];
 };
 // The most one spawn there may ask for (MiB, vCPUs), as its host says; null
 // for no more than its budget, or its cores.
 export type Offer = { memory: number | null; cores: number | null };
-export type Environment = { name: string; templates: Record<string, Template>; seen: string; offer?: Offer; running?: Running };
+// bindings: the brains whose memory its host mounts in their spawns' slots.
+export type Environment = { name: string; templates: Record<string, Template>; seen: string; offer?: Offer; egress?: Egress; bindings?: string[]; running?: Running };
 
 // What the agent's tools are, brought by whoever spawns it: packages from the
 // guest's own nixpkgs, or a flake's devShell ("." is its repo's). The guest
@@ -90,9 +105,12 @@ export type Spawn = {
   template: string;
   environment: string;
   task: string;
-  // The template's brain, and who asked: "user", or a brain.
+  // Who it works for, and who asked: "user", or a brain.
   brain: string | null;
   by: string;
+  // The Claude account it runs as, from a brain's record: its own, or the
+  // spawning brain's for a brainless one; null for its host's default.
+  account?: string | null;
   state: SpawnState;
   board: string;
   card: string;
@@ -161,6 +179,8 @@ export class Refused extends Error {
 
 export type SpawnInput = {
   template?: unknown;
+  // Who it works for: a brain's name, or none.
+  brain?: unknown;
   task?: unknown;
   environment?: unknown;
   board?: unknown;
@@ -199,12 +219,18 @@ function size(v: unknown, what: string, max: number): number | undefined {
   return v as number;
 }
 
+// The hosts of a brain's egress that slots allowing e can't reach.
+const lacks = (e: Egress, hosts: string[]) =>
+  e.open ? [] : hosts.filter((h) => !e.domains.includes(h) && !e.suffixes.some((s) => h === s || h.endsWith("." + s)));
+
 // A spawn, asked for by the user or a brain: placed, checked against the
 // rule, and given its card.
 export async function spawn(env: Env, user: string, by: string, input: SpawnInput): Promise<Spawn> {
   const u = users(env, user);
   if (input.template !== undefined && input.template !== null && (typeof input.template !== "string" || !NAME.test(input.template)))
     throw new Refused(400, "template must be a template's name; spawn_status lists them");
+  if (input.brain !== undefined && input.brain !== null && input.brain !== "" && (typeof input.brain !== "string" || !BRAIN.test(input.brain)))
+    throw new Refused(400, "brain must be a brain's name; brain_list lists them");
   const interactive = input.interactive === true;
   // A session's task is only its first message, which it can go without.
   if (interactive && input.task === undefined) input.task = "";
@@ -216,9 +242,18 @@ export async function spawn(env: Env, user: string, by: string, input: SpawnInpu
   const cores = size(input.cores, "cores", 256);
   const needs = Array.isArray(input.needs) ? input.needs.map(String) : [];
 
+  // The rule, first half: a brain spawns for itself or for no brain.
+  const asks = typeof input.brain === "string" && input.brain ? input.brain : null;
+  if (by !== "user" && asks && asks !== by) throw new Refused(403, `${by} may spawn for itself or for no brain, not for ${asks}`);
+  const b = asks ? await live(env, user, asks) : undefined;
+  if (asks && !b) throw new Refused(400, `no brain ${asks}; brain_list lists them`);
+  // A shell is the spawner's code, so never beside a brain's memory and credentials.
+  if (shell && b) throw new Refused(400, `a shell of your own never goes beside the ${b.name} brain's memory; spawn it for no brain`);
+  const account = b ? b.account : by !== "user" ? ((await live(env, user, by))?.account ?? null) : null;
+
   const envs = await u.environments();
   const asked = typeof input.environment === "string" && input.environment ? input.environment : undefined;
-  // Named, the template; else the smallest brainless one with every need.
+  // Named, the template; else the smallest one with every need.
   const named = typeof input.template === "string" ? input.template : undefined;
   const fits = (e: Environment, t: Template) =>
     (!memory || !e.offer?.memory || Math.max(memory, t.memory) <= e.offer.memory) && (!cores || !e.offer?.cores || Math.max(cores, t.cores) <= e.offer.cores);
@@ -226,7 +261,7 @@ export async function spawn(env: Env, user: string, by: string, input: SpawnInpu
     .filter((e) => !asked || e.name === asked)
     .flatMap((e) =>
       Object.entries(e.templates)
-        .filter(([name, t]) => (named ? name === named : !t.brain && needs.every((n) => t.capNames.includes(n))))
+        .filter(([name, t]) => (named ? name === named : needs.every((n) => t.capNames.includes(n))))
         .map(([name, t]) => ({ e, name, t })),
     )
     .sort((a, b) => a.t.capNames.length - b.t.capNames.length || a.t.memory - b.t.memory);
@@ -235,23 +270,30 @@ export async function spawn(env: Env, user: string, by: string, input: SpawnInpu
       const known = [...new Set(envs.flatMap((e) => Object.keys(e.templates)))].sort();
       throw new Refused(400, `no ${asked ? `${asked} environment runs` : "environment runs"} ${named}; there are ${known.join(", ") || "none yet (no fleetd has said what it runs)"}`);
     }
-    const offered = [...new Set(envs.flatMap((e) => Object.values(e.templates).filter((t) => !t.brain).flatMap((t) => t.capNames)))].sort();
+    const offered = [...new Set(envs.flatMap((e) => Object.values(e.templates).flatMap((t) => t.capNames)))].sort();
     throw new Refused(400, `no ${asked ? `${asked} environment` : "environment"} has a VM with ${needs.join(", ") || "room for it"}; there are ${offered.join(", ") || "none"}`);
   }
-  const placed = candidates.find((c) => fits(c.e, c.t));
+  // A brain's spawn goes where every slot reaches what the brain does.
+  let reach = candidates;
+  if (b) {
+    const where = (cs: typeof candidates) => [...new Set(cs.map((c) => c.e))];
+    const told = candidates.filter((c) => c.e.egress);
+    if (!told.length) throw new Refused(400, `${where(candidates).map((e) => e.name).join(", ")} can't run a spawn for a brain: its fleetd predates brains on spawns`);
+    reach = told.filter((c) => !lacks(c.e.egress!, b.egress).length);
+    if (!reach.length)
+      throw new Refused(400, `the ${b.name} brain reaches hosts no slot there may: ${where(told).map((e) => `${e.name} lacks ${lacks(e.egress!, b.egress).join(", ")}`).join("; ")}`);
+  }
+  const placed = reach.find((c) => fits(c.e, c.t));
   if (!placed) {
-    const offers = [...new Set(candidates.map((c) => c.e))].map((e) => `${e.name} gives at most ${e.offer?.memory ?? "?"} MiB, ${e.offer?.cores ?? "?"} cores`);
+    const offers = [...new Set(reach.map((c) => c.e))].map((e) => `${e.name} gives at most ${e.offer?.memory ?? "?"} MiB, ${e.offer?.cores ?? "?"} cores`);
     throw new Refused(400, `no VM that big: ${offers.join("; ")}`);
   }
   const { e: where, name: template, t } = placed;
   const environment = where.name;
-  // A shell is the spawner's code, so never beside a brain's memory and credentials.
-  if (shell && t.brain) throw new Refused(400, `${template} is the ${t.brain} brain's; a shell of your own goes in a brainless template`);
 
-  // The rule: a brain's own templates or brainless ones, and those with
-  // credentials only once the user says.
-  if (by !== "user" && t.brain && t.brain !== by) throw new Refused(403, `${template} is the ${t.brain} brain's; ${by} can't spawn it`);
-  const state: SpawnState = by !== "user" && t.needsApproval ? "pending-approval" : "queued";
+  // The rule, second half: what holds credentials runs once the user says.
+  const held = t.needsApproval || !!b?.credentials.length;
+  const state: SpawnState = by !== "user" && held ? "pending-approval" : "queued";
 
   const key = typeof input.board === "string" && input.board ? input.board : FLEET_BOARD;
   const boards = await u.boards();
@@ -263,16 +305,17 @@ export async function spawn(env: Env, user: string, by: string, input: SpawnInpu
 
   const id = newId();
   const agent = `${template}-${id}`;
+  const what = `${template}${b ? ` for the ${b.name} brain` : ""}`;
   const first = task.split("\n")[0].trim() || `${template} session`;
   const card = value(
     await boardOf(env, user, key).create({
       title: first.length > 100 ? first.slice(0, 99) + "…" : first,
-      description: `${task}${task ? "\n\n---\n" : ""}${interactive ? "Session" : "Spawned agent"} ${id}: ${template} in ${environment}${shell ? `, with ${"flake" in shell ? shell.flake : shell.packages.join(" ")}` : ""}, asked by ${by}.`,
+      description: `${task}${task ? "\n\n---\n" : ""}${interactive ? "Session" : "Spawned agent"} ${id}: ${what} in ${environment}${shell ? `, with ${"flake" in shell ? shell.flake : shell.packages.join(" ")}` : ""}, asked by ${by}.`,
       status: "ready",
       agent,
       agent_state: "queued",
       labels: ["fleet"],
-      attention: state === "pending-approval" ? `approve: ${by} wants to spawn ${template}, which holds credentials` : null,
+      attention: state === "pending-approval" ? `approve: ${by} wants to spawn ${what}, which holds credentials` : null,
     }),
   );
   return u.addSpawn({
@@ -280,8 +323,9 @@ export async function spawn(env: Env, user: string, by: string, input: SpawnInpu
     template,
     environment,
     task,
-    brain: t.brain,
+    brain: b?.name ?? null,
     by,
+    account,
     state,
     board: key,
     card: card.id,
@@ -350,28 +394,42 @@ async function report(env: Env, user: string, id: string, input: Record<string, 
 
 // fleetd's claim: the spawn, its card token, and the repo to work in (its
 // board's project, if it has one: the claiming environment's clone of it).
+// A brain's spawn also gets a token for the brain, unless the brain has gone
+// since, which fails it.
 async function claim(env: Env, user: string, props: Props, id: string, environment: unknown, mint: Mint) {
   if (typeof environment !== "string" || !NAME.test(environment)) throw new Invalid("environment must be the claiming environment's name");
   const u = users(env, user);
   const s = value(await u.claimSpawn(id, environment));
+  const b = s.brain ? await live(env, user, s.brain) : undefined;
+  if (s.brain && !b) {
+    const error = `the ${s.brain} brain is archived or gone`;
+    await report(env, user, id, { state: "failed", error });
+    throw new Refused(409, error);
+  }
   const { token } = await mint(env, props, { kind: "card", board: s.board, card: s.card, agent: s.agent });
+  const brainToken = b && (await mint(env, props, { kind: "brain", brain: b.name, agent: s.agent, id: b.id })).token;
   const repo = await u.rootIn(s.board, environment);
-  return { spawn: s, token, repo };
+  return { spawn: s, token, repo, ...(brainToken && { brainToken }) };
 }
 
 // Routes -----------------------------------------------------------------------------
 
-export type Mint = (env: Env, props: Props, grant: Extract<Grant, { kind: "card" }>) => Promise<{ token: string; expires_at: string | null }>;
+export type Mint = (
+  env: Env,
+  props: Props,
+  grant: Extract<Grant, { kind: "card" }> | { kind: "brain"; brain: string; agent: string; id: string },
+) => Promise<{ token: string; expires_at: string | null }>;
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 
-function template(name: string, v: unknown): Template {
+// One a fleetd from before brains on spawns still says is a brain's is none:
+// it would hand out the brain's memory without the brain's rule.
+function template(name: string, v: unknown): Template | undefined {
   const t = (v ?? {}) as Record<string, unknown>;
   const num = (k: string) => (Number.isFinite(t[k]) ? (t[k] as number) : 0);
-  if (t.brain !== null && t.brain !== undefined && (typeof t.brain !== "string" || !NAME.test(t.brain))) throw new Invalid(`templates.${name}.brain must be a brain's name or null`);
+  if (t.brain !== null && t.brain !== undefined) return undefined;
   if (typeof t.needsApproval !== "boolean") throw new Invalid(`templates.${name}.needsApproval must be true or false`);
   return {
-    brain: (t.brain as string | undefined) ?? null,
     needsApproval: t.needsApproval,
     memory: num("memory"),
     cores: num("cores"),
@@ -403,6 +461,13 @@ function config(v: unknown): Config | undefined {
   };
 }
 
+function egress(v: unknown): Egress {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) throw new Invalid("egress must be { open, domains, suffixes }");
+  const e = v as Record<string, unknown>;
+  const hosts = (x: unknown) => (Array.isArray(x) ? x.slice(0, 1024).flatMap((h) => (typeof h === "string" && /^[a-z0-9.-]{1,253}$/i.test(h) ? [h.toLowerCase()] : [])) : []);
+  return { open: e.open === true, domains: hosts(e.domains), suffixes: hosts(e.suffixes).map((s) => s.replace(/^\./, "")) };
+}
+
 function host(v: unknown): Host | undefined {
   if (typeof v !== "object" || v === null || Array.isArray(v)) return undefined;
   const h = v as Record<string, unknown>;
@@ -431,7 +496,7 @@ function running(v: unknown): Running {
     }),
     slots: list(r.slots).flatMap((i) => {
       const c = config(i.config);
-      return name(i.name) ? [{ name: name(i.name)!, spawn: id(i.spawn), template: name(i.template), memory: num(i.memory), ...(c && { config: c }) }] : [];
+      return name(i.name) ? [{ name: name(i.name)!, spawn: id(i.spawn), template: name(i.template), ...(i.brain !== undefined && { brain: name(i.brain) }), memory: num(i.memory), ...(c && { config: c }) }] : [];
     }),
   };
 }
@@ -457,9 +522,10 @@ export async function fleetRoutes(request: Request, env: Env, props: Props, body
       const input = await body();
       if (typeof input.templates !== "object" || input.templates === null || Array.isArray(input.templates)) throw new Invalid("templates must be an object of templates by name");
       const templates = Object.fromEntries(
-        Object.entries(input.templates).map(([name, t]) => {
+        Object.entries(input.templates).flatMap(([name, t]) => {
           if (!NAME.test(name)) throw new Invalid(`bad template name ${name}`);
-          return [name, template(name, t)];
+          const parsed = template(name, t);
+          return parsed ? [[name, parsed]] : [];
         }),
       );
       const environment: Environment = { name: e[1], templates, seen: now() };
@@ -467,6 +533,11 @@ export async function fleetRoutes(request: Request, env: Env, props: Props, body
         const o = input.offer as Record<string, unknown>;
         const n = (x: unknown) => (Number.isInteger(x) && (x as number) > 0 ? (x as number) : null);
         environment.offer = { memory: n(o.memory), cores: n(o.cores) };
+      }
+      if (input.egress !== undefined) environment.egress = egress(input.egress);
+      if (input.bindings !== undefined) {
+        if (!Array.isArray(input.bindings) || input.bindings.some((b) => typeof b !== "string" || !BRAIN.test(b))) throw new Invalid("bindings must be a list of brains' names");
+        environment.bindings = [...new Set(input.bindings as string[])].slice(0, 64);
       }
       if (input.running !== undefined) environment.running = running(input.running);
       return json(await u.putEnvironment(environment));
@@ -530,7 +601,11 @@ export async function status(env: Env, user: string, id?: string) {
     seen: e.seen,
     running: e.running,
     offer: e.offer,
-    templates: Object.entries(e.templates).map(([name, t]) => ({ name, brain: t.brain, holdsCredentials: t.needsApproval, memory: t.memory, capabilities: t.capNames })),
+    egress: e.egress,
+    bindings: e.bindings,
+    templates: Object.entries(e.templates).map(([name, t]) => ({ name, holdsCredentials: t.needsApproval, memory: t.memory, capabilities: t.capNames })),
   }));
-  return { environments, spawns: (await u.spawns(undefined, [], 20)).map(({ task, ...s }) => ({ ...s, task: task.slice(0, 200) })) };
+  // Who a spawn may work for (its brain).
+  const brains = (await u.brains()).map((b) => ({ name: b.name, title: b.title, account: b.account, holdsCredentials: b.credentials.length > 0 }));
+  return { environments, brains, spawns: (await u.spawns(undefined, [], 20)).map(({ task, ...s }) => ({ ...s, task: task.slice(0, 200) })) };
 }

@@ -608,8 +608,9 @@ let
     '';
 
   # A slot's launcher. The guest is whichever template fleetd claimed the
-  # slot for, written into ${stateDir}/template before it starts the unit,
-  # and is built as `nixosConfigurations."<template>@slot"`, the same guest
+  # slot for (`<template>+<brain>` for a brain whose memory is bound here),
+  # written into ${stateDir}/template before it starts the unit, and is
+  # built as `nixosConfigurations."<guest>@slot"`, the same guest
   # in every slot: this launcher tells it which (fleet/guest/slot.nix). Every
   # spawn starts from an empty disk, so nothing one task leaves behind is
   # there for the next. A spawn that asked for a size has it in
@@ -621,14 +622,14 @@ let
       runtimeInputs = [ config.nix.package pkgs.coreutils ];
       text = ''
         template=$(cat ${vm.stateDir}/template 2>/dev/null || true)
-        known=(${lib.escapeShellArgs spawnable})
+        known=(${lib.escapeShellArgs guests})
         ok=""
         for t in "''${known[@]}"; do
           if [ "$t" = "$template" ]; then ok=1; fi
         done
         if [ -z "$ok" ]; then
           echo "${name}: no spawnable template in ${vm.stateDir}/template (got '$template')." >&2
-          echo "Spawnable here: ${lib.concatStringsSep ", " spawnable}" >&2
+          echo "Spawnable here: ${lib.concatStringsSep ", " guests}" >&2
           exit 1
         fi
 
@@ -657,6 +658,8 @@ let
     };
 
   spawnable = lib.attrNames (lib.filterAttrs (_: t: t.spawnable or false) cfg.templates);
+  # And each with a bound brain's memory.
+  guests = spawnable ++ lib.concatMap (t: map (b: "${t}+${b}") (lib.attrNames (lib.filterAttrs (_: b: b.shares != [ ]) cfg.bindings))) spawnable;
 
   # What the fleet view shows of a VM: where it is and what it may reach.
   network = name: inst: {
@@ -669,7 +672,7 @@ let
   # there (they count against the budget while they run), the templates a
   # slot can take, and the budget itself.
   manifest = {
-    inherit (cfg) flake owner memoryBudget brains defaultAccount offer;
+    inherit (cfg) flake owner memoryBudget bindings defaultAccount offer;
     slots = lib.mapAttrs
       (name: inst:
         let vm = plans.${name}; in {
@@ -692,7 +695,7 @@ let
         })
       (lib.filterAttrs (_: inst: inst.headless && !inst.slot) active);
     templates = lib.mapAttrs
-      (_: t: { inherit (t) memory cores needsApproval brain account capNames; })
+      (_: t: { inherit (t) memory cores needsApproval capNames; })
       (lib.filterAttrs (_: t: t.spawnable or false) cfg.templates);
   };
 

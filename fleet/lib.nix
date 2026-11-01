@@ -1,11 +1,15 @@
-# The fleet: brains, capabilities, environments and templates, and the check
-# that every template can run everywhere it says it can. See
+# The fleet: capabilities, environments and templates, and the check that
+# every template can run everywhere it says it can. See
 # .agent/plans/agent-fleet.md for what each of these is.
 #
-# `mkFleet` takes the four sets and the installing flake's `nixosSystem`, and
-# gives back the resolved templates and a guest per template that runs in a
-# `vm` environment. Anything that cannot be placed is an evaluation error
-# naming every such template at once, never a runtime one.
+# `mkFleet` takes them and the installing flake's `nixosSystem`, and gives
+# back the resolved templates and a guest per template that runs in a `vm`
+# environment. Anything that cannot be placed is an evaluation error naming
+# every such template at once, never a runtime one.
+#
+# A brain is corkboard's (cloud/src/brains.ts), and a spawn's, not a
+# template's: what stays here is what only the host knows, its bindings, the
+# memory it mounts in a brain's spawns (.agent/plans/brains.md).
 { lib }:
 let
   inherit (lib) concatMap concatStringsSep elem foldl' max subtractLists unique;
@@ -33,18 +37,12 @@ let
     targets = c.targets or [ "vm" ];
   };
 
-  brain = name: b: {
+  binding = name: b: {
     inherit name;
-    modules = b.modules or [ ];
-    egress = b.egress or [ ];
-    credentials = b.credentials or [ ];
-    # The Claude account its agents run as: a name, whose token the host
-    # keeps (fleetd). Every agent of the brain shares it, and so its limits.
-    account = b.account or null;
-    # Its memory, as virtiofs shares every spawned agent of the brain mounts,
-    # keyed by name: { source; target; writable ? false; description ? ""; }.
-    # Shared, so what one agent writes the others see. Resident guests
-    # declare their own shares.
+    # The brain's memory on this host, as virtiofs shares every spawn for the
+    # brain mounts, keyed by name: { source; target; writable ? false;
+    # description ? ""; }. Shared, so what one agent writes the others see.
+    # Resident guests declare their own shares.
     shares = lib.mapAttrs (_: s: { writable = false; description = ""; } // s) (b.shares or { });
   };
 
@@ -58,7 +56,7 @@ let
   };
 
   mkFleet =
-    { brains ? { }
+    { bindings ? { }
     , capabilities ? { }
     , environments ? { }
     , templates ? { }
@@ -69,6 +67,10 @@ let
       # passes uids through, so the guest's user has to be this uid to write
       # to the outbox or a brain's memory.
     , ownerUid ? null
+      # Hosts every slot may reach besides its templates': what the brains
+      # spawned here reach (their records' egress), since a slot's filter is
+      # fixed when its host is built.
+    , egress ? [ ]
       # The installing flake's, so guests are built from its nixpkgs.
     , nixosSystem ? null
       # corkboard's Worker: every spawned agent reports to its card there,
@@ -77,7 +79,7 @@ let
     }:
     let
       caps = lib.mapAttrs capability capabilities;
-      brains' = lib.mapAttrs brain brains;
+      bindings' = lib.mapAttrs binding bindings;
       envs = lib.mapAttrs environment environments;
 
       # The capabilities a template asked for, then whatever they require, in
@@ -96,23 +98,13 @@ let
 
       resolve = name: t:
         let
-          b =
-            if (t.brain or null) == null then null
-            else brains'.${t.brain} or (throw "fleet: template `${name}`: unknown brain `${t.brain}`");
           capNames = closure (t.capabilities or [ ]);
           cs = map (n: caps.${n}) capNames;
-          fromBrain = f: if b == null then [ ] else f b;
-          credentials = unique (fromBrain (b: b.credentials) ++ concatMap (c: c.credentials) cs);
+          credentials = unique (concatMap (c: c.credentials) cs);
         in
-        {
+        if t ? brain then throw "fleet: template `${name}`: a brain is a spawn's now, not a template's; bind its memory with `bindings.${t.brain}.shares`"
+        else {
           inherit name capNames credentials;
-          # Null for an agent that works for the user directly and holds
-          # nothing of a brain's.
-          brain = t.brain or null;
-          # The brain's account and memory. A template with no brain runs as
-          # whichever account spawned it (fleetd).
-          account = if b == null then null else b.account;
-          shares = if b == null then { } else b.shares;
           environments = t.environments or [ ];
           needs = unique (concatMap (c: c.needs) cs);
           memory = foldl' max (t.memory or 0) (map (c: c.memory) cs);
@@ -120,15 +112,15 @@ let
           disk = foldl' max (t.disk or 0) (map (c: c.disk) cs);
           # Started on demand in a slot, rather than a VM of its own.
           spawnable = t.spawnable or false;
-          egress = unique (fromBrain (b: b.egress) ++ concatMap (c: c.egress) cs);
+          egress = unique (concatMap (c: c.egress) cs);
           # The approval rule: a template with no credentials runs whoever
           # asks; one with any needs the user's yes when a brain asks.
           needsApproval = credentials != [ ];
           # Where it can be built: every capability has to agree.
           targets = foldl' (acc: c: builtins.filter (k: elem k c.targets) acc) [ "vm" "oci" ] cs;
           # The template's own modules first (a guest's base: its machine,
-          # its network), then the brain's, then each capability's.
-          modules = (t.modules or [ ]) ++ fromBrain (b: b.modules) ++ concatMap (c: c.modules) cs;
+          # its network), then each capability's.
+          modules = (t.modules or [ ]) ++ concatMap (c: c.modules) cs;
         };
 
       resolved = lib.mapAttrs resolve templates;
@@ -172,20 +164,25 @@ let
       runsAsVm = t: lib.any (e: (envs.${e}.kind or null) == "vm") t.environments;
 
       # A spawnable template as a slot's guest: the slot guest, then the
-      # template. Named `<template>@slot`, which every slot's launcher builds.
-      slotGuests = lib.mapAttrs'
-        (_: t: lib.nameValuePair "${t.name}@slot" (checked (nixosSystem {
-          modules = [ (import ./guest/slot.nix { inherit ownerUid; template = t; }) ]
-            ++ slotModules ++ t.modules ++ [ (guestCheck t) ];
-        })))
-        (lib.filterAttrs (_: t: t.spawnable && runsAsVm t) resolved);
+      # template. Named `<template>@slot`, which every slot's launcher builds,
+      # and `<template>+<brain>@slot` with a bound brain's memory mounted.
+      slotGuest = t: brain: shares: checked (nixosSystem {
+        modules = [ (import ./guest/slot.nix { inherit ownerUid corkboardHost brain shares; template = t; }) ]
+          ++ slotModules ++ t.modules ++ [ (guestCheck t) ];
+      });
+      spawnables = lib.attrValues (lib.filterAttrs (_: t: t.spawnable && runsAsVm t) resolved);
+      slotGuests = lib.listToAttrs (concatMap
+        (t: [ (lib.nameValuePair "${t.name}@slot" (slotGuest t null { })) ]
+          ++ lib.mapAttrsToList (b: binding: lib.nameValuePair "${t.name}+${b}@slot" (slotGuest t b binding.shares))
+            (lib.filterAttrs (_: b: b.shares != { }) bindings'))
+        spawnables);
     in
     {
       templates = lib.mapAttrs (_: checked) resolved;
       environments = envs;
-      # Each brain's account, for fleetd: a brain's spawn of a template with
-      # no brain of its own runs as the brain's account.
-      brains = lib.mapAttrs (_: b: { inherit (b) account; }) brains';
+      # Each bound brain's shares, by name, for fleetd: a spawn for one with
+      # any boots `<template>+<brain>`.
+      bindings = lib.mapAttrs (_: b: { shares = lib.attrNames b.shares; }) bindings';
       inherit errors;
 
       nixosConfigurations = lib.mapAttrs
@@ -193,9 +190,10 @@ let
         (lib.filterAttrs (_: t: runsAsVm t && !t.spawnable) resolved)
       // slotGuests;
 
-      # Every host a slot may need to reach: corkboard's Worker and the
-      # union of the spawnable templates' egress, for the slots' allowlist.
-      slotEgress = unique ([ corkboardHost ] ++ concatMap (t: t.egress) (lib.attrValues (lib.filterAttrs (_: t: t.spawnable) resolved)));
+      # Every host a slot may need to reach: corkboard's Worker, the union
+      # of the spawnable templates' egress, and the brains', for the slots'
+      # allowlist.
+      slotEgress = unique ([ corkboardHost ] ++ concatMap (t: t.egress) (lib.attrValues (lib.filterAttrs (_: t: t.spawnable) resolved)) ++ egress);
     };
 
   # Capabilities corkboard provides, for an installing flake to use as they

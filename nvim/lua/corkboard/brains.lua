@@ -4,10 +4,14 @@
 --
 -- The view is the agent://brains buffer, fourth among the tabs after the
 -- fleet: a plain listing with the browser's HTML drawn over it. The cursor's
--- line selects a brain. a makes one and e edits it, in a buffer of its
--- fields written with :w; d archives it (asked first), u restores it, and P
--- purges an archived one, its name typed again. It follows the user's
--- socket, which says when a brain changes.
+-- line selects a brain. <CR> opens its memory beside the listing; a makes
+-- one and e edits it, in a buffer of its fields written with :w; d archives
+-- it (asked first), u restores it, and P purges an archived one, its name
+-- typed again. It follows the user's socket, which says when a brain changes.
+--
+-- A brain's memory is agent://brains/<name>, drawn over by the browser too:
+-- its notes by kind, the days of its log and its episodes, and / recalls
+-- over them. <CR> opens the line's note, day or transcript below it.
 
 local pinned = require("corkboard.pinned")
 
@@ -19,6 +23,8 @@ local selected
 local brains -- as the Worker answers, archived ones too
 local problem
 local asking -- { name, what = "archive" }: d's question, until it's answered
+
+local push_memory -- below, with the memory buffers
 
 local function cloud() return require("corkboard.cards.cloud") end
 
@@ -84,7 +90,7 @@ end
 local function render_text()
   if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
   local s = state()
-  local lines, map = { "Brains     j/k · a new · e edit · d archive · u restore · P purge · R refresh", "" }, {}
+  local lines, map = { "Brains     j/k · <CR> memory · a new · e edit · d archive · u restore · P purge · R refresh", "" }, {}
   if s.problem then table.insert(lines, "  " .. s.problem) end
   if s.loading then table.insert(lines, "  asking the Worker…") end
   if s.asking then table.insert(lines, "  archive " .. s.asking.name .. "?  y yes · n no") end
@@ -294,12 +300,301 @@ function M.select(name, win)
   if lnum then vim.api.nvim_win_set_cursor(0, { lnum, 2 }) end
 end
 
+-- Memory -----------------------------------------------------------------------
+--
+-- One buffer per brain, its state in mem[buf]: what the Worker gave, which
+-- line is which item, the selected one, and the last recall.
+
+local mem = {} -- buf -> { name, title, notes, days, episodes, recall, lines, selected, problem }
+
+local function size(bytes)
+  bytes = tonumber(bytes) or 0
+  if bytes >= 1048576 then return string.format("%.1f MB", bytes / 1048576) end
+  if bytes >= 1024 then return math.floor(bytes / 1024) .. " KB" end
+  return bytes .. " B"
+end
+
+local function entries(n) return n .. (n == 1 and " entry" or " entries") end
+
+-- What the page is sent: the sections, each a list of items with keys.
+local function memory_state(b)
+  local m = mem[b]
+  local kinds, by = {}, {}
+  for _, n in ipairs(m.notes or {}) do
+    if not by[n.kind] then
+      by[n.kind] = {}
+      table.insert(kinds, n.kind)
+    end
+    table.insert(by[n.kind], { key = "note:" .. n.id, id = n.id, title = n.title, ago = ago(n.updated) })
+  end
+  table.sort(kinds)
+  return {
+    buf = b,
+    name = m.name,
+    title = m.title,
+    notes = vim.tbl_map(function(k) return { kind = k, notes = by[k] } end, kinds),
+    days = vim.tbl_map(function(d) return { key = "day:" .. d.day, day = d.day, entries = d.entries } end, m.days or {}),
+    episodes = vim.tbl_map(function(e)
+      return { key = "episode:" .. e.id, ago = ago(e.at), agent = e.agent, trigger = e.trigger, size = size(e.bytes), pending = e.consolidated == 0 or nil }
+    end, m.episodes or {}),
+    recall = m.recall and {
+      query = m.recall.query,
+      hits = vim.iter(ipairs(m.recall.hits)):map(function(i, h)
+        return { key = "hit:" .. i, title = h.title, kind = nil_if_null(h.kind), snippet = h.snippet, ago = ago(h.at) }
+      end):totable(),
+    },
+    selected = m.selected,
+    problem = m.problem,
+    loading = (not m.notes and not m.problem) or nil,
+  }
+end
+
+push_memory = function(b)
+  if mem[b] then require("corkboard").notify("corkboard.view", b, memory_state(b)) end
+end
+
+local function render_memory(b)
+  local m = mem[b]
+  if not (m and vim.api.nvim_buf_is_valid(b)) then return end
+  local s = memory_state(b)
+  local lines, map = { s.name .. " · " .. s.title .. "     j/k · <CR> open · / recall · <Esc> clear · R refresh · q close", "" }, {}
+  local function item(key, text)
+    table.insert(lines, text)
+    map[#lines] = key
+  end
+  if s.problem then table.insert(lines, "  " .. s.problem) end
+  if s.loading then table.insert(lines, "  asking the Worker…") end
+  if s.recall then
+    table.insert(lines, "Recall: " .. s.recall.query)
+    if #s.recall.hits == 0 then table.insert(lines, "  nothing") end
+    for _, h in ipairs(s.recall.hits) do
+      item(h.key, string.format("  %-40s %s", h.title, h.ago or ""))
+      table.insert(lines, "    " .. (h.snippet or ""):gsub("\n", " "))
+    end
+    table.insert(lines, "")
+  end
+  if not s.loading then
+    table.insert(lines, "Notes")
+    if #s.notes == 0 then table.insert(lines, "  none") end
+    for _, k in ipairs(s.notes) do
+      table.insert(lines, "  " .. k.kind)
+      for _, n in ipairs(k.notes) do item(n.key, string.format("    %-28s %-40s %s", n.id, n.title, n.ago or "")) end
+    end
+    table.insert(lines, "")
+    table.insert(lines, "Log")
+    if #s.days == 0 then table.insert(lines, "  none") end
+    for _, d in ipairs(s.days) do item(d.key, "  " .. d.day .. "  " .. entries(d.entries)) end
+    table.insert(lines, "")
+    table.insert(lines, "Episodes")
+    if #s.episodes == 0 then table.insert(lines, "  none") end
+    for _, e in ipairs(s.episodes) do
+      item(e.key, string.format("  %-8s %-16s %-8s %-8s%s", e.ago or "", e.agent, e.trigger, e.size, e.pending and "  pending" or ""))
+    end
+  end
+  pinned.set_lines(b, lines)
+  m.lines = map
+  -- The first item, until one is picked.
+  if not m.selected or not pinned.line_of(map, m.selected) then
+    local first = vim.iter(vim.tbl_keys(map)):fold(math.huge, math.min)
+    m.selected = map[first]
+  end
+  pinned.follow(b, map, m.selected)
+end
+
+local function redraw_memory(b)
+  render_memory(b)
+  push_memory(b)
+end
+
+local function call(op, ...)
+  local ok, res = pcall(cloud().call, op, ...)
+  if ok then return res end
+  vim.notify("corkboard: " .. tostring(res), vim.log.levels.WARN)
+end
+
+local function load_memory(b)
+  local m = mem[b]
+  if not m then return end
+  local ok, res = pcall(function()
+    return { notes = cloud().call("brains_notes", m.name), days = cloud().call("brains_days", m.name), episodes = cloud().call("brains_episodes", m.name) }
+  end)
+  if ok then
+    m.notes, m.days, m.episodes, m.problem = res.notes, res.days, res.episodes, nil
+  else
+    m.problem = tostring(res)
+  end
+  redraw_memory(b)
+end
+
+-- A read-only scratch buffer below, q to close it.
+local function scratch(name, lines)
+  local old = vim.fn.bufnr(name)
+  if old ~= -1 then pcall(vim.api.nvim_buf_delete, old, { force = true }) end
+  local s = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(s, name)
+  vim.bo[s].bufhidden = "wipe"
+  vim.bo[s].filetype = "markdown"
+  vim.api.nvim_buf_set_lines(s, 0, -1, false, lines)
+  vim.bo[s].modifiable = false
+  vim.keymap.set("n", "q", "<Cmd>close<CR>", { buffer = s, nowait = true, desc = "brains: close" })
+  vim.cmd("botright split")
+  vim.api.nvim_win_set_buf(0, s)
+end
+
+local function text_of(content)
+  if type(content) == "string" then return content end
+  local out = {}
+  for _, c in ipairs(type(content) == "table" and content or {}) do
+    if c.type == "text" then
+      table.insert(out, c.text)
+    elseif c.type == "tool_use" then
+      table.insert(out, "→ " .. tostring(c.name) .. " " .. vim.json.encode(c.input or vim.empty_dict()):sub(1, 200))
+    elseif c.type == "tool_result" then
+      table.insert(out, "← " .. text_of(c.content):sub(1, 400))
+    end
+  end
+  return table.concat(out, "\n")
+end
+
+-- A transcript, as Claude Code writes it (a JSON line per event), as who
+-- said what.
+local function transcript_lines(raw)
+  local out = {}
+  for line in raw:gmatch("[^\n]+") do
+    local ok, ev = pcall(vim.json.decode, line)
+    if ok and type(ev) == "table" and (ev.type == "user" or ev.type == "assistant") and type(ev.message) == "table" then
+      local t = vim.trim(text_of(ev.message.content))
+      if t ~= "" then
+        table.insert(out, "## " .. ev.type .. (type(ev.timestamp) == "string" and ("  " .. ev.timestamp) or ""))
+        vim.list_extend(out, vim.split(t, "\n", { plain = true }))
+        table.insert(out, "")
+      end
+    elseif not ok then
+      table.insert(out, line)
+    end
+  end
+  return out
+end
+
+local function open_day(m, day)
+  local list = call("brains_entries", m.name, day)
+  if not list then return end
+  local lines = { "# " .. m.name .. " · " .. day, "" }
+  for _, e in ipairs(list) do
+    local text = vim.split(e.text or "", "\n", { plain = true })
+    table.insert(lines, string.format("- %s %s: %s", (e.at or ""):match("T(%d+:%d+)") or "", e.who, text[1] or ""))
+    for i = 2, #text do table.insert(lines, "  " .. text[i]) end
+  end
+  scratch("agent://brains/" .. m.name .. "/log/" .. day, lines)
+end
+
+local function open_item(b, key)
+  local m = mem[b]
+  if not (m and key) then return end
+  local kind, id = key:match("^(%w+):(.*)$")
+  if kind == "hit" then
+    local h = m.recall and m.recall.hits[tonumber(id)]
+    if not h then return end
+    if h.type == "entry" then return open_day(m, h.day) end
+    kind, id = "note", h.id
+  end
+  if kind == "note" then
+    local n = call("brains_note", m.name, id)
+    if not n then return end
+    local lines = { "# " .. n.title, "" }
+    vim.list_extend(lines, vim.split(n.body or "", "\n", { plain = true }))
+    scratch("agent://brains/" .. m.name .. "/note/" .. id, lines)
+  elseif kind == "day" then
+    open_day(m, id)
+  elseif kind == "episode" then
+    local e = call("brains_episode", m.name, id)
+    if e then scratch("agent://brains/" .. m.name .. "/episode/" .. id, transcript_lines(e.transcript or "")) end
+  end
+end
+
+local function recall(b)
+  local m = mem[b]
+  vim.ui.input({ prompt = "Recall: ", default = m.recall and m.recall.query or nil }, function(q)
+    q = q and vim.trim(q) or ""
+    if q == "" then return end
+    local hits = call("brains_recall", m.name, q)
+    if not hits then return end
+    m.recall = { query = q, hits = hits }
+    m.selected = hits[1] and "hit:1" or nil
+    redraw_memory(b)
+  end)
+end
+
+local function memory_buffer(name)
+  for b, m in pairs(mem) do
+    if m.name == name and vim.api.nvim_buf_is_valid(b) then return b end
+  end
+  local b
+  local function step(dir) return function() pinned.step(mem[b].lines or {}, dir) end end
+  b = pinned.listing("agent://brains/" .. name, "brain-memory", {
+    j = { step(1), "next" },
+    k = { step(-1), "previous" },
+    ["<CR>"] = { function() open_item(b, mem[b].selected) end, "open it" },
+    ["/"] = { function() recall(b) end, "recall" },
+    ["<Esc>"] = {
+      function()
+        if not mem[b].recall then return end
+        mem[b].recall, mem[b].selected = nil, nil
+        redraw_memory(b)
+      end,
+      "clear the recall",
+    },
+    R = { function() load_memory(b) end, "refresh" },
+    q = { "<Cmd>close<CR>", "close" },
+  }, function() return mem[b] and mem[b].lines or {} end, function(key)
+    if mem[b].selected == key then return end
+    mem[b].selected = key
+    push_memory(b)
+  end)
+  vim.bo[b].bufhidden = "wipe"
+  vim.b[b].corkboard_brain_memory = name
+  local f = find(name)
+  mem[b] = { name = name, title = f and f.title or name }
+  vim.api.nvim_create_autocmd("BufWipeout", { buffer = b, callback = function() mem[b] = nil end })
+  return b
+end
+
+-- The selected brain's memory (or name's), beside the listing.
+function M.memory(name)
+  name = name or selected
+  if not name then return end
+  local b = memory_buffer(name)
+  local win = vim.iter(vim.api.nvim_tabpage_list_wins(0)):find(function(w)
+    return vim.b[vim.api.nvim_win_get_buf(w)].corkboard_brain_memory ~= nil
+  end)
+  if win then
+    vim.api.nvim_set_current_win(win)
+  else
+    vim.cmd("botright vsplit")
+  end
+  vim.api.nvim_win_set_buf(0, b)
+  load_memory(b)
+end
+
+-- A click on an item in the browser; with open, a double click.
+function M.memory_select(b, key, win, open)
+  if not mem[b] then return end
+  if not (win and vim.api.nvim_win_is_valid(win)) then win = vim.fn.win_findbuf(b)[1] end
+  if not win then return end
+  vim.api.nvim_set_current_win(win)
+  local lnum = pinned.line_of(mem[b].lines or {}, key)
+  if lnum then vim.api.nvim_win_set_cursor(win, { lnum, 2 }) end
+  mem[b].selected = key
+  push_memory(b)
+  if open then open_item(b, key) end
+end
+
 local function buffer()
   if buf and vim.api.nvim_buf_is_valid(buf) then return buf end
   buf = pinned.listing("agent://brains", "brains", {
     j = { function() pinned.step(line_item, 1) end, "next" },
     k = { function() pinned.step(line_item, -1) end, "previous" },
-    ["<CR>"] = { or_answer(true, M.edit), "edit it" },
+    ["<CR>"] = { or_answer(true, function() M.memory() end), "its memory" },
     a = { M.new, "a new brain" },
     e = { M.edit, "edit it" },
     d = { M.archive, "archive it" },
@@ -331,6 +626,9 @@ end
 
 function M.push_all()
   if buf and vim.api.nvim_buf_is_valid(buf) then push_state() end
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.b[b].corkboard_brain_memory then push_memory(b) end
+  end
 end
 
 M.state = state

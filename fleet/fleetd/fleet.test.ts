@@ -1,7 +1,7 @@
 // fleetd's scheduling: which queued spawns start, given slots, residents and
 // the memory budget.   bun test fleet/fleetd
 import { expect, test } from "bun:test";
-import { accountFor, occupancy, OVERHEAD, schedule, type Manifest, type Spawn } from "./fleet";
+import { accountFor, egressOf, guestOf, occupancy, OVERHEAD, schedule, type Manifest, type Network, type Spawn } from "./fleet";
 
 const slot = (n: number) => ({ guestAddress: `10.${80 + n}.0.2`, stateDir: "", shareDir: "", outboxDir: "", unit: `agent-${n}.service` });
 
@@ -12,11 +12,10 @@ const m = (budget: number | null): Manifest => ({
   slots: { "agent-0": slot(0), "agent-1": slot(1) },
   residents: { "brain-vm": { unit: "brain-vm.service", memory: 14336 } },
   templates: {
-    coding: { memory: 4096, cores: 2, needsApproval: false, brain: null, account: null, capNames: ["coding"] },
-    big: { memory: 12288, cores: 4, needsApproval: false, brain: null, account: null, capNames: [] },
-    "work-coding": { memory: 4096, cores: 2, needsApproval: true, brain: "work", account: "work", capNames: ["coding"] },
+    coding: { memory: 4096, cores: 2, needsApproval: false, capNames: ["coding"] },
+    big: { memory: 12288, cores: 4, needsApproval: false, capNames: [] },
   },
-  brains: { work: { account: "work" }, pepper: { account: "personal" } },
+  bindings: { work: { shares: ["vault"] }, pepper: { shares: [] } },
   defaultAccount: "personal",
 });
 
@@ -69,30 +68,35 @@ test("a slot whose unit is still up isn't free, even with no spawn on it", () =>
   expect(schedule(m(null), [s], new Set(["agent-0.service"])).start).toEqual([{ id: s.id, slot: "agent-1" }]);
 });
 
-// Which account a spawn runs as.
+// Which account a spawn runs as, and which guest it boots.
 
-test("a brain's template runs as the brain's account, whoever spawns it", () => {
-  expect(accountFor(m(null), "work-coding", "user")).toBe("work");
-  expect(accountFor(m(null), "work-coding", "pepper")).toBe("work");
-});
-
-test("and can't be made to run as another", () => {
-  expect(() => accountFor(m(null), "work-coding", "user", "personal")).toThrow("runs as work");
-});
-
-test("a brainless template runs as the brain that spawned it", () => {
-  expect(accountFor(m(null), "coding", "pepper")).toBe("personal");
-  expect(accountFor(m(null), "coding", "work")).toBe("work");
-});
-
-test("or, spawned by the user, as asked, else the default", () => {
-  expect(accountFor(m(null), "coding", "user", "work")).toBe("work");
-  expect(accountFor(m(null), "coding", "user")).toBe("personal");
-  expect(() => accountFor({ ...m(null), defaultAccount: null }, "coding", "user")).toThrow("which account?");
+test("a spawn runs as the account it was given, else the default", () => {
+  expect(accountFor(m(null), "work")).toBe("work");
+  expect(accountFor(m(null), null)).toBe("personal");
+  expect(accountFor(m(null))).toBe("personal");
+  expect(() => accountFor({ ...m(null), defaultAccount: null })).toThrow("which account?");
 });
 
 test("an account is a plain name, never a path", () => {
-  expect(() => accountFor(m(null), "coding", "user", "../../.ssh/id_ed25519")).toThrow("no account");
+  expect(() => accountFor(m(null), "../../.ssh/id_ed25519")).toThrow("no account");
+});
+
+test("a brain this host has memory for boots with it; any other, its template's guest", () => {
+  expect(guestOf(m(null), { ...spawn("coding"), brain: "work" })).toBe("coding+work");
+  expect(guestOf(m(null), { ...spawn("coding"), brain: "pepper" })).toBe("coding");
+  expect(guestOf(m(null), { ...spawn("coding"), brain: "garden" })).toBe("coding");
+  expect(guestOf({ ...m(null), bindings: undefined }, { ...spawn("coding"), brain: "work" })).toBe("coding");
+  expect(guestOf(m(null), spawn("coding"))).toBe("coding");
+});
+
+test("what every slot may reach: what they all allow, open if they all are, unknown if one doesn't say", () => {
+  const net = (egress: Network["egress"], allowedDomains: string[], allowedDomainSuffixes: string[] = []): Network => ({ address: null, egress, allowedDomains, allowedDomainSuffixes, routedEgress: [] });
+  const with2 = (a?: Network, b?: Network): Manifest => ({ ...m(null), slots: { "agent-0": { ...slot(0), network: a }, "agent-1": { ...slot(1), network: b } } });
+  expect(egressOf(with2(net("allowlist", ["a.com", "b.com"], ["x.org"]), net("allowlist", ["b.com"], ["x.org"])))).toEqual({ open: false, domains: ["b.com"], suffixes: ["x.org"] });
+  expect(egressOf(with2(net("open", []), net("allowlist", ["b.com"])))).toEqual({ open: false, domains: ["b.com"], suffixes: [] });
+  expect(egressOf(with2(net("open", []), net("open", [])))).toEqual({ open: true, domains: [], suffixes: [] });
+  expect(egressOf(with2(net("open", []), undefined))).toBeUndefined();
+  expect(egressOf({ ...m(null), slots: {} })).toBeUndefined();
 });
 
 test("what's up: residents while their unit is, and each slot's spawn", () => {
@@ -103,8 +107,8 @@ test("what's up: residents while their unit is, and each slot's spawn", () => {
     used: 14336 + 4096 + OVERHEAD,
     residents: [{ name: "brain-vm", brain: "work", memory: 14336, up: true }],
     slots: [
-      { name: "agent-0", spawn: null, template: null, memory: null },
-      { name: "agent-1", spawn: a.id, template: "coding", memory: 4096 + OVERHEAD },
+      { name: "agent-0", spawn: null, template: null, brain: null, memory: null },
+      { name: "agent-1", spawn: a.id, template: "coding", brain: null, memory: 4096 + OVERHEAD },
     ],
   });
   expect(occupancy(m(null), [], new Set()).residents[0]).toMatchObject({ brain: null, up: false });
@@ -118,10 +122,11 @@ test("each VM's config: a resident's own, a slot's as the template it runs", () 
     slots: { "agent-0": { ...slot(0), network }, "agent-1": { ...slot(1), network } },
     residents: { "brain-vm": { unit: "brain-vm.service", memory: 14336, brain: "work", account: "work", cores: 4, capNames: ["coding"], network } },
   };
-  const a = spawn("work-coding", "running", "agent-0");
+  const a = { ...spawn("coding", "running", "agent-0"), brain: "work" };
   const o = occupancy(man, [a], new Set(["brain-vm.service"]));
   expect(o.residents[0].config).toEqual({ ...network, cores: 4, capabilities: ["coding"], account: "work" });
-  expect(o.slots[0].config).toEqual({ ...network, cores: 2, capabilities: ["coding"], account: "personal", needsApproval: true });
+  expect(o.slots[0]).toMatchObject({ template: "coding", brain: "work" });
+  expect(o.slots[0].config).toEqual({ ...network, cores: 2, capabilities: ["coding"], account: "personal", needsApproval: false });
   expect(o.slots[1].config).toEqual({ ...network, cores: null, capabilities: [], account: null });
   expect(occupancy(base, [], new Set()).residents[0].config).toBeUndefined();
 });
@@ -140,7 +145,7 @@ test("past the host's offer a spawn fails", () => {
   expect(p.fail.map((f) => f.error)).toEqual(["asks for 9000 MiB; one VM here gets at most 8192", "asks for 8 cores; one VM here gets at most 4"]);
 });
 
-test("a shell of the spawner's never goes in a brain's template", () => {
-  const s = { ...spawn("work-coding"), shell: { packages: ["ffmpeg"] } };
-  expect(schedule(m(null), [s], new Set()).fail[0].error).toContain("brainless");
+test("a shell of the spawner's never goes beside a brain's memory", () => {
+  const s = { ...spawn("coding"), brain: "work", shell: { packages: ["ffmpeg"] } };
+  expect(schedule(m(null), [s], new Set()).fail[0].error).toContain("for no brain");
 });

@@ -69,7 +69,7 @@ const tmux = (args: string[], stdin?: string) => spawn([...TMUX, ...args], stdin
 // to read, not to replace.
 async function renew(state: State) {
   if (state.token && state.minted && Date.now() - state.minted < DAY) return;
-  const { token: pepper } = await api("POST", "/api/tokens/pepper", {});
+  const { token: pepper } = await api("POST", "/api/brains/pepper/tokens", {});
   if (SSH) await spawn([...SSH, `cat > ${TOKEN_FILE}`], pepper);
   else writeFileSync(TOKEN_FILE, pepper);
   const old = state.token;

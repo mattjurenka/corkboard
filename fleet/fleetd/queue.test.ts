@@ -5,7 +5,20 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-type Remote = { id: string; template: string; task: string; by: string; state: string; environment: string; board: string; card: string; agent: string; stopRequested?: boolean };
+type Remote = {
+  id: string;
+  template: string;
+  task: string;
+  by: string;
+  brain?: string | null;
+  account?: string | null;
+  state: string;
+  environment: string;
+  board: string;
+  card: string;
+  agent: string;
+  stopRequested?: boolean;
+};
 
 const dir = mkdtempSync(join(tmpdir(), "fleet-queue-"));
 const repo = join(dir, "repo");
@@ -26,7 +39,7 @@ const server = Bun.serve({
     const m = url.pathname.match(/^\/api\/spawns\/(\w+)\/(claim|report)$/);
     const s = remote.find((x) => x.id === m?.[1]);
     if (!s) return Response.json({ error: "no" }, { status: 404 });
-    if (m![2] === "claim") return Response.json({ spawn: s, token: `cbc_${s.id}`, repo: s.board === "proj" ? repo : null });
+    if (m![2] === "claim") return Response.json({ spawn: s, token: `cbc_${s.id}`, repo: s.board === "proj" ? repo : null, ...(s.brain && { brainToken: `cbb_${s.id}` }) });
     s.state = body.state;
     return Response.json(s);
   },
@@ -52,13 +65,14 @@ beforeAll(async () => {
       flake: "",
       owner: "matthew",
       memoryBudget: null,
-      slots: {},
+      slots: {
+        "agent-0": { guestAddress: "", stateDir: "", shareDir: "", outboxDir: "", unit: "agent-0.service", network: { address: null, egress: "allowlist", allowedDomains: ["api.anthropic.com"], allowedDomainSuffixes: [], routedEgress: [] } },
+      },
       residents: {},
       templates: {
-        coding: { memory: 4096, cores: 2, needsApproval: false, brain: null, account: null, capNames: ["coding"] },
-        "work-coding": { memory: 4096, cores: 2, needsApproval: true, brain: "work", account: "work", capNames: ["coding"] },
+        coding: { memory: 4096, cores: 2, needsApproval: false, capNames: ["coding"] },
       },
-      brains: { work: { account: "work" }, pepper: { account: "personal" } },
+      bindings: { work: { shares: ["vault"] } },
       defaultAccount: "personal",
     }),
   );
@@ -86,17 +100,22 @@ const add = (s: Partial<Remote> & { id: string }) =>
 
 test("says what it runs, and claims what's queued for it as a spawn of its own", async () => {
   add({ id: "aaaaaa1", board: "proj" });
-  add({ id: "aaaaaa2", template: "coding", by: "pepper" });
+  add({ id: "aaaaaa2", template: "coding", by: "pepper", account: "personal" });
   add({ id: "aaaaaa3", state: "pending-approval" });
+  add({ id: "aaaaaa4", brain: "work", account: "work" });
   await queue.step(new Set());
-  expect(Object.keys(environment.templates)).toEqual(["coding", "work-coding"]);
-  expect(environment.running).toMatchObject({ budget: null, used: 0, residents: [], slots: [], host: { name: expect.any(String) } });
+  expect(Object.keys(environment.templates)).toEqual(["coding"]);
+  expect(environment).toMatchObject({ egress: { open: false, domains: ["api.anthropic.com"], suffixes: [] }, bindings: ["work"] });
+  expect(environment.running).toMatchObject({ budget: null, used: 0, residents: [], slots: [{ name: "agent-0", spawn: null }], host: { name: expect.any(String) } });
   const a = fleet.read("aaaaaa1")!;
   expect(a).toMatchObject({ state: "queued", by: "user", account: "personal", repo, remote: { board: "proj", card: "TASK-1", agent: "coding-aaaaaa1", token: "cbc_aaaaaa1" } });
-  // A brain's brainless spawn runs as the brain's account.
+  // Each runs as the account the Worker stamped it with.
   expect(fleet.read("aaaaaa2")).toMatchObject({ by: "pepper", account: "personal" });
   expect(fleet.read("aaaaaa2")!.repo).toBeUndefined();
   expect(fleet.read("aaaaaa3")).toBeUndefined();
+  // A brain's has the brain's token.
+  expect(fleet.read("aaaaaa4")).toMatchObject({ brain: "work", account: "work", remote: { token: "cbc_aaaaaa4", brainToken: "cbb_aaaaaa4" } });
+  expect(fleet.read("aaaaaa1")!.remote!.brainToken).toBeUndefined();
 });
 
 test("passes a stop on, and reports a run, fetching its commits and revoking its token at the end", async () => {
@@ -129,6 +148,13 @@ test("passes a stop on, and reports a run, fetching its commits and revoking its
   expect(fleet.read("aaaaaa1")).toMatchObject({ reported: "done", fetched: "fleet/aaaaaa1", remote: { token: "" } });
   const log = Bun.spawnSync(["git", "-C", repo, "log", "--format=%s", "fleet/aaaaaa1"]).stdout.toString();
   expect(log).toBe("the fix\nbase\n");
+
+  // A brain's revokes both its tokens.
+  fleet.write({ ...fleet.read("aaaaaa4")!, state: "failed", error: "x" });
+  calls.length = 0;
+  await queue.step();
+  expect(calls.filter((c) => c.path === "/api/tokens/revoke").map((c) => c.body.token)).toEqual(["cbc_aaaaaa4", "cbb_aaaaaa4"]);
+  expect(fleet.read("aaaaaa4")!.remote).toMatchObject({ token: "", brainToken: "" });
 
   // Nothing new, nothing said.
   calls.length = 0;

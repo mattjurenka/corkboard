@@ -9,8 +9,12 @@
 #     slots = 8;
 #     memoryBudget = 14336;
 #     offer = { memory = 12288; cores = 6; };
+#     bindings.work.shares.vault = { source = "/home/me/vault"; target = "/mnt/vault"; writable = true; };
 #     guestModules = [ ... ];   # Claude Code, login keys, time zone
 #   };
+#
+# Who a spawn works for is corkboard's (its brains); a host only says what
+# memory it has for one, and what the brains' agents reach.
 #
 # It drives the VM plumbing in ./host.nix (`my.agentVms`), which a host may
 # also use for VMs of its own.
@@ -23,7 +27,7 @@ let
 
   fleet = fleetLib.mkFleet {
     inherit nixosSystem;
-    inherit (cfg) brains corkboardHost;
+    inherit (cfg) bindings egress corkboardHost;
     capabilities = {
       # Every agent is Claude Code. Its package is the host's to give
       # (guestModules); these are the hosts it talks to.
@@ -47,7 +51,12 @@ let
     else lib.foldl' lib.max 0 (lib.mapAttrsToList (_: t: t.memory) fleet.templates);
 in
 {
-  imports = [ ./host.nix ];
+  imports = [
+    ./host.nix
+    (lib.mkRemovedOptionModule [ "services" "corkboard" "fleet" "brains" ] ''
+      A brain is corkboard's now (its Brains tab), with its account, credentials and egress.
+      What stays here: bindings.<brain>.shares for its memory, and egress for the hosts its agents reach.'')
+  ];
 
   options.services.corkboard.fleet = with lib; {
     enable = mkEnableOption "corkboard's fleet: spawned agents in VMs of their own";
@@ -114,9 +123,10 @@ in
       type = types.attrsOf types.attrs;
       default = { coding = { capabilities = [ "claude-code" "coding" ]; }; };
       description = ''
-        What an agent can be started as here: `mkFleet` templates (brain,
-        capabilities, memory, cores, modules), each spawnable on this host.
-        What it runs inside is the spawner's (its shell).
+        What an agent can be started as here: `mkFleet` templates
+        (capabilities, memory, cores, modules), each spawnable on this host.
+        What it runs inside is the spawner's (its shell), and who it works
+        for is the spawn's (its brain).
       '';
     };
 
@@ -126,10 +136,26 @@ in
       description = "Capabilities besides corkboard's own (`claude-code`, `coding`).";
     };
 
-    brains = mkOption {
+    bindings = mkOption {
       type = types.attrsOf types.attrs;
       default = { };
-      description = "Who agents may work for: their account, credentials, egress and memory (`mkFleet` brains).";
+      example = literalExpression ''{ work.shares.vault = { source = "/home/me/vault"; target = "/mnt/vault"; writable = true; }; }'';
+      description = ''
+        The memory this host has for a brain, by the brain's name: `shares`,
+        virtiofs shares every spawn for it mounts here. A brain with none runs
+        here without them.
+      '';
+    };
+
+    egress = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      example = [ "graph.microsoft.com" ];
+      description = ''
+        Hosts every slot may reach besides its templates': the brains'
+        egress. A spawn for a brain that reaches a host the slots can't is
+        refused, not run with less.
+      '';
     };
 
     defaultAccount = mkOption {
@@ -155,7 +181,7 @@ in
   config = lib.mkIf cfg.enable {
     my.agentVms = {
       inherit (cfg) owner memoryBudget offer defaultAccount;
-      inherit (fleet) templates brains;
+      inherit (fleet) templates bindings;
       plans = pool;
       instances = lib.mapAttrs
         (_: _: {

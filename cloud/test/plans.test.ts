@@ -179,7 +179,7 @@ describe("plans", () => {
 });
 
 describe("chat", () => {
-  const pepperToken = async () => (await (await call(owner, "POST", "/api/tokens/pepper", {})).json<any>()).token as string;
+  const pepperToken = async () => (await (await call(owner, "POST", "/api/brains/pepper/tokens", {})).json<any>()).token as string;
 
   it("carries the user's messages to Pepper and its replies back", async () => {
     const pepper = await pepperToken();
@@ -246,7 +246,7 @@ describe("who sees what", () => {
 });
 
 describe("goals", () => {
-  const pepperToken = async () => (await (await call(owner, "POST", "/api/tokens/pepper", {})).json<any>()).token as string;
+  const pepperToken = async () => (await (await call(owner, "POST", "/api/brains/pepper/tokens", {})).json<any>()).token as string;
   const kindsOf = async (token: string) => {
     const tools = (await (await call(token, "POST", "/mcp", { jsonrpc: "2.0", id: 1, method: "tools/list" })).json<any>()).result.tools;
     return tools.find((t: any) => t.name === "note_write").inputSchema.properties.kind.enum as string[];
@@ -287,8 +287,8 @@ describe("goals", () => {
     await tool(pepper, "note_write", { id: "job", kind: "goal", title: "Land a job", body: "b" });
     expect((await tool(owner, "note_read", { id: "job" })).error).toMatch(/no note job/);
     expect((await call(pepper, "GET", "/api/notes")).status).toBe(403);
-    expect((await call(pepper, "POST", "/api/tokens/pepper", {})).status).toBe(403);
-    expect((await call(assistant, "POST", "/api/tokens/pepper", {})).status).toBe(403);
+    expect((await call(pepper, "POST", "/api/brains/pepper/tokens", {})).status).toBe(403);
+    expect((await call(assistant, "POST", "/api/brains/pepper/tokens", {})).status).toBe(403);
     await call(owner, "POST", "/api/tokens/revoke", { token: pepper });
     expect((await call(pepper, "POST", "/mcp", { jsonrpc: "2.0", id: 1, method: "tools/list" })).status).toBe(401);
   });

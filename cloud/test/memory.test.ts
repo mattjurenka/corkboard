@@ -24,7 +24,7 @@ async function tool(token: string, name: string, args: object = {}) {
   return body.result.isError ? { error: text } : text.startsWith("#") ? text : JSON.parse(text);
 }
 
-const pepperToken = async () => (await (await call(owner, "POST", "/api/tokens/pepper", {})).json<any>()).token as string;
+const pepperToken = async () => (await (await call(owner, "POST", "/api/brains/pepper/tokens", {})).json<any>()).token as string;
 
 beforeEach(async () => {
   owner = await ownerToken();
@@ -144,7 +144,7 @@ describe("episodes", () => {
 });
 
 describe("brains", () => {
-  const brainToken = async (brain: string) => call(owner, "POST", "/api/tokens/brain", { brain });
+  const brainToken = async (brain: string) => call(owner, "POST", `/api/brains/${brain}/tokens`, {});
 
   it("each have their own memory, and their goals are their own agents'", async () => {
     const work = (await (await brainToken("work")).json<any>()).token as string;
@@ -162,7 +162,7 @@ describe("brains", () => {
 
   it("are named, and Pepper's token is the pepper brain's", async () => {
     expect((await brainToken("pepper")).status).toBe(201);
-    expect((await brainToken("nobody")).status).toBe(400);
+    expect((await brainToken("nobody")).status).toBe(404);
     expect((await call(owner, "GET", "/api/notes?brain=nobody")).status).toBe(400);
   });
 });
@@ -175,7 +175,7 @@ describe("a sync", () => {
     ];
     expect((await (await call(owner, "POST", "/api/memory/entries?brain=work", { entries })).json<any>()).added).toBe(2);
     expect((await (await call(owner, "POST", "/api/memory/entries?brain=work", { entries })).json<any>()).added).toBe(0);
-    const work = (await (await call(owner, "POST", "/api/tokens/brain", { brain: "work" })).json<any>()).token as string;
+    const work = (await (await call(owner, "POST", "/api/brains/work/tokens", {})).json<any>()).token as string;
     expect((await tool(work, "memory_recall", { query: "PR 191" }))[0].day).toBe("2026-10-26");
     expect((await call(owner, "POST", "/api/memory/entries?brain=work", { entries: [{ day: "26 Oct", at: "x", text: "y", key: "c" }] })).status).toBe(400);
   });
@@ -204,5 +204,37 @@ describe("dates", () => {
     // Nothing on 20 Oct says "happened"; the date finds it.
     const hits = await tool(assistant, "memory_recall", { query: "what happened on 2026-10-20" });
     expect(hits.map((h: any) => h.snippet)).toContain("Long run, 12k.");
+  });
+});
+
+describe("the brains view", () => {
+  it("reads a brain's log by day, its episodes and recall", async () => {
+    await call(owner, "POST", "/api/memory/entries?brain=work", {
+      entries: [
+        { day: "2026-10-26", at: "2026-10-26T17:00:00Z", who: "brain-vm", text: "Shipped PR 191.", key: "a" },
+        { day: "2026-10-26", at: "2026-10-26T18:00:00Z", who: "brain-vm", text: "Asked about aws logs.", key: "b" },
+        { day: "2026-10-27", at: "2026-10-27T17:00:00Z", who: "brain-vm", text: "Reviewed the lending portal.", key: "c" },
+      ],
+    });
+    const get = async (path: string) => (await call(owner, "GET", path)).json<any>();
+    expect(await get("/api/memory/days?brain=work")).toEqual([
+      { day: "2026-10-27", entries: 1 },
+      { day: "2026-10-26", entries: 2 },
+    ]);
+    expect((await get("/api/memory/entries?brain=work&day=2026-10-26")).map((e: any) => e.text)).toEqual(["Shipped PR 191.", "Asked about aws logs."]);
+    expect((await get("/api/memory/entries?brain=work&from=2026-10-26&to=2026-10-27")).length).toBe(3);
+    expect((await call(owner, "GET", "/api/memory/entries?brain=work&day=Oct")).status).toBe(400);
+    expect(await get("/api/memory/days")).toEqual([]);
+
+    const work = (await (await call(owner, "POST", "/api/brains/work/tokens", {})).json<any>()).token as string;
+    await call(work, "POST", "/memory/episodes", { session: "s1", transcript: '{"type":"user"}\n' });
+    const episodes = await get("/api/memory/episodes?brain=work");
+    expect(episodes.map((e: any) => e.session)).toEqual(["s1"]);
+    expect((await get(`/api/memory/episodes/${episodes[0].id}?brain=work`)).transcript).toBe('{"type":"user"}\n');
+    expect((await call(owner, "GET", `/api/memory/episodes/${"0".repeat(32)}?brain=work`)).status).toBe(404);
+
+    expect((await get("/api/memory/recall?brain=work&q=PR%20191"))[0].day).toBe("2026-10-26");
+    expect((await call(owner, "GET", "/api/memory/recall?brain=work")).status).toBe(400);
+    expect((await call(assistant, "GET", "/api/memory/days?brain=work")).status).toBe(403);
   });
 });

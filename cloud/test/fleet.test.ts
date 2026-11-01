@@ -31,15 +31,16 @@ async function tools(token: string) {
 }
 
 const TEMPLATES = {
-  coding: { brain: null, needsApproval: false, memory: 4096, cores: 2, capNames: ["coding"] },
-  "work-coding": { brain: "work", needsApproval: true, memory: 4096, cores: 2, capNames: ["coding"] },
-  "pepper-coding": { brain: "pepper", needsApproval: true, memory: 4096, cores: 2, capNames: ["coding"] },
+  coding: { needsApproval: false, memory: 4096, cores: 2, capNames: ["coding"] },
 };
+// What every slot in local may reach: Pepper's hosts, and Microsoft's.
+const EGRESS = { open: false, domains: ["portal.corkboard.fyi", "oauth2.googleapis.com", "www.googleapis.com", "gmail.googleapis.com"], suffixes: ["microsoft.com"] };
+const WORK = { name: "work", title: "Stable", account: "work", credentials: ["graph"], egress: ["graph.microsoft.com"] };
 
 beforeEach(async () => {
   owner = await ownerToken();
   await send("PUT", `/api/boards/${BOARD}`, { name: "corkboard", root: "/home/matthew/corkboard" });
-  expect((await send("PUT", "/api/fleet/environments/local", { templates: TEMPLATES })).status).toBe(200);
+  expect((await send("PUT", "/api/fleet/environments/local", { templates: TEMPLATES, egress: EGRESS, bindings: ["work"] })).status).toBe(200);
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -61,19 +62,62 @@ describe("spawning", () => {
   });
 
   it("refuses a template no environment runs, and a board that doesn't exist", async () => {
-    expect((await send("POST", "/api/spawns", { template: "valheim", task: "x" })).body.error).toContain("there are coding, pepper-coding, work-coding");
+    expect((await send("POST", "/api/spawns", { template: "valheim", task: "x" })).body.error).toBe("no environment runs valheim; there are coding");
     expect((await send("POST", "/api/spawns", { template: "coding", task: "x", environment: "cloud" })).status).toBe(400);
     expect((await send("POST", "/api/spawns", { template: "coding", task: "x", board: "nope" })).status).toBe(400);
     expect((await send("POST", "/api/spawns", { template: "coding", task: " " })).status).toBe(400);
   });
 
-  it("lets a brain spawn its own templates and brainless ones, and holds those with credentials", async () => {
-    await expect(spawn(env as any, USER, "pepper", { template: "work-coding", task: "x" })).rejects.toThrow("the work brain's");
+  it("hides a template an old fleetd still says is a brain's", async () => {
+    const old = { ...TEMPLATES, "work-coding": { brain: "work", needsApproval: true, memory: 4096, cores: 2, capNames: ["coding"] } };
+    const { body } = await send("PUT", "/api/fleet/environments/local", { templates: old });
+    expect(Object.keys(body.templates)).toEqual(["coding"]);
+    expect((await send("POST", "/api/spawns", { template: "work-coding", task: "x" })).status).toBe(400);
+  });
+
+  it("works for a brain, stamped from its record", async () => {
+    expect((await send("POST", "/api/brains", WORK)).status).toBe(201);
+    const { status, body: s } = await send("POST", "/api/spawns", { template: "coding", brain: "work", task: "file the notes" });
+    expect(status).toBe(201);
+    // The user's own runs at once, as the brain's account.
+    expect(s).toMatchObject({ state: "queued", by: "user", brain: "work", account: "work" });
+    expect((await card("fleet", s.card)).description).toContain("coding for the work brain in local, asked by user");
+    expect((await send("POST", "/api/spawns", { task: "x", brain: "work" })).body).toMatchObject({ template: "coding", brain: "work" });
+    expect((await send("POST", "/api/spawns", { task: "x" })).body).toMatchObject({ brain: null, account: null });
+  });
+
+  it("refuses a brain there isn't, or that's archived, and a shell beside one", async () => {
+    expect((await send("POST", "/api/spawns", { template: "coding", brain: "nobody", task: "x" })).body.error).toContain("no brain nobody");
+    expect((await send("POST", "/api/spawns", { template: "coding", brain: "Not A Name", task: "x" })).status).toBe(400);
+    await send("POST", "/api/brains", WORK);
+    await send("DELETE", "/api/brains/work");
+    expect((await send("POST", "/api/spawns", { template: "coding", brain: "work", task: "x" })).body.error).toContain("no brain work");
+    expect((await send("POST", "/api/spawns", { template: "coding", brain: "pepper", task: "x", packages: ["jq"] })).body.error).toContain("for no brain");
+  });
+
+  it("goes only where every slot reaches what the brain does", async () => {
+    await send("POST", "/api/brains", { ...WORK, egress: ["graph.microsoft.com", "mail.example.com"] });
+    expect((await send("POST", "/api/spawns", { brain: "work", task: "x" })).body.error).toBe(
+      "the work brain reaches hosts no slot there may: local lacks mail.example.com",
+    );
+    // An environment that reaches them is where it goes.
+    await send("PUT", "/api/fleet/environments/cloud", { templates: TEMPLATES, egress: { open: true, domains: [], suffixes: [] } });
+    expect((await send("POST", "/api/spawns", { brain: "work", task: "x" })).body.environment).toBe("cloud");
+    // One whose fleetd doesn't say what its slots reach runs none.
+    await send("PUT", "/api/fleet/environments/old", { templates: TEMPLATES });
+    expect((await send("POST", "/api/spawns", { brain: "pepper", task: "x", environment: "old" })).body.error).toContain("predates brains");
+    expect((await send("POST", "/api/spawns", { task: "x", environment: "old" })).status).toBe(201);
+  });
+
+  it("lets a brain spawn for itself or for no brain, and holds one that holds credentials", async () => {
+    await send("POST", "/api/brains", WORK);
+    await expect(spawn(env as any, USER, "pepper", { template: "coding", brain: "work", task: "x" })).rejects.toThrow("for itself or for no brain");
+    // Brainless, it runs at once, as the spawning brain's account.
     const free = await spawn(env as any, USER, "pepper", { template: "coding", task: "x" });
-    expect(free.state).toBe("queued");
-    const held = await spawn(env as any, USER, "pepper", { template: "pepper-coding", task: "read my mail" });
-    expect(held).toMatchObject({ state: "pending-approval", brain: "pepper", by: "pepper" });
-    expect((await card("fleet", held.card)).attention).toContain("approve: pepper wants to spawn pepper-coding");
+    expect(free).toMatchObject({ state: "queued", brain: null, account: "personal" });
+    const held = await spawn(env as any, USER, "pepper", { template: "coding", brain: "pepper", task: "read my mail" });
+    expect(held).toMatchObject({ state: "pending-approval", brain: "pepper", by: "pepper", account: "personal" });
+    expect((await card("fleet", held.card)).attention).toBe("approve: pepper wants to spawn coding for the pepper brain, which holds credentials");
 
     // Claiming waits for the approval, which clears the card's attention.
     expect((await send("POST", `/api/spawns/${held.id}/claim`, { environment: "local" })).status).toBe(409);
@@ -86,11 +130,11 @@ describe("spawning", () => {
 
 describe("bringing your own VM", () => {
   beforeEach(async () => {
-    const templates = { ...TEMPLATES, gpu: { brain: null, needsApproval: false, memory: 8192, cores: 4, capNames: ["coding", "gpu"] } };
+    const templates = { ...TEMPLATES, gpu: { needsApproval: false, memory: 8192, cores: 4, capNames: ["coding", "gpu"] } };
     await send("PUT", "/api/fleet/environments/local", { templates, offer: { memory: 16384, cores: 6 } });
   });
 
-  it("picks the smallest brainless template with every need, and keeps the shell and size", async () => {
+  it("picks the smallest template with every need, and keeps the shell and size", async () => {
     const plain = (await send("POST", "/api/spawns", { task: "x", packages: ["ffmpeg", "python3Packages.numpy"] })).body;
     expect(plain).toMatchObject({ template: "coding", environment: "local", shell: { packages: ["ffmpeg", "python3Packages.numpy"] } });
     const gpu = (await send("POST", "/api/spawns", { task: "x", needs: ["gpu"], shell: "github:me/envs#cuda", memory: 12000, cores: 2 })).body;
@@ -104,7 +148,7 @@ describe("bringing your own VM", () => {
     expect((await send("POST", "/api/spawns", { task: "x", memory: 32768 })).body.error).toContain("local gives at most 16384 MiB, 6 cores");
     expect((await send("POST", "/api/spawns", { task: "x", packages: ["a; rm -rf /"] })).status).toBe(400);
     expect((await send("POST", "/api/spawns", { task: "x", shell: "x y" })).status).toBe(400);
-    expect((await send("POST", "/api/spawns", { template: "work-coding", task: "x", packages: ["jq"] })).body.error).toContain("brainless");
+    expect((await send("POST", "/api/spawns", { brain: "pepper", task: "x", packages: ["jq"] })).body.error).toContain("for no brain");
   });
 
   it("from MCP", async () => {
@@ -171,6 +215,26 @@ describe("fleetd's side", () => {
     expect(c.log.map((e: any) => e.note)).toEqual(expect.arrayContaining(["running in agent-0 (local)", "done:\nFixed the off-by-one."]));
   });
 
+  it("hands a brain's spawn a token for the brain, which its memory hooks send", async () => {
+    await send("POST", "/api/brains", WORK);
+    const s = (await send("POST", "/api/spawns", { template: "coding", brain: "work", task: "file the notes" })).body;
+    const claimed = (await send("POST", `/api/spawns/${s.id}/claim`, { environment: "local" })).body;
+    expect(claimed.brainToken).toMatch(/^cbc_/);
+    expect(await (await call(claimed.brainToken, "GET", "/memory/context")).text()).toMatch(/^# Memory: work/);
+    // A brainless one gets none.
+    const plain = (await send("POST", "/api/spawns", { template: "coding", task: "x" })).body;
+    expect((await send("POST", `/api/spawns/${plain.id}/claim`, { environment: "local" })).body.brainToken).toBeUndefined();
+  });
+
+  it("fails a brain's spawn whose brain was archived before it was claimed", async () => {
+    await send("POST", "/api/brains", WORK);
+    const s = (await send("POST", "/api/spawns", { template: "coding", brain: "work", task: "x" })).body;
+    await send("DELETE", "/api/brains/work");
+    expect((await send("POST", `/api/spawns/${s.id}/claim`, { environment: "local" })).status).toBe(409);
+    expect((await send("GET", `/api/spawns/${s.id}`)).body).toMatchObject({ state: "failed", error: "the work brain is archived or gone" });
+    expect((await card("fleet", s.card)).attention).toBe("spawn failed: the work brain is archived or gone");
+  });
+
   it("raises a failure on the card", async () => {
     const s = (await send("POST", "/api/spawns", { template: "coding", task: "fix it" })).body;
     await send("POST", `/api/spawns/${s.id}/claim`, { environment: "local" });
@@ -210,7 +274,7 @@ describe("what's running", () => {
     budget: 21504,
     used: 20992,
     residents: [{ name: "brain-vm", brain: "work", memory: 14336, up: true }, { name: "pepper-vm", brain: "pepper", memory: 2048, up: false }],
-    slots: [{ name: "agent-0", spawn: "abc123def", template: "coding", memory: 4608 }, { name: "agent-1", spawn: null, template: null, memory: null }],
+    slots: [{ name: "agent-0", spawn: "abc123def", template: "coding", brain: "work", memory: 4608 }, { name: "agent-1", spawn: null, template: null, memory: null }],
   };
 
   it("is kept as fleetd last said, through a look that doesn't say", async () => {
@@ -249,14 +313,22 @@ describe("the MCP tools", () => {
     const s = await tool(owner, "spawn_agent", { template: "coding", task: "look into the flaky test", board: BOARD });
     expect(s).toMatchObject({ state: "queued", by: "user", board: BOARD });
     const st = await tool(owner, "spawn_status");
-    expect(st.environments[0].templates.map((t: any) => t.name)).toEqual(["coding", "work-coding", "pepper-coding"]);
+    expect(st.environments[0].templates.map((t: any) => t.name)).toEqual(["coding"]);
+    expect(st.environments[0]).toMatchObject({ egress: EGRESS, bindings: ["work"] });
+    expect(st.brains).toEqual([{ name: "pepper", title: "Pepper", account: "personal", holdsCredentials: true }]);
     expect(st.spawns[0].id).toBe(s.id);
     expect((await tool(owner, "spawn_status", { id: s.id })).card).toBe(s.card);
     expect((await tool(owner, "spawn_status", { id: "nope000" })).error).toContain("no spawn");
     expect((await tool(owner, "spawn_stop", { id: s.id })).state).toBe("stopped");
 
-    const pepper = (await (await call(owner, "POST", "/api/tokens/pepper", {})).json<any>()).token as string;
+    const pepper = (await (await call(owner, "POST", "/api/brains/pepper/tokens", {})).json<any>()).token as string;
     expect(await tools(pepper)).not.toContain("spawn_agent");
     expect(await tools(owner)).toEqual(expect.arrayContaining(["spawn_agent", "spawn_status", "spawn_stop"]));
+  });
+
+  it("spawn for a brain", async () => {
+    await send("POST", "/api/brains", WORK);
+    expect(await tool(owner, "spawn_agent", { brain: "work", task: "file the notes" })).toMatchObject({ template: "coding", brain: "work", account: "work" });
+    expect(await tool(owner, "start_session", { brain: "work", board: BOARD })).toMatchObject({ interactive: true, brain: "work" });
   });
 });

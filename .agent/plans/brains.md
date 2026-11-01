@@ -1,6 +1,6 @@
 # Brains as data: a list you can change, not a constant
 
-**Written:** 2026-10-31. Steps 1, 2, 3 and 5 built the same day (commits 0c118f3 and after); step 4, the fleet, is next.
+**Written:** 2026-10-31. All five steps and the memory browser built the same day (commits 0c118f3 and after).
 
 Today a brain is hardcoded in four places that have to agree by hand:
 
@@ -161,13 +161,32 @@ app's `brains` tab. `<CR>` edits, not "opens its memory": a memory browser is st
 
 Steps 1–3 change nothing a running agent sees. Step 4 is the first that changes spawns.
 
+**Built 2026-10-31 (the memory browser).** `/api/memory/{days,entries,episodes,recall}` (api.ts
+`browse()`, owner only, `?brain=`), the bridge's `brains_*` ops, and `agent://brains/<name>`
+(brains.lua, `brain-memory` in web/src/views/Brains.tsx): `<CR>` on a brain opens its notes, the log
+by day and its episodes, with `/` to recall.
+
+**Built 2026-10-31 (4).** A spawn is `{ template, brain? }`: fleet.ts checks the brain is live, stamps
+the spawn with its `account`, and holds a brain's spawn when the brain or the template holds
+credentials. A brain may spawn for itself or for no brain; a brainless spawn of a brain's runs as
+the spawning brain's account. A template a fleetd still reports with a `brain` isn't offered. Each
+environment reports its slots' `egress` (`{ open, domains, suffixes }`, what every slot allows) and
+its `bindings`; a brain's spawn goes only where the slots reach the brain's egress (refused with the
+hosts missing, as planned), and never where the fleetd doesn't say (it predates brains on spawns).
+At claim fleetd gets `brainToken` too (a claim whose brain was archived since fails the spawn);
+it writes it to `share/brain-token` and revokes it at the end, and every slot guest has the memory
+hooks (fleet/memory-hooks.nix), which do nothing without it. In Nix, `services.corkboard.fleet.brains`
+is gone (`mkRemovedOptionModule`) for `bindings.<brain>.shares` and `egress`; a template with
+`brain` is an evaluation error; a bound brain with shares gets guests `<template>+<brain>@slot`,
+which fleetd boots for its spawns. MCP: `brain` on `spawn_agent`/`start_session`, `brain_read`, and
+`spawn_status` lists the brains. The bridge and pepperd mint at `/api/brains/:name/tokens`;
+`/api/tokens/pepper` and `/api/tokens/brain` stay as aliases until the droplet's pepperd is redeployed.
+
 ---
 
-## Open
+## Resolved
 
-- **Delete:** archive by default with purge as a second, typed step (proposed), or a real delete?
-- **Abilities:** generalise Pepper's tools as abilities any brain can have (proposed), or keep
-  them Pepper's alone?
-- **Default brain:** your own sessions work in one brain you pick (proposed: Pepper, as now), or
-  in none unless a session says which?
-- **The view:** a Neovim tab (proposed, in the TUI's style), or a page in the portal too?
+- **Delete:** archive by default, purge as a second, typed step (`?purge=<name>`). Built.
+- **Abilities:** generalised; Pepper's chat tools are the `chat` ability, the only one so far.
+- **Default brain:** one you pick (Pepper, seeded so); with none, the memory tools say so.
+- **The view:** a Neovim tab and a page in the portal, and the Android app's tab.

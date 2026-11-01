@@ -6,15 +6,14 @@ let
   inherit (import ./lib.nix { inherit lib; }) mkFleet;
 
   base = {
-    brains = {
-      pepper = { egress = [ "api.anthropic.com" ]; credentials = [ "google" ]; account = "personal"; };
-      work = {
-        account = "work";
-        shares.vault = { source = "/home/me/vault"; target = "/mnt/vault"; writable = true; };
-      };
+    bindings = {
+      pepper = { };
+      work.shares.vault = { source = "/home/me/vault"; target = "/mnt/vault"; writable = true; };
     };
+    egress = [ "api.anthropic.com" ];
     capabilities = {
       coding = { memory = 4096; cores = 2; egress = [ "github.com" ]; targets = [ "vm" "oci" ]; };
+      mail = { egress = [ "gmail.googleapis.com" ]; credentials = [ "google" ]; targets = [ "vm" "oci" ]; };
       display = { needs = [ "display" ]; };
       screenshot = { requires = [ "display" ]; };
       valheim = { memory = 16384; cores = 6; needs = [ "gpu" ]; requires = [ "screenshot" ]; };
@@ -42,26 +41,29 @@ let
       let t = (fleet { v = { capabilities = [ "coding" "valheim" ]; environments = [ "local" ]; memory = 2048; }; }).templates.v;
       in t.memory == 16384 && t.cores == 6;
 
-    egressMergesBrainAndCapabilities =
-      (fleet { p = { brain = "pepper"; capabilities = [ "coding" ]; environments = [ "cloud" ]; }; }).templates.p.egress
-      == [ "api.anthropic.com" "github.com" ];
+    egressMergesCapabilities =
+      (fleet { p = { capabilities = [ "coding" "mail" ]; environments = [ "cloud" ]; }; }).templates.p.egress
+      == [ "github.com" "gmail.googleapis.com" ];
 
-    modulesAreTemplateBrainThenCapabilities =
+    modulesAreTemplateThenCapabilities =
       let
         f = mkFleet (lib.recursiveUpdate base {
-          brains.pepper.modules = [ "brain" ];
           capabilities.display.modules = [ "display" ];
           capabilities.screenshot.modules = [ "screenshot" ];
-          templates.p = { brain = "pepper"; modules = [ "base" ]; capabilities = [ "screenshot" ]; environments = [ "local" ]; };
+          templates.p = { modules = [ "base" ]; capabilities = [ "screenshot" ]; environments = [ "local" ]; };
         });
       in
-      f.templates.p.modules == [ "base" "brain" "screenshot" "display" ];
+      f.templates.p.modules == [ "base" "screenshot" "display" ];
 
     noCredentialsNoApproval =
       !(fleet { c = { capabilities = [ "coding" ]; environments = [ "cloud" ]; }; }).templates.c.needsApproval;
 
-    brainCredentialsNeedApproval =
-      (fleet { p = { brain = "pepper"; capabilities = [ "coding" ]; environments = [ "cloud" ]; }; }).templates.p.needsApproval;
+    capabilityCredentialsNeedApproval =
+      (fleet { p = { capabilities = [ "coding" "mail" ]; environments = [ "cloud" ]; }; }).templates.p.needsApproval;
+
+    # A brain is a spawn's, never a template's.
+    aTemplateWithABrainIsAnError =
+      fails (fleet { p = { brain = "pepper"; capabilities = [ "coding" ]; environments = [ "local" ]; }; }).templates.p;
 
     missingNeedIsAnError =
       let f = fleet { v = { capabilities = [ "valheim" ]; environments = [ "cloud" ]; }; }; in
@@ -85,39 +87,28 @@ let
         bad = { capabilities = [ "valheim" ]; environments = [ "cloud" ]; };
       }).templates.good;
 
-    # A spawnable template is one slot guest, `<template>@slot`, that boots
-    # in any slot, and not a guest of its own.
-    spawnableTemplatesGetOneSlotGuest =
+    # A spawnable template is a slot guest, `<template>@slot`, that boots in
+    # any slot, and one more for each brain with memory bound here,
+    # `<template>+<brain>@slot`; not a guest of its own.
+    spawnableTemplatesGetSlotGuests =
       builtins.attrNames (mkFleet (base // {
         nixosSystem = args: args;
         templates = {
           c = { capabilities = [ "coding" ]; environments = [ "local" ]; spawnable = true; };
           resident = { capabilities = [ "coding" ]; environments = [ "local" ]; };
         };
-      })).nixosConfigurations == [ "c@slot" "resident" ];
+      })).nixosConfigurations == [ "c+work@slot" "c@slot" "resident" ];
 
-    slotEgressIsEverySpawnableTemplates =
+    slotEgressIsEverySpawnableTemplatesAndTheBrains =
       (mkFleet (base // {
         templates = {
           c = { capabilities = [ "coding" ]; environments = [ "local" ]; spawnable = true; };
-          p = { brain = "pepper"; environments = [ "local" ]; spawnable = true; };
-          notSpawned = { brain = "pepper"; capabilities = [ "coding" ]; environments = [ "local" ]; };
+          notSpawned = { capabilities = [ "mail" ]; environments = [ "local" ]; };
         };
       })).slotEgress == [ "portal.corkboard.fyi" "github.com" "api.anthropic.com" ];
 
-    # A brain's templates run as its account and mount its memory; a
-    # brainless one has neither of its own.
-    brainAccountAndSharesComeWithIt =
-      let t = (fleet { w = { brain = "work"; capabilities = [ "coding" ]; environments = [ "local" ]; }; }).templates.w; in
-      t.account == "work"
-      && t.shares == { vault = { source = "/home/me/vault"; target = "/mnt/vault"; writable = true; description = ""; }; };
-
-    brainlessHasNoAccount =
-      let t = (fleet { c = { capabilities = [ "coding" ]; environments = [ "local" ]; }; }).templates.c; in
-      t.account == null && t.shares == { };
-
-    brainsListTheirAccounts =
-      (fleet { }).brains == { pepper.account = "personal"; work.account = "work"; };
+    bindingsListTheirShares =
+      (fleet { }).bindings == { pepper.shares = [ ]; work.shares = [ "vault" ]; };
 
     onlyVmTemplatesGetGuests =
       builtins.attrNames (fleet {

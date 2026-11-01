@@ -57,7 +57,7 @@ switch (cmd) {
     if (repo && !existsSync(join(repo, ".git"))) die(`${repo} is not a git repo`);
     let account = "";
     try {
-      account = accountFor(m, template, "user", asked);
+      account = accountFor(m, asked);
     } catch (e: any) {
       die(e.message);
     }
@@ -125,7 +125,8 @@ switch (cmd) {
 
   case "templates": {
     for (const [name, t] of Object.entries(manifest().templates))
-      console.log(`${name}  ${t.memory} MiB, ${t.cores} cores, ${t.capNames.join(" ") || "-"}${t.brain ? `, ${t.brain} brain as ${t.account}` : ""}${t.needsApproval ? "  (holds credentials)" : ""}`);
+      console.log(`${name}  ${t.memory} MiB, ${t.cores} cores, ${t.capNames.join(" ") || "-"}${t.needsApproval ? "  (holds credentials)" : ""}`);
+    for (const [brain, b] of Object.entries(manifest().bindings ?? {})) console.log(`${brain}'s memory: ${b.shares.join(" ") || "-"}`);
     break;
   }
 

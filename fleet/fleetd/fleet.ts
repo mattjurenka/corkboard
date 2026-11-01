@@ -34,10 +34,13 @@ export type Manifest = {
     string,
     { unit: string; memory: number | null; brain?: string | null; account?: string | null; cores?: number | null; capNames?: string[]; network?: Network }
   >;
-  templates: Record<string, { memory: number; cores: number; needsApproval: boolean; brain: string | null; account: string | null; capNames: string[] }>;
-  // Each brain's Claude account, and the one a brainless template runs as
-  // when the user spawns it without saying.
-  brains: Record<string, { account: string | null }>;
+  templates: Record<string, { memory: number; cores: number; needsApproval: boolean; capNames: string[] }>;
+  // The brains whose memory this host has, by name: the shares a spawn for
+  // one mounts, in the guest `<template>+<brain>`. A brain with none runs
+  // here in its template's own guest. Absent from a manifest written before
+  // brains were spawns'.
+  bindings?: Record<string, { shares: string[] }>;
+  // The account a spawn runs as when nothing says.
   defaultAccount: string | null;
 };
 
@@ -49,9 +52,12 @@ export type Spawn = {
   task: string;
   // A repo on this machine to work in; its commits come back as a bundle.
   repo?: string;
-  // Who asked: "user", or a brain. A brain's spawn of a template that needs
-  // approval waited for it in the Worker's queue; the CLI's never does.
+  // Who asked: "user", or a brain. A brain's spawn that holds credentials
+  // waited for approval in the Worker's queue; the CLI's never does.
   by: string;
+  // Who it works for, if a brain: its token goes in the share, and its
+  // memory's with it if this host binds the brain.
+  brain?: string;
   // The Claude account it runs as (accountFor), whose token it is handed.
   account: string;
   state: State;
@@ -62,9 +68,9 @@ export type Spawn = {
   exit?: number;
   error?: string;
   stopRequested?: boolean;
-  // From the Worker's queue: its card, and the spawn token for it (emptied
-  // once it's revoked, at the end).
-  remote?: { board: string; card: string; agent: string; token: string };
+  // From the Worker's queue: its card, the spawn token for it, and its
+  // brain's token if it has one (each emptied once it's revoked, at the end).
+  remote?: { board: string; card: string; agent: string; token: string; brainToken?: string };
   // A session you talk to rather than a task (sessions.ts); when it was
   // asked to finish, if it has been.
   interactive?: boolean;
@@ -154,7 +160,7 @@ export type Occupancy = {
   budget: number | null;
   used: number;
   residents: { name: string; brain: string | null; memory: number | null; up: boolean; config?: Config }[];
-  slots: { name: string; spawn: string | null; template: string | null; memory: number | null; config?: Config }[];
+  slots: { name: string; spawn: string | null; template: string | null; brain: string | null; memory: number | null; config?: Config }[];
 };
 
 export function occupancy(m: Manifest, all: Spawn[], active: Set<string>): Occupancy {
@@ -175,7 +181,7 @@ export function occupancy(m: Manifest, all: Spawn[], active: Set<string>): Occup
       account: s?.account ?? null,
       ...(t && { needsApproval: t.needsApproval }),
     };
-    return { name, spawn: s?.id ?? null, template: s?.template ?? null, memory: s ? memoryOf(m, s) + OVERHEAD : null, ...(config && { config }) };
+    return { name, spawn: s?.id ?? null, template: s?.template ?? null, brain: s?.brain ?? null, memory: s ? memoryOf(m, s) + OVERHEAD : null, ...(config && { config }) };
   });
   // A running spawn whose slot left the manifest still takes its memory.
   const lost = all.filter((s) => s.state === "running" && !m.slots[s.slot!]);
@@ -212,8 +218,8 @@ export function schedule(m: Manifest, all: Spawn[], active: Set<string>): Plan {
       plan.fail.push({ id: s.id, error: `asks for ${s.cores} cores; one VM here gets at most ${offer.cores}` });
       continue;
     }
-    if (s.shell && t.brain) {
-      plan.fail.push({ id: s.id, error: `${s.template} is the ${t.brain} brain's; a shell of your own goes in a brainless template` });
+    if (s.shell && s.brain) {
+      plan.fail.push({ id: s.id, error: `a shell of your own never goes beside the ${s.brain} brain's memory; spawn it for no brain` });
       continue;
     }
     if (m.memoryBudget !== null && need > m.memoryBudget) {
@@ -235,20 +241,28 @@ export function schedule(m: Manifest, all: Spawn[], active: Set<string>): Plan {
   return plan;
 }
 
-// The account a spawn runs as. A brain's template runs as the brain's
-// account, and nothing else: its agents share the brain's memory, so they
-// share its account too. A brainless one runs as what was asked for, or
-// the account of the brain that spawned it, or the host's default.
-export function accountFor(m: Manifest, template: string, by: string, asked?: string): string {
-  const t = m.templates[template];
-  if (t?.brain) {
-    if (!t.account) throw new Error(`the ${t.brain} brain has no account`);
-    if (asked && asked !== t.account) throw new Error(`${template} is the ${t.brain} brain's, which runs as ${t.account}`);
-    return t.account;
-  }
-  const account = asked ?? (by === "user" ? m.defaultAccount : m.brains[by]?.account);
+// The account a spawn runs as: what was asked for (the Worker stamps a
+// brain's spawn with the brain's), or the host's default.
+export function accountFor(m: Manifest, asked?: string | null): string {
+  const account = asked ?? m.defaultAccount;
   if (!account) throw new Error(`which account? --account <name> (there is no default)`);
   // A file name under ACCOUNTS.
   if (!/^[\w-]+$/.test(account)) throw new Error(`no account ${account}`);
   return account;
 }
+
+// What every slot here may reach, for the Worker to place a brain's spawn
+// by: open if they all are, else the hosts and suffixes every allowlisted
+// one has. Unknown (undefined) while a slot doesn't say, or there are none.
+export function egressOf(m: Manifest): { open: boolean; domains: string[]; suffixes: string[] } | undefined {
+  const nets = Object.values(m.slots).map((s) => s.network);
+  if (!nets.length || nets.some((n) => !n)) return undefined;
+  const lists = nets.filter((n) => n!.egress === "allowlist") as Network[];
+  if (!lists.length) return { open: true, domains: [], suffixes: [] };
+  const every = (f: (n: Network) => string[]) => f(lists[0]).filter((d) => lists.every((n) => f(n).includes(d)));
+  return { open: false, domains: every((n) => n.allowedDomains), suffixes: every((n) => n.allowedDomainSuffixes) };
+}
+
+// The guest a spawn boots: its template's, or with its brain's memory
+// mounted, `<template>+<brain>`, when this host binds the brain.
+export const guestOf = (m: Manifest, s: Spawn) => (s.brain && m.bindings?.[s.brain]?.shares.length ? `${s.template}+${s.brain}` : s.template);

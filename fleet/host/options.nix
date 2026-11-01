@@ -32,12 +32,13 @@
       '';
     };
 
-    brains = lib.mkOption {
+    bindings = lib.mkOption {
       type = lib.types.attrsOf lib.types.raw;
       default = { };
       description = ''
-        The fleet's brains (`mkFleet`'s `brains`): each one's Claude account,
-        which its agents run as, and so do the brainless agents it spawns.
+        The brains whose memory this host has (`mkFleet`'s `bindings`): each
+        one's shares, which a spawn for it mounts by booting
+        `<template>+<brain>`.
       '';
     };
 
@@ -46,8 +47,8 @@
       default = null;
       example = "personal";
       description = ''
-        The account a template with no brain runs as when the user spawns
-        it without `--account`. Each account is a token from `claude
+        The account a spawn runs as when nothing says: corkboard stamps a
+        brain's with the brain's, and the CLI takes `--account`. Each account is a token from `claude
         setup-token` at ~/.local/state/corkboard/fleet/accounts/<name>.
       '';
     };
