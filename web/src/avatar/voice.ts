@@ -8,8 +8,33 @@
 
 export type Viseme = "aa" | "ih" | "ou" | "ee" | "oh";
 
-// Kokoro's voices, the first the default; v in the panel goes to the next.
-export const VOICES = ["af_heart", "af_bella", "af_nicole", "af_sky", "bf_emma", "am_michael"];
+// Kokoro's voices, the first the default.
+export const VOICES = [
+  "anime",
+  "af_heart",
+  "af_bella",
+  "af_nicole",
+  "af_sky",
+  "af_nova",
+  "af_kore",
+  "af_aoede",
+  "af_jessica",
+  "af_sarah",
+  "af_river",
+  "af_alloy",
+  "bf_lily",
+  "bf_isabella",
+  "bf_alice",
+  "bf_emma",
+  "am_michael",
+];
+
+// Voices that are one of Kokoro's said slower and played faster: pitched up,
+// the whole voice, by pitch. Kokoro's speed 0.8 makes a sentence about 1.2
+// times as long, so that pitch leaves it as quick as it was.
+const PITCHED: Record<string, { voice: string; speed: number; pitch: number }> = {
+  anime: { voice: "af_bella", speed: 0.8, pitch: 1.2 },
+};
 
 type Synth = { samples?: Float32Array; rate?: number; error?: string };
 export type Bridge = (path: string, init?: RequestInit) => Promise<Response>;
@@ -88,10 +113,10 @@ function audio() {
   return context;
 }
 
-async function synth(text: string, voice: string, bridge?: Bridge): Promise<Synth> {
+async function synth(text: string, voice: string, speed: number, bridge?: Bridge): Promise<Synth> {
   if (bridge && bridged) {
     try {
-      const res = await bridge("speech", { method: "POST", body: JSON.stringify({ text, voice }), headers: { "content-type": "application/json" } });
+      const res = await bridge("speech", { method: "POST", body: JSON.stringify({ text, voice, speed }), headers: { "content-type": "application/json" } });
       if (res.ok) return { samples: new Float32Array(await res.arrayBuffer()), rate: Number(res.headers.get("x-sample-rate")) };
       console.warn("speech:", res.status, (await res.text()).trim());
     } catch (err) {
@@ -107,21 +132,24 @@ async function synth(text: string, voice: string, bridge?: Bridge): Promise<Synt
     };
   }
   const id = ++asked;
-  worker.postMessage({ id, text, voice });
+  worker.postMessage({ id, text, voice, speed, page: location.href });
   return new Promise((ok) => waiting.set(id, ok));
 }
 
 async function clip(text: string, voice: string, bridge: Bridge | undefined, failed: (why: string) => void): Promise<Clip | null> {
-  const r = await synth(text, voice, bridge);
+  const p = PITCHED[voice];
+  const r = await synth(text, p?.voice ?? voice, p?.speed ?? 1, bridge);
   if (!r.samples || !r.rate) {
     failed(r.error ?? "no audio");
     return null;
   }
+  // Pitched by playing its samples faster.
+  const rate = r.rate * (p?.pitch ?? 1);
   const ctx = audio();
-  const buffer = ctx.createBuffer(1, r.samples.length, r.rate);
+  const buffer = ctx.createBuffer(1, r.samples.length, rate);
   buffer.copyToChannel(r.samples as Float32Array<ArrayBuffer>, 0);
   // Each slice's loudness (RMS), against the loudest slices'.
-  const step = Math.round(r.rate / LOUD_HZ);
+  const step = Math.round(rate / LOUD_HZ);
   const loud = new Float32Array(Math.ceil(r.samples.length / step));
   for (let i = 0; i < loud.length; i++) {
     let sum = 0;

@@ -2,23 +2,30 @@
 // voice, its audio (24kHz mono). The model comes from Hugging Face the
 // first time (about 90MB) and from the browser's cache after; on wasm, since
 // ONNX Runtime's WebGPU gets some of Kokoro's ConvTransposes wrong (see
-// bridge/kokoro-gpu.py).
+// bridge/kokoro-gpu.py). Our own voices come from the page's voices/.
 
+import { Tensor } from "@huggingface/transformers";
 import { KokoroTTS } from "kokoro-js";
+import { ownVoices } from "../../../bridge/kokoro-voices";
 
 const MODEL = "onnx-community/Kokoro-82M-v1.0-ONNX";
 
 let tts: Promise<KokoroTTS> | undefined;
 
-function load() {
-  return KokoroTTS.from_pretrained(MODEL, { dtype: "q8", device: "wasm" });
+async function load(page: string) {
+  const tts = await KokoroTTS.from_pretrained(MODEL, { dtype: "q8", device: "wasm" });
+  return ownVoices(tts, Tensor, async (name) => {
+    const res = await fetch(new URL(`voices/${name}.bin`, page));
+    if (!res.ok) throw new Error(`no voice ${name}`);
+    return res.arrayBuffer();
+  });
 }
 
-self.onmessage = async (e: MessageEvent<{ id: number; text: string; voice: string }>) => {
-  const { id, text, voice } = e.data;
+self.onmessage = async (e: MessageEvent<{ id: number; text: string; voice: string; speed?: number; page: string }>) => {
+  const { id, text, voice, speed = 1, page } = e.data;
   try {
-    tts ??= load();
-    const audio = await (await tts).generate(text, { voice: voice as any });
+    tts ??= load(page);
+    const audio = await (await tts).generate(text, { voice: voice as any, speed });
     const samples = audio.audio as Float32Array;
     self.postMessage({ id, samples, rate: audio.sampling_rate }, { transfer: [samples.buffer] });
   } catch (err) {

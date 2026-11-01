@@ -1,6 +1,6 @@
 // A face for a Claude Code session (corkboard.avatar's panel): a VRM model
 // that says each new thing Claude writes, out loud, with its words typed out
-// under it as they're said, in Kokoro's voice (v goes to the next). What
+// under it as they're said, in Kokoro's voice, pitched up. What
 // was said before the panel opened isn't said again. A .vrm file dropped
 // on it is the model from then on, in this browser; until then it's
 // avatar.vrm (ryo73's "haruto 5" from VRoid Hub: anyone may use, change and
@@ -11,12 +11,13 @@ import { useEffect, useRef, useState } from "react";
 import { Spinner } from "@/components/Spinner";
 import { cn } from "@/lib/utils";
 import type { Mood, Stage } from "@/avatar/stage";
-import { VOICES, Voice } from "@/avatar/voice";
+import { line as quip, type Poked } from "@/avatar/tsundere";
+import { Voice } from "@/avatar/voice";
 import { useNvim } from "@/nvim/context";
 import type { ViewProps } from "./index";
 
 type Said = { id: string; text: string };
-type AvatarState = { said?: Said[]; state?: string; muted?: boolean; skip?: number; voice?: number };
+type AvatarState = { said?: Said[]; state?: string; muted?: boolean; skip?: number };
 
 const SAMPLE = new URL("avatar.vrm", location.href).href;
 
@@ -33,6 +34,7 @@ export function Avatar({ state }: ViewProps<AvatarState>) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [line, setLine] = useState({ text: "", at: 0, speaking: false });
+  const clicks = useRef<number[]>([]);
 
   voice.current ??= new Voice(nvim.bridge);
 
@@ -41,7 +43,7 @@ export function Avatar({ state }: ViewProps<AvatarState>) {
     let live = true;
     const sizes = new ResizeObserver(() => box.current && stage.current?.resize(box.current.clientWidth, box.current.clientHeight));
     const v = voice.current!;
-    v.voice = remembered();
+    v.voice = "anime";
     // The last line stays as it fades.
     v.onChange = () => setLine((l) => (v.speaking ? { text: v.text, at: v.at(), speaking: true } : { ...l, at: l.text.length, speaking: false }));
     import("@/avatar/stage").then(async ({ Stage }) => {
@@ -87,17 +89,6 @@ export function Avatar({ state }: ViewProps<AvatarState>) {
   useEffect(() => {
     voice.current!.muted = !!state.muted;
   }, [state.muted]);
-  // The next voice, which says so.
-  useEffect(() => {
-    if (!state.voice) return;
-    const v = voice.current!;
-    v.voice = VOICES[(VOICES.indexOf(v.voice) + 1) % VOICES.length];
-    try {
-      localStorage.setItem(VOICE, v.voice);
-    } catch {}
-    v.stop();
-    v.say("This is my voice now.", "voice:" + state.voice);
-  }, [state.voice]);
   useEffect(() => {
     if (state.skip) voice.current!.stop();
   }, [state.skip]);
@@ -131,10 +122,39 @@ export function Avatar({ state }: ViewProps<AvatarState>) {
     setLoading(false);
   };
 
+  // The pointer, in the camera's terms.
+  const at = (e: React.PointerEvent | React.MouseEvent) => {
+    const r = canvas.current!.getBoundingClientRect();
+    return { x: ((e.clientX - r.left) / r.width) * 2 - 1, y: -((e.clientY - r.top) / r.height) * 2 + 1 };
+  };
+  // Clicked: she reacts, and unless she's busy saying something, says so.
+  const poke = (e: React.MouseEvent) => {
+    const s = stage.current;
+    if (!s) return;
+    const now = performance.now();
+    clicks.current = [...clicks.current.filter((c) => now - c < 6000), now];
+    const hit = s.hit(at(e));
+    const poked: Poked = clicks.current.length >= 4 ? "again" : (hit ?? "miss");
+    if (poked === "head") s.play("pat", "snub");
+    else if (poked === "miss") s.play("snub");
+    else s.play("flinch", "huff");
+    if (poked === "again") clicks.current = [];
+    const v = voice.current!;
+    if (!v.speaking) v.say(quip(poked), `poke:${now}`);
+  };
+
   const voiceError = voice.current.error;
   const shown = line.text.slice(0, Math.ceil(line.at));
   return (
-    <div ref={box} className="relative h-full" onDragOver={(e) => e.preventDefault()} onDrop={drop}>
+    <div
+      ref={box}
+      className="relative h-full"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={drop}
+      onPointerMove={(e) => stage.current?.point(at(e))}
+      onPointerLeave={() => stage.current?.point(null)}
+      onClick={poke}
+    >
       <canvas ref={canvas} className="absolute inset-0 size-full" />
       {loading && <Spinner className="absolute inset-0" />}
       {(error || voiceError) && <div className="absolute inset-x-0 top-0 px-2ch pt-row text-blocked">{error || voiceError}</div>}
@@ -150,16 +170,6 @@ export function Avatar({ state }: ViewProps<AvatarState>) {
       </div>
     </div>
   );
-}
-
-// The voice last picked, in this browser.
-const VOICE = "corkboard.avatar.voice";
-function remembered() {
-  try {
-    const v = localStorage.getItem(VOICE);
-    if (v && VOICES.includes(v)) return v;
-  } catch {}
-  return VOICES[0];
 }
 
 // The model dropped on a panel, kept in this browser.

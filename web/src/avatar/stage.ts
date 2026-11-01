@@ -8,6 +8,7 @@
 import { MToonMaterial, type VRM, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { ACTS, type ActName, type Face, type Frame, type Pose, weight } from "./acts";
 import type { Viseme, Voice } from "./voice";
 
 export type Mood = "idle" | "thinking" | "asking";
@@ -82,6 +83,16 @@ export class Stage {
   private shrugAt = -10;
   private dart = new THREE.Vector2();
   private dartAt = 1;
+  // What it's doing now, if anything, and after.
+  private acts: ActName[] = [];
+  private actAt = 0;
+  private side = 1;
+  private act?: Frame;
+  private actWeight = 0;
+  private idleAt = 6;
+  // Where the pointer is over it, in the camera's -1 to 1.
+  private pointer?: THREE.Vector2;
+  private ray = new THREE.Raycaster();
   mood: Mood = "idle";
 
   constructor(
@@ -189,6 +200,30 @@ export class Stage {
     this.camera.updateProjectionMatrix();
   }
 
+  // Things to do, one after another, now (whatever it was doing).
+  play(...acts: ActName[]) {
+    this.acts = acts;
+    this.actAt = this.t;
+    this.side = Math.random() < 0.5 ? 1 : -1;
+  }
+
+  // Its eyes on the pointer, or (null) not.
+  point(at: { x: number; y: number } | null) {
+    this.pointer = at ? new THREE.Vector2(at.x, at.y) : undefined;
+  }
+
+  // What's under the pointer at: its head (or hair), the rest of it, or
+  // nothing.
+  hit(at: { x: number; y: number }): "head" | "body" | null {
+    if (!this.vrm) return null;
+    this.ray.setFromCamera(new THREE.Vector2(at.x, at.y), this.camera);
+    const [first] = this.ray.intersectObject(this.vrm.scene, true);
+    if (!first) return null;
+    const neck = this.vrm.humanoid.getNormalizedBoneNode("neck");
+    const y = neck ? neck.getWorldPosition(new THREE.Vector3()).y : this.headY - 0.1;
+    return first.point.y > y ? "head" : "body";
+  }
+
   private tick(dt: number) {
     this.t += dt;
     const vrm = this.vrm;
@@ -237,15 +272,36 @@ export class Stage {
     const thinking = this.mood === "thinking" && !talking;
     const asking = this.mood === "asking" && !talking;
     this.tilt = ease(this.tilt, asking ? 0.12 : thinking ? -0.06 : 0, 3, dt);
+
+    // Left alone and quiet, now and then it does something.
+    if (talking || this.mood !== "idle" || this.acts.length) this.idleAt = Math.max(this.idleAt, t + 4);
+    else if (t > this.idleAt) {
+      this.idleAt = t + 9 + Math.random() * 12;
+      const pick: ActName[] = ["shift", "shift", "stretch", "snub", "huff"];
+      this.play(pick[Math.floor(Math.random() * pick.length)]);
+    }
+    let since = t - this.actAt;
+    while (this.acts.length && since > ACTS[this.acts[0]].span) {
+      this.actAt += ACTS[this.acts.shift()!].span;
+      since = t - this.actAt;
+    }
+    this.act = this.acts.length ? ACTS[this.acts[0]].at(since, this.side) : undefined;
+    this.actWeight = this.acts.length ? weight(since, ACTS[this.acts[0]].span) : 0;
+    const w = this.actWeight;
+
+    // Where to look: the pointer if it's over it, else off and up while it
+    // thinks, else you; or wherever the act has it looking.
     const away = thinking ? new THREE.Vector2(0.35 + 0.1 * Math.sin(t * 0.4), 0.25) : new THREE.Vector2(0, 0);
-    this.look.set(ease(this.look.x, away.x, 2, dt), ease(this.look.y, away.y, 2, dt));
+    const pointed = this.pointed();
+    if (pointed) away.copy(pointed);
+    if (this.act?.look) away.lerp(new THREE.Vector2(...this.act.look), w);
+    const rate = pointed && !this.act?.look ? 5 : 2;
+    this.look.set(ease(this.look.x, away.x, rate, dt), ease(this.look.y, away.y, rate, dt));
 
     const breath = Math.sin(t * 1.6);
-    // A VRM 0 model's normalized bones turn the other way about x and z.
-    const s = vrm.meta?.metaVersion === "0" ? -1 : 1;
-    const set = (name: Parameters<VRM["humanoid"]["getNormalizedBoneNode"]>[0], x: number, y: number, z: number) => {
-      const b = this.bone(vrm, name);
-      if (b) b.rotation.set(x * s, y, z * s);
+    const pose: Pose = {};
+    const set = (name: keyof Pose, x: number, y: number, z: number) => {
+      pose[name] = [x, y, z];
     };
     set("spine", breath * 0.015, Math.sin(t * 0.5) * 0.03, Math.sin(t * 0.7) * 0.015);
     set("chest", breath * 0.02, 0, 0);
@@ -283,9 +339,33 @@ export class Stage {
     set("leftShoulder", 0, 0, breath * 0.01 + shrug);
     set("rightShoulder", 0, 0, -breath * 0.01 - shrug);
 
-    // Its eyes: the camera, or off and up while it thinks.
+    // The act's pose over all that, as far into it as it is. A VRM 0
+    // model's normalized bones turn the other way about x and z.
+    const s = vrm.meta?.metaVersion === "0" ? -1 : 1;
+    const names = new Set([...Object.keys(pose), ...Object.keys(this.act?.pose ?? {})] as (keyof Pose)[]);
+    for (const name of names) {
+      const [x, y, z] = pose[name] ?? [0, 0, 0];
+      const to = this.act?.pose[name];
+      const [ax, ay, az] = to ? [x + (to[0] - x) * w, y + (to[1] - y) * w, z + (to[2] - z) * w] : [x, y, z];
+      // An upper arm turns about itself first, so x is a twist.
+      this.bone(vrm, name)?.rotation.set(ax * s, ay, az * s, name.endsWith("UpperArm") ? "YZX" : "XYZ");
+    }
+
+    // Its eyes: the camera, or off from it wherever it's looking.
     const eyes = this.look.clone().add(this.dart).multiplyScalar(1.5);
     this.gaze.position.copy(this.camera.position).add(new THREE.Vector3(eyes.x, eyes.y, 0));
+  }
+
+  // How far to turn its head (in look's terms) to face the pointer: by how
+  // far the pointer is from its face on the screen, so it turns as far as
+  // looks right however close the camera is.
+  private pointed() {
+    if (!this.pointer) return undefined;
+    const face = new THREE.Vector3(0, this.headY, 0).project(this.camera);
+    return new THREE.Vector2(
+      THREE.MathUtils.clamp((this.pointer.x - face.x) * 0.8, -0.8, 0.8),
+      THREE.MathUtils.clamp((this.pointer.y - face.y) * 0.8, -0.6, 0.6),
+    );
   }
 
   private face(vrm: VRM, dt: number) {
@@ -298,7 +378,14 @@ export class Stage {
       blink = Math.sin(Math.min(since / 0.16, 1) * Math.PI);
       if (since > 0.16) this.blinkAt = this.t + (Math.random() < 0.15 ? 0.2 : 2 + Math.random() * 4);
     }
-    ex.setValue("blink", blink);
+    // The act's face over its own (and no other feeling).
+    const w = this.actWeight;
+    const acted = (name: keyof Face, own: number) => {
+      const face = this.act?.face;
+      const to = face?.[name] ?? (face && name !== "blink" ? 0 : undefined);
+      return to === undefined ? own : own + (to - own) * w;
+    };
+    ex.setValue("blink", acted("blink", blink));
 
     const [shape, open] = this.voice.mouth();
     for (const v of VISEMES) {
@@ -308,10 +395,11 @@ export class Stage {
     this.smile = ease(this.smile, this.voice.speaking ? 0.25 : this.mood === "idle" ? 0.15 : 0, 2, dt);
     const felt = this.voice.speaking ? this.felt : null;
     for (const f of FEELINGS) this.feel[f] = ease(this.feel[f], f === felt ? 1 : 0, 3, dt);
-    ex.setValue("happy", this.smile + this.feel.happy * 0.6);
-    ex.setValue("sad", this.feel.sad * 0.45);
+    ex.setValue("happy", acted("happy", this.smile + this.feel.happy * 0.6));
+    ex.setValue("sad", acted("sad", this.feel.sad * 0.45));
+    ex.setValue("angry", acted("angry", 0));
     // VRoid's surprise is a custom expression, not the preset.
-    const surprised = (this.mood === "asking" && !this.voice.speaking ? 0.2 : 0) + this.feel.surprised * 0.45;
+    const surprised = acted("surprised", (this.mood === "asking" && !this.voice.speaking ? 0.2 : 0) + this.feel.surprised * 0.45);
     if (ex.getExpression("Surprised")) ex.setValue("Surprised", surprised);
     else ex.setValue("surprised", surprised);
   }

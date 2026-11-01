@@ -7,7 +7,6 @@
 --
 --   m   mute or unmute
 --   s   stop what it's saying
---   v   the next voice
 --
 -- :Avatar opens it beside this tab's session, or closes it.
 
@@ -51,7 +50,6 @@ local function push(src)
     state = require("corkboard.agents").state(src) or "idle",
     muted = a.muted,
     skip = a.skip,
-    voice = a.voice,
   })
 end
 
@@ -116,7 +114,7 @@ local function panel_buf(src)
   vim.bo[p].filetype = "corkboard"
   vim.b[p].corkboard_view = "avatar"
   vim.b[p].corkboard_source = src
-  a = { buf = p, said = {}, muted = false, skip = 0, voice = 0 }
+  a = { buf = p, said = {}, muted = false, skip = 0 }
   panels[src] = a
   vim.keymap.set("n", "m", function()
     a.muted = not a.muted
@@ -126,10 +124,6 @@ local function panel_buf(src)
     a.skip = a.skip + 1
     push(src)
   end, { buffer = p, nowait = true, desc = "avatar: stop talking" })
-  vim.keymap.set("n", "v", function()
-    a.voice = a.voice + 1
-    push(src)
-  end, { buffer = p, nowait = true, desc = "avatar: next voice" })
   a.timer = vim.uv.new_timer()
   a.timer:start(0, 400, vim.schedule_wrap(function() read(src) end))
   for _, b in ipairs({ src, p }) do
@@ -151,10 +145,10 @@ local function panel_buf(src)
 end
 
 -- Above the cards beside the session if they're there, else beside it;
--- with how it was (corkboard.restore), muted and on the same voice.
+-- with how it was (corkboard.restore): muted or not.
 local function open(src, swin, was)
   local p = panel_buf(src)
-  if was then panels[src].muted, panels[src].voice = was.muted == true, tonumber(was.voice) or 0 end
+  if was then panels[src].muted = was.muted == true end
   local cards
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
     if vim.b[vim.api.nvim_win_get_buf(win)].corkboard_view == "cards" then cards = win end
@@ -199,7 +193,7 @@ function M.kept(src, tab)
   local a = panels[src]
   if not a or not vim.api.nvim_buf_is_valid(a.buf) then return nil end
   for _, w in ipairs(vim.fn.win_findbuf(a.buf)) do
-    if vim.api.nvim_win_get_tabpage(w) == tab then return { muted = a.muted, voice = a.voice } end
+    if vim.api.nvim_win_get_tabpage(w) == tab then return { muted = a.muted } end
   end
 end
 
