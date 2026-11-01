@@ -80,9 +80,9 @@ end
 
 -- Work a tool left running after it returned (a command run in the
 -- background, a Monitor, a background agent): the session isn't done with
--- the turn's work until its task-notification comes back. And a /loop's
--- next wakeup.
-local background, wakeup
+-- the turn's work until its task-notification comes back, or it's stopped
+-- (TaskStop, which brings none back). And a /loop's next wakeup.
+local background, stopped, wakeup
 if input.hook_event_name == "PostToolUse" then
   local args = type(input.tool_input) == "table" and input.tool_input or {}
   -- The result's own fields, not its text, which may be anything (a file
@@ -90,6 +90,9 @@ if input.hook_event_name == "PostToolUse" then
   local result = type(input.tool_response) == "table" and input.tool_response or {}
   background = args.run_in_background == true or input.tool_name == "Monitor" or input.tool_name == "Workflow"
     or result.status == "async_launched" or result.backgroundTaskId ~= nil
+  -- Its task's id, which a TaskStop names, where the result says it.
+  if background then background = type(result.backgroundTaskId) == "string" and result.backgroundTaskId or true end
+  if input.tool_name == "TaskStop" then stopped = args.task_id or args.shell_id end
   wakeup = input.tool_name == "ScheduleWakeup" and args.stop ~= true
 end
 
@@ -107,6 +110,7 @@ pcall(vim.rpcnotify, chan, "nvim_exec_lua", "require('corkboard.agents').hook(..
     tool_name = input.tool_name,
     tool_use_id = input.tool_use_id,
     background = background or nil,
+    stopped = stopped,
     wakeup = wakeup or nil,
     corkboard_tool = tool or nil,
     card = card,

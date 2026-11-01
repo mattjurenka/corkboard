@@ -20,7 +20,7 @@ local starting = {} -- card ids schedule() has queued to start
 -- started still runs) | ready (it waits on you) | idle (a fresh session) |
 -- asking | permission
 local live = {}
-local pending = {} -- terminal buffer -> { [tool_use_id] = true } of background work
+local pending = {} -- terminal buffer -> { [tool_use_id] = task id or true } of background work
 local waking = {} -- terminal buffer -> true when this turn scheduled a /loop wakeup
 local exited = {} -- card ids whose session has ended
 
@@ -261,7 +261,13 @@ function M.hook(ev)
   if state == "working" and was ~= "working" then waking[buf] = nil end
   if ev.background and ev.tool_use_id then
     pending[buf] = pending[buf] or {}
-    pending[buf][ev.tool_use_id] = true
+    pending[buf][ev.tool_use_id] = ev.background
+  end
+  -- Stopped, it brings no task-notification back.
+  if ev.stopped and pending[buf] then
+    for use, task in pairs(pending[buf]) do
+      if task == ev.stopped then pending[buf][use] = nil end
+    end
   end
   if ev.wakeup then waking[buf] = true end
   if state == "settled" then state = settle(buf, ev) end
