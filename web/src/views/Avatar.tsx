@@ -1,9 +1,11 @@
 // A face for a Claude Code session (corkboard.avatar's panel): a VRM model
 // that says each new thing Claude writes, out loud, with its words typed out
 // under it as they're said, in Kokoro's voice (v goes to the next). What
-// was said before the panel opened isn't said again. A .vrm file dropped on it is the model from then on, in this
-// browser; until then it's pixiv's sample. three.js comes with the first
-// panel, not the page.
+// was said before the panel opened isn't said again. A .vrm file dropped
+// on it is the model from then on, in this browser; until then it's
+// avatar.vrm (ryo73's "haruto 5" from VRoid Hub: anyone may use, change and
+// share it, credit unnecessary). three.js comes with the first panel, not
+// the page.
 
 import { useEffect, useRef, useState } from "react";
 import { Spinner } from "@/components/Spinner";
@@ -16,7 +18,7 @@ import type { ViewProps } from "./index";
 type Said = { id: string; text: string };
 type AvatarState = { said?: Said[]; state?: string; muted?: boolean; skip?: number; voice?: number };
 
-const SAMPLE = "https://cdn.jsdelivr.net/gh/pixiv/three-vrm@v3.5.5/packages/three-vrm/examples/models/VRM1_Constraint_Twist_Sample.vrm";
+const SAMPLE = new URL("avatar.vrm", location.href).href;
 
 const mood = (state?: string): Mood =>
   state === "working" || state === "starting" || state === "background" ? "thinking" : state === "asking" || state === "permission" ? "asking" : "idle";

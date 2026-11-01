@@ -132,9 +132,11 @@ export class Stage {
     this.look.set(ease(this.look.x, away.x, 2, dt), ease(this.look.y, away.y, 2, dt));
 
     const breath = Math.sin(t * 1.6);
+    // A VRM 0 model's normalized bones turn the other way about x and z.
+    const s = vrm.meta?.metaVersion === "0" ? -1 : 1;
     const set = (name: Parameters<VRM["humanoid"]["getNormalizedBoneNode"]>[0], x: number, y: number, z: number) => {
       const b = this.bone(vrm, name);
-      if (b) b.rotation.set(x, y, z);
+      if (b) b.rotation.set(x * s, y, z * s);
     };
     set("spine", breath * 0.015, Math.sin(t * 0.5) * 0.03, Math.sin(t * 0.7) * 0.015);
     set("chest", breath * 0.02, 0, 0);
