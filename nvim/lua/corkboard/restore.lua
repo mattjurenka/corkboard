@@ -9,7 +9,8 @@
 -- Claude Code sessions, a card's agent's too, are resumed. The pinned tabs
 -- (board, usage, the fleet, the day plan) make themselves, and the panels that open
 -- beside something (a markdown preview, a session's cards) open with it, so
--- neither is kept. Neither is Pepper, whom the day plan's window brings.
+-- neither is kept; a session's avatar is kept as part of the session.
+-- Neither is Pepper, whom the day plan's window brings.
 
 local M = {}
 
@@ -43,6 +44,7 @@ local function leaf(win)
         l.card = b.corkboard_card
       end
       l.transcript = b.corkboard_claude_transcript
+      l.avatar = require("corkboard.avatar").kept(buf, vim.api.nvim_win_get_tabpage(win))
     else
       l.type = "terminal"
       l.toggle = buf == vim.t.corkboard_terminal or nil
@@ -212,6 +214,11 @@ local function put_back()
       if tab.terminal then vim.t.corkboard_terminal_tab = true end
       if #vim.fn.win_findbuf(empty) == 0 then pcall(vim.api.nvim_buf_delete, empty, {}) end
       resize(placed, saved)
+      -- After the sizes, as the avatar takes its room from the session's.
+      for _, p in ipairs(placed) do
+        local buf = vim.api.nvim_win_is_valid(p.win) and vim.api.nvim_win_get_buf(p.win)
+        if p.leaf.avatar and buf and vim.b[buf].corkboard_claude then require("corkboard.avatar").open(buf, p.win, p.leaf.avatar) end
+      end
       for _, p in ipairs(placed) do
         if p.leaf.focus then focus = p.win end
       end

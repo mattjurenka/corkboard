@@ -150,9 +150,11 @@ local function panel_buf(src)
   return p
 end
 
--- Above the cards beside the session if they're there, else beside it.
-local function open(src, swin)
+-- Above the cards beside the session if they're there, else beside it;
+-- with how it was (corkboard.restore), muted and on the same voice.
+local function open(src, swin, was)
   local p = panel_buf(src)
+  if was then panels[src].muted, panels[src].voice = was.muted == true, tonumber(was.voice) or 0 end
   local cards
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
     if vim.b[vim.api.nvim_win_get_buf(win)].corkboard_view == "cards" then cards = win end
@@ -187,6 +189,18 @@ function M.toggle()
     return
   end
   open(src, swin)
+end
+
+M.open = open
+
+-- How a session's panel is, if it's open in tab, for corkboard.restore to
+-- keep.
+function M.kept(src, tab)
+  local a = panels[src]
+  if not a or not vim.api.nvim_buf_is_valid(a.buf) then return nil end
+  for _, w in ipairs(vim.fn.win_findbuf(a.buf)) do
+    if vim.api.nvim_win_get_tabpage(w) == tab then return { muted = a.muted, voice = a.voice } end
+  end
 end
 
 -- A session's state changed (corkboard.agents' hook): the face follows it.
