@@ -450,6 +450,18 @@ export class Session {
       if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`);
       return json;
     };
+    // The holds (holds.lua): /api/holds, and the spawns waiting on one.
+    const holds = async (method: string, path: string, body?: object) => {
+      const res = await fetch(`${this.cloud.link.cloud}/api${path}`, {
+        method,
+        headers: { Authorization: `Bearer ${await this.cloud.link.token()}`, ...(body ? { "Content-Type": "application/json" } : {}) },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const json = res.status === 204 ? null : ((await res.json().catch(() => ({}))) as any);
+      if (res.status === 409 && json?.hold) return { stale: json.hold, error: json.error };
+      if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`);
+      return json;
+    };
     const name = (n: unknown) => `/${encodeURIComponent(String(n))}`;
     // A brain's memory (its <CR> in the view): /api/notes and /api/memory, ?brain=.
     const read = async (path: string, params: Record<string, string> = {}) => {
@@ -488,6 +500,20 @@ export class Session {
         return send("POST", `${name(args[0])}/restore`, {});
       case "brains_purge":
         return send("DELETE", `${name(args[0])}?purge=${encodeURIComponent(String(args[0]))}`);
+      // What brains hold (holds.lua): every hold, and the spawns waiting on
+      // the user because of one. A stale edit answers with the hold as it is.
+      case "brains_holds": {
+        await this.cloud.follow(USER, this.listener);
+        this.keys.add(USER);
+        const [list, waiting] = await Promise.all([holds("GET", "/holds"), holds("GET", "/spawns?state=pending-approval&limit=50")]);
+        return { holds: list, waiting };
+      }
+      case "brains_hold_create":
+        return holds("POST", "/holds", args[0]);
+      case "brains_hold_update":
+        return holds("PATCH", `/holds${name(args[0])}`, args[1]);
+      case "brains_hold_delete":
+        return holds("DELETE", `/holds${name(args[0])}`);
       default:
         throw new Error(`corkboard cloud: no operation ${op}`);
     }

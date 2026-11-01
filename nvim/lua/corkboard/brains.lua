@@ -7,7 +7,8 @@
 -- line selects a brain. <CR> opens its memory beside the listing; a makes
 -- one and e edits it, in the page's form (in a bare Neovim, a buffer of its
 -- fields written with :w); d archives it (asked first), u restores it, and P purges an archived one, its name
--- typed again. It follows the user's socket, which says when a brain changes.
+-- typed again. H opens what they hold (corkboard.holds) beside it. It
+-- follows the user's socket, which says when a brain changes.
 --
 -- A brain's memory is agent://brains/<name>, drawn over by the browser too:
 -- its notes by kind, the days of its log and its episodes, and / recalls
@@ -92,7 +93,7 @@ end
 local function render_text()
   if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
   local s = state()
-  local lines, map = { "Brains" .. string.rep(" ", 40) .. "a new brain", "" }, {}
+  local lines, map = { "Brains" .. string.rep(" ", 40) .. "a new brain · H holds", "" }, {}
   if s.problem then table.insert(lines, "  " .. s.problem) end
   if s.loading then table.insert(lines, "  asking the Worker…") end
   if s.asking then table.insert(lines, "  archive " .. s.asking.name .. "?  y yes · n no") end
@@ -667,6 +668,7 @@ local function buffer()
     d = { M.archive, "archive it" },
     u = { M.restore, "restore it" },
     P = { M.purge, "purge it" },
+    H = { function() require("corkboard.holds").show() end, "what they hold" },
     y = { or_answer(true), "yes, archive it" },
     n = { or_answer(false), "no, leave it" },
     ["<Esc>"] = { or_answer(false), "no, leave it" },
@@ -693,6 +695,7 @@ end
 
 function M.push_all()
   if buf and vim.api.nvim_buf_is_valid(buf) then push_state() end
+  require("corkboard.holds").push_all()
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
     if vim.b[b].corkboard_brain_memory then push_memory(b) end
   end

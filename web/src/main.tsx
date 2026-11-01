@@ -175,6 +175,7 @@ rpc.on("corkboard.away", ([away]: any[]) => store.set({ away: typeof away === "o
 rpc.on("corkboard.tools", ([tools]: any[]) => store.set({ tools }));
 rpc.on("corkboard.projects", ([projects]: any[]) => store.set({ projects }));
 rpc.on("corkboard.brain_form", ([brainForm]: any[]) => store.set({ brainForm }));
+rpc.on("corkboard.hold_form", ([f]: any[]) => store.set({ holdForm: { hold: f?.hold ?? null } }));
 rpc.on("corkboard.chime", () => chime());
 rpc.on("corkboard.message", ([m]: any[]) => notifyMessage(m));
 // A toast replaces the one with its id; one that's ended goes after a while.

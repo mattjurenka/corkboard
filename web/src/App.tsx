@@ -8,6 +8,7 @@
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { BrainForm } from "@/components/BrainForm";
+import { HoldForm } from "@/components/HoldForm";
 import { Away } from "@/components/Away";
 import { Panels } from "@/components/Panels";
 import { Projects } from "@/components/Projects";
@@ -36,7 +37,7 @@ export function App() {
   const gutter = focus ? `max(0px, calc((100% - var(--cell-w) * ${focus.width} - 1px) / 2))` : undefined;
   // The drawer closes once it has done its job: another tab, or a picker.
   const tab = useStore((s) => s.tabs?.current.id);
-  const picking = useStore((s) => !!s.tools || !!s.projects || !!s.brainForm);
+  const picking = useStore((s) => !!s.tools || !!s.projects || !!s.brainForm || !!s.holdForm);
   useEffect(() => {
     if (store.get().drawer) store.set({ drawer: false });
   }, [tab, picking]);
@@ -105,6 +106,7 @@ export function App() {
       <Tools />
       <Projects />
       <BrainForm />
+      <HoldForm />
       <Away />
     </div>
   );

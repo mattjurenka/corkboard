@@ -35,6 +35,7 @@ export function Brains({ state, win, focused, nvim }: ViewProps<BrainsState>) {
   const pick = (name: string) => nvim.lua("require('corkboard.brains').select(...)", name, win);
   const act = (name: string, what: Act) => nvim.lua("require('corkboard.brains').act(...)", name, what, win);
   const make = () => nvim.lua("require('corkboard.brains').new()");
+  const holds = () => nvim.lua("require('corkboard.holds').show()");
   const cards = state.cards ?? [];
   const live = cards.filter((c) => !c.archived);
   const archived = cards.filter((c) => c.archived);
@@ -51,9 +52,14 @@ export function Brains({ state, win, focused, nvim }: ViewProps<BrainsState>) {
       <div ref={root} className="@container/brains flex h-full flex-col gap-row overflow-y-auto px-2ch pt-row pb-row">
         <header className="flex items-baseline justify-between gap-2ch">
           <span className="font-bold">Brains</span>
-          <Button k="a" lit onClick={make}>
-            new brain
-          </Button>
+          <span className="flex gap-2ch">
+            <Button k="H" lit onClick={holds}>
+              holds
+            </Button>
+            <Button k="a" lit onClick={make}>
+              new brain
+            </Button>
+          </span>
         </header>
         {state.problem && <p className="px-ch text-destructive">{state.problem}</p>}
         {state.loading && <Spinner className="h-[calc(var(--cell-h)*4)]" />}
@@ -157,7 +163,7 @@ function BrainCard({
 }
 
 // A label, dim, and its value.
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <>
       <dt className="text-muted-foreground">{label}</dt>
@@ -167,7 +173,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 // Words set off as tags.
-function Tags({ items }: { items: string[] }) {
+export function Tags({ items }: { items: string[] }) {
   return items.map((t) => (
     <span key={t} className="bg-muted px-half">
       {t}
@@ -176,7 +182,7 @@ function Tags({ items }: { items: string[] }) {
 }
 
 // An action with its key before it, the key lit where it works.
-function Button({ k, lit, danger, onClick, children }: { k: string; lit?: boolean; danger?: boolean; onClick: () => void; children: React.ReactNode }) {
+export function Button({ k, lit, danger, onClick, children }: { k: string; lit?: boolean; danger?: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
       type="button"

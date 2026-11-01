@@ -28,6 +28,19 @@ export type BrainFields = {
 // brains to pick accounts and labels from or start from, and the abilities.
 export type BrainFormData = { brain?: BrainFields; brains: BrainFields[]; abilities: string[] };
 
+// A hold as its form edits it (corkboard.holds fields()): secret, how long
+// ago it was set here; recorded false for a name with no record yet;
+// templates, those holding it in Nix, which fix its name.
+export type HoldFields = {
+  name: string;
+  about: string;
+  where: string | null;
+  secret: string | null;
+  recorded: boolean;
+  updated: string | null;
+  templates: string[];
+};
+
 export type Toast = { id: string; kind: "pending" | "done" | "error"; text: string };
 
 // A window that shows a view buffer, or a float, in grid cells
@@ -121,6 +134,8 @@ export type State = {
   tools: { leader: string; tools: { text: string; hint: string }[] } | null;
   // The brain form (corkboard.brains), while it's open.
   brainForm: BrainFormData | null;
+  // The hold form (corkboard.holds), while it's open: the hold, none for a new one.
+  holdForm: { hold: HoldFields | null } | null;
   // Open project (corkboard.picker), while it's open. here: this window has a
   // project, so the one chosen opens in a window of its own.
   projects: { here: boolean } | null;
@@ -153,6 +168,7 @@ let state: State = {
   away: null,
   tools: null,
   brainForm: null,
+  holdForm: null,
   projects: null,
   windows: [],
   toasts: [],
