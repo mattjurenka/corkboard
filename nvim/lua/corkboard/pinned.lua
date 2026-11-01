@@ -124,6 +124,28 @@ function M.follow(buf, lines, id)
   end
 end
 
+-- Each listing's items by line, for go below.
+local listings = {}
+
+-- h/j/k/l as drawn: the page picks the nearest item that way among those it
+-- shows in this window (corkboard.nav in web/src/main.tsx) and calls go with
+-- it. With no page, fallback, which goes by line.
+function M.nav(dir, lines, fallback)
+  return function()
+    local ui = require("corkboard")
+    if not ui.attached() then return fallback() end
+    local win = vim.api.nvim_get_current_win()
+    ui.notify("corkboard.nav", { win = win, dir = dir, from = lines()[vim.api.nvim_win_get_cursor(win)[1]] })
+  end
+end
+
+function M.go(win, id)
+  if not vim.api.nvim_win_is_valid(win) then return end
+  local lines = listings[vim.api.nvim_win_get_buf(win)]
+  local lnum = lines and M.line_of(lines(), id)
+  if lnum then vim.api.nvim_win_set_cursor(win, { lnum, 2 }) end
+end
+
 -- The arrow for each of h/j/k/l.
 M.ARROWS = { h = "Left", j = "Down", k = "Up", l = "Right" }
 
@@ -148,6 +170,8 @@ function M.listing(name, view, keys, current, on_select)
   vim.bo[b].filetype = "corkboard"
   vim.bo[b].modifiable = false
   vim.b[b].corkboard_view = view
+  listings[b] = current
+  vim.api.nvim_create_autocmd("BufWipeout", { buffer = b, callback = function() listings[b] = nil end })
   for lhs, key in pairs(keys) do
     vim.keymap.set("n", lhs, key[1], { buffer = b, nowait = true, desc = view .. ": " .. key[2] })
   end

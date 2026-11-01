@@ -13,6 +13,7 @@ import { chime } from "./chime";
 import { openPlan } from "./planWindow";
 import { remember, save as saveSkeleton } from "./skeleton";
 import { nvimFlushed, startLatency } from "./latency";
+import { navigate } from "./lib/nav";
 
 // ?cwd=/path/to/project opens Neovim there; ?host=<name> on that machine,
 // over ssh (CORKBOARD_REMOTES in bridge/server.ts). ?view=plan is the day
@@ -191,6 +192,11 @@ rpc.on("corkboard.away_return", ([here]: any[]) => {
 rpc.on("corkboard.usage",([state]: any[]) => store.set({ views: { ...store.get().views, usage: state } }));
 rpc.on("corkboard.fleet", ([state]: any[]) => store.set({ views: { ...store.get().views, fleet: state } }));
 rpc.on("corkboard.brains", ([state]: any[]) => store.set({ views: { ...store.get().views, brains: state } }));
+// h/j/k/l in a view's window, to the item drawn that way (lib/nav.ts).
+rpc.on("corkboard.nav", ([{ win, dir, from }]: any[]) => {
+  const to = navigate(win, dir, from);
+  if (to) rpc.notify("nvim_exec_lua", "require('corkboard.pinned').go(...)", [win, to]);
+});
 // The day and the ranked list are two windows on one state.
 rpc.on("corkboard.plan", ([state]: any[]) => store.set({ views: { ...store.get().views, plan: state, "plan-priority": state } }));
 rpc.on("corkboard.plan_diff", ([state]: any[]) => store.set({ views: { ...store.get().views, "plan-diff": state } }));

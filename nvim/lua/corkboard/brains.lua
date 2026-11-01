@@ -598,10 +598,13 @@ local function memory_buffer(name)
     if m.name == name and vim.api.nvim_buf_is_valid(b) then return b end
   end
   local b
-  local function step(dir) return function() pinned.step(mem[b].lines or {}, dir) end end
+  local function items() return mem[b] and mem[b].lines or {} end
+  local function step(dir) return function() pinned.step(items(), dir) end end
   b = pinned.listing("agent://brains/" .. name, "brain-memory", {
-    j = { step(1), "next" },
-    k = { step(-1), "previous" },
+    j = { pinned.nav("down", items, step(1)), "down" },
+    k = { pinned.nav("up", items, step(-1)), "up" },
+    h = { pinned.nav("left", items, function() end), "left" },
+    l = { pinned.nav("right", items, function() end), "right" },
     ["<CR>"] = { function() open_item(b, mem[b].selected) end, "open it" },
     ["/"] = { function() recall(b) end, "recall" },
     ["<Esc>"] = {
@@ -614,7 +617,7 @@ local function memory_buffer(name)
     },
     R = { function() load_memory(b) end, "refresh" },
     q = { "<Cmd>close<CR>", "close" },
-  }, function() return mem[b] and mem[b].lines or {} end, function(key)
+  }, items, function(key)
     if mem[b].selected == key then return end
     mem[b].selected = key
     push_memory(b)
@@ -657,11 +660,15 @@ function M.memory_select(b, key, win, open)
   if open then open_item(b, key) end
 end
 
+local function items() return line_item end
+
 local function buffer()
   if buf and vim.api.nvim_buf_is_valid(buf) then return buf end
   buf = pinned.listing("agent://brains", "brains", {
-    j = { function() pinned.step(line_item, 1) end, "next" },
-    k = { function() pinned.step(line_item, -1) end, "previous" },
+    j = { pinned.nav("down", items, function() pinned.step(line_item, 1) end), "down" },
+    k = { pinned.nav("up", items, function() pinned.step(line_item, -1) end), "up" },
+    h = { pinned.nav("left", items, function() pinned.step(line_item, -1) end), "left" },
+    l = { pinned.nav("right", items, function() pinned.step(line_item, 1) end), "right" },
     ["<CR>"] = { or_answer(true, function() M.memory() end), "its memory" },
     a = { M.new, "a new brain" },
     e = { M.edit, "edit it" },
@@ -673,7 +680,7 @@ local function buffer()
     n = { or_answer(false), "no, leave it" },
     ["<Esc>"] = { or_answer(false), "no, leave it" },
     R = { M.load, "refresh" },
-  }, function() return line_item end, function(name)
+  }, items, function(name)
     if name == selected then return end
     selected = name
     if asking and asking.name ~= name then asking = nil end

@@ -109,7 +109,7 @@ export function Fleet({ state, win, focused, nvim }: ViewProps<FleetState>) {
         <header className="flex justify-between gap-2ch text-muted-foreground">
           <span className="font-bold text-foreground">Fleet</span>
           <span className="flex-none @max-[70ch]/fleet:hidden">
-            j/k · h/l card · a approve · x stop · ⏎ open · g by {state.by === "project" ? "machine" : "project"} · R refresh
+            hjkl · a approve · x stop · ⏎ open · g by {state.by === "project" ? "machine" : "project"} · R refresh
           </span>
         </header>
         {state.problem && <p className="px-ch text-destructive">{state.problem}</p>}
@@ -144,6 +144,7 @@ export function Fleet({ state, win, focused, nvim }: ViewProps<FleetState>) {
               return (
                 <li
                   key={s.id}
+                  data-nav={s.id}
                   data-selected={on || undefined}
                   onClick={() => pick(s.id)}
                   title={`${s.id} · card ${s.card} on ${s.board} · asked by ${s.by}`}
@@ -305,6 +306,7 @@ function MachineCard({ card, selected, focused, onPick }: { card: Card; selected
           return (
             <li
               key={r.id}
+              data-nav={r.id}
               data-selected={on || undefined}
               onClick={() => onPick(r.id)}
               className={cn(

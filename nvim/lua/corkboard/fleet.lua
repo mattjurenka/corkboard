@@ -805,12 +805,14 @@ end
 -- While in sight, the ages move on.
 local timer
 
+local function items() return line_item end
+
 local function buffer()
   if buf and vim.api.nvim_buf_is_valid(buf) then return buf end
   timer = timer or assert(vim.uv.new_timer())
   buf = pinned.listing("agent://fleet", "fleet", {
-    j = { function() pinned.step(line_item, 1) end, "next" },
-    k = { function() pinned.step(line_item, -1) end, "previous" },
+    j = { pinned.nav("down", items, function() pinned.step(line_item, 1) end), "down" },
+    k = { pinned.nav("up", items, function() pinned.step(line_item, -1) end), "up" },
 
     ["<CR>"] = { or_answer(true, M.open), "the session, or the spawn's card" },
     y = { or_answer(true), "yes, stop it" },
@@ -820,12 +822,12 @@ local function buffer()
     x = { M.stop, "stop the spawn" },
     g = { M.group, "group by machine or project" },
     R = { M.load, "refresh" },
-    h = { function() card_step(-1) end, "previous card" },
-    l = { function() card_step(1) end, "next card" },
+    h = { pinned.nav("left", items, function() card_step(-1) end), "left" },
+    l = { pinned.nav("right", items, function() card_step(1) end), "right" },
 
     ["<A-h>"] = { function() card_step(-1, "<A-h>") end, "previous card" },
     ["<A-l>"] = { function() card_step(1, "<A-l>") end, "next card" },
-  }, function() return line_item end, function(id)
+  }, items, function(id)
     if id == selected then return end
     selected = id
     -- Moving off the spawn takes the question back.

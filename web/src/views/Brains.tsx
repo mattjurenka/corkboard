@@ -102,6 +102,7 @@ function BrainCard({
   );
   return (
     <section
+      data-nav={c.name}
       data-selected={on || undefined}
       onClick={() => onPick(c.name)}
       onDoubleClick={() => !c.archived && onAct(c.name, "memory")}
@@ -250,6 +251,7 @@ export function BrainMemory({ state, win, focused, nvim }: ViewProps<MemoryState
     return (
       <li
         key={key}
+        data-nav={key}
         data-selected={on || undefined}
         onClick={() => select(key)}
         onDoubleClick={() => select(key, true)}
@@ -276,7 +278,7 @@ export function BrainMemory({ state, win, focused, nvim }: ViewProps<MemoryState
         <span className="truncate">
           <span className="font-bold text-foreground">{state.name}</span> · {state.title}
         </span>
-        <span className="flex-none @max-[70ch]/memory:hidden">j/k · ⏎ open · / recall · esc clear · R refresh · q close</span>
+        <span className="flex-none @max-[70ch]/memory:hidden">hjkl · ⏎ open · / recall · esc clear · R refresh · q close</span>
       </header>
       {state.problem && <p className="px-ch text-destructive">{state.problem}</p>}
       {state.loading && <Spinner className="h-[calc(var(--cell-h)*4)]" />}

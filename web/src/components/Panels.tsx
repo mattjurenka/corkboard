@@ -37,6 +37,7 @@ export function Panels() {
             // Another kind of view in the window (an image, then a PDF) is a
             // new panel.
             key={`${w.win}:${w.view}`}
+            data-win={w.win}
             // A click in a panel is a click in its window, as on the grid:
             // the window is focused, and a float that closes on losing
             // focus (a card over the board) goes.
