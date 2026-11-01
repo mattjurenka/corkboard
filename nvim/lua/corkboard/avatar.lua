@@ -1,9 +1,10 @@
 -- A Claude Code session with a face: an HTML panel (b:corkboard_view
 -- "avatar", web/src/views/Avatar.tsx) beside the session, where a VRM model
--- says each thing Claude writes as it comes, out loud and as subtitles. The
--- session's log (b:corkboard_claude_transcript) is followed here; the page
--- speaks what it hasn't seen before, so what was said before it opened is
--- only shown.
+-- says what Claude passes to the mod's say tool (claude-plugin/hooks/say.tsx)
+-- as it comes, out loud and as subtitles; its replies stay written to be
+-- read. The session's log (b:corkboard_claude_transcript) is followed here;
+-- the page speaks what it hasn't seen before, so what was said before it
+-- opened is only shown.
 --
 --   m   mute or unmute
 --   s   stop what it's saying
@@ -15,6 +16,7 @@ local M = {}
 local KEEP = 20
 local TEXT = 4000
 local TAIL = 256 * 1024
+local SAY = "mcp__corkboard-ui__say"
 
 local panels = {} -- session buffer -> { buf, timer, path, offset, rest, said, muted, skip }
 
@@ -27,17 +29,16 @@ local function session_in_tab()
   end
 end
 
--- What Claude wrote in one record of the log: its text blocks, not a
--- subagent's, nor tool calls or thinking.
+-- What Claude said in one record of the log: its calls to say, not a
+-- subagent's.
 local function said(line)
   local ok, r = pcall(vim.json.decode, line, { luanil = { object = true, array = true } })
   if not ok or type(r) ~= "table" or r.type ~= "assistant" or r.isSidechain or type(r.message) ~= "table" then return {} end
   local out = {}
   for i, b in ipairs(type(r.message.content) == "table" and r.message.content or {}) do
-    if type(b) == "table" and b.type == "text" and type(b.text) == "string" then
-      local text = vim.trim(b.text)
-      if text ~= "" then table.insert(out, { id = ("%s:%d"):format(r.uuid or "", i), text = text:sub(1, TEXT) }) end
-    end
+    local text = type(b) == "table" and b.type == "tool_use" and b.name == SAY and type(b.input) == "table" and b.input.text
+    text = type(text) == "string" and vim.trim(text) or ""
+    if text ~= "" then table.insert(out, { id = b.id or ("%s:%d"):format(r.uuid or "", i), text = text:sub(1, TEXT) }) end
   end
   return out
 end
@@ -203,7 +204,7 @@ function M.changed(src)
 end
 
 -- Whether what the session says next is heard: its panel is open and not
--- muted. The session hook asks, to have the reply written to be heard.
+-- muted. The session hook asks, to have it told to use say.
 function M.heard(src)
   local a = panels[src]
   return a ~= nil and not a.muted and vim.api.nvim_buf_is_valid(a.buf) and #vim.fn.win_findbuf(a.buf) > 0

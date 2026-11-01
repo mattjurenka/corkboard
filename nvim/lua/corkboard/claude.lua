@@ -12,10 +12,12 @@ local function hook(name)
   }
 end
 
--- Added to the user's own settings.
+-- Added to the user's own settings; the mod's say (claude-plugin/hooks/say.tsx)
+-- needs no asking.
 local function settings()
   local session = { hooks = { hook("claude-session.lua") } }
   return {
+    permissions = { allow = { "mcp__corkboard-ui__say" } },
     hooks = {
       PostToolUse = {
         { matcher = "PushNotification", hooks = { hook("claude-notification.lua") } },

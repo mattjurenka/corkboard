@@ -1,6 +1,7 @@
 // A face for a Claude Code session (corkboard.avatar's panel): a VRM model
-// that says each new thing Claude writes, out loud, with its words typed out
-// under it as they're said, in Kokoro's voice, pitched up. What
+// that says each new thing Claude says (with the mod's say tool), out loud,
+// with its words typed out under it as they're said, in Kokoro's voice,
+// pitched up. What
 // was said before the panel opened isn't said again. A .vrm file dropped
 // on it is the model from then on, in this browser; until then it's
 // avatar.vrm (ryo73's "haruto 5" from VRoid Hub: anyone may use, change and

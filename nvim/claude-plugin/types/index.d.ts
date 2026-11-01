@@ -10,9 +10,11 @@ export type Live = {
 }
 
 declare module 'claude-code' {
-  // The tool the mod gives Pepper (hooks/work.tsx).
+  // The tools the mod gives: Pepper hand_off (hooks/work.tsx),
   interface McpToolInputs {
     'mcp__corkboard-ui__hand_off': { task: string; project?: string; name?: string }
+    // every session say (hooks/say.tsx).
+    'mcp__corkboard-ui__say': { text: string }
   }
 
   interface PluginState {

@@ -73,10 +73,11 @@ local buf = tonumber(os.getenv("CORKBOARD_BUF") or "")
 local chan = addr and buf and vim.F.npcall(vim.fn.sockconnect, "pipe", addr, { rpc = true }) or nil
 if chan == 0 then chan = nil end
 
-local HEARD = "The avatar panel is open on this session, so the text you end your turn with is read aloud to the user rather than read."
-  .. " Write it for the ear: plain talk in short sentences, the answer or outcome first, a few sentences unless they ask for more."
-  .. " Leave out markdown, lists, tables, code, file paths, URLs and long identifiers; say what a thing is instead (\"the bridge's speech route\")."
-  .. " The work itself, and what you pass to tools, is as usual."
+local HEARD = "The avatar panel is open on this session, so the user hears what you pass to the say tool."
+  .. " Before you end your turn, call say with what you'd tell them out loud: the answer or outcome first, a few short sentences unless they ask for more,"
+  .. " no markdown, lists, code, file paths, URLs or long identifiers; say what a thing is instead (\"the bridge's speech route\")."
+  .. " On a long task, a few words through say now and then on what you're doing is welcome too."
+  .. " Your reply itself is read, not heard: write it as usual."
 if chan and input.hook_event_name == "UserPromptSubmit"
   and vim.F.npcall(vim.rpcrequest, chan, "nvim_exec_lua", "return require('corkboard.avatar').heard(...)", { buf }) then
   local said = out and out.hookSpecificOutput.additionalContext
