@@ -4,7 +4,7 @@
 // and nods along; working, it looks off and up as if thinking; asking, it
 // looks at you with its head on one side.
 
-import { type VRM, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
+import { MToonMaterial, type VRM, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import type { Viseme, Voice } from "./voice";
@@ -12,6 +12,30 @@ import type { Viseme, Voice } from "./voice";
 export type Mood = "idle" | "thinking" | "asking";
 
 const VISEMES: Viseme[] = ["aa", "ih", "ou", "ee", "oh"];
+
+// The clothes' color, lit and in shade; their painted texture is soft.
+const CLOTH = new THREE.Color(0xc8102e);
+const CLOTH_SHADE = new THREE.Color(0x6e0718);
+
+// A texture's shape only: white wherever it isn't see-through, for a
+// cut-out material to be one color.
+function silhouette(t: THREE.Texture): THREE.Texture {
+  const img = t.image as CanvasImageSource & { width: number; height: number };
+  const c = document.createElement("canvas");
+  c.width = img.width;
+  c.height = img.height;
+  const g = c.getContext("2d")!;
+  g.drawImage(img, 0, 0);
+  g.globalCompositeOperation = "source-in";
+  g.fillStyle = "#fff";
+  g.fillRect(0, 0, c.width, c.height);
+  const out = new THREE.CanvasTexture(c);
+  out.flipY = t.flipY;
+  out.colorSpace = t.colorSpace;
+  out.wrapS = t.wrapS;
+  out.wrapT = t.wrapT;
+  return out;
+}
 
 // Toward target at rate (per second), whatever the frame time.
 const ease = (from: number, to: number, rate: number, dt: number) => from + (to - from) * (1 - Math.exp(-rate * dt));
@@ -42,9 +66,15 @@ export class Stage {
     this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    const sun = new THREE.DirectionalLight(0xffffff, Math.PI * 0.9);
-    sun.position.set(0.5, 1.5, 2);
-    this.scene.add(sun, new THREE.AmbientLight(0xffffff, 0.6), this.camera, this.gaze);
+    // A warm key from above one side, a cool fill from the other, and one
+    // from behind for an edge on the hair and shoulders.
+    const key = new THREE.DirectionalLight(0xfff1e0, Math.PI * 0.85);
+    key.position.set(1, 1.6, 2);
+    const fill = new THREE.DirectionalLight(0xd8e4ff, Math.PI * 0.25);
+    fill.position.set(-1.5, 0.6, 1.5);
+    const back = new THREE.DirectionalLight(0xffffff, Math.PI * 0.5);
+    back.position.set(-0.5, 1.5, -2);
+    this.scene.add(key, fill, back, new THREE.AmbientLight(0xffffff, 0.45), this.camera, this.gaze);
     const loop = () => {
       this.frame = requestAnimationFrame(loop);
       this.tick(Math.min(this.clock.getDelta(), 0.1));
@@ -67,6 +97,18 @@ export class Stage {
     vrm.scene.traverse((o) => {
       o.frustumCulled = false;
       for (const m of [(o as THREE.Mesh).material ?? []].flat()) {
+        if (m instanceof MToonMaterial) {
+          if (/CLOTH/.test(m.name) && m.map) {
+            m.map = m.shadeMultiplyTexture = silhouette(m.map);
+            m.color.copy(CLOTH);
+            m.shadeColorFactor.copy(CLOTH_SHADE);
+          }
+          // A soft light at the silhouette's edge.
+          m.parametricRimColorFactor.setRGB(0.35, 0.35, 0.4);
+          m.parametricRimFresnelPowerFactor = 4;
+          m.parametricRimLiftFactor = 0;
+          m.rimLightingMixFactor = 1;
+        }
         const uniforms = Object.values((m as THREE.ShaderMaterial).uniforms ?? {}).map((u) => u.value);
         for (const t of [...Object.values(m), ...uniforms]) {
           if (!(t instanceof THREE.Texture)) continue;
