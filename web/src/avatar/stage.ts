@@ -68,13 +68,13 @@ export class Stage {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     // A warm key from above one side, a cool fill from the other, and one
     // from behind for an edge on the hair and shoulders.
-    const key = new THREE.DirectionalLight(0xfff1e0, Math.PI * 0.85);
+    const key = new THREE.DirectionalLight(0xfff1e0, Math.PI * 0.55);
     key.position.set(1, 1.6, 2);
-    const fill = new THREE.DirectionalLight(0xd8e4ff, Math.PI * 0.25);
+    const fill = new THREE.DirectionalLight(0xd8e4ff, Math.PI * 0.12);
     fill.position.set(-1.5, 0.6, 1.5);
-    const back = new THREE.DirectionalLight(0xffffff, Math.PI * 0.5);
+    const back = new THREE.DirectionalLight(0xffffff, Math.PI * 0.3);
     back.position.set(-0.5, 1.5, -2);
-    this.scene.add(key, fill, back, new THREE.AmbientLight(0xffffff, 0.45), this.camera, this.gaze);
+    this.scene.add(key, fill, back, new THREE.AmbientLight(0xffffff, 0.3), this.camera, this.gaze);
     const loop = () => {
       this.frame = requestAnimationFrame(loop);
       this.tick(Math.min(this.clock.getDelta(), 0.1));
@@ -214,8 +214,20 @@ export class Stage {
     const lift = talking ? 0.06 * Math.sin(t * 1.9) : 0;
     set("leftUpperArm", 0, 0, -1.2 + breath * 0.02 + lift);
     set("rightUpperArm", 0, 0, 1.2 - breath * 0.02 - lift * 0.7);
-    set("leftLowerArm", 0, -0.25, -0.1);
-    set("rightLowerArm", 0, 0.25, 0.1);
+    set("leftLowerArm", -0.45, -0.25, -0.1);
+    set("rightLowerArm", -0.45, 0.25, 0.1);
+    // Hands at rest: the fingers curled a little, more toward the little
+    // finger, the thumb in.
+    for (const [side, d] of [["left", -1], ["right", 1]] as const) {
+      for (const [finger, curl] of [["Index", 0.35], ["Middle", 0.42], ["Ring", 0.5], ["Little", 0.58]] as const) {
+        set(`${side}${finger}Proximal`, 0, 0, d * curl);
+        set(`${side}${finger}Intermediate`, 0, 0, d * curl * 1.3);
+        set(`${side}${finger}Distal`, 0, 0, d * curl * 0.8);
+      }
+      set(`${side}ThumbMetacarpal`, 0, -d * 0.3, 0);
+      set(`${side}ThumbProximal`, 0, -d * 0.25, 0);
+      set(`${side}ThumbDistal`, 0, -d * 0.2, 0);
+    }
     set("leftShoulder", 0, 0, breath * 0.01);
     set("rightShoulder", 0, 0, -breath * 0.01);
 
