@@ -30,9 +30,34 @@ local PERIODS = {
 }
 local SORTS = { recent = "recent", cost = "cost" }
 
-local function project_dir(cwd)
+local function projects_dir()
   local config = vim.env.CLAUDE_CONFIG_DIR or vim.fs.joinpath(vim.uv.os_homedir(), ".claude")
-  return vim.fs.joinpath(config, "projects", (cwd:gsub("[^%w]", "-")))
+  return vim.fs.joinpath(config, "projects")
+end
+
+local function project_dir(cwd)
+  return vim.fs.joinpath(projects_dir(), (cwd:gsub("[^%w]", "-")))
+end
+
+-- The cwd a log directory's sessions ran in, from the first of a few logs
+-- that names one.
+local function first_cwd(dir)
+  local checked = 0
+  for name, kind in vim.fs.dir(dir) do
+    if kind == "file" and name:match("%.jsonl$") then
+      checked = checked + 1
+      if checked > 5 then return end
+      local f = io.open(vim.fs.joinpath(dir, name))
+      local cwd
+      for _ = 1, f and 20 or 0 do
+        local entry = f:read("*l")
+        cwd = entry and entry:match('"cwd":"([^"]+)"')
+        if not entry or cwd then break end
+      end
+      if f then f:close() end
+      if cwd then return cwd end
+    end
+  end
 end
 
 -- The cwd under place that a log directory's sessions ran in, if they did:
@@ -99,12 +124,13 @@ local function read_meta(path)
   return type(decoded) == "table" and decoded or {}
 end
 
--- The sessions in this project written to since `since` (any, when nil),
--- newest first, each with its subagents and whether any of its logs grew;
--- and whether any log grew at all.
-local function scan(root, since)
+-- The sessions in this project (or in dirs, the log directories given)
+-- written to since `since` (any, when nil), newest first, each with its
+-- subagents, its cwd and whether any of its logs grew; and whether any log
+-- grew at all.
+local function scan(root, since, dirs)
   local files = {}
-  for _, d in ipairs(log_dirs(root)) do
+  for _, d in ipairs(dirs or log_dirs(root)) do
     for name, kind in vim.fs.dir(d.dir) do
       if kind == "file" and name:match("%.jsonl$") then
         local path = vim.fs.joinpath(d.dir, name)
@@ -119,7 +145,7 @@ local function scan(root, since)
   for _, f in ipairs(files) do
     if since and f.mtime < since then break end
     local log, grew = transcript.read(f.path, f.cwd)
-    local session = { id = f.id, log = log, agents = {}, grew = grew }
+    local session = { id = f.id, cwd = f.cwd, log = log, agents = {}, grew = grew }
     local sub = vim.fs.joinpath(f.dir, f.id, "subagents")
     if vim.fn.isdirectory(sub) == 1 then
       for name, kind in vim.fs.dir(sub) do
@@ -208,6 +234,11 @@ local sort = "recent"
 -- view shows it in place of the selected session.
 local advice
 local show_advice = false
+-- The account's boards, fetched hourly (Pepper's report); nil until they
+-- first are.
+local boards -- { at, list }
+local board_at = {} -- project root -> its board, or false
+local claimed = {} -- log dir -> { cwd, board: whether a board project's }
 -- Where h/j/k/l are: the session list, the session's rows (item, from 0,
 -- the one picked out as the mouse would hover it) or Pepper's advice
 -- (line, how far down it is read).
@@ -319,6 +350,7 @@ local function state()
   for _, p in ipairs(PERIODS) do table.insert(periods, { key = p.key, label = p.label }) end
   return {
     root = util.project_root(), selected = selected, sessions = list,
+    board = board_at[util.project_root()] and board_at[util.project_root()].key or nil,
     loading = warmed[util.project_root()] ~= true or nil,
     period = period, periods = periods, sort = sort, total = period_total(),
     advice = advice and { body = advice.body, updated = advice.updated } or nil, show_advice = show_advice,
@@ -425,23 +457,82 @@ end
 
 -- Pepper's report -------------------------------------------------------------
 --
--- The last week of this project's sessions, as a note on the Worker
--- (usage-<project>, kind review) that Pepper reads to suggest how to spend
--- fewer tokens. Sent once the logs are read, then hourly when it changed.
--- Absolute times only, so an unchanged week sends nothing.
+-- The last week of sessions, as notes on the Worker (kind review) that
+-- Pepper reads to suggest how to spend fewer tokens, project by project.
+-- Only a project with a board gets its own (usage-<board>-<host>: each
+-- machine's clone sends one); every other session on the machine (scratch
+-- directories, home, a repository with no board) goes in its Corkboard
+-- System report (usage-system-<host>), which never gets cards. Sent once the
+-- logs are read, then hourly when it changed. Absolute times only, so an
+-- unchanged week sends nothing.
 
 local REPORT_DAYS = 7
+local SYSTEM = "Corkboard System"
 
 local function pct(x) return string.format("%.0f%%", (x or 0) * 100) end
 local function when(timestamp) return (tostring(timestamp or ""):sub(1, 16):gsub("T", " ")) .. "Z" end
+local function slug(s) return (s:lower():gsub("[^a-z0-9]+", "-"):gsub("^-+", ""):gsub("-+$", "")) end
+local function host() return vim.uv.os_gethostname() end
 
-function M.report(cwd)
-  local list = scan(cwd, os.time() - REPORT_DAYS * 86400)
+local function board_list()
+  if boards and vim.uv.now() - boards.at < 3600 * 1000 then return boards.list end
+  local ok, list = pcall(require("corkboard.cards.cloud").boards)
+  if not ok or type(list) ~= "table" then return boards and boards.list end
+  boards, board_at, claimed = { at = vim.uv.now(), list = list }, {}, {}
+  return list
+end
+
+-- The board of the project at root: the one it's pinned to, else the one
+-- for its first commit, else for its path.
+local function board_of(root)
+  local list = board_list() or {}
+  if board_at[root] == nil then
+    local function find(field, value)
+      for _, b in ipairs(value and list or {}) do
+        if b[field] == value then return b end
+      end
+    end
+    board_at[root] = find("key", util.pinned_board(root)) or find("commit", util.project_commit(root))
+      or find("key", util.path_key(root)) or false
+  end
+  return board_at[root] or nil
+end
+
+-- The machine's log directories that no board project claims. A card
+-- worktree's are its project's; any other's are the project of the cwd its
+-- sessions ran in.
+local function system_dirs()
+  board_list()
+  local worktrees = util.data_dir("worktrees") .. "/"
+  local dirs, base = {}, projects_dir()
+  if vim.fn.isdirectory(base) == 0 then return dirs end
+  for name, kind in vim.fs.dir(base) do
+    local dir = vim.fs.joinpath(base, name)
+    if kind == "directory" and not claimed[dir] then
+      local cwd = first_cwd(dir)
+      -- The cwd may be gone since; its nearest directory that isn't.
+      local here = cwd
+      while here and vim.fn.isdirectory(here) == 0 do
+        here = here ~= "/" and vim.fs.dirname(here) or nil
+      end
+      claimed[dir] = { cwd = cwd, board = here ~= nil
+        and (cwd:sub(1, #worktrees) == worktrees or board_of(util.project_root(here)) ~= nil) }
+    end
+    local c = claimed[dir]
+    if c and c.cwd and not c.board then table.insert(dirs, { dir = dir, cwd = c.cwd }) end
+  end
+  return dirs
+end
+
+-- The report on scan()'s sessions, below the head lines that say what it
+-- covers; with where, each costliest session names the directory it ran in.
+local function report(head, list, where)
   if #list == 0 then return nil end
   local sums = { cost = 0, tokens = 0, requests = 0, read = 0, sent = 0, misses = 0, miss_tokens = 0, miss_cost = 0 }
   local by_label, by_agent, by_model = {}, {}, {}
   local rows = {}
   for _, session in ipairs(list) do
+    if session.grew then summaries[session.id] = nil end
     local s = summary_of(session)
     local cost = cost_of(s) or 0
     local t = s.tokens
@@ -465,7 +556,7 @@ function M.report(cwd)
     end
     local model = model_name(s.model)
     by_model[model] = (by_model[model] or 0) + cost
-    table.insert(rows, { s = s, cost = cost })
+    table.insert(rows, { s = s, cost = cost, cwd = session.cwd })
   end
   local function sorted(t, key)
     local out = vim.tbl_values(t)
@@ -473,8 +564,7 @@ function M.report(cwd)
     return out
   end
 
-  local lines = {
-    string.format("# Token usage: %s, the %d days to %s", cwd, REPORT_DAYS, os.date("!%Y-%m-%d")),
+  local lines = vim.list_extend(vim.deepcopy(head), {
     "",
     "From corkboard's usage view (Claude Code's session logs). Costs are list-price estimates; a session's cost is",
     "its own record where it has one. Cache hit: the share of input read from the prompt cache. A miss is a request",
@@ -485,7 +575,7 @@ function M.report(cwd)
     string.format("- %d sessions, %d requests, %s tokens, %s", #list, sums.requests, human(sums.tokens), dollars(sums.cost)),
     string.format("- cache hit %s; %d misses re-sent %s tokens, %s", pct(sums.sent > 0 and sums.read / sums.sent or 0),
       sums.misses, human(sums.miss_tokens), dollars(sums.miss_cost)),
-  }
+  })
   local models = {}
   for name, cost in pairs(by_model) do
     if cost >= 0.005 then table.insert(models, { name = name ~= "" and name or "unknown", cost = cost }) end
@@ -518,7 +608,7 @@ function M.report(cwd)
       string.format("### %s", s.title),
       "",
       string.format("- %s, last active %s, %s, %d requests, peak context %s", dollars(r.cost), when(s.updated),
-        model_name(s.model), s.requests, human(peak)),
+        model_name(s.model), s.requests, human(peak)) .. (where and r.cwd and (", in " .. r.cwd) or ""),
       string.format("- cache hit %s, %d misses (%s tokens)", pct(s.cache.hit), #s.cache.misses, human(s.cache.miss_tokens)),
     })
     local cats = {}
@@ -543,22 +633,56 @@ function M.report(cwd)
   return table.concat(lines, "\n")
 end
 
-local published = {} -- cwd -> the report last sent
+local function since() return os.time() - REPORT_DAYS * 86400 end
+local function today() return os.date("!%Y-%m-%d") end
 
-local function note_id(cwd)
-  return (("usage-" .. cwd:lower():gsub("[^a-z0-9]+", "-"):gsub("^-+", ""):gsub("-+$", "")):sub(1, 80):gsub("-+$", ""))
+-- The report on the project at root, its note's id and its name; nil when
+-- it has no board.
+function M.report(root)
+  local board = board_of(root)
+  if not board then return nil end
+  local name = board.name or board.key
+  return report({
+    string.format("# Token usage: %s, the %d days to %s", name, REPORT_DAYS, today()),
+    "",
+    string.format("Project: %s (board %s)", name, board.key),
+    string.format("Machine: %s, %s", host(), root),
+  }, scan(root, since())), (("usage-" .. slug(board.key .. "-" .. host())):sub(1, 80):gsub("-+$", "")), name
 end
 
-local function publish(cwd)
-  local cloud = require("corkboard.cards.cloud")
-  if not cloud.enabled() or cwd == vim.uv.os_homedir() or require("corkboard").window == "plan" then return end
-  local ok, text = pcall(M.report, cwd)
-  if not ok or not text or published[cwd] == text then return end
-  local sent, err = pcall(cloud.note_put, note_id(cwd), { kind = "review", title = "Usage: " .. vim.fs.basename(cwd), body = text })
+-- The report on the machine's sessions outside every board project.
+function M.system_report()
+  return report({
+    string.format("# Token usage: %s on %s, the %d days to %s", SYSTEM, host(), REPORT_DAYS, today()),
+    "",
+    string.format("Project: %s (no board)", SYSTEM),
+    string.format("Machine: %s", host()),
+  }, scan(nil, since(), system_dirs()), true)
+end
+
+local published = {} -- note id -> the report last sent
+-- Whether the system report's logs were read: nil before, false while.
+local system_warmed
+
+local function send(id, name, text)
+  if not text or published[id] == text then return end
+  local sent, err = pcall(require("corkboard.cards.cloud").note_put, id, { kind = "review", title = "Usage: " .. name, body = text })
   if sent then
-    published[cwd] = text
+    published[id] = text
   else
     vim.notify("corkboard: sending the usage report: " .. tostring(err), vim.log.levels.WARN)
+  end
+end
+
+local function publish(root)
+  if not require("corkboard.cards.cloud").enabled() or require("corkboard").window == "plan" or not board_list() then return end
+  if root ~= vim.uv.os_homedir() then
+    local ok, text, id, name = pcall(M.report, root)
+    if ok and text then send(id, name, text) end
+  end
+  if system_warmed then
+    local ok, text = pcall(M.system_report)
+    if ok then send("usage-system-" .. slug(host()), SYSTEM, text) end
   end
 end
 
@@ -582,6 +706,40 @@ function M.show_advice(on)
   if on then vim.schedule(fetch_advice) end
 end
 
+-- Read the logs at paths a file per tick, then call done.
+local function read_slowly(paths, done)
+  local i = 0
+  local function step()
+    i = i + 1
+    if paths[i] then
+      pcall(transcript.read, paths[i].path, paths[i].cwd)
+      return vim.defer_fn(step, 0)
+    end
+    done()
+  end
+  vim.defer_fn(step, 0)
+end
+
+-- The system report's logs of the last week, read as warm() reads a
+-- project's before the report is first sent. Not until the boards are known,
+-- or every session would be the system's.
+local function warm_system()
+  if system_warmed ~= nil or require("corkboard").window == "plan" or not board_list() then return end
+  system_warmed = false
+  local paths, from = {}, since()
+  for _, d in ipairs(system_dirs()) do
+    for name, kind in vim.fs.dir(d.dir, { depth = 3 }) do
+      local path = vim.fs.joinpath(d.dir, name)
+      local stat = kind == "file" and name:match("%.jsonl$") and vim.uv.fs_stat(path)
+      if stat and stat.mtime.sec >= from then table.insert(paths, { path = path, cwd = d.cwd }) end
+    end
+  end
+  read_slowly(paths, function()
+    system_warmed = true
+    publish(util.project_root())
+  end)
+end
+
 local hourly
 local function publish_hourly(cwd)
   hourly = hourly or assert(vim.uv.new_timer())
@@ -589,11 +747,13 @@ local function publish_hourly(cwd)
     hourly:start(3600 * 1000, 3600 * 1000, vim.schedule_wrap(function()
       publish(util.project_root())
       fetch_advice()
+      warm_system()
     end))
   end
   vim.schedule(function()
     publish(cwd)
     fetch_advice()
+    warm_system()
   end)
 end
 
@@ -614,18 +774,11 @@ local function warm(cwd)
       if s.transcript then table.insert(paths, { path = s.transcript, cwd = cwd }) end
     end
   end
-  local i = 0
-  local function step()
-    i = i + 1
-    if paths[i] then
-      pcall(transcript.read, paths[i].path, paths[i].cwd)
-      return vim.defer_fn(step, 0)
-    end
+  read_slowly(paths, function()
     warmed[cwd] = true
     if util.project_root() == cwd then M.push(true) end
     publish_hourly(cwd)
-  end
-  vim.defer_fn(step, 0)
+  end)
 end
 
 -- Re-read the logs; redraw and push when anything changed (or force).

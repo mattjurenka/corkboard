@@ -33,6 +33,8 @@ type Session = {
 };
 type UsageState = {
   root?: string;
+  // The project's board, once Neovim has looked it up.
+  board?: string;
   sessions: Session[];
   selected?: string;
   period: string;
@@ -127,7 +129,7 @@ export function Usage({ state, win, focused, nvim }: ViewProps<UsageState>) {
             onPick={(key) => nvim.lua("require('corkboard.usage').show_advice(...)", key === "advice")}
           />
           {state.show_advice ? (
-            <Advice advice={state.advice} line={focused ? state.line : undefined} />
+            <Advice advice={state.advice} board={state.board} line={focused ? state.line : undefined} />
           ) : selected ? (
             <Detail s={selected} item={focused ? state.item : undefined} />
           ) : (
@@ -157,8 +159,33 @@ const safe = new Marked({
   },
 });
 
-// What Pepper made of the report: markdown, on the grid like a card's.
-function Advice({ advice, line }: { advice: UsageState["advice"]; line?: number }) {
+// The JSON Pepper ends its note with (fleet/pepper/guest.nix).
+type Recommendation = { title: string; saving?: number; change?: string; evidence?: string; cards?: string[] };
+type Earlier = { title: string; status?: string; evidence?: string };
+type ProjectAdvice = { project: string; board?: string | null; recommendations?: Recommendation[]; earlier?: Earlier[] };
+
+const FENCE = /```json\s*\n([\s\S]*?)\n```\s*$/;
+
+// The note's projects, this one's first and the boardless last; the
+// markdown without its JSON when there are none.
+function parseAdvice(body: string, board?: string): { projects?: ProjectAdvice[]; markdown: string } {
+  const m = FENCE.exec(body.trimEnd());
+  const markdown = m ? body.trimEnd().slice(0, m.index) : body;
+  let projects: ProjectAdvice[] | undefined;
+  try {
+    const parsed = m && JSON.parse(m[1]);
+    if (Array.isArray(parsed?.projects)) projects = parsed.projects.filter((p: ProjectAdvice) => p && typeof p.project === "string");
+  } catch {}
+  if (!projects?.length) return { markdown };
+  const rank = (p: ProjectAdvice) => (board && p.board === board ? 0 : p.board ? 1 : 2);
+  return { projects: [...projects].sort((a, b) => rank(a) - rank(b)), markdown };
+}
+
+const md = (s?: string) => ({ __html: s ? (safe.parse(s) as string) : "" });
+
+// What Pepper made of the reports: a section per project, or its markdown
+// on the grid like a card's.
+function Advice({ advice, board, line }: { advice: UsageState["advice"]; board?: string; line?: number }) {
   // Scrolled as far down as line is through the note's lines.
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -174,11 +201,64 @@ function Advice({ advice, line }: { advice: UsageState["advice"]; line?: number 
       </div>
     );
   }
+  const { projects, markdown } = parseAdvice(advice.body, board);
   return (
     <div ref={box} className="on-grid min-h-0 min-w-0 flex-1 overflow-y-auto pr-ch">
       <p className="text-muted-foreground">Pepper · updated {advice.updated.slice(0, 16).replace("T", " ")}Z</p>
-      <article className="markdown-body" dangerouslySetInnerHTML={{ __html: safe.parse(advice.body) as string }} />
+      {projects ? (
+        projects.map((p) => <ProjectSection key={p.project} p={p} />)
+      ) : (
+        <article className="markdown-body" dangerouslySetInnerHTML={md(markdown)} />
+      )}
     </div>
+  );
+}
+
+function ProjectSection({ p }: { p: ProjectAdvice }) {
+  const recs = p.recommendations ?? [];
+  const earlier = p.earlier ?? [];
+  const saving = recs.reduce((sum, r) => sum + (r.saving ?? 0), 0);
+  return (
+    <section className="mt-row border-t pt-half">
+      <h2 className="flex gap-2ch">
+        <span className="min-w-0 flex-1 truncate font-bold">{p.project}</span>
+        {p.board && <span className="flex-none text-muted-foreground">{p.board}</span>}
+        {saving > 0 && <span className="flex-none tabular-nums">{money(saving)}/wk</span>}
+      </h2>
+      {!recs.length && !earlier.length && <div className="px-ch text-muted-foreground">—</div>}
+      <ol>
+        {recs.map((r, i) => (
+          <li key={i} className="mt-half">
+            <div className="flex gap-ch">
+              <span className="flex-none text-muted-foreground tabular-nums">{i + 1}.</span>
+              <span className="min-w-0 flex-1 font-bold">{r.title}</span>
+              {r.saving != null && <span className="flex-none tabular-nums">{money(r.saving)}/wk</span>}
+            </div>
+            <div className="pl-3ch">
+              <article className="markdown-body" dangerouslySetInnerHTML={md(r.change)} />
+              <article className="markdown-body text-muted-foreground" dangerouslySetInnerHTML={md(r.evidence)} />
+              {!!r.cards?.length && <div className="text-muted-foreground">{r.cards.join(" · ")}</div>}
+            </div>
+          </li>
+        ))}
+      </ol>
+      {earlier.length > 0 && (
+        <>
+          <h3 className="mt-half text-muted-foreground lowercase">Earlier</h3>
+          <ul>
+            {earlier.map((e, i) => (
+              <li key={i} className="grid grid-cols-[12ch_1fr] gap-x-ch">
+                <span className={cn("text-muted-foreground", e.status === "working" && "text-primary", e.status === "not working" && "text-blocked")}>
+                  {e.status ?? ""}
+                </span>
+                <span className="min-w-0">{e.title}</span>
+                <article className="markdown-body col-start-2 text-muted-foreground" dangerouslySetInnerHTML={md(e.evidence)} />
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
   );
 }
 
