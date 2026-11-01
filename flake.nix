@@ -10,9 +10,16 @@
       url = "github:neovim/neovim/v0.12.6";
       flake = false;
     };
+    # Claude Code for every machine: Pepper's VM, the droplet's workspace,
+    # and (through nixosconfig's input, which follows this one) the laptop,
+    # brain-vm and the fleet's slots. One lock, one version.
+    claude-code = {
+      url = "github:sadjow/claude-code-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, nixpkgs-wasm, neovim-src, ... }:
+  outputs = { self, nixpkgs, nixpkgs-wasm, neovim-src, claude-code, ... }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAll = f: nixpkgs.lib.genAttrs systems (s: f nixpkgs.legacyPackages.${s});
@@ -53,7 +60,10 @@
       };
 
       nixosConfigurations.pepper-vm = nixpkgs.lib.nixosSystem {
-        modules = [ (import ./fleet/pepper/guest.nix { plan = pepperPlan; memoryHooks = import ./fleet/memory-hooks.nix; }) ];
+        modules = [
+          (import ./fleet/pepper/guest.nix { plan = pepperPlan; memoryHooks = import ./fleet/memory-hooks.nix; })
+          { nixpkgs.overlays = [ claude-code.overlays.default ]; }
+        ];
       };
 
       checks = forAll (pkgs: {
@@ -131,7 +141,7 @@
           dontFixup = true;
           outputHashMode = "recursive";
           outputHash = {
-            x86_64-linux = "sha256-0MsLZ6iPcYO4eIGzvXjuG63Q0IRrMuKgGZ76ry8qsBk=";
+            x86_64-linux = "sha256-Mv/bAYY0hFsLa/RHebGFg8rUi4FvRWLNrGtCdmZcFnw=";
           }.${pkgs.stdenv.hostPlatform.system} or pkgs.lib.fakeHash;
         };
 
@@ -169,7 +179,12 @@
             url = "https://registry.npmjs.org/@msgpack/msgpack/-/msgpack-3.1.3.tgz";
             hash = "sha512-47XIizs9XZXvuJgoaJUIE2lFoID8ugvc0jzSHP+Ptfk8nTbnR8g788wv48N03Kx0UkAv559HWRQ3yzOgzlRNUA==";
           };
-          nativeBuildInputs = [ pkgs.makeWrapper ];
+          # The avatar's voice (bridge/speech.ts): Kokoro on onnxruntime-node,
+          # taken from webDeps, with onnxruntime's binaries for this system
+          # only and linked to the libstdc++ here.
+          speech = [ "kokoro-js" "phonemizer" "@huggingface/transformers" "onnxruntime-node" "onnxruntime-common" ];
+          nativeBuildInputs = [ pkgs.makeWrapper pkgs.autoPatchelfHook ];
+          buildInputs = [ pkgs.stdenv.cc.cc.lib ];
           installPhase = ''
             share=$out/share/corkboard
             mkdir -p $share/node_modules/@msgpack/msgpack
@@ -178,6 +193,18 @@
             echo ${rev} > $share/nvim/rev
             mkdir -p $share/web && cp -r ${web} $share/web/dist
             tar -xzf $msgpack -C $share/node_modules/@msgpack/msgpack --strip-components=1
+            for p in $speech; do
+              mkdir -p $share/node_modules/$(dirname $p)
+              cp -r ${webDeps}/$p $share/node_modules/$p
+            done
+            chmod -R u+w $share/node_modules
+            arch=${if pkgs.stdenv.hostPlatform.isAarch64 then "arm64" else "x64"}
+            ort=$share/node_modules/onnxruntime-node/bin/napi-v3
+            find $ort -mindepth 2 -maxdepth 2 ! -path "$ort/linux/$arch" -exec rm -r {} +
+            # transformers.js wants sharp, for images, to be there; speech never calls it.
+            mkdir -p $share/node_modules/sharp
+            echo '{"name":"sharp","main":"index.js"}' > $share/node_modules/sharp/package.json
+            echo 'module.exports = () => { throw new Error("no sharp"); };' > $share/node_modules/sharp/index.js
             makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-bridge \
               --add-flags $share/bridge/server.ts \
               --suffix PATH : ${pkgs.lib.makeBinPath [ pkgs.neovim pkgs.bun pkgs.ripgrep pkgs.fd ]} \
@@ -189,6 +216,14 @@
           '';
           meta.mainProgram = "corkboard-bridge";
         };
+
+        # The pinned Claude Code, for a profile outside NixOS (the droplet's
+        # workspace). Unfree, hence its own nixpkgs.
+        claude-code = (import nixpkgs {
+          system = pkgs.stdenv.hostPlatform.system;
+          config.allowUnfree = true;
+          overlays = [ self.inputs.claude-code.overlays.default ];
+        }).claude-code;
 
         # The desktop window (app/main.js): nixpkgs' Electron on the bridge's
         # page. `corkboard-app [--name ID] [--title NAME] URL`; ID is the

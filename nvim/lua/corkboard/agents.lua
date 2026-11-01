@@ -281,6 +281,7 @@ function M.hook(ev)
     local waiting = state == "asking" or state == "permission"
     vim.b[buf].corkboard_asking = waiting and (asking(ev) or vim.b[buf].corkboard_asking) or nil
     require("corkboard.away").report()
+    require("corkboard.avatar").changed(buf)
     -- The tab's mark: a session in a tab off screen draws nothing that
     -- would push it.
     require("corkboard").push_layout()

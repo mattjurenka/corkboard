@@ -15,6 +15,8 @@ export type Nvim = {
   blob: (path: string, version?: unknown) => Promise<string>;
   // A file attached to a card, from the bridge's /media, as a blob URL.
   media: (url: string) => Promise<string>;
+  // A request to the bridge that served the page, with its token.
+  bridge: (path: string, init?: RequestInit) => Promise<Response>;
   openFile: (path: string, tab?: boolean) => void;
   // Keyboard focus back to the canvas (or the on-screen keyboard's
   // textarea, while it's up), and so to Neovim.
@@ -65,6 +67,7 @@ export function makeNvim(rpc: Rpc, token?: string | null): Nvim {
     notify: (method, ...params) => rpc.notify(method, ...params),
     blob,
     media,
+    bridge: (path, init) => fetch(new URL(path, location.href), { ...init, headers: { ...(init?.headers as Record<string, string>), ...(token ? { "x-corkboard-token": token } : {}) } }),
     openFile: (path, tab = false) => void lua("require('corkboard').open_file(...)", path, tab),
     refocus: () => document.querySelector<HTMLElement>(store.get().keyboard ? "#keys" : "#editor canvas")?.focus(),
   };

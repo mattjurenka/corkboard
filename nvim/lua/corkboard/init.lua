@@ -727,6 +727,7 @@ function M.setup()
 
   require("corkboard.viewer").setup()
   require("corkboard.claude.cards").setup()
+  require("corkboard.avatar").setup()
   require("corkboard.restore").setup()
   require("corkboard.focus").setup()
   require("corkboard.away").setup()

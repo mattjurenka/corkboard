@@ -1,5 +1,26 @@
 {
   "nodes": {
+    "claude-code": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "systems": "systems"
+      },
+      "locked": {
+        "lastModified": 1792552369,
+        "narHash": "sha256-YcM61WVrvmcA1qS0xFWGu8wYQtAtOq/5D4T+OuXcoyw=",
+        "owner": "sadjow",
+        "repo": "claude-code-nix",
+        "rev": "463d6f0f918d040f2bd78f5951f5f2355027d5e7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "sadjow",
+        "repo": "claude-code-nix",
+        "type": "github"
+      }
+    },
     "neovim-src": {
       "flake": false,
       "locked": {
@@ -51,9 +72,25 @@
     },
     "root": {
       "inputs": {
+        "claude-code": "claude-code",
         "neovim-src": "neovim-src",
         "nixpkgs": "nixpkgs",
         "nixpkgs-wasm": "nixpkgs-wasm"
+      }
+    },
+    "systems": {
+      "locked": {
+        "lastModified": 1791244623,
+        "narHash": "sha256-uuanbkFk8a313Zfrxdcz8Us/yQtaxNnKJtX8v0ZPpd8=",
+        "owner": "nix-systems",
+        "repo": "default",
+        "rev": "d36eeed142f88b5a636f2e3856a53c61654cf29b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-systems",
+        "repo": "default",
+        "type": "github"
       }
     }
   },

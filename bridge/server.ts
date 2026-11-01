@@ -19,6 +19,7 @@ import * as away from "./away";
 import * as boards from "./boards";
 import * as phone from "./phone";
 import * as remote from "./remote";
+import { speech } from "./speech";
 import * as wasm from "./wasm";
 import { CLOUD, token } from "./cloud";
 
@@ -724,6 +725,11 @@ Bun.serve<Session, {}>({
     if (url.pathname.startsWith("/wasm/plugins/")) return wasmPlugins(req, url);
     if (url.pathname.startsWith("/api/git/")) return gitProxy(req, url);
     if (url.pathname.startsWith("/media/")) return media(req, url);
+    if (url.pathname === "/speech") {
+      if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
+      if (!TOKEN && !isLoopback(url.hostname)) return new Response(`wrong host: ${url.host}`, { status: 403 });
+      return speech(req);
+    }
     if (url.pathname.startsWith(`/host/snapshot/`)) return snapshotFile(req, url);
     if (url.pathname.startsWith(`/wasm/${WASM_VERSION}/`) && NVIM_WASM) {
       const name = url.pathname.split("/").at(-1)!;
