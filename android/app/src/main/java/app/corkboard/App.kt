@@ -29,6 +29,8 @@ class App : Application() {
         Ticker.update(this)
         // A meditation still running when the process was restarted.
         Chimes.sync(this)
+        // The encrypted account, if this phone is in one, read off the main thread.
+        Repo.scope.launch(Dispatchers.IO) { runCatching { Encrypted.load(this@App) } }
         // Followed live while the app is in front; the notification and
         // widget move on with alarms the rest of the time.
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {

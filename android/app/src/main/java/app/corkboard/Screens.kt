@@ -71,6 +71,11 @@ sealed interface Screen {
     // What brains hold, and one of them to change or a new one (Holds.kt).
     data object Holds : Screen
     data class EditHold(val name: String? = null) : Screen
+    // The end-to-end encrypted side (EncryptedScreens.kt): pairing, boards and what's shared.
+    data object Encrypted : Screen
+    data class EncryptedBoard(val ref: app.corkboard.Encrypted.Ref) : Screen
+    data class EncryptedCard(val ref: app.corkboard.Encrypted.Ref, val id: String) : Screen
+    data class SharedBrain(val ref: app.corkboard.Encrypted.Ref) : Screen
     // One attached file (Media.kt).
     data class Viewing(val board: String, val card: String, val id: String) : Screen
     data class Goals(val id: String? = null) : Screen
@@ -85,6 +90,7 @@ sealed interface Screen {
             "media" -> Media
             "brains" -> Brains
             "holds" -> Holds
+            "encrypted" -> Encrypted
             "goals" -> Goals()
             "meditate" -> Meditate
             "chat" -> Chat()
@@ -167,7 +173,7 @@ fun SignInScreen() {
 // First run: what Android has to allow ------------------------------------------------
 
 @Composable
-fun SetupScreen(resumed: Int, done: () -> Unit) {
+fun SetupScreen(resumed: Int, encrypted: (() -> Unit)? = null, done: () -> Unit) {
     val context = LocalContext.current
     // Re-read on every resume: each one comes back from a settings page.
     val on = remember(resumed) { Setup.Need.entries.associateWith { Setup.on(context, it) } }
@@ -202,6 +208,17 @@ fun SetupScreen(resumed: Int, done: () -> Unit) {
                 Rule(Monokai.base01)
                 Permission("Notifications", "the current block, the timer, and a word when one of these is off", notifications) {
                     ask.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+            if (encrypted != null) {
+                Spacer(Modifier.height(16.dp))
+                val paired by app.corkboard.Encrypted.me.collectAsState()
+                Panel("encrypted account") {
+                    PanelRow(encrypted) {
+                        Check(paired != null)
+                        Text(if (paired != null) "this phone is paired" else "pair this phone", modifier = Modifier.weight(1f))
+                        Text("›", color = Monokai.base04)
+                    }
                 }
             }
         }
@@ -759,7 +776,7 @@ fun AppsScreen(back: () -> Unit) {
 
 private val tabs = listOf("now" to Screen.Home, "plan" to Screen.Plan, "pepper" to Screen.Chat(), "fleet" to Screen.Fleet, "brains" to Screen.Brains, "media" to Screen.Media)
 
-fun isTab(screen: Screen) = screen is Screen.Holds || tabs.any { it.second::class == screen::class }
+fun isTab(screen: Screen) = screen is Screen.Holds || screen is Screen.Encrypted || tabs.any { it.second::class == screen::class }
 
 // The tabs along the foot: now, the plan, Pepper, the fleet, brains and media; the
 // plan and the fleet yellow while something there waits on you.
@@ -771,7 +788,7 @@ fun Tabs(screen: Screen, go: (Screen) -> Unit) {
     Rule()
     Row(Modifier.fillMaxWidth()) {
         for ((label, to) in tabs) {
-            val here = screen::class == to::class || (to == Screen.Brains && screen is Screen.Holds)
+            val here = screen::class == to::class || (to == Screen.Brains && (screen is Screen.Holds || screen is Screen.Encrypted))
             Text(
                 if (here) "[$label]" else label,
                 color = when {

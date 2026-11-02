@@ -104,6 +104,7 @@ fun BrainsScreen(go: (Screen) -> Unit) {
                 )
             }
             Text("holds", color = Monokai.base04, modifier = Modifier.clickable(role = Role.Tab) { go(Screen.Holds) })
+            Text("encrypted", color = Monokai.base04, modifier = Modifier.clickable(role = Role.Tab) { go(Screen.Encrypted) })
         }
         Rule(Monokai.base01)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {

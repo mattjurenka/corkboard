@@ -47,6 +47,8 @@ class MainActivity : ComponentActivity() {
                             is Screen.Session, is Screen.NewSession -> Screen.Fleet
                             is Screen.EditBrain -> Screen.Brains
                             is Screen.EditHold -> Screen.Holds
+                            is Screen.EncryptedBoard, is Screen.SharedBrain -> Screen.Encrypted
+                            is Screen.EncryptedCard -> Screen.EncryptedBoard((screen as Screen.EncryptedCard).ref)
                             is Screen.Goals -> Screen.Plan
                             is Screen.Viewing -> Screen.Media
                             else -> Screen.Home
@@ -64,6 +66,7 @@ class MainActivity : ComponentActivity() {
                                     Screen.Fleet -> FleetScreen(go)
                                     Screen.Brains -> BrainsScreen(go)
                                     Screen.Holds -> HoldsScreen(go)
+                                    Screen.Encrypted -> EncryptedScreen(go)
                                     Screen.Media -> MediaScreen(go)
                                     Screen.Plan -> PlanScreen(go)
                                     is Screen.Chat -> ChatScreen(s.draft)
@@ -76,13 +79,16 @@ class MainActivity : ComponentActivity() {
                             if (!WindowInsets.isImeVisible) Tabs(screen, go)
                         }
                         else -> when (val s = screen) {
-                            Screen.Home, Screen.Fleet, Screen.Brains, Screen.Holds, Screen.Media, Screen.Plan, is Screen.Chat -> {}
+                            Screen.Home, Screen.Fleet, Screen.Brains, Screen.Holds, Screen.Encrypted, Screen.Media, Screen.Plan, is Screen.Chat -> {}
                             is Screen.EditBrain -> EditBrainScreen(s.name) { screen = Screen.Brains }
                             is Screen.EditHold -> EditHoldScreen(s.name) { screen = Screen.Holds }
+                            is Screen.EncryptedBoard -> EncryptedBoardScreen(s.ref, go) { screen = Screen.Encrypted }
+                            is Screen.EncryptedCard -> EncryptedCardScreen(s.ref, s.id) { screen = Screen.EncryptedBoard(s.ref) }
+                            is Screen.SharedBrain -> SharedBrainScreen(s.ref) { screen = Screen.Encrypted }
                             is Screen.Goals -> GoalsScreen(s.id) { screen = Screen.Plan }
                             Screen.Meditate -> MeditateScreen(home)
                             Screen.Apps -> AppsScreen(home)
-                            Screen.Setup -> SetupScreen(resumed, home)
+                            Screen.Setup -> SetupScreen(resumed, { screen = Screen.Encrypted }, home)
                             is Screen.Viewing -> ViewingScreen(s) { screen = Screen.Media }
                             is Screen.Session -> SessionScreen(s) { screen = Screen.Fleet }
                             is Screen.NewSession -> NewSessionScreen(s.environment, go) { screen = Screen.Fleet }

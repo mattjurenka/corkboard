@@ -106,6 +106,7 @@ fun HoldsScreen(go: (Screen) -> Unit) {
                 Text(label, color = Monokai.base04, modifier = Modifier.clickable(role = Role.Tab) { brainsArchived.value = value; go(Screen.Brains) })
             }
             Text("holds", color = Monokai.cyan, fontWeight = FontWeight.SemiBold)
+            Text("encrypted", color = Monokai.base04, modifier = Modifier.clickable(role = Role.Tab) { go(Screen.Encrypted) })
         }
         Rule(Monokai.base01)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
