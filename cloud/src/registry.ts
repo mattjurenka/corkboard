@@ -201,7 +201,7 @@ const cache = new Map<string, { account: Account | null; until: number }>();
 export async function accountOf(env: Env, props: Props): Promise<Account | null> {
   const hit = cache.get(props.userId);
   if (hit && hit.until > Date.now()) return hit.account;
-  const email = props.email.toLowerCase();
+  const email = (props.email ?? "").toLowerCase();
   const { account, created } = await registry(env).check(props.userId, email, admins(env).includes(email));
   if (created) await welcome(env, props.userId, email);
   cache.set(props.userId, { account, until: Date.now() + CACHE_MS });
