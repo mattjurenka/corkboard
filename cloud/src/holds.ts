@@ -5,8 +5,13 @@
 // whose secret is kept elsewhere (Pepper's google, on its own VM's disk),
 // where that is. Holding any still makes an agent's spawn wait for the user.
 //
-// They're in HOLDS, one key per user for the records and one per secret,
-// as plain text for now: the secret is never read back but to a claim.
+// They're in HOLDS, one key per user for the records and one per secret.
+// The secret is never read back but to a claim (or the account's export),
+// and is kept encrypted: AES-GCM, with a key of the user's own derived
+// (HKDF) from the HOLDS_KEY secret and their sub, and the hold's name as
+// the associated data, so a value can't be moved to another hold or user.
+// One kept before that is plain text: read as it is, and encrypted the
+// next time it's written or read.
 //
 //   GET    /api/holds                   every hold, with the brains and templates holding it; a name
 //                                       one lists with no record is there too, recorded: false
@@ -53,6 +58,63 @@ class Conflict extends Error {
   }
 }
 
+// Secrets at rest -------------------------------------------------------------------
+
+// What an encrypted secret starts with: then base64 of the IV and the ciphertext.
+const SEALED = "enc1:";
+const utf8 = (s: string) => new TextEncoder().encode(s);
+
+class NoKey extends Error {
+  constructor() {
+    super("the Worker has no HOLDS_KEY to keep secrets with (wrangler secret put HOLDS_KEY)");
+  }
+}
+
+const userKeys = new Map<string, Promise<CryptoKey>>();
+function keyFor(env: Env, user: string): Promise<CryptoKey> {
+  if (!env.HOLDS_KEY) throw new NoKey();
+  let k = userKeys.get(user);
+  if (!k) {
+    k = crypto.subtle
+      .importKey("raw", utf8(env.HOLDS_KEY), "HKDF", false, ["deriveKey"])
+      .then((base) => crypto.subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt: utf8("corkboard holds"), info: utf8(user) }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]));
+    userKeys.set(user, k);
+  }
+  return k;
+}
+
+async function seal(env: Env, user: string, name: string, plain: string): Promise<string> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: utf8(name) }, await keyFor(env, user), utf8(plain)));
+  const out = new Uint8Array(iv.length + sealed.length);
+  out.set(iv);
+  out.set(sealed, iv.length);
+  let s = "";
+  for (const b of out) s += String.fromCharCode(b);
+  return SEALED + btoa(s);
+}
+
+async function unseal(env: Env, user: string, name: string, stored: string): Promise<string> {
+  if (!stored.startsWith(SEALED)) return stored;
+  const bytes = Uint8Array.from(atob(stored.slice(SEALED.length)), (c) => c.charCodeAt(0));
+  const key = await keyFor(env, user);
+  try {
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: bytes.slice(0, 12), additionalData: utf8(name) }, key, bytes.slice(12)));
+  } catch {
+    throw new Error(`the secret of ${name} doesn't open with this Worker's HOLDS_KEY`);
+  }
+}
+
+// A secret as it was set, or null; one still in plain text is encrypted now.
+async function readSecret(env: Env, user: string, name: string): Promise<string | null> {
+  const stored = await env.HOLDS.get(secretKey(user, name));
+  if (stored === null) return null;
+  if (!stored.startsWith(SEALED) && env.HOLDS_KEY) await writeSecret(env, user, name, stored);
+  return unseal(env, user, name, stored);
+}
+
+const writeSecret = async (env: Env, user: string, name: string, plain: string) => env.HOLDS.put(secretKey(user, name), await seal(env, user, name, plain));
+
 async function records(env: Env, user: string): Promise<Record<string, Hold>> {
   return (await env.HOLDS.get<Record<string, Hold>>(recordsKey(user), "json")) ?? {};
 }
@@ -62,7 +124,7 @@ const save = (env: Env, user: string, all: Record<string, Hold>) => env.HOLDS.pu
 export async function secretsFor(env: Env, user: string, names: string[]): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   for (const n of new Set(names)) {
-    const v = await env.HOLDS.get(secretKey(user, n));
+    const v = await readSecret(env, user, n);
     if (v !== null) out[n] = v;
   }
   return out;
@@ -80,7 +142,7 @@ export async function dumpHolds(env: Env, user: string): Promise<HoldsDump> {
 export async function restoreHolds(env: Env, user: string, d: HoldsDump): Promise<number> {
   if (typeof d?.records !== "object" || typeof d.secrets !== "object") throw new Invalid("holds must be { records, secrets }");
   for (const n of [...Object.keys(d.records), ...Object.keys(d.secrets)]) if (!LABEL.test(n)) throw new Invalid(`bad hold name ${n}`);
-  for (const [n, v] of Object.entries(d.secrets)) await env.HOLDS.put(secretKey(user, n), v);
+  for (const [n, v] of Object.entries(d.secrets)) await writeSecret(env, user, n, v);
   await save(env, user, d.records);
   return Object.keys(d.records).length;
 }
@@ -123,7 +185,7 @@ const later = (was: string) => {
 async function setSecret(env: Env, user: string, name: string, v: string | null | undefined, h: Hold, at: string) {
   if (v === undefined) return h;
   if (v === null) await env.HOLDS.delete(secretKey(user, name));
-  else await env.HOLDS.put(secretKey(user, name), v);
+  else await writeSecret(env, user, name, v);
   return { ...h, secret: v === null ? null : at };
 }
 
@@ -183,8 +245,9 @@ export async function holdRoutes(request: Request, env: Env, user: string, body:
         if (all[to]) throw new Conflict(`there's already a hold ${to}`, 409);
         const nix = by.get(name)?.templates ?? [];
         if (nix.length) throw new Conflict(`${nix.join(", ")} hold${nix.length === 1 ? "s" : ""} ${name} in its host's Nix config; rename it there first`, 409);
-        const kept = await env.HOLDS.get(secretKey(user, name));
-        if (kept !== null && secretValue === undefined) await env.HOLDS.put(secretKey(user, to), kept);
+        // Sealed again under its new name, which it's bound to.
+        const kept = secretValue === undefined ? await readSecret(env, user, name) : null;
+        if (kept !== null) await writeSecret(env, user, to, kept);
         await env.HOLDS.delete(secretKey(user, name));
         await moveOnBrains(env, user, name, to);
         next = { ...next, name: to };
@@ -212,6 +275,7 @@ export async function holdRoutes(request: Request, env: Env, user: string, body:
   } catch (e) {
     if (e instanceof Invalid) return json({ error: e.message }, 400);
     if (e instanceof Conflict) return json({ error: e.message, ...(e.hold && { hold: e.hold }) }, e.status);
+    if (e instanceof NoKey) return json({ error: e.message }, 503);
     throw e;
   }
 }

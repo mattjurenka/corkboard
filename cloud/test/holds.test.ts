@@ -1,6 +1,8 @@
 import { reset } from "cloudflare:test";
+import { env as bindings } from "cloudflare:workers";
+import type { Env } from "../src/index";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ownerToken, worker } from "./login";
+import { ownerToken, pepper, worker } from "./login";
 
 let owner: string;
 
@@ -20,6 +22,7 @@ const TEMPLATES = {
 
 beforeEach(async () => {
   owner = await ownerToken();
+  await pepper(owner);
   expect((await send("PUT", "/api/fleet/environments/local", { templates: TEMPLATES })).status).toBe(200);
 });
 afterEach(async () => {
@@ -78,5 +81,36 @@ describe("holds", () => {
     expect((await send("POST", `/api/spawns/${m.id}/claim`, { environment: "local" })).body.secrets).toEqual({ google: "{\"refresh\":\"r\"}" });
     const plain = (await send("POST", "/api/spawns", { template: "coding", task: "x" })).body;
     expect((await send("POST", `/api/spawns/${plain.id}/claim`, { environment: "local" })).body.secrets).toBeUndefined();
+  });
+});
+
+describe("secrets at rest", () => {
+  const kv = () => (bindings as unknown as Env).HOLDS;
+  const USER = "sub-me@example.com";
+  const claim = async () => {
+    const s = (await send("POST", "/api/spawns", { template: "coding", brain: "pepper", task: "x" })).body;
+    return send("POST", `/api/spawns/${s.id}/claim`, { environment: "local" }).catch((e: Error) => ({ status: 500, body: { error: e.message } }));
+  };
+
+  it("are encrypted, and bound to their hold: moved under another name, they don't open", async () => {
+    await send("POST", "/api/holds", { name: "corkboard", secret: "cbt-secret" });
+    const stored = await kv().get(`${USER}/secret/corkboard`);
+    expect(stored).toMatch(/^enc1:/);
+    expect(stored).not.toContain("cbt-secret");
+    expect((await claim()).body.secrets).toEqual({ corkboard: "cbt-secret" });
+    // Renamed, it's sealed again under the new name.
+    const h = (await send("GET", "/api/holds/corkboard")).body;
+    await send("PATCH", "/api/holds/corkboard", { updated: h.updated, name: "board" });
+    expect(await kv().get(`${USER}/secret/board`)).toMatch(/^enc1:/);
+    // One copied by hand under another name is refused, not handed out.
+    await kv().put(`${USER}/secret/google`, stored!);
+    expect((await claim()).body.secrets).toBeUndefined();
+  });
+
+  it("from before, in plain text, are read as they are and encrypted on that read", async () => {
+    await kv().put(`${USER}/secret/google`, "plain-refresh");
+    expect((await claim()).body.secrets).toEqual({ google: "plain-refresh" });
+    expect(await kv().get(`${USER}/secret/google`)).toMatch(/^enc1:/);
+    expect((await claim()).body.secrets).toEqual({ google: "plain-refresh" });
   });
 });
