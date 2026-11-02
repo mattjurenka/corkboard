@@ -92,13 +92,13 @@
 //   POST  /memory/consolidate/rollup         { through, version, text }: the long-term memory rewritten
 
 import { insufficientScope, type OAuthResourceContext } from "@cloudflare/workers-oauth-provider";
-import { Invalid, cardId, fields, imported, logEntry } from "./cards";
+import { Invalid, cardId, fields, imported, logEntry } from "../../lib/model/cards";
 import type { BoardInfo, Result } from "./board";
 import type { Dump } from "./dump";
 import { CARD_TOKEN, type Env, type Props } from "./index";
 import { type Grant, brainOf, hiddenFor, mcp, memoryOf } from "./mcp";
 import { calendarError, write as writeCalendar } from "./calendar";
-import { type Plan, blocks, chatText, date, note, noteId, today } from "./plans";
+import { type Plan, blocks, chatText, date, note, noteId, today } from "../../lib/model/plans";
 import { NAME as BRAIN_NAME, brainRoutes, live } from "./brains";
 import { dumpHolds, holdRoutes, restoreHolds, type HoldsDump } from "./holds";
 import { fleetRoutes } from "./fleet";

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/index";
 import { google, login, ownerToken, pepper, worker } from "./login";
 import { bullets, parseRollup, render } from "../src/consolidate";
-import { today } from "../src/plans";
+import { today } from "../../lib/model/plans";
 
 const USER = "sub-me@example.com";
 const env = bindings as unknown as Env;

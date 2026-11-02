@@ -24,7 +24,7 @@
 // A template's holds are its host's Nix config's, so one a template holds
 // is renamed or removed there first.
 
-import { Invalid } from "./cards";
+import { Invalid } from "../../lib/model/cards";
 import type { Env } from "./index";
 import type { User } from "./user";
 

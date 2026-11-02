@@ -9,8 +9,8 @@
 // the words and the days, as the Worker's was with vectors off.
 
 import { Database } from "bun:sqlite";
-import { range } from "../../cloud/src/dates";
-import { DAY_STARTS_HOUR, type Note } from "../../cloud/src/plans";
+import { range } from "../../lib/model/dates";
+import { DAY_STARTS_HOUR, type Note } from "../../lib/model/plans";
 import type { Data, Entry } from "./data";
 
 export type Hit = { type: "note" | "entry"; id: string; title: string; kind?: string; day?: string; at: string; snippet: string };

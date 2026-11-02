@@ -3,7 +3,7 @@ package app.corkboard
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-// The Worker's day plan (cloud/src/plans.ts), as much of it as the phone
+// The Worker's day plan (lib/model/plans.ts), as much of it as the phone
 // shows. Times are minutes since midnight.
 
 @Serializable

@@ -21,7 +21,7 @@ import {
   type Plan,
   type Proposal,
   emptyPlan,
-} from "./plans";
+} from "../../lib/model/plans";
 
 const ok = <T>(value: T): Result<T> => ({ ok: true, value });
 const fail = (status: number, error: string, plan?: Plan): Result<never> => ({ ok: false, status, error, plan });

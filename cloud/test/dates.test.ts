@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { range } from "../src/dates";
+import { range } from "../../lib/model/dates";
 import { chunks } from "../src/vectors";
 
 // Tuesday 27 October 2026.

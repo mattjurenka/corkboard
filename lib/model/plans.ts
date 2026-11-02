@@ -1,11 +1,11 @@
 // Day plans, notes and the chat, as the API and the MCP tools take them.
-// Stored per user (user.ts).
+// Stored per user by whoever serves them: the hosted Worker, or the node.
 //
 // A plan is a date's day (its blocks, the ranked work, what's not today,
 // what the planner looked at) and, when the assistant has proposed one, a
 // proposal: blocks from a time on, with reasons and a why per changed block.
 // A first plan of the day is a proposal against an empty day. Accepting
-// makes the proposal's blocks the day; only the owner can (api.ts), so no
+// makes the proposal's blocks the day; only the owner can, so no
 // agent can accept a plan for itself. Times are minutes since midnight.
 
 import { Invalid } from "./cards";
@@ -56,7 +56,7 @@ export type Plan = {
   // What the user has said to change since the last proposal.
   asked: string[];
   accepted: string | null;
-  // How writing the Claude calendar went for that accept (calendar.ts):
+  // How writing the Claude calendar went for that accept:
   // how many blocks it got, or why it got none.
   calendar?: { accepted: string; at: string; blocks?: number; error?: string };
 };

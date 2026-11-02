@@ -12,9 +12,9 @@
 // (owner or assistant, oauth.ts). An assistant can't write the soul, and
 // neither sees the brains' goals, as on the Worker.
 
-import { AGENT_STATES, type Card, PRIORITIES, STATUSES, waitingOn } from "../../cloud/src/cards";
-import { BRAIN_ONLY_KINDS, NOTE_KINDS, OWNER_ONLY_NOTES, date, note, noteId, slug } from "../../cloud/src/plans";
-import { range } from "../../cloud/src/dates";
+import { AGENT_STATES, type Card, PRIORITIES, STATUSES, waitingOn } from "../../lib/model/cards";
+import { BRAIN_ONLY_KINDS, NOTE_KINDS, OWNER_ONLY_NOTES, date, note, noteId, slug } from "../../lib/model/plans";
+import { range } from "../../lib/model/dates";
 import { type Data, type FullCard, Invalid } from "./data";
 import type { Search } from "./search";
 

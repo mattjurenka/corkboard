@@ -20,7 +20,7 @@
 // brain of the same name.
 
 import type { Result } from "./board";
-import { Invalid } from "./cards";
+import { Invalid } from "../../lib/model/cards";
 import type { Env, Props } from "./index";
 import type { User } from "./user";
 

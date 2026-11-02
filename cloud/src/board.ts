@@ -6,7 +6,7 @@
 // keeps its message but not its class, and the Worker needs the status.
 
 import { DurableObject } from "cloudflare:workers";
-import { type BoardEvent, type Card, type Fields, type Imported, type LogEntry, type Status, waitingOn } from "./cards";
+import { type BoardEvent, type Card, type Fields, type Imported, type LogEntry, type Status, waitingOn } from "../../lib/model/cards";
 import { type Dump, dump, restore } from "./dump";
 
 // card, plan: on a conflict, the thing as it is now, to redo the change on.

@@ -35,7 +35,7 @@
 // and its transcript becomes one of the brain's episodes.
 
 import type { Result } from "./board";
-import { type Card, type Fields, Invalid } from "./cards";
+import { type Card, type Fields, Invalid } from "../../lib/model/cards";
 import type { Env, Props } from "./index";
 import { NAME as BRAIN, live } from "./brains";
 import { LABEL, secretsFor } from "./holds";

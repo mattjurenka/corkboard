@@ -24,8 +24,8 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Result } from "./board";
 import type { Env } from "./index";
-import { DAY_STARTS_HOUR, type Note, type NoteInput, today } from "./plans";
-import { range } from "./dates";
+import { DAY_STARTS_HOUR, type Note, type NoteInput, today } from "../../lib/model/plans";
+import { range } from "../../lib/model/dates";
 import { chunks, embed, namespaceOf, sha, vectorId } from "./vectors";
 import { type Dump, dump, restore } from "./dump";
 import { live } from "./brains";

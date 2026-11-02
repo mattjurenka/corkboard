@@ -21,7 +21,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import type { Result } from "./board";
-import { Invalid } from "./cards";
+import { Invalid } from "../../lib/model/cards";
 import type { Env, Props } from "./index";
 import type { Creation, Grant, DeviceCert, Rotation, Signed } from "../../lib/e2ee/wire";
 

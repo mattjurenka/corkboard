@@ -14,7 +14,7 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
-import { DAY_STARTS_HOUR, type Plan, today } from "../../cloud/src/plans";
+import { DAY_STARTS_HOUR, type Plan, today } from "../../lib/model/plans";
 import { random } from "../../lib/e2ee/keys";
 import { b64url } from "../../lib/e2ee/wire";
 

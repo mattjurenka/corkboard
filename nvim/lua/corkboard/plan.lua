@@ -10,7 +10,7 @@
 -- against the current plan, in hunks like a review: accepted whole, or
 -- with hunks undone first.
 --
--- The plan is today's on corkboard's Worker (cloud/src/plans.ts), read
+-- The plan is today's on corkboard's Worker (lib/model/plans.ts), read
 -- through the bridge and followed live: the assistant proposes (MCP
 -- plan_propose), the proposal shows here as a diff against the day, and
 -- accepting it tells the Worker, which writes the Claude calendar

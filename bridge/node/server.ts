@@ -25,8 +25,8 @@
 // The origin (what tokens, metadata and redirects name) is --origin, or
 // else the request's Host: https unless it's this machine.
 
-import { BRAIN_ONLY_KINDS, type Plan, blocks as checkBlocks, date as checkDate, note as checkNote, noteId } from "../../cloud/src/plans";
-import { waitingOn } from "../../cloud/src/cards";
+import { BRAIN_ONLY_KINDS, type Plan, blocks as checkBlocks, date as checkDate, note as checkNote, noteId } from "../../lib/model/plans";
+import { waitingOn } from "../../lib/model/cards";
 import { type Data, Invalid } from "./data";
 import { type Caller, type Consent, OAuthError, type OAuthStore, Redirect, SCOPES, deniedUrl } from "./oauth";
 import { mcp } from "./mcp";

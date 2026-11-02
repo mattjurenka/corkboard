@@ -4,7 +4,7 @@
 // the high-level parts are picked out: the name and aim from the title, the
 // why, how it's measured, and this week's steps.
 
-import type { Note } from "./plans";
+import type { Note } from "../../lib/model/plans";
 
 export type Goal = {
   id: string;

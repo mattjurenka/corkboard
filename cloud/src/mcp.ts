@@ -19,11 +19,11 @@
 //              the pepper brain's (api.ts)
 
 import type { Result } from "./board";
-import { AGENT_STATES, type Card, type Fields, type LogEntry, PRIORITIES, STATUSES, waitingOn } from "./cards";
+import { AGENT_STATES, type Card, type Fields, type LogEntry, PRIORITIES, STATUSES, waitingOn } from "../../lib/model/cards";
 import type { Env } from "./index";
-import { Invalid } from "./cards";
-import { BRAIN_ONLY_KINDS, NOTE_KINDS, OWNER_ONLY_NOTES, chatText, date, note, noteId, projects, proposal, slug, today } from "./plans";
-import { range } from "./dates";
+import { Invalid } from "../../lib/model/cards";
+import { BRAIN_ONLY_KINDS, NOTE_KINDS, OWNER_ONLY_NOTES, chatText, date, note, noteId, projects, proposal, slug, today } from "../../lib/model/plans";
+import { range } from "../../lib/model/dates";
 import type { Memory } from "./memory";
 import { type ABILITIES, create as createBrain, fieldsOf as brainFields } from "./brains";
 import type { User } from "./user";

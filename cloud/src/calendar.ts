@@ -12,7 +12,7 @@
 // events), then the approval marker, last, since it vouches for the rest.
 
 import type { Env } from "./index";
-import { DAY_STARTS_HOUR, type Block, type Plan, today } from "./plans";
+import { DAY_STARTS_HOUR, type Block, type Plan, today } from "../../lib/model/plans";
 
 const GOOGLE_AUTHORIZE = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN = "https://oauth2.googleapis.com/token";
