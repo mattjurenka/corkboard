@@ -5,10 +5,10 @@
 // the machine was doing then. Keys that arrived while the screen was already
 // changing (busy) are left out: their first change may not be theirs.
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { STATE_DIR } from "./dirs";
 
-const LOG = join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state"), "corkboard", "latency.jsonl");
+const LOG = join(STATE_DIR, "latency.jsonl");
 const minutes = Number(process.argv[2] ?? 60);
 const since = Date.now() - minutes * 60_000;
 

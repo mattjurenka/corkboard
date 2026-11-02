@@ -395,10 +395,16 @@ local function cloud_mcp_config(id)
 end
 
 -- The corkboard MCP for projects that don't configure it: the Worker's for a
--- cloud board, else this checkout's mcp/board.ts over the card files.
+-- cloud board, else mcp/board.ts over the card files: as the bridge says to
+-- start it (CORKBOARD_MCP_COMMAND, a JSON list: the compiled bridge's
+-- `mcp`, which needs no bun), or with bun from this checkout.
 -- Returns the --mcp-config value, and what to do when the agent exits.
 local function mcp_config(id)
   if require("corkboard.cards").cloud() then return cloud_mcp_config(id) end
+  local ok, given = pcall(vim.json.decode, vim.env.CORKBOARD_MCP_COMMAND or "")
+  if ok and type(given) == "table" and given[1] then
+    return vim.json.encode({ mcpServers = { corkboard = { command = given[1], args = vim.list_slice(given, 2) } } })
+  end
   local here = vim.api.nvim_get_runtime_file("lua/corkboard/agents.lua", false)[1]
   local script = vim.fs.joinpath(vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(here)))), "mcp", "board.ts")
   if vim.fn.filereadable(script) == 0 then return nil end

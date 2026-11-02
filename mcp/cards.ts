@@ -9,7 +9,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { DATA_DIR, pathKey } from "../bridge/dirs";
 
 export const STATUSES = ["backlog", "ready", "doing", "review", "done"];
 export const AGENT_STATES = ["queued", "working", "blocked", "needs-review", "done"];
@@ -33,20 +34,13 @@ function projectRoot(): string {
     // The common dir is the main checkout's .git, from any worktree; a
     // submodule's is in its parent's .git/modules, so it is its own top level.
     const root = basename(common) === ".git" ? dirname(common) : top;
-    return root && root !== homedir() ? root : process.cwd();
+    return root && resolve(root) !== homedir() ? root : process.cwd();
   } catch {
     return process.cwd();
   }
 }
 
-export const DIR =
-  process.env.CORKBOARD_BOARD ||
-  join(
-    process.env.XDG_DATA_HOME || join(homedir(), ".local/share"),
-    "corkboard",
-    "boards",
-    projectRoot().replace(/^\//, "").replaceAll("/", "-"),
-  );
+export const DIR = process.env.CORKBOARD_BOARD || join(DATA_DIR, "boards", pathKey(projectRoot()));
 const TASKS = join(DIR, "tasks");
 
 // Front matter fields are strings, or string lists for LISTS. agent is the

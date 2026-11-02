@@ -270,7 +270,7 @@
           version = "0.1.0";
           src = pkgs.lib.fileset.toSource {
             root = ./.;
-            fileset = pkgs.lib.fileset.unions [ ./fleet/fleetd/fleet.ts ./fleet/fleetd/fleetd.ts ./fleet/fleetd/cli.ts ./fleet/fleetd/queue.ts ./fleet/fleetd/sessions.ts ./bridge/cloud.ts ./bridge/host.ts ./bridge/sessions.ts ./bridge/transcript.ts ./fleet/pepper/pepperd.ts ];
+            fileset = pkgs.lib.fileset.unions [ ./fleet/fleetd/fleet.ts ./fleet/fleetd/fleetd.ts ./fleet/fleetd/cli.ts ./fleet/fleetd/queue.ts ./fleet/fleetd/sessions.ts ./bridge/cloud.ts ./bridge/dirs.ts ./bridge/host.ts ./bridge/sessions.ts ./bridge/transcript.ts ./fleet/pepper/pepperd.ts ];
           };
           nativeBuildInputs = [ pkgs.makeWrapper ];
           installPhase = ''
@@ -278,7 +278,7 @@
             mkdir -p $share/fleet/fleetd $share/fleet/pepper $share/bridge
             cp fleet/fleetd/*.ts $share/fleet/fleetd/
             cp fleet/pepper/pepperd.ts $share/fleet/pepper/
-            cp bridge/cloud.ts bridge/host.ts bridge/sessions.ts bridge/transcript.ts $share/bridge/
+            cp bridge/cloud.ts bridge/dirs.ts bridge/host.ts bridge/sessions.ts bridge/transcript.ts $share/bridge/
             makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-fleetd \
               --add-flags $share/fleet/fleetd/fleetd.ts
             makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-fleet \

@@ -11,18 +11,18 @@
 // The bridge is an ordinary OAuth client of the Worker: it registers itself,
 // then signs in with PKCE through a one-shot server on a loopback port, the
 // way RFC 8252 has native apps do it. What it gets is kept in
-// $XDG_STATE_HOME/corkboard/auth.json, readable only by this user, and
+// corkboard's state directory (dirs.ts), as auth.json, readable only by this user, and
 // token() refreshes it as it expires.
 //
 // CORKBOARD_CLOUD: the Worker's origin.
 
 import { createHash, randomBytes } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir, hostname } from "node:os";
+import { hostname } from "node:os";
 import { join } from "node:path";
+import { STATE_DIR } from "./dirs";
 
 export const CLOUD = (process.env.CORKBOARD_CLOUD ?? "https://portal.corkboard.fyi").replace(/\/$/, "");
-const STATE_DIR = join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state"), "corkboard");
 const AUTH = join(STATE_DIR, "auth.json");
 
 type OAuth = { cloud: string; client_id: string; access_token: string; refresh_token: string; expires_at: number };
@@ -120,7 +120,7 @@ export async function login(): Promise<void> {
     console.log("If the browser ends on a page that won't load, paste that page's address here.\n");
     // A machine with no browser (a server) has no xdg-open: the address above is the way in.
     try {
-      Bun.spawn(["xdg-open", url.toString()], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+      Bun.spawn(browse(url.toString()), { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
     } catch {}
     (async () => {
       for await (const line of console) {
@@ -190,19 +190,28 @@ export async function token(): Promise<string> {
   });
 }
 
-if (import.meta.main) {
-  const command = process.argv[2];
+// The browser on a URL, as this OS opens one. start takes its first quoted
+// word for a window title, hence the "", and cmd an & for its own.
+const browse = (url: string) =>
+  process.platform === "darwin" ? ["open", url]
+  : process.platform === "win32" ? ["cmd", "/c", "start", '""', url.replaceAll("&", "^&")]
+  : ["xdg-open", url];
+
+// login, token, machine: `bun bridge/cloud.ts ...`, or the compiled
+// bridge's subcommands of the same names (main.ts).
+export async function cli(args: string[]) {
+  const command = args[0];
   try {
     if (command === "login") {
       await login();
       process.exit(0); // the paste reader would otherwise hold stdin open
     }
     else if (command === "token") console.log(await token());
-    else if (command === "machine" && process.argv[3]) {
+    else if (command === "machine" && args[1]) {
       const res = await fetch(`${CLOUD}/api/tokens/machine`, {
         method: "POST",
         headers: { Authorization: `Bearer ${await token()}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ environment: process.argv[3] }),
+        body: JSON.stringify({ environment: args[1] }),
       });
       const json = (await res.json().catch(() => ({}))) as { token?: string; error?: string };
       if (!res.ok || !json.token) throw new Error(`corkboard: ${json.error ?? `HTTP ${res.status}`}`);
@@ -216,3 +225,5 @@ if (import.meta.main) {
     process.exit(1);
   }
 }
+
+if (import.meta.main) await cli(process.argv.slice(2));

@@ -21,11 +21,7 @@ local shown_preview = false
 
 -- The last project opened, which the bridge opens when a page names no
 -- ?cwd. Shared with bridge/server.ts, so not under stdpath().
-local last_project_file = vim.fs.joinpath(
-  vim.env.XDG_STATE_HOME or vim.fs.joinpath(vim.uv.os_homedir(), ".local/state"),
-  "corkboard",
-  "last-project"
-)
+local last_project_file = require("corkboard.util").state_dir("last-project")
 
 -- Every project opened, newest first, for Open project. Not snacks' recent
 -- list: that comes from oldfiles, and the bridge stops Neovim with SIGTERM,

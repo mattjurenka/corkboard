@@ -9,16 +9,14 @@
 // duplicate or overwrite anything. The files are left as they are.
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AGENT_STATES, PRIORITIES, STATUSES, parse, split } from "../mcp/cards";
 import { CLOUD, token } from "./cloud";
+import { DATA_DIR, STATE_DIR, isUnder, pathKey } from "./dirs";
 
-const DATA = process.env.XDG_DATA_HOME ?? join(homedir(), ".local/share");
-const BOARDS = join(DATA, "corkboard", "boards");
-const PROJECTS = join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state"), "corkboard", "projects");
-
-const pathKey = (p: string) => p.replace(/^\//, "").replaceAll("/", "-");
+const BOARDS = join(DATA_DIR, "boards");
+const PROJECTS = join(STATE_DIR, "projects");
 
 // A board's project: the path corkboard opened it from, which the key can't
 // give back unambiguously, so it's looked up in the projects corkboard knows.
@@ -100,7 +98,7 @@ const keys = named.length
   ? named
   : readdirSync(BOARDS).filter((k) => {
       const root = known.get(k);
-      return root && !root.startsWith("/tmp/") && existsSync(root);
+      return root && !isUnder(root, "/tmp") && !isUnder(root, tmpdir()) && existsSync(root);
     });
 
 for (const key of keys) {

@@ -39,6 +39,12 @@ local function project_dir(cwd)
   return vim.fs.joinpath(projects_dir(), (cwd:gsub("[^%w]", "-")))
 end
 
+-- A log entry's cwd, JSON's escapes undone (Windows' \ is \\ there).
+local function cwd_of(entry)
+  local cwd = entry and entry:match('"cwd":"([^"]+)"')
+  return cwd and (cwd:gsub("\\(.)", "%1"))
+end
+
 -- The cwd a log directory's sessions ran in, from the first of a few logs
 -- that names one.
 local function first_cwd(dir)
@@ -51,7 +57,7 @@ local function first_cwd(dir)
       local cwd
       for _ = 1, f and 20 or 0 do
         local entry = f:read("*l")
-        cwd = entry and entry:match('"cwd":"([^"]+)"')
+        cwd = cwd_of(entry)
         if not entry or cwd then break end
       end
       if f then f:close() end
@@ -73,11 +79,11 @@ local function cwd_under(dir, place)
       local cwd
       for _ = 1, f and 20 or 0 do
         local entry = f:read("*l")
-        cwd = entry and entry:match('"cwd":"([^"]+)"')
+        cwd = cwd_of(entry)
         if not entry or cwd then break end
       end
       if f then f:close() end
-      if cwd and cwd:sub(1, #place + 1) == place .. "/" then return cwd end
+      if cwd and util.is_under(cwd, place) then return cwd end
     end
   end
 end
@@ -503,20 +509,22 @@ end
 -- sessions ran in.
 local function system_dirs()
   board_list()
-  local worktrees = util.data_dir("worktrees") .. "/"
+  local worktrees = util.data_dir("worktrees")
   local dirs, base = {}, projects_dir()
   if vim.fn.isdirectory(base) == 0 then return dirs end
   for name, kind in vim.fs.dir(base) do
     local dir = vim.fs.joinpath(base, name)
     if kind == "directory" and not claimed[dir] then
       local cwd = first_cwd(dir)
-      -- The cwd may be gone since; its nearest directory that isn't.
+      -- The cwd may be gone since; its nearest directory that isn't. The
+      -- top ("/", "C:/") is its own dirname.
       local here = cwd
       while here and vim.fn.isdirectory(here) == 0 do
-        here = here ~= "/" and vim.fs.dirname(here) or nil
+        local up = vim.fs.dirname(here)
+        here = up ~= here and up or nil
       end
       claimed[dir] = { cwd = cwd, board = here ~= nil
-        and (cwd:sub(1, #worktrees) == worktrees or board_of(util.project_root(here)) ~= nil) }
+        and (util.is_under(cwd, worktrees) or board_of(util.project_root(here)) ~= nil) }
     end
     local c = claimed[dir]
     if c and c.cwd and not c.board then table.insert(dirs, { dir = dir, cwd = c.cwd }) end

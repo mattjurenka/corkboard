@@ -2,15 +2,34 @@
 
 local M = {}
 
--- $XDG_DATA_HOME/corkboard/..., where boards and worktrees live.
-function M.data_dir(...)
-  local base = vim.env.XDG_DATA_HOME or vim.fs.joinpath(vim.uv.os_homedir(), ".local/share")
-  return vim.fs.joinpath(base, "corkboard", ...)
+local windows = vim.fn.has("win32") == 1
+
+-- corkboard's own directories, as the bridge found them for this OS
+-- (bridge/dirs.ts) and passed them on; without a bridge, XDG's.
+local function dir(kind, xdg, default)
+  local given = vim.env["CORKBOARD_" .. kind:upper() .. "_DIR"]
+  if given and given ~= "" then return given end
+  return vim.fs.joinpath(vim.env[xdg] or vim.fs.joinpath(vim.uv.os_homedir(), default), "corkboard")
 end
 
--- A path as one directory name: /home/me/proj -> home-me-proj.
+-- $XDG_DATA_HOME/corkboard/..., where boards and worktrees live.
+function M.data_dir(...) return vim.fs.joinpath(dir("data", "XDG_DATA_HOME", ".local/share"), ...) end
+
+-- $XDG_STATE_HOME/corkboard/..., which the bridge reads too.
+function M.state_dir(...) return vim.fs.joinpath(dir("state", "XDG_STATE_HOME", ".local/state"), ...) end
+
+-- A path as one directory name: /home/me/proj -> home-me-proj; on Windows
+-- C:\Users\me\proj -> C-Users-me-proj. As pathKey in bridge/dirs.ts.
 function M.path_key(path)
+  if windows then return (path:gsub("^(%a):", "%1"):gsub("^[\\/]+", ""):gsub("[\\/:]", "-")) end
   return (path:gsub("^/", ""):gsub("/", "-"))
+end
+
+-- Whether path is inside dir. On Windows either may have either separator
+-- (git's are /, the OS's \), so both are made /.
+function M.is_under(path, dir_)
+  if windows then path, dir_ = path:gsub("\\", "/"), dir_:gsub("\\", "/") end
+  return #path > #dir_ and path:sub(1, #dir_) == dir_ and path:sub(#dir_ + 1, #dir_ + 1) == "/"
 end
 
 -- Where to reach this Neovim: its server, or the bridge's stand-in for

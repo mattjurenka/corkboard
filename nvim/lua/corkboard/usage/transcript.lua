@@ -93,7 +93,7 @@ end
 
 local function relative(path, cwd)
   if type(path) ~= "string" then return nil end
-  if cwd and path:sub(1, #cwd + 1) == cwd .. "/" then return path:sub(#cwd + 2) end
+  if cwd and require("corkboard.util").is_under(path, cwd) then return path:sub(#cwd + 2) end
   return vim.fn.fnamemodify(path, ":~")
 end
 

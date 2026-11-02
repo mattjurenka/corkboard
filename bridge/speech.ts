@@ -5,7 +5,7 @@
 // ONNX Runtime's WebGPU EP; on an integrated GPU that's no faster, and the
 // page's drawing stalls while it runs, so it isn't the default. If that
 // fails, the CPU. Loaded the first time it's asked for (the CPU's model,
-// 325 MB, is downloaded once into ~/.cache/corkboard/models, not into
+// 325 MB, is downloaded once into ~/.cache/corkboard/models (dirs.ts), not into
 // node_modules, which in the Nix package can't be written), and one
 // sentence is made at a time. With its audio, when each of its phonemes is
 // said (bridge/kokoro-timing.ts).
@@ -20,10 +20,11 @@
 // no phonemes, so the mouth follows the letters. If it can't, Kokoro.
 
 import { mkdir, readFile, rename, stat } from "node:fs/promises";
-import { availableParallelism, homedir } from "node:os";
+import { availableParallelism } from "node:os";
 import { dirname, join } from "node:path";
 import { timed, timing, withDurations } from "./kokoro-timing";
 import { ownVoices } from "./kokoro-voices";
+import { CACHE_DIR, COMPILED, DATA_DIR, RESOURCES } from "./dirs";
 
 const MODEL = "onnx-community/Kokoro-82M-v1.0-ONNX";
 
@@ -37,7 +38,7 @@ type Floats = { data: Float32Array; dims: number[] };
 // Where our voices are: the page's, as they are here or as the Nix package
 // has them, built.
 const voicesAt = (name: string) => {
-  const web = join(import.meta.dir, "..", "web");
+  const web = join(RESOURCES, "web");
   return [join(web, "public", "voices", name), join(web, "dist", "voices", name)];
 };
 
@@ -59,7 +60,7 @@ type Cloner = (text: string, ref: string) => Promise<Said>;
 // The Python that has it, if any.
 const chatterbox = (async () => {
   if (process.env.CORKBOARD_CHATTERBOX) return process.env.CORKBOARD_CHATTERBOX;
-  const venv = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "corkboard", "chatterbox", "bin", "python");
+  const venv = join(DATA_DIR, "chatterbox", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
   if (await stat(venv).catch(() => null)) return venv;
 })();
 
@@ -69,7 +70,7 @@ let cloned: Cloner | undefined;
 
 // bridge/chatterbox-speech.py, ready.
 async function clone(python: string): Promise<Cloner> {
-  const proc = Bun.spawn([python, join(import.meta.dir, "chatterbox-speech.py")], {
+  const proc = Bun.spawn([python, join(RESOURCES, "bridge", "chatterbox-speech.py")], {
     stdin: "pipe",
     stdout: "pipe",
     stderr: "inherit",
@@ -125,9 +126,18 @@ async function cpuModel(cache: string): Promise<string> {
   return file;
 }
 
+// The compiled bridge has these beside it, in resources/node_modules, and
+// not in it: onnxruntime-node's binaries can't be bundled. A build without
+// them (or for a system onnxruntime has none for) has no voice, only that.
+const sidecar = <T>(name: string): Promise<T> => import(COMPILED ? Bun.resolveSync(name, join(RESOURCES, "speech.js")) : name);
+
 async function load(): Promise<Tts> {
-  const [{ env, AutoTokenizer, Tensor }, { KokoroTTS }, ort] = await Promise.all([import("@huggingface/transformers"), import("kokoro-js"), import("onnxruntime-node")]);
-  env.cacheDir = join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "corkboard", "models");
+  const [{ env, AutoTokenizer, Tensor }, { KokoroTTS }, ort] = await Promise.all([
+    sidecar<typeof import("@huggingface/transformers")>("@huggingface/transformers"),
+    sidecar<typeof import("kokoro-js")>("kokoro-js"),
+    sidecar<typeof import("onnxruntime-node")>("onnxruntime-node"),
+  ]);
+  env.cacheDir = join(CACHE_DIR, "models");
   const tokenizer = AutoTokenizer.from_pretrained(MODEL);
   const session = async (file: string, options: Parameters<typeof ort.InferenceSession.create>[1]) => {
     const s = await ort.InferenceSession.create(withDurations(await readFile(file)), options);

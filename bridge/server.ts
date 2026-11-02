@@ -15,12 +15,14 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import * as away from "./away";
 import * as boards from "./boards";
 import * as remote from "./remote";
 import { speech } from "./speech";
 import * as wasm from "./wasm";
 import { CLOUD, token } from "./cloud";
+import { COMPILED, RESOURCES, STATE_DIR, dirsEnv } from "./dirs";
 
 const HOST = process.env.CORKBOARD_HOST ?? "127.0.0.1";
 const PORT = Number(process.env.CORKBOARD_PORT ?? 7777);
@@ -37,27 +39,40 @@ const WASM_DEFAULT = !!NVIM_WASM && process.env.CORKBOARD_WASM === "1";
 // Whether a page's URL has it run Neovim itself.
 const inPage = (url: URL) => (url.searchParams.has("wasm") ? url.searchParams.get("wasm") !== "0" : false);
 // The page as `bun run build` writes it (web/dist).
-const WEB_ROOT = new URL("../web/dist/", import.meta.url).pathname;
+const WEB_ROOT = join(RESOURCES, "web", "dist");
 // `bun run dev` (--dev): build the page again each time it loads, so a
 // reload shows the source as it is now.
 const DEV = process.argv.includes("--dev");
-const PLUGIN_ROOT = new URL("../nvim", import.meta.url).pathname;
-// This bridge's commit, as it started: the repo's, or, built by the flake
-// with no repo, the one it wrote beside the code. Neovim shows it in its
-// status line (CORKBOARD_BRIDGE_VERSION).
+const PLUGIN_ROOT = join(RESOURCES, "nvim");
+// The repo, for `bun run dev`'s builds and commits.
+const REPO = fileURLToPath(new URL("..", import.meta.url));
+// This bridge's commit, as it started: the repo's, or, built with no repo
+// (the flake, scripts/build-bridge.ts), the one written beside the code or
+// into the resources. Neovim shows it in its status line
+// (CORKBOARD_BRIDGE_VERSION).
 const BRIDGE_VERSION = (() => {
-  const dir = new URL(".", import.meta.url).pathname;
-  const git = Bun.spawnSync(["git", "-C", dir, "describe", "--always", "--dirty"], { stderr: "ignore" });
-  if (git.success) return git.stdout.toString().trim();
-  try {
-    return readFileSync(dir + "rev", "utf8").trim();
-  } catch {
-    return "?";
+  const git = !COMPILED && Bun.spawnSync(["git", "-C", import.meta.dir, "describe", "--always", "--dirty"], { stderr: "ignore" });
+  if (git && git.success) return git.stdout.toString().trim();
+  for (const file of [join(import.meta.dir, "rev"), join(RESOURCES, "rev")]) {
+    try {
+      return readFileSync(file, "utf8").trim();
+    } catch {}
   }
+  return "?";
 })();
+// How Neovim starts corkboard's MCP server (agents.lua): this executable
+// when it is the compiled bridge (main.ts's subcommands), else bun on the
+// repo's main.ts.
+const SELF = COMPILED ? [process.execPath] : [process.execPath, join(import.meta.dir, "main.ts")];
 // Third-party plugins (snacks.nvim) as a colon-separated list of plugin
 // directories; the flake's dev shell sets it from nixpkgs.
-const PLUGINS = (process.env.CORKBOARD_PLUGINS ?? "").split(":").filter(Boolean);
+// On Windows, where paths have ":" in them, it's ";"-separated.
+const PLUGINS = (process.env.CORKBOARD_PLUGINS ?? "").split(process.platform === "win32" ? ";" : ":").filter(Boolean);
+// The plugin and those, first on Neovim's runtimepath. Windows' "\" as "/",
+// which Neovim takes there too and :set doesn't read as an escape.
+const RTP_CMD = `set rtp^=${[PLUGIN_ROOT, ...PLUGINS]
+  .map((p) => (process.platform === "win32" ? p.replaceAll("\\", "/") : p).replace(/[ \\,]/g, "\\$&"))
+  .join(",")}`;
 // The app's name in the web app manifest, so two bridges installed as apps
 // (the installed one and the dev one) tell apart in launchers and
 // notifications.
@@ -140,7 +155,7 @@ for (const type of [0, 1, 2]) {
 type Remote = { target: string; options?: string[] };
 const remotesRaw = process.env.CORKBOARD_REMOTES ?? "{}";
 const REMOTES: Record<string, Remote> = JSON.parse(
-  remotesRaw.startsWith("/") ? readFileSync(remotesRaw, "utf8") : remotesRaw,
+  remotesRaw.trimStart().startsWith("{") ? remotesRaw : readFileSync(remotesRaw, "utf8"),
 );
 const REMOTE_NVIM = process.env.CORKBOARD_REMOTE_NVIM;
 
@@ -168,8 +183,19 @@ type Session = {
   toPage?: (msg: unknown) => void;
 };
 
+// What Neovim, and what it starts, has from the bridge: the Worker, for what
+// Neovim starts itself (the plan's Claude Code); this bridge's version; where
+// corkboard keeps things (dirs.ts); and how to start the MCP server, as a
+// JSON list.
+const NVIM_ENV = {
+  CORKBOARD_CLOUD: CLOUD,
+  CORKBOARD_BRIDGE_VERSION: BRIDGE_VERSION,
+  ...dirsEnv,
+  CORKBOARD_MCP_COMMAND: JSON.stringify([...SELF, "mcp"]),
+};
+
 // The project Neovim last opened (remember_project in corkboard/init.lua).
-const LAST_PROJECT = resolve(process.env.XDG_STATE_HOME ?? resolve(homedir(), ".local/state"), "corkboard/last-project");
+const LAST_PROJECT = join(STATE_DIR, "last-project");
 
 function lastProject(): string | null {
   try {
@@ -186,7 +212,7 @@ function lastProject(): string | null {
 // ENOENT on the executable ("posix_spawn 'nvim'").
 function resolveCwd(raw: string | null): { cwd: string; error?: string } {
   const home = homedir();
-  const cwd = resolve(home, (raw ?? lastProject() ?? home).replace(/^~(?=$|\/)/, home));
+  const cwd = resolve(home, (raw ?? lastProject() ?? home).replace(/^~(?=$|[\\/])/, home));
   try {
     if (statSync(cwd).isDirectory()) return { cwd };
   } catch {}
@@ -294,6 +320,7 @@ exec "$2" --embed 1>&3 3>&-
 async function spawnRemote(data: Session): Promise<NonNullable<Session["nvim"]>> {
   const remote = REMOTES[data.host!];
   const options = remote.options ?? [];
+  if (!Bun.which("nix")) throw new Error(`opening a project on ${data.host} needs nix on this machine`);
   // A no-op once the store path is there, which is every time but the first
   // after a rebuild. --no-check-sigs because the plugin and theme are built
   // here and signed by nobody; the far side accepts that only from a user
@@ -316,12 +343,11 @@ async function spawnRemote(data: Session): Promise<NonNullable<Session["nvim"]>>
 }
 
 function spawnLocal(data: Session): NonNullable<Session["nvim"]> {
-  const rtp = `set rtp^=${[PLUGIN_ROOT, ...PLUGINS].map((p) => p.replace(/[ \\,]/g, "\\$&")).join(",")}`;
+  const rtp = RTP_CMD;
   return Bun.spawn([NVIM, "--embed", "--cmd", rtp], {
     cwd: data.cwd,
-    // corkboard.window: which window this Neovim is for. CORKBOARD_CLOUD:
-    // the Worker, for what Neovim starts itself (the plan's Claude Code).
-    env: { ...process.env, CORKBOARD_CLOUD: CLOUD, CORKBOARD_BRIDGE_VERSION: BRIDGE_VERSION, ...(data.view ? { CORKBOARD_WINDOW: data.view } : {}) },
+    // corkboard.window: which window this Neovim is for.
+    env: { ...process.env, ...NVIM_ENV, ...(data.view ? { CORKBOARD_WINDOW: data.view } : {}) },
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -442,7 +468,7 @@ let building: Promise<string | undefined> | undefined;
 function build() {
   building ??= (async () => {
     const proc = Bun.spawn(["bun", "run", "build"], {
-      cwd: new URL("..", import.meta.url).pathname,
+      cwd: REPO,
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -523,7 +549,7 @@ const pages = new Set<Bun.ServerWebSocket<Session>>();
 // as committed, rather than each save half way through a change. A reload
 // starts the page's Neovim again, terminals and all.
 async function head() {
-  const proc = Bun.spawn(["git", "rev-parse", "HEAD"], { cwd: new URL("..", import.meta.url).pathname, stdout: "pipe", stderr: "ignore" });
+  const proc = Bun.spawn(["git", "rev-parse", "HEAD"], { cwd: REPO, stdout: "pipe", stderr: "ignore" });
   const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
   return code === 0 ? out.trim() : undefined;
 }
@@ -596,7 +622,7 @@ function startWasm(ws: Bun.ServerWebSocket<Session>) {
   const data = ws.data;
   data.toPage = (msg) => ws.send(JSON.stringify(msg, toJson));
   // As spawnLocal gives it to Neovim, which its processes inherit.
-  const env = { ...(process.env as Record<string, string>), CORKBOARD_CLOUD: CLOUD, CORKBOARD_BRIDGE_VERSION: BRIDGE_VERSION, ...(data.view ? { CORKBOARD_WINDOW: data.view } : {}) };
+  const env = { ...(process.env as Record<string, string>), ...NVIM_ENV, ...(data.view ? { CORKBOARD_WINDOW: data.view } : {}) };
   const host = new wasm.Host(
     (code, ...args) => deliver(data, [2, "nvim_exec_lua", [code, args]]),
     (tag, method, params) => data.toPage!([10, tag, method, params]),
@@ -604,7 +630,7 @@ function startWasm(ws: Bun.ServerWebSocket<Session>) {
   );
   data.wasmHost = host;
   hosts.set(host.id, host);
-  const rtp = `set rtp^=${[PLUGIN_ROOT, ...PLUGINS].map((p) => p.replace(/[ \\,]/g, "\\$&")).join(",")}`;
+  const rtp = RTP_CMD;
   notifyPage(ws, "corkboard.host", {
     id: host.id,
     cwd: data.cwd,
@@ -648,7 +674,7 @@ async function hostCall(req: Request, url: URL): Promise<Response> {
 // /latency: a page's key-to-pixels timings (web/src/latency.ts), one line
 // per key with the window it came from, for `bun run latency` and for
 // lining up with whatever else the machine was doing at the time.
-const LATENCY_LOG = join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state"), "corkboard", "latency.jsonl");
+const LATENCY_LOG = join(STATE_DIR, "latency.jsonl");
 async function latency(req: Request): Promise<Response> {
   const why = refuse(req);
   if (why || req.method !== "POST") return new Response(why ?? "POST", { status: 403 });
@@ -710,6 +736,8 @@ Bun.serve<Session, {}>({
               : resolveCwd(cwd);
       if (inPage(url) && !data.error) {
         if (data.host) data.error = "a page on another machine runs Neovim there, not in wasm";
+        // Its hooks dial a unix socket and its terminals want a pty (wasm.ts).
+        else if (process.platform === "win32") data.error = "a page can't run Neovim itself on Windows";
         else if (!NVIM_WASM) data.error = "CORKBOARD_NVIM_WASM is not set";
         else data.wasm = true;
       }
@@ -748,7 +776,7 @@ Bun.serve<Session, {}>({
       const failed = await (path === "index.html" ? build() : building);
       if (failed) return new Response(failed, { status: 500, headers: { "content-type": "text/plain" } });
     }
-    const file = Bun.file(WEB_ROOT + path);
+    const file = Bun.file(join(WEB_ROOT, path));
     if (path === "manifest.webmanifest" && NAME) {
       const manifest = { ...(await file.json()), name: NAME, short_name: NAME };
       return new Response(JSON.stringify(manifest), { headers: { "content-type": "application/manifest+json" } });

@@ -4,11 +4,19 @@
 
 local M = {}
 
+-- One word for the shell Claude Code runs hooks with, whatever 'shell' is
+-- here (shellescape follows it): sh on unix; on Windows, Git Bash or cmd,
+-- which both take a "-quoted path with / for \.
+local function word(s)
+  if vim.fn.has("win32") == 1 then return '"' .. s:gsub("\\", "/") .. '"' end
+  return "'" .. s:gsub("'", [['\'']]) .. "'"
+end
+
 local function hook(name)
   local script = vim.api.nvim_get_runtime_file("hooks/" .. name, false)[1]
   return {
     type = "command",
-    command = table.concat({ vim.fn.shellescape(require("corkboard.util").progpath()), "--clean --headless -l", vim.fn.shellescape(script) }, " "),
+    command = table.concat({ word(require("corkboard.util").progpath()), "--clean --headless -l", word(script) }, " "),
   }
 end
 
