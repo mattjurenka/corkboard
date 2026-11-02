@@ -241,11 +241,6 @@ data class Grant(val owner: String, val obj: String, val member: String, val rol
     }
 }
 
-// A grant's end: the owner's word too.
-data class Ungrant(val owner: String, val obj: String, val member: String, val at: Long) : Statement {
-    override fun flat() = mapOf("v" to 1, "owner" to owner, "object" to obj, "member" to member, "at" to at)
-}
-
 // The account's key changing, signed by the key before it. account is the
 // account's id (its first key), which never changes.
 data class Rotation(val account: String, val from: String, val to: String, val box: String, val at: Long) : Statement {
@@ -261,7 +256,6 @@ data class Rotation(val account: String, val from: String, val to: String, val b
 }
 
 fun grantBytes(g: Grant) = signed("grant", g.flat())
-fun ungrantBytes(u: Ungrant) = signed("ungrant", u.flat())
 fun rotationBytes(r: Rotation) = signed("rotation", r.flat())
 
 // What a grant's sealed box holds: the object's key at an epoch, and what

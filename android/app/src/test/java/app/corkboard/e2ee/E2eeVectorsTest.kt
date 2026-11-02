@@ -264,10 +264,6 @@ class E2eeVectorsTest {
         val g = Signed.parse(sh["grant"]!!) { Grant.from(it) }
         assertEquals(sh["grant"]!!.s("bytes"), fromUtf8(grantBytes(g.body)))
         assertEquals(g.sig, signGrant(owner, g.body).sig)
-        val u = sh["ungrant"]!!.jsonObject["body"]!!.jsonObject
-        val ungrant = Ungrant(u.s("owner"), u.s("object"), u.s("member"), u["at"]!!.jsonPrimitive.long)
-        assertEquals(sh["ungrant"]!!.s("bytes"), fromUtf8(ungrantBytes(ungrant)))
-        assertEquals(sh["ungrant"]!!.s("sig"), signUngrant(owner, ungrant).sig)
 
         // The member opens it, the owner's account proven from its id.
         val view = AccountView(owner.id, owner.id, b64url(owner.box.public), creation(owner, "https://relay.test", null), emptyList())

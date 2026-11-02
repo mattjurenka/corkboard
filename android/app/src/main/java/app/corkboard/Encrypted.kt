@@ -201,9 +201,12 @@ object Encrypted {
         check(me.value == null) { "this phone is already in an account" }
         val device = withContext(Dispatchers.Default) { Device.new() }
         val got = pairNew(Relay(Cloud.ORIGIN), device, name, { code, _ -> show(code) }, confirm)
-        val m = Me(got.cert.body.account, name, device, got.cert, got.root)
+        // The id from the relay: a device paired after a rotation has a cert
+        // naming the account's key now, not its id.
+        val t = Relay(Cloud.ORIGIN, device, got.cert).signIn()
+        val m = Me(t.account ?: got.cert.body.account, name, device, got.cert, got.root)
+        token = t
         withContext(Dispatchers.IO) { keep(m) }
-        relay(m).signIn()
     }
 
     // Leaves the account on this phone: its keys and replicas go. The relay

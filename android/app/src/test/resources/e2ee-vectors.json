@@ -3541,17 +3541,6 @@
       "bytes": "corkboard-e2ee/v1 grant\n{\"at\":1762077600002,\"epoch\":1,\"member\":\"COHFGpR6EHSS-rl7g9sgtMqSGoQ_hkMc_cLXIj5mNuc\",\"object\":\"WTTOPFz8mPLic3YHW5Ih0w\",\"owner\":\"sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ\",\"role\":\"read\",\"v\":1,\"wrapped\":\"PqHIksReSNQO27La2NHEm_UQbLQXWgQqV_tFjltkJhw\"}",
       "sig": "1klVSAGDT1D1BNi7PXMuKis6NRlqYapBGqjMNjQr8oL1unloOSe5Z2HLbZLtgzmqzdzLtOJqDjCrbWvskHn-Bw"
     },
-    "ungrant": {
-      "body": {
-        "v": 1,
-        "owner": "sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ",
-        "object": "WTTOPFz8mPLic3YHW5Ih0w",
-        "member": "COHFGpR6EHSS-rl7g9sgtMqSGoQ_hkMc_cLXIj5mNuc",
-        "at": 1762077600003
-      },
-      "bytes": "corkboard-e2ee/v1 ungrant\n{\"at\":1762077600003,\"member\":\"COHFGpR6EHSS-rl7g9sgtMqSGoQ_hkMc_cLXIj5mNuc\",\"object\":\"WTTOPFz8mPLic3YHW5Ih0w\",\"owner\":\"sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ\",\"v\":1}",
-      "sig": "KbsraEkEJOWBdkPROZAv8maEbiTasyC77UyLAKA73sB_i9drxxY2G5PisXxtP2cjQUc2pgwzi2VgZ90SD_IJBw"
-    },
     "brain": {
       "object": "WTTOPFz8mPLic3YHW5Ih0w",
       "key": "5bde3e435f971822a42f7ed7f6bd7eef77deb40066c9b545c4ad3afba1ed0557",
@@ -3581,7 +3570,7 @@
           "id": "mlQtVsFRwXw0QdWHWC5Z-A",
           "seq": 3,
           "nonce": "anvi_Khj_JEiSyvE2Zolq8K0cjfLdifW",
-          "ciphertext": "PVnUQnMsFTde5bydA_TKjzBWMWEHhnV1hSK05269ieXbCWErjFyNzajuA6Mlj3neOC0n37W-aUqwQRopXIl9AxkpshpTd_GBq4vB79_vGdlTAK3hvWv_n_MYvBcc7Ef7EqZUWvGCOlWa_RpCYfzZPhDfH2NQNbxkgrx4hvQjF4oZBilbfLx-meSALpRyJ70ES6VB4lfHYEx4XbxgHjFzCUrOtFo5YpMeblfLFAuT5m8V-zln_nzxm7QOFQJx75_E5J4RnGq28HDujMVD0mfOQ2PuKpsf6WolKugl7-Ej",
+          "ciphertext": "PVnUQnMsFTde5bydA_TKjjBWMWEHhnV1hSK05269ieXbCWErjFyNzajuA6Mlj3neOC0n37W-aUqwQRopXIl9AxkpshpTd_GBq4vB79_vGdlTAK3hvWv_n_MYvBcc7Ef7EqZUWvGCOlWa_RpCYfzZPhDfH2NQNbxkgrx4hvQjF4oZBilbfLx-meSALpRyJ70ES6VB4lfHYEx4XbxgHjFzCUrOtFo5YpMeblfLFAuT5m8V-zln_nzxm7QOFQJx75_E5J4RnGq28HDujMVD0meTlFqQp2QqwRhqdrOGHcKZ",
           "epoch": 1,
           "device": "4ErMM9oRgghjbsrWtA2RJwx3DO7DOXTZvIXyfzLjZmc",
           "pos": 3,
@@ -3602,7 +3591,7 @@
     },
     "bytes": "corkboard-e2ee/v1 rotation\n{\"account\":\"sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ\",\"at\":1762077600004,\"box\":\"81PAs7kSS_d_rw5K9zN7D6kzqOau8ecKWAQUK2n1XRU\",\"from\":\"sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ\",\"to\":\"4j6qAhbR4WD7rKqpbZXaFJ_i4JSjXMZtn-f4_ZE3E44\",\"v\":1}",
     "sig": "-aZjCUlBp2Lo-Z7iy6QdT9YTn4SinheB1-s0yQ2JTH9uSSC2HITRVAw0eoTluxHJJnN_oJcfiPoBRjPtSJ7HDQ",
-    "sealedRoot": "_Wb_VPPA1O8Az6f0MQTNyBHL6NSiCGnZd-bYgqBGECqwFjwGdxm-LnlFpMFzOLyBWgByRlffi1MVOpNsjvNmIXO6b5Hcsocx_4TsU8dK-MM",
+    "sealedRoot": "GGbHlJ2dXKrCymErJKTNVMgP7GdB3TJIERb_tbgeOWPIEjJtANWURvTT23HM1F1pycCnMKvXiEkiOqebiDFMGbRlKZw4pqZz46UJJAWwk9Q",
     "cert": {
       "body": {
         "v": 1,

@@ -85,7 +85,6 @@ fun answer(device: Device, origin: String, nonce: String, account: String): Sign
 }
 
 fun signGrant(account: AccountKeys, g: Grant) = Signed(g, sign(account.sign, grantBytes(g)))
-fun signUngrant(account: AccountKeys, u: Ungrant) = Signed(u, sign(account.sign, ungrantBytes(u)))
 // Signed by the key before: `from`'s.
 fun signRotation(from: AccountKeys, r: Rotation) = Signed(r, sign(from.sign, rotationBytes(r)))
 

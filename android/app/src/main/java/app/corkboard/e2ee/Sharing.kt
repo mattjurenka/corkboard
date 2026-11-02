@@ -214,18 +214,18 @@ suspend fun rotate(relay: Relay, root: ByteArray, accountId: String, device: Dev
     oldIndex.sync()
     val newIndex = r.replica(fresh, indexId(fresh), indexKey(fresh), 0)
     val moved = mutableListOf<Pair<Replica, IndexEntry>>()
+    val rekeyed = mutableListOf<IndexEntry>()
     for (e in entries(oldIndex)) {
         val rep = r.replica(root, e.obj, e.keyFrom(root), e.epoch)
         rep.sync()
         if (e.key != null) {
-            // Shared: the same id, a new random key at the next epoch, its grants sealed again.
+            // Shared: the same id, a new random key at the next epoch. Its grants
+            // are sealed again once the relay knows the new key that signs them.
             val key = random(32)
             rep.rekey(key)
-            remember(newIndex, IndexEntry(e.obj, e.kind, e.name, rep.epoch, b64url(key)))
-            for (g in relay.grants(e.obj).map { it.grant.body }.distinctBy { it.member }) {
-                val (signed, sealed) = grantTo(next, accountId, relay.accountView(g.member), e.obj, e.kind, e.name, g.role, rep.epoch, key)
-                relay.grant(signed, sealed)
-            }
+            val entry = IndexEntry(e.obj, e.kind, e.name, rep.epoch, b64url(key))
+            remember(newIndex, entry)
+            rekeyed += entry
         } else {
             val obj = objectId(fresh, e.kind, e.name)
             val into = r.replica(fresh, obj, objectKey(fresh, e.kind, e.name), 0)
@@ -244,6 +244,13 @@ suspend fun rotate(relay: Relay, root: ByteArray, accountId: String, device: Dev
     val mine = certs.first { it.body.device == device.id }
     // Every token ended with the old key: the next call signs in with the new cert.
     relay.cert = mine
+    for (e in rekeyed) {
+        val key = fromB64url(e.key!!)
+        for (g in relay.grants(e.obj).map { it.grant.body }.distinctBy { it.member }) {
+            val (signed, sealed) = grantTo(next, accountId, relay.accountView(g.member), e.obj, e.kind, e.name, g.role, e.epoch, key)
+            relay.grant(signed, sealed)
+        }
+    }
     // Anything written meanwhile, then the old logs go.
     for ((rep, e) in moved) {
         val before = rep.cursor

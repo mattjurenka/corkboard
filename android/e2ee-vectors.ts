@@ -26,7 +26,6 @@ const SEED = new TextEncoder().encode("corkboard android vectors");
 };
 
 const e = await import("../lib/e2ee/index");
-const wire = e as unknown as Record<string, unknown>;
 const { b64url, fromB64url, utf8, fromUtf8, signed, canonical } = e;
 
 const hex = bytesToHex;
@@ -36,12 +35,7 @@ const text = (b: Uint8Array) => fromUtf8(b);
 const root = hexToBytes("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
 const account = e.accountKeys(root);
 
-// What the newer wire has (grants, rotations), when lib/e2ee has it yet;
-// else the plan's layout, which Wire.kt follows.
-const grantBytes = (wire.grantBytes as ((g: unknown) => Uint8Array) | undefined) ?? ((g: never) => signed("grant", g));
-const ungrantBytes = (wire.ungrantBytes as ((g: unknown) => Uint8Array) | undefined) ?? ((g: never) => signed("ungrant", g));
-const rotationBytes = (wire.rotationBytes as ((g: unknown) => Uint8Array) | undefined) ?? ((g: never) => signed("rotation", g));
-const snapshotLabel = (wire.snapshotLabel as ((epoch: number, upTo: number) => string) | undefined) ?? ((epoch: number, upTo: number) => `snapshot:${epoch}:${upTo}`);
+const { grantBytes, rotationBytes, snapshotLabel } = e;
 const objectLabel = (kind: string, name: string) => `${kind}\0${name}`;
 
 const { ed25519 } = await import("@noble/curves/ed25519.js");
@@ -161,7 +155,6 @@ const brainKey = e.random(32);
 const sharedKey = { v: 1, owner: account.id, object: brainId, kind: "brain", name: "pepper", epoch: 1, key: b64(brainKey) };
 const sealedKey = e.sealTo(member.box.public, utf8(JSON.stringify(sharedKey)));
 const grant = { v: 1, owner: account.id, object: brainId, member: member.id, role: "read", epoch: 1, wrapped: b64(sha256(sealedKey)), at: 1762077600002 };
-const ungrant = { v: 1, owner: account.id, object: brainId, member: member.id, at: 1762077600003 };
 const newRoot = hexToBytes("aa".repeat(32));
 const rotated = e.accountKeys(newRoot);
 const rotation = { v: 1, account: account.id, from: account.id, to: rotated.id, box: b64(rotated.box.public), at: 1762077600004 };
@@ -254,7 +247,6 @@ const vectors = {
     sharedKey,
     sealedKey: b64(sealedKey),
     grant: { body: grant, bytes: text(grantBytes(grant)), sig: signWith(account.sign.secret, grantBytes(grant)) },
-    ungrant: { body: ungrant, bytes: text(ungrantBytes(ungrant)), sig: signWith(account.sign.secret, ungrantBytes(ungrant)) },
     brain: { object: brainId, key: hex(brainKey), epoch: 1, ops: brainOps },
   },
   rotation: {

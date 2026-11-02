@@ -52,7 +52,8 @@ import java.util.concurrent.TimeUnit
 // expired or refused is got again, once, from the device's keys.
 
 @Serializable
-data class Token(val token: String, val expires: Long)
+// account: the account's id, which after a rotation is no longer the key certs name.
+data class Token(val token: String, val expires: Long, val account: String? = null)
 
 class RelayError(val status: Int, message: String, val body: JsonObject? = null) : Exception(message)
 
@@ -70,7 +71,7 @@ class Relay(
     private val http: OkHttpClient = defaultHttp,
 ) : PairTransport, LogTransport {
     val origin = origin.trimEnd('/')
-    val account get() = cert?.body?.account
+    val account get() = current?.account ?: cert?.body?.account
 
     companion object {
         val defaultHttp: OkHttpClient = OkHttpClient.Builder().pingInterval(30, TimeUnit.SECONDS).build()
