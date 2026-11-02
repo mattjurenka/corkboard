@@ -9,7 +9,9 @@
 // said on its own, with a pause after it by its stop and the line's mood;
 // some interjections are a real recording (voices/clips, from cicifyre's
 // "Free Voice Clips Pack (Bright Female)", whose voice ours was grown from),
-// and some are spelled the way Kokoro says them right.
+// and some are spelled the way Kokoro says them right. Sentences said ahead
+// of time (bun run lines: the personas' lines for a click) are played from
+// voices/said, and a line can be made ready before it's said (Voice.warm).
 
 import { FRAME, type Timing } from "../../../bridge/kokoro-timing";
 
@@ -205,50 +207,103 @@ async function synth(text: string, voice: string, speed: number, mood: Mood | un
   return new Promise((ok) => waiting.set(id, ok));
 }
 
+// An audio file's samples, at a rate.
+const decode = (path: string, rate: number): Promise<Float32Array> =>
+  fetch(new URL(path, location.href))
+    .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(`no ${path}`))))
+    .then((b) => new OfflineAudioContext(1, 1, rate).decodeAudioData(b))
+    .then((b) => b.getChannelData(0));
+
 // A take of a recording, at Kokoro's rate.
 const takes = new Map<string, Promise<Float32Array>>();
 function recording(name: string, rate: number): Promise<Float32Array> {
-  const url = new URL(`voices/clips/${name}-${1 + Math.floor(Math.random() * TAKES)}.wav`, location.href).href;
-  let r = takes.get(url);
+  const path = `voices/clips/${name}-${1 + Math.floor(Math.random() * TAKES)}.wav`;
+  let r = takes.get(path);
   if (!r) {
-    r = fetch(url)
-      .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(`no ${name}`))))
-      .then((b) => new OfflineAudioContext(1, 1, rate).decodeAudioData(b))
-      .then((b) => b.getChannelData(0));
-    r.catch(() => takes.delete(url));
-    takes.set(url, r);
+    r = decode(path, rate);
+    r.catch(() => takes.delete(path));
+    takes.set(path, r);
   }
   return r;
 }
 
-async function clip(text: string, voice: string, mood: Mood | undefined, bridge: Bridge | undefined, failed: (why: string) => void): Promise<Clip | null> {
+// What a sentence of a line is made from: what's asked of the voice, or a
+// recording if it's one.
+export type Ask = { text: string; voice: string; speed: number; mood?: Mood; recorded?: string };
+function ask(s: string, voice: string, mood?: Mood): Ask {
+  const p = PITCHED[voice];
+  return {
+    text: respell(s),
+    voice: p?.voice ?? voice,
+    speed: (p?.speed ?? 1) * ((mood && MOODS[mood].speed) ?? 1),
+    mood,
+    recorded: voice === "anime" ? RECORDED.find(([re]) => re.test(s))?.[1] : undefined,
+  };
+}
+const split = (text: string) => text.split(/(?<=[.!?…])\s+/).filter(Boolean);
+
+// What's asked of the voice to say a line, but its recordings.
+export const asks = (text: string, voice: string, mood?: Mood): Ask[] =>
+  sentences(text)
+    .flatMap(split)
+    .map((s) => ask(s, voice, mood))
+    .filter((a) => !a.recorded);
+export const askKey = (a: Ask) => [a.voice, a.speed, a.mood ?? "", a.text].join("\n");
+
+// What's been said ahead of time, by askKey: its file in voices/said, at
+// its rate, and its phonemes if it has them.
+// (ref is what bun run lines knows the recording it was cloned from by.)
+export type SaidAhead = { file: string; rate: number; phonemes?: string; frames?: number[]; ref?: string };
+let saidAhead: Promise<Record<string, SaidAhead>> | undefined;
+
+// A sentence: said ahead of time if it was, else made now, unless only
+// what was said ahead will do.
+async function made(a: Ask, bridge: Bridge | undefined, only: boolean): Promise<Synth> {
+  saidAhead ??= fetch(new URL("voices/said/index.json", location.href))
+    .then((res) => (res.ok ? res.json() : {}))
+    .catch(() => ({}));
+  const s = (await saidAhead)[askKey(a)];
+  if (s) {
+    try {
+      const samples = await decode(`voices/said/${s.file}`, s.rate);
+      return { samples, rate: s.rate, ...(s.phonemes && s.frames && { phonemes: s.phonemes, frames: s.frames }) };
+    } catch (err) {
+      console.warn("speech:", err);
+    }
+  }
+  if (only) return { error: "not said ahead" };
+  return synth(a.text, a.voice, a.speed, a.mood, bridge);
+}
+
+// A line's audio; with only, from what was said ahead of time, or none.
+async function clip(text: string, voice: string, mood: Mood | undefined, bridge: Bridge | undefined, failed: (why: string) => void, only = false): Promise<Clip | null> {
   const p = PITCHED[voice];
   const m = mood && MOODS[mood];
   // Its sentences, each made, then a pause after each, a little more or less
   // each time.
-  const parts = text.split(/(?<=[.!?…])\s+/).filter(Boolean);
-  const made = await Promise.all(
+  const parts = split(text);
+  const said = await Promise.all(
     parts.map(async (s): Promise<Synth> => {
-      const rec = voice === "anime" ? RECORDED.find(([re]) => re.test(s))?.[1] : undefined;
-      if (rec) return recording(rec, 24000).then((samples) => ({ samples, rate: 24000 }), () => synth(respell(s), p?.voice ?? voice, (p?.speed ?? 1) * (m?.speed ?? 1), mood, bridge));
-      return synth(respell(s), p?.voice ?? voice, (p?.speed ?? 1) * (m?.speed ?? 1), mood, bridge);
+      const a = ask(s, voice, mood);
+      if (a.recorded) return recording(a.recorded, 24000).then((samples) => ({ samples, rate: 24000 }), () => made(a, bridge, only));
+      return made(a, bridge, only);
     }),
   );
-  const bad = made.find((r) => !r.samples || !r.rate);
+  const bad = said.find((r) => !r.samples || !r.rate);
   if (bad) {
-    failed(bad.error ?? "no audio");
+    if (!only) failed(bad.error ?? "no audio");
     return null;
   }
-  const at = made[0].rate!;
+  const at = said[0].rate!;
   const gaps = parts.map((s) => Math.round(pause(s) * (m?.pause ?? 1) * (0.75 + Math.random() * 0.5) * at));
-  const samples = new Float32Array(made.reduce((n, r, i) => n + r.samples!.length + gaps[i], 0));
+  const samples = new Float32Array(said.reduce((n, r, i) => n + r.samples!.length + gaps[i], 0));
   // Pitched by playing its samples faster.
   const rate = at * (p?.pitch ?? 1);
   const marks: Mark[] = [];
   const spans: Span[] = [];
   let o = 0;
   let first = 0;
-  made.forEach((r, i) => {
+  said.forEach((r, i) => {
     samples.set(r.samples!, o);
     first = text.indexOf(parts[i], first);
     const last = first + parts[i].length;
@@ -343,6 +398,8 @@ export class Voice {
   private gain?: GainNode;
   private timer?: ReturnType<typeof setTimeout>;
   private _muted = false;
+  // Lines made ready (warm), by voice, mood and text.
+  private warmed = new Map<string, Promise<Clip | null>>();
   voice = VOICES[0];
   error = "";
   onChange?: () => void;
@@ -372,9 +429,25 @@ export class Voice {
   say(text: string, from: string, mood?: Mood) {
     const items = [...new Set(this.queue.map((l) => l.from))];
     if (items.length > 1) this.queue = this.queue.filter((l) => l.from === items[items.length - 1]);
-    this.queue.push(...sentences(text).map((t) => ({ text: t, from, mood })));
+    this.queue.push(
+      ...sentences(text).map((t) => {
+        const k = [this.voice, mood, t].join("\n");
+        const ready = this.warmed.get(k);
+        this.warmed.delete(k);
+        return { text: t, from, mood, clip: ready?.then((c) => c ?? clip(t, this.voice, mood, this.bridge, (why) => (this.error = why))) };
+      }),
+    );
     this.ahead();
     if (!this.line) this.next();
+  }
+
+  // A line that was said ahead of time made ready, so that when it's said
+  // it's heard at once.
+  warm(text: string, mood?: Mood) {
+    for (const t of sentences(text)) {
+      const k = [this.voice, mood, t].join("\n");
+      if (!this.warmed.has(k)) this.warmed.set(k, clip(t, this.voice, mood, undefined, () => {}, true));
+    }
   }
 
   stop() {

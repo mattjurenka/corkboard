@@ -7,6 +7,7 @@
     "build": "vite build web",
     "dev:web": "vite web",
     "portraits": "bun web/portraits.ts",
+    "lines": "bun web/lines.ts",
     "app": "electron app",
     "typecheck": "tsc -p .",
     "mcp": "bun mcp/board.ts",

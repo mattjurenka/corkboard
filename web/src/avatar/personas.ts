@@ -8,7 +8,8 @@ import type { ActName } from "./acts";
 import type { Mood as Tone } from "./voice";
 
 // A pat is a rub on her head; head, a click on it.
-export type Poked = "pat" | "head" | "body" | "miss" | "again";
+export const POKED = ["pat", "head", "body", "miss", "again"] as const;
+export type Poked = (typeof POKED)[number];
 
 export type Persona = {
   title: string;
@@ -89,7 +90,7 @@ export const PERSONAS = {
     model: "bikini.vrm",
     recolor: true,
     voice: "af_bella",
-    idle: ["sway", "sway", "stretch", "stretch", "shift", "glance", "glance", "yawn", "proud"],
+    idle: ["sway", "sway", "stretch", "stretch", "shift", "glance", "glance", "yawn", "proud", "jump"],
     poked: {
       pat: {
         tone: "happy",
@@ -331,13 +332,14 @@ export const PERSONAS = {
       },
     },
   },
-  // Smouldering and in charge, and he knows it; calls you kitten and princess.
+  // Smouldering and in charge, and he knows it; calls you kitten and princess,
+  // and good girl when you've earned it.
   shirtless: {
     title: "Shirtless",
     model: "shirtless.vrm",
     recolor: false,
     voice: "am_fenrir",
-    idle: ["fold", "fold", "stretch", "stretch", "proud", "proud", "glance", "shift"],
+    idle: ["fold", "fold", "stretch", "stretch", "proud", "proud", "glance", "shift", "jump"],
     poked: {
       pat: {
         tone: "teasing",
@@ -348,6 +350,7 @@ export const PERSONAS = {
           "You want my attention that badly? Earn it, kitten. Ship something.",
           "Careful, princess. Keep that up and I'll think you like me.",
           "That's sweet, kitten. Don't let it go to your head. Let it go to mine.",
+          "Good girl. You get one more of those when the build is green.",
         ],
       },
       head: {
@@ -370,6 +373,7 @@ export const PERSONAS = {
           "Mm. You're distracted, princess. I'm very distracting, I know.",
           "Careful, kitten. I bite. Bugs, mostly.",
           "Something you need, princess? Say please.",
+          "Said please? Good girl. Now what do you want, kitten?",
         ],
       },
       miss: {
@@ -404,9 +408,12 @@ export const persona = (id?: string | null): Persona => PERSONAS[id && id in PER
 // comes round again.
 const bags = new Map<string, string[]>();
 
-export function line(p: Persona, poked: Poked): string {
+function bag(p: Persona, poked: Poked): string[] {
   const key = `${p.title}/${poked}`;
   let bag = bags.get(key);
   if (!bag?.length) bags.set(key, (bag = [...p.poked[poked].lines].sort(() => Math.random() - 0.5)));
-  return bag.pop()!;
+  return bag;
 }
+export const line = (p: Persona, poked: Poked): string => bag(p, poked).pop()!;
+// The line it'll be next time.
+export const upcoming = (p: Persona, poked: Poked): string => bag(p, poked).at(-1)!;

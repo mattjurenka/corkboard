@@ -48,7 +48,7 @@ async function voiceFile(name: string): Promise<ArrayBuffer> {
 }
 
 // The recording a voice is cloned from, for a mood if it has one.
-async function reference(voice: string, mood?: string): Promise<string | undefined> {
+export async function reference(voice: string, mood?: string): Promise<string | undefined> {
   for (const name of [...(mood ? [`${voice}-${mood}.wav`] : []), `${voice}.wav`]) {
     for (const file of voicesAt(name)) if (await stat(file).catch(() => null)) return file;
   }
@@ -99,7 +99,11 @@ async function clone(python: string): Promise<Cloner> {
   const say: Cloner = async (text, ref) => {
     proc.stdin.write(JSON.stringify({ text, ref }) + "\n");
     proc.stdin.flush();
-    const h = await head();
+    // Anything it says that isn't an answer, and it's out of step: started again.
+    const h = await head().catch((err) => {
+      proc.kill();
+      throw err;
+    });
     if (h.error) throw new Error(h.error);
     while (buf.length < h.samples! * 4) await more();
     return { audio: new Float32Array(take(h.samples! * 4).buffer), sampling_rate: h.rate! };

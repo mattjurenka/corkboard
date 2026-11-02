@@ -3,7 +3,7 @@
 # which starts it once and keeps it. Each voice is cloned from a recording of
 # about 10 s, <voice>.wav beside the voices' .bin files, or for a mood
 # <voice>-<mood>.wav if there is one; each is made ready the first time it's
-# used (the first takes about 30 s, librosa warming up), and kept.
+# used (the first takes about 30 s, librosa warming up), and kept until its file changes.
 #
 # In, a line of JSON a sentence: {"text", "ref"}, ref the recording's path.
 # Out, a line of JSON, {"rate", "samples"} or {"error"}, and then that many
@@ -32,6 +32,9 @@ try:
 except Exception:
     model = ChatterboxTurboTTS.from_pretrained(device=device, nano=True)
 out = sys.stdout.buffer
+# Chatterbox prints as it goes (on some sentences, "S3 Token -> Mel
+# Inference..."), which in among the answers would garble them.
+sys.stdout = sys.stderr
 conds = {}
 
 
@@ -45,10 +48,11 @@ for line in sys.stdin:
     try:
         ask = json.loads(line)
         ref = ask["ref"]
-        if ref not in conds:
+        key = (ref, os.stat(ref).st_mtime_ns)
+        if key not in conds:
             model.prepare_conditionals(ref)
-            conds[ref] = model.conds
-        model.conds = conds[ref]
+            conds[key] = model.conds
+        model.conds = conds[key]
         with torch.inference_mode():
             wav = model.generate(ask["text"])
         samples = wav.squeeze(0).numpy().astype("<f4").tobytes()
