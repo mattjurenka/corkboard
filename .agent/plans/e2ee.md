@@ -87,9 +87,9 @@ laptop app ─┐                         ┌─ phone app ──https──┐
 
 ## Order
 
-1. Keys: account root, passkey and keychain wrapping, recovery phrase, device pairing. A
+1. *(Done, see below.)* Keys: account root, passkey and keychain wrapping, recovery phrase, device pairing. A
    signed-challenge sign-in to the Worker alongside Google.
-2. Encrypted op log in the DOs alongside the current API; a client library (bridge, web, Android)
+2. *(Done but Android, see below.)* Encrypted op log in the DOs alongside the current API; a client library (bridge, web, Android)
    that encrypts, syncs and merges.
 3. `bridge serve` as the node: replicas, `/mcp` with its own OAuth, the phone API, memory,
    calendar. Move Claude Code onto the local MCP.
@@ -98,6 +98,75 @@ laptop app ─┐                         ┌─ phone app ──https──┐
 5. Reachability helpers (Funnel setup in the app, the TLS-forwarding relay), a Docker image and a
    VPS image for the node.
 6. Later: hosted nodes on our fleet, clearly labelled as trusting us.
+
+## Done: steps 1 and 2 (2026-11-02)
+
+Alongside everything else: Google sign-in and the plaintext API are untouched, and nothing uses the
+encrypted side yet but `corkboard-bridge e2ee`.
+
+- **`lib/e2ee/`**, shared by the bridge, the page and the Worker's tests (`bun run test:e2ee`):
+  `keys.ts` (root → HKDF-SHA256 per label: account Ed25519 and X25519 keys, each object's key and
+  its opaque 128-bit id, so the relay never sees a board's name), `record.ts` (XChaCha20-Poly1305,
+  AAD binding object id and op id; blobs bound to their id), `box.ts` (sealed boxes),
+  `phrase.ts` (BIP39, 24 words), `device.ts` (device keys, certs, revocations, the signed
+  challenge), `pairing.ts`, `merge.ts`, `sync.ts` (the replica), `relay.ts` (the HTTP client).
+  `wire.ts` has the signed byte layouts and limits with no crypto library, and is all of it the
+  Worker imports.
+- **The relay** (`cloud/src/e2ee.ts`, `log.ts`, `mailbox.ts`, under `/e2ee/*`): accounts in the
+  Registry, keyed by account key, made with an invite or by an admin (`POST /api/e2ee/accounts`;
+  `GET/PATCH /api/admin/e2ee` to list and disable); `/e2ee/challenge` → device signs → `/e2ee/token`
+  (`cbe_…`, 24 h, hashed in the Registry); revocations signed by the account key, which also kill the
+  device's tokens; a `Log` DO per `<account>/<object>` (append-only, server order `pos`, idempotent
+  by op id, `since` catch-up, hibernating WebSocket fan-out, size limits); a `Mailbox` DO per pairing
+  code; encrypted blobs in `MEDIA` under `e2ee/<account>/<id>`. Wrangler migration `v5`.
+- **The bridge**: `corkboard-bridge e2ee init|recover|pair|approve|push-board|pull-board|status|revoke`
+  (`bridge/e2ee.ts`); keys in `<state>/e2ee/` (`bridge/keystore.ts`).
+- **The page**: `web/src/e2ee/keystore.ts` keeps the root in IndexedDB under a passkey's PRF output
+  where supported, else a non-extractable WebCrypto key. Untested in a real browser; nothing calls it.
+
+### What changed from the plan above
+
+- **@noble and @scure instead of libsodium.js.** libsodium.js instantiates its wasm from bytes at run
+  time, which Workers forbid, and its ESM build trips bundlers; @noble/curves, hashes and ciphers
+  and @scure/bip39 are audited, pure JS, and work the same in `bun build --compile`, browsers and
+  workerd. The constructions are libsodium's, byte for byte (`crypto_aead_xchacha20poly1305_ietf`,
+  Ed25519, and `crypto_box_seal`, checked against libsodium's own output both ways), so the
+  Android app can use libsodium (lazysodium) directly.
+- **The Worker checks signatures with WebCrypto's Ed25519**, so it bundles no crypto library.
+- **Logs are a new `Log` Durable Object**, not tables in the existing per-user ones: an account is
+  a key, not a sub, and a log per object keeps each one's socket fan-out and size limit its own.
+- **Pairing doesn't use a sealed box for the root.** A sealed box is anonymous, so a relay could
+  seal a root of its own to the new device. Instead: the approver commits to an ephemeral X25519
+  key before it sees the new device's, the new device waits for that commitment before joining,
+  both show six digits hashed from the transcript (code, both keys, the device key), and the root
+  travels in a record keyed by X25519(approver, new device) with the transcript as salt and AAD.
+  A relay in the middle gets one 1-in-10^6 guess per attempt. A QR (`corkboard-pair:1:<code>:<box>`)
+  lets the approver check the new device's key outright; the six digits are still compared.
+  Sealed boxes are there for wrapping board keys to members, later.
+- **Board keys are derived from the root** (HKDF, `object key board\0<key>`), not random and wrapped:
+  a device with the root needs nothing else, and the derived key can still be wrapped to a
+  collaborator without giving them the root.
+- **A device's `seq` is informational.** The relay records it but doesn't enforce it; readers can use
+  gaps in a device's seq to notice a relay withholding ops (not done yet). Order is the relay's `pos`.
+- **Merge**: per field, the write with the highest (Lamport clock, device, op id); logs are a set by
+  op id read in that order. An op whose inner device differs from the relay's label, or that doesn't
+  open, is skipped and listed in the replica's `rejected`.
+- **The bridge's keychain is a seam with one implementation, a file** (`<state>/e2ee/kek`, 0600)
+  beside `root.json`; `--passphrase` (or `CORKBOARD_E2EE_PASSPHRASE`) uses scrypt (N=2^16) instead.
+  libsecret, the macOS keychain, DPAPI and Electron's safeStorage go behind `Keychain`.
+
+### Still to do, or known gaps
+
+- Rate limits on the unauthenticated `/e2ee/pair` (makes a DO) and `/e2ee/challenge` (a Registry
+  row, swept as they expire). The Registry is one object for the whole Worker: every token check
+  goes through it (cached 30 s per isolate, so a revocation or disable elsewhere takes up to that).
+- Members and sharing (board keys wrapped to other accounts' box keys); key rotation after a
+  revocation (a revoked device still knows the root: revoking stops it syncing, not reading what
+  it had). Rotation means a new root and re-encrypting, which the log's design allows but nothing does.
+- Log compaction (snapshots) — logs only grow, to 64 MiB each.
+- The bridge CLI has been run compiled up to the relay call; its whole flows have been tested only
+  through the library against the Worker in vitest, not as a CLI against a running Worker.
+- Attachments: the blob routes and `sealBlob` exist; no op type names one yet.
 
 ## Open questions
 
