@@ -18,6 +18,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run test:fleet
+      - run: bun run test:e2ee
       - run: bun run build
 
   cloud:

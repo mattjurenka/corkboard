@@ -17,13 +17,18 @@
     "login": "bun bridge/cloud.ts login",
     "test:cloud": "bun test/cloud-boards.ts",
     "test:plan": "bun test/day-plan.ts",
-    "test:fleet": "bun test fleet/fleetd"
+    "test:fleet": "bun test fleet/fleetd",
+    "test:e2ee": "bun test lib/e2ee"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
     "@huggingface/transformers": "4.3.2",
     "@msgpack/msgpack": "^3.0.0",
+    "@noble/ciphers": "^2.4.0",
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
     "@pixiv/three-vrm": "3.5.5",
+    "@scure/bip39": "^2.4.0",
     "buffer": "^6.0.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
