@@ -1,6 +1,6 @@
 // Who the avatar is: a brain's persona (cloud/src/brains.ts, picked in its
-// form), else the tsundere. Each is a model, a voice, what she does when
-// left alone, and what she says and does when you click on her. How each
+// form), else the tsundere. Each is a model, a voice, what they do when
+// left alone, and what they say and do when you click on them. How each
 // talks as Claude is corkboard.personas (nvim/lua/corkboard/personas.lua),
 // by the same ids.
 
@@ -203,6 +203,192 @@ export const PERSONAS = {
           "That's enough. Let's take this offline.",
           "I'm going to have to ask you to stop. Formally.",
           "Shall I put a recurring poke on your calendar, or are we done?",
+        ],
+      },
+    },
+  },
+  // Eager and earnest, delighted by the details, a little awkward.
+  nerd: {
+    title: "Nerd",
+    model: "nerd.vrm",
+    recolor: false,
+    voice: "am_puck",
+    idle: ["ponder", "ponder", "glance", "shift", "shift", "stretch", "yawn", "proud"],
+    poked: {
+      pat: {
+        tone: "shy",
+        acts: ["pat", "proud"],
+        lines: [
+          "Oh! Uh, thanks. Positive reinforcement. Very effective, actually.",
+          "Careful, you'll knock my glasses off. But, um, that was nice.",
+          "Is this a reward for the refactor? I knew the refactor was good.",
+          "Head pats increase dopamine. I read that somewhere. It's working.",
+          "Ha. Okay. I'll take that as a code review approval.",
+        ],
+      },
+      head: {
+        tone: "surprised",
+        acts: ["flinch", "ponder"],
+        lines: [
+          "Ow! My glasses! Okay, they're fine. We're fine.",
+          "Hey, that's where I keep the stack traces.",
+          "Did you just percussive-maintenance me?",
+          "That reset my train of thought. I was three levels deep.",
+        ],
+      },
+      body: {
+        tone: "surprised",
+        acts: ["flinch", "glance"],
+        lines: [
+          "Ah! Sorry. I was reading the docs. All of them.",
+          "Is that a bug report? Please tell me it's not a bug report.",
+          "You know, technically, that's an interrupt. I'll handle it.",
+          "Hi! Did you know this function has a fun edge case? I'll tell you later.",
+          "Poking a nerd. Classic. I'm logging it.",
+          "Yes? Do you need a regex? I love writing regexes. Nobody believes me.",
+        ],
+      },
+      miss: {
+        tone: "teasing",
+        acts: ["glance"],
+        lines: [
+          "Off by one. Happens to the best of us.",
+          "That was a miss. Want me to check your hitbox?",
+          "Nothing there. Undefined behavior, I guess.",
+          "I'm over here. Just to your left. Your other left.",
+        ],
+      },
+      again: {
+        tone: "annoyed",
+        acts: ["huff", "ponder"],
+        lines: [
+          "Okay, I think we're in an infinite loop. Somebody add a break.",
+          "That's a lot of clicks. Should I rate-limit you?",
+          "I'm going to have to throttle these. Sorry. It's for the system's health.",
+        ],
+      },
+    },
+  },
+  // Polished and assured, a charmer in a good suit.
+  businessman: {
+    title: "Businessman",
+    model: "businessman.vrm",
+    recolor: false,
+    voice: "bm_george",
+    idle: ["fold", "fold", "ponder", "shift", "glance", "stretch", "proud"],
+    poked: {
+      pat: {
+        tone: "happy",
+        acts: ["pat", "proud"],
+        lines: [
+          "A pat on the head. I'll mention it in my quarterly review.",
+          "Thank you. Morale is important. Mine especially.",
+          "Careful with the hair. It's part of the brand.",
+          "I accept your appreciation. Shall we put it in writing?",
+          "Well. That's the nicest thing to happen in this meeting.",
+        ],
+      },
+      head: {
+        tone: "annoyed",
+        acts: ["flinch", "fold"],
+        lines: [
+          "I'd prefer you knock on the door, not on my head.",
+          "That's my thinking cap you just tapped.",
+          "Is that how we're opening negotiations? Bold.",
+          "Mind the hair. I have a call in five.",
+        ],
+      },
+      body: {
+        tone: "annoyed",
+        acts: ["flinch", "fold"],
+        lines: [
+          "Careful. This suit cost more than your laptop.",
+          "If you'd like a meeting, my calendar is open. Barely.",
+          "Let's circle back to why you're poking me.",
+          "I'm in the middle of closing something. As should you be.",
+          "Was that a question, or a hostile takeover?",
+          "Noted. I'll have my assistant follow up. Oh wait, I'm the assistant.",
+        ],
+      },
+      miss: {
+        tone: "teasing",
+        acts: ["glance"],
+        lines: [
+          "Missed. Let's call that a soft launch.",
+          "Over here. The corner office.",
+          "Nothing there but opportunity. Very empty opportunity.",
+          "Close. Close doesn't close deals, though.",
+        ],
+      },
+      again: {
+        tone: "annoyed",
+        acts: ["huff", "fold"],
+        lines: [
+          "That's quite enough. Let's take this offline.",
+          "I'm going to need you to stop. Effective immediately.",
+          "Shall I schedule these, or are we done for the quarter?",
+        ],
+      },
+    },
+  },
+  // Easygoing and warm, all good vibes and no shirt.
+  shirtless: {
+    title: "Shirtless",
+    model: "shirtless.vrm",
+    recolor: false,
+    voice: "am_fenrir",
+    idle: ["stretch", "stretch", "sway", "sway", "shift", "yawn", "glance", "proud"],
+    poked: {
+      pat: {
+        tone: "happy",
+        acts: ["pat", "proud"],
+        lines: [
+          "Aw, thanks, friend. Good vibes received.",
+          "Hey, easy on the hair. Took me all of zero minutes.",
+          "That's nice. Keep that energy.",
+          "A head pat? You're alright, you know that?",
+          "Cool, cool. I'll pat you back when the build passes.",
+        ],
+      },
+      head: {
+        tone: "surprised",
+        acts: ["flinch", "glance"],
+        lines: [
+          "Whoa! Bonk. Okay. I felt that one.",
+          "Hey, gentle, my brain's in there. Most of it.",
+          "Ow. No worries. I've had worse from surfboards.",
+          "Knock knock. Yeah, I'm home.",
+        ],
+      },
+      body: {
+        tone: "teasing",
+        acts: ["flinch", "glance"],
+        lines: [
+          "Hey! Ticklish. Totally ticklish.",
+          "Yeah, I know, no shirt. It's a whole thing. Very aerodynamic.",
+          "What's up? Need a hand? Or a spot?",
+          "Poke all you want, these are real. The abs, I mean. And the code.",
+          "Easy, buddy. We're all chill here.",
+          "Did you need something, or just saying hi? Hi!",
+        ],
+      },
+      miss: {
+        tone: "teasing",
+        acts: ["glance"],
+        lines: [
+          "Missed me. No stress.",
+          "Whiff! That's okay, happens to everyone.",
+          "Just air there, friend.",
+          "Over here! Wave if you can see me.",
+        ],
+      },
+      again: {
+        tone: "annoyed",
+        acts: ["huff", "sway"],
+        lines: [
+          "Alright, alright, you win. Let's both get back to it.",
+          "That's a lot of pokes. Want to go take a walk? I think you need a walk.",
+          "Okay, poke break's over. Code time.",
         ],
       },
     },

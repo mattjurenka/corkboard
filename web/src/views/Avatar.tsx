@@ -2,13 +2,13 @@
 // that says each new thing Claude says (with the mod's say tool), out loud,
 // with its words typed out under it as they're said, in Kokoro's voice,
 // pitched up. What
-// was said before the panel opened isn't said again. She's the session's
+// was said before the panel opened isn't said again. It's the session's
 // brain's persona (avatar/personas.ts): its model, voice and lines. A .vrm
-// file dropped on her is that persona's model from then on, in this
+// file dropped on it is that persona's model from then on, in this
 // browser. The models: tsundere.vrm (a blonde in a school uniform, made in
-// VRoid Studio for corkboard), bikini.vrm, and businesswoman.vrm (the same
-// girl with a suit painted on her). three.js comes with the first panel,
-// not the page.
+// VRoid Studio for corkboard), bikini.vrm, businesswoman.vrm (the same
+// girl with a suit painted on her), nerd.vrm, businessman.vrm and
+// shirtless.vrm. three.js comes with the first panel, not the page.
 
 import { useEffect, useRef, useState } from "react";
 import { Spinner } from "@/components/Spinner";

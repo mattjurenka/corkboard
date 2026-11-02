@@ -77,7 +77,7 @@ local HEARD = "The avatar panel is open on this session, so the user hears what 
   .. " Before you end your turn, call say with what you'd tell them out loud: the answer or outcome first, a few short sentences unless they ask for more,"
   .. " no markdown, lists, code, file paths, URLs or long identifiers; say what a thing is instead (\"the bridge's speech route\")."
   .. " On a long task, a few words through say now and then on what you're doing is welcome too."
-  .. " Give each say a mood that fits it; her voice and face follow it."
+  .. " Give each say a mood that fits it; the avatar's voice and face follow it."
   .. " Your reply itself is read, not heard: write it as usual."
 local speaks = chan and input.hook_event_name == "UserPromptSubmit"
   and vim.F.npcall(vim.rpcrequest, chan, "nvim_exec_lua", "return require('corkboard.avatar').heard(...)", { buf })

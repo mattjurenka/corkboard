@@ -45,7 +45,7 @@ export type Brain = {
 export const ABILITIES = ["chat"] as const;
 
 // Its avatar's persona: web/src/avatar/personas.ts and nvim/lua/corkboard/personas.lua.
-export const PERSONAS = ["tsundere", "bikini", "businesswoman"] as const;
+export const PERSONAS = ["tsundere", "bikini", "businesswoman", "nerd", "businessman", "shirtless"] as const;
 
 export const PEPPER = (at: string): Brain => ({
   id: crypto.randomUUID(),

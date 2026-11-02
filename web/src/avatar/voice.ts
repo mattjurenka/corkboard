@@ -35,7 +35,7 @@ export const isMood = (m: unknown): m is Mood => typeof m === "string" && Object
 const pause = (s: string) => (/(\.\.\.|…)$/.test(s) ? 0.6 : /\?$/.test(s) ? 0.4 : /!$/.test(s) ? 0.3 : /[.:]$/.test(s) ? 0.35 : 0.15);
 
 // Interjections said on their own, as a sentence, that are a recording:
-// one of a few takes.
+// one of a few takes. In the anime voice only: the recordings are hers.
 const RECORDED: [RegExp, string][] = [
   [/^gasps?[.!]*$/i, "gasp"],
   [/^(a?(ha){2,}|(he){2,}|(ehe)+)[.!~]*$/i, "laugh"],
@@ -229,7 +229,7 @@ async function clip(text: string, voice: string, mood: Mood | undefined, bridge:
   const parts = text.split(/(?<=[.!?…])\s+/).filter(Boolean);
   const made = await Promise.all(
     parts.map(async (s): Promise<Synth> => {
-      const rec = RECORDED.find(([re]) => re.test(s))?.[1];
+      const rec = voice === "anime" ? RECORDED.find(([re]) => re.test(s))?.[1] : undefined;
       if (rec) return recording(rec, 24000).then((samples) => ({ samples, rate: 24000 }), () => synth(respell(s), p?.voice ?? voice, (p?.speed ?? 1) * (m?.speed ?? 1), mood, bridge));
       return synth(respell(s), p?.voice ?? voice, (p?.speed ?? 1) * (m?.speed ?? 1), mood, bridge);
     }),
