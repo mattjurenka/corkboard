@@ -253,7 +253,7 @@
           nativeBuildInputs = [ pkgs.makeWrapper ];
           installPhase = ''
             mkdir -p $out/share/corkboard-app $out/share/icons/hicolor/scalable/apps $out/share/icons/hicolor/512x512/apps
-            cp app/* $out/share/corkboard-app/
+            cp app/main.js app/bridge.js app/package.json $out/share/corkboard-app/
             cp web/public/logo.svg $out/share/icons/hicolor/scalable/apps/corkboard.svg
             cp web/public/icon-512.png $out/share/icons/hicolor/512x512/apps/corkboard.png
             makeWrapper ${pkgs.lib.getExe pkgs.electron} $out/bin/corkboard-app \

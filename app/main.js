@@ -18,8 +18,14 @@
 // window list call it. Launching an app that is already running opens URL in
 // a new window of the running one; with --one (the day plan's app), it
 // brings the running one's window forward instead.
+//
+// Packaged (electron-builder.yml) and given no URL, it is the whole of
+// corkboard: it starts its own bridge (bridge.js), says so if claude or
+// git can't be found, and keeps itself up to date from GitHub's releases,
+// bar the .deb and the tarball, which their package managers update.
 
 import { app, BrowserWindow, Menu, net, session, shell } from "electron";
+import { loginPath, startBridge, which } from "./bridge.js";
 
 function parse(argv) {
   const args = { name: "corkboard", title: undefined, url: undefined, one: false };
@@ -36,8 +42,12 @@ function parse(argv) {
 // Electron's own arguments come first: the binary, and the app's path when
 // it isn't packaged.
 const args = parse(process.argv.slice(app.isPackaged ? 1 : 2));
-const URL_DEFAULT = "http://127.0.0.1:7777/";
-const ORIGIN = new URL(args.url ?? URL_DEFAULT).origin;
+// Its own bridge, when it's the packaged app with no URL given.
+const OWN = app.isPackaged && !args.url;
+// The page every new window opens: the dev bridge's, or, once it's up, the
+// app's own bridge's, with its token.
+let home = args.url ?? "http://127.0.0.1:7777/";
+let ORIGIN = new URL(home).origin;
 
 // Before anything reads them: the profile directory goes by the name, and
 // so does the single-instance lock.
@@ -66,12 +76,15 @@ const symbolFor = (hex) => {
 // The page draws where the title bar was, all but the window buttons, as an
 // installed PWA with window-controls-overlay does: Electron's overlay sets
 // the same env(titlebar-area-*) the page lays itself out by (App.tsx).
+// On macOS the traffic lights sit in it instead, inset, centred on its 32px.
+const MAC = process.platform === "darwin";
 const windowOptions = () => ({
   width: 1400,
   height: 900,
   backgroundColor: themeColor,
-  titleBarStyle: "hidden",
-  titleBarOverlay: { color: themeColor, symbolColor: symbolFor(themeColor), height: 32 },
+  titleBarStyle: MAC ? "hiddenInset" : "hidden",
+  ...(MAC ? { trafficLightPosition: { x: 12, y: 9 } } : {}),
+  titleBarOverlay: MAC ? { height: 32 } : { color: themeColor, symbolColor: symbolFor(themeColor), height: 32 },
   webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false },
 });
 
@@ -82,7 +95,7 @@ function setup(win) {
     if (!color) return;
     themeColor = color;
     win.setBackgroundColor(color);
-    win.setTitleBarOverlay({ color, symbolColor: symbolFor(color) });
+    if (!MAC) win.setTitleBarOverlay({ color, symbolColor: symbolFor(color) });
   });
 
   // Other projects and the day plan open in windows of their own (window.open
@@ -105,6 +118,9 @@ function setup(win) {
     if (sameOrigin(url)) return;
     e.preventDefault();
     if (/^(https?|mailto):/i.test(url)) shell.openExternal(url);
+    // The missing-tools page's two links.
+    else if (url === "corkboard:again") checked(win);
+    else if (url === "corkboard:anyway") win.loadURL(home);
   });
 
   wc.on("before-input-event", (e, input) => {
@@ -147,11 +163,38 @@ const errorPage = (desc, url) =>
 <pre style="margin:0;padding:1ch 2ch;border:1px solid currentColor">can't reach the bridge — reconnecting
 ${escape(desc)}  ${escape(url)}</pre>`);
 
+// Claude Code and git, which corkboard can't do without, and ripgrep, which
+// its pickers are slow without: looked for on the PATH the bridge has.
+const TOOLS = [
+  { name: "claude", need: true, url: "https://claude.com/claude-code" },
+  { name: "git", need: true, url: "https://git-scm.com/downloads" },
+  { name: "rg", need: false, url: "https://github.com/BurntSushi/ripgrep#installation" },
+];
+let path = process.env.PATH ?? "";
+const missing = () => TOOLS.filter((t) => !which(t.name, path));
+
+const toolsPage = (gone) =>
+  "data:text/html;charset=utf-8," +
+  encodeURIComponent(`<!doctype html><title>corkboard</title>
+<style>a{color:inherit}</style>
+<body style="margin:0;height:100vh;display:grid;place-items:center;background:${themeColor};color:${symbolFor(themeColor)};font:14px/1.6 monospace">
+<pre style="margin:0;padding:1ch 2ch;border:1px solid currentColor">not found
+${gone.map((t) => `  ${t.name.padEnd(7)}<a href="${t.url}">${t.url}</a>${t.need ? "" : "  (optional)"}`).join("\n")}
+
+<a href="corkboard:again">[ again ]</a>  <a href="corkboard:anyway">[ open anyway ]</a></pre>`);
+
+// The page, unless claude or git is missing, which it says instead.
+function checked(win) {
+  const gone = OWN ? missing() : [];
+  win.loadURL(gone.some((t) => t.need) ? toolsPage(gone) : home);
+}
+
 app.on("browser-window-created", (_e, win) => setup(win));
 
 function open(url) {
   const win = new BrowserWindow(windowOptions());
-  win.loadURL(url ?? URL_DEFAULT);
+  if (url) win.loadURL(url);
+  else checked(win);
 }
 
 app.on("second-instance", (_e, argv) => {
@@ -170,12 +213,56 @@ app.on("second-instance", (_e, argv) => {
 // (Neovim's "+ register, main.tsx), and only the bridge's page.
 const PERMITTED = new Set(["notifications", "clipboard-read", "clipboard-sanitized-write", "fullscreen"]);
 
-app.whenReady().then(() => {
+let bridge;
+let quitting = false;
+
+// The app's own bridge, started again if it stops on its own, a few times.
+async function own(tries = 3) {
+  bridge = await startBridge({
+    resources: process.resourcesPath,
+    profile: app.getPath("userData"),
+    path,
+    onExit: (code) => {
+      console.error(`bridge exited (${code})`);
+      if (tries > 1 && !quitting) own(tries - 1).catch((err) => console.error(err));
+    },
+  });
+  home = bridge.home;
+  ORIGIN = new URL(bridge.url).origin;
+}
+
+// AppImage, macOS and Windows; not the .deb or the tarball (AUR), which have
+// no APPIMAGE and are their package managers' to update.
+async function updates() {
+  if (process.platform === "linux" && !process.env.APPIMAGE) return;
+  try {
+    const { autoUpdater } = (await import("electron-updater")).default;
+    await autoUpdater.checkForUpdatesAndNotify();
+  } catch (err) {
+    console.error("update check:", err);
+  }
+}
+
+app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, done, details) =>
     done(PERMITTED.has(permission) && sameOrigin(details.requestingUrl)),
   );
   session.defaultSession.setPermissionCheckHandler((_wc, permission, origin) => PERMITTED.has(permission) && sameOrigin(origin));
+  if (OWN) {
+    path = loginPath();
+    try {
+      await own();
+    } catch (err) {
+      const win = new BrowserWindow(windowOptions());
+      return win.loadURL(errorPage(err.message, ""));
+    }
+    updates();
+  }
   open(args.url);
 });
 
 app.on("window-all-closed", () => app.quit());
+app.on("will-quit", () => {
+  quitting = true;
+  bridge?.stop();
+});
