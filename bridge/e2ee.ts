@@ -17,6 +17,9 @@
 //   corkboard-bridge e2ee pull-board KEY
 //                              the board from its log, decrypted and merged, as JSON
 //   corkboard-bridge e2ee status | revoke DEVICE
+//   corkboard-bridge e2ee approve-connector
+//                              a one-time code (ten minutes) for approving a connector
+//                              at this machine's node's /authorize (bridge/node/)
 //
 // The relay is CORKBOARD_CLOUD's (cloud.ts). The passphrase, when there is
 // one, is CORKBOARD_E2EE_PASSPHRASE or asked for.
@@ -36,7 +39,7 @@ import { Relay } from "../lib/e2ee/relay";
 import { Replica } from "../lib/e2ee/sync";
 import { type DeviceCert, type Signed, normalizeCode, showCode } from "../lib/e2ee/wire";
 
-const USAGE = "usage: corkboard-bridge e2ee init|recover|pair|approve CODE|push-board KEY|pull-board KEY|status|revoke DEVICE";
+const USAGE = "usage: corkboard-bridge e2ee init|recover|pair|approve CODE|push-board KEY|pull-board KEY|status|revoke DEVICE|approve-connector";
 
 function option(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -227,6 +230,7 @@ export async function cli(args: string[]) {
     "pull-board": pullBoard,
     status,
     revoke: revokeDevice,
+    "approve-connector": async () => console.log((await import("./node/serve")).approvalCode()),
   };
   const run = commands[args[0]];
   if (!run) {
