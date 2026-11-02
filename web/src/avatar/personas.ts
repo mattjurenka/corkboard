@@ -1,5 +1,5 @@
 // Who the avatar is: a brain's persona (cloud/src/brains.ts, picked in its
-// form), else the tsundere. Each is a model, a voice, what they do when
+// form), else the businesswoman. Each is a model, a voice, what they do when
 // left alone, and what they say and do when you click on them. How each
 // talks as Claude is corkboard.personas (nvim/lua/corkboard/personas.lua),
 // by the same ids.
@@ -396,7 +396,7 @@ export const PERSONAS = {
 } satisfies Record<string, Persona>;
 
 export type PersonaId = keyof typeof PERSONAS;
-export const DEFAULT: PersonaId = "tsundere";
+export const DEFAULT: PersonaId = "businesswoman";
 
 export const persona = (id?: string | null): Persona => PERSONAS[id && id in PERSONAS ? (id as PersonaId) : DEFAULT];
 

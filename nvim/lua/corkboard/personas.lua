@@ -5,7 +5,7 @@
 
 local M = {}
 
-M.DEFAULT = "tsundere"
+M.DEFAULT = "businesswoman"
 
 M.IDS = { "tsundere", "bikini", "businesswoman", "nerd", "businessman", "shirtless" }
 
