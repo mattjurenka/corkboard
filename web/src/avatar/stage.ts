@@ -92,6 +92,43 @@ function silhouette(t: THREE.Texture): THREE.Texture {
   return out;
 }
 
+// A texture with its most common colour turned to the one given, and the
+// rest moved by as much, so what's drawn on it keeps its contrast.
+function retone(t: THREE.Texture, to: THREE.Color): THREE.Texture {
+  const img = t.image as CanvasImageSource & { width: number; height: number };
+  const c = document.createElement("canvas");
+  c.width = img.width;
+  c.height = img.height;
+  const g = c.getContext("2d")!;
+  g.drawImage(img, 0, 0);
+  const data = g.getImageData(0, 0, c.width, c.height);
+  const px = data.data;
+  const counts = new Map<number, number>();
+  for (let i = 0; i < px.length; i += 4) {
+    if (px[i + 3] < 8) continue;
+    const k = ((px[i] >> 3) << 10) | ((px[i + 1] >> 3) << 5) | (px[i + 2] >> 3);
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  let mode = 0;
+  let most = 0;
+  for (const [k, n] of counts) if (n > most) [mode, most] = [k, n];
+  const base = [(mode >> 10) & 31, (mode >> 5) & 31, mode & 31].map((v) => v * 8 + 4);
+  const want = to.clone().convertLinearToSRGB();
+  const gain = [want.r, want.g, want.b].map((v, i) => (v * 255) / base[i]);
+  for (let i = 0; i < px.length; i += 4) {
+    px[i] = Math.min(255, px[i] * gain[0]);
+    px[i + 1] = Math.min(255, px[i + 1] * gain[1]);
+    px[i + 2] = Math.min(255, px[i + 2] * gain[2]);
+  }
+  g.putImageData(data, 0, 0);
+  const out = new THREE.CanvasTexture(c);
+  out.flipY = t.flipY;
+  out.colorSpace = t.colorSpace;
+  out.wrapS = t.wrapS;
+  out.wrapT = t.wrapT;
+  return out;
+}
+
 // A texture recolored from dark to light by its own lightness, the
 // darkest of it dark and the lightest light; see-through stays so.
 function recolor(t: THREE.Texture, dark: THREE.Color, light: THREE.Color): THREE.Texture {
@@ -200,8 +237,8 @@ export class Stage {
   }
 
   // The model; the sample's clothes and hair are recolored, anyone else's
-  // are as they made them.
-  async load(source: string | ArrayBuffer, sample = false) {
+  // are as they made them. Its skin is the colour given, if one is.
+  async load(source: string | ArrayBuffer, sample = false, skin?: string) {
     const loader = new GLTFLoader();
     loader.register((parser) => new VRMLoaderPlugin(parser));
     const gltf = typeof source === "string" ? await loader.loadAsync(source) : await loader.parseAsync(source, "");
@@ -213,6 +250,8 @@ export class Stage {
     // VRoid's exports ask for no mipmaps, so its 2K textures drawn a few
     // hundred pixels across shimmer and look low-resolution.
     const anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+    const tone = skin ? new THREE.Color(skin) : null;
+    const toned = new Map<unknown, THREE.Texture>();
     vrm.scene.traverse((o) => {
       o.frustumCulled = false;
       for (const m of [(o as THREE.Mesh).material ?? []].flat()) {
@@ -235,6 +274,12 @@ export class Stage {
             if (m.shadeMultiplyTexture?.source === m.map?.source) m.shadeColorFactor.copy(SKIN_SHADE);
             m.shadingShiftFactor = -0.2;
             m.normalScale.setScalar(2.5);
+          }
+          if (tone && /_SKIN/.test(m.name) && m.map) {
+            const source = m.map.source;
+            if (!toned.has(source)) toned.set(source, retone(m.map, tone));
+            if (m.shadeMultiplyTexture?.source === source) m.shadeMultiplyTexture = toned.get(source)!;
+            m.map = toned.get(source)!;
           }
           // A soft light at the silhouette's edge.
           m.parametricRimColorFactor.setRGB(0.35, 0.35, 0.4);
@@ -526,6 +571,7 @@ export class Stage {
       // An upper arm turns about itself first, so x is a twist.
       this.bone(vrm, name)?.rotation.set(ax * s, ay, az * s, name.endsWith("UpperArm") ? "YZX" : "XYZ");
     }
+    vrm.scene.position.y = (this.act?.lift ?? 0) * w;
 
     // Its eyes: the camera, or off from it wherever it's looking.
     const eyes = this.look.clone().add(this.dart).multiplyScalar(1.5);

@@ -1,6 +1,6 @@
 -- The brains (.agent/plans/brains.md, cloud/src/brains.ts): who agents work
 -- for, each with its memory's counts, its account, what it holds, its
--- abilities and its avatar's persona (corkboard.personas). The default
+-- abilities and its avatar's persona (corkboard.personas) and skin. The default
 -- one is what your own sessions remember in.
 --
 -- The view is the agent://brains buffer, fourth among the tabs after the
@@ -75,7 +75,7 @@ local function state()
     table.insert(cards, {
       name = b.name, title = b.title, description = nil_if_null(b.description), account = nil_if_null(b.account),
       default = b.default or nil, archived = nil_if_null(b.archived) and ago(b.archived) or nil,
-      credentials = list(b.credentials), abilities = list(b.abilities), persona = nil_if_null(b.persona),
+      credentials = list(b.credentials), abilities = list(b.abilities), persona = nil_if_null(b.persona), skin = nil_if_null(b.skin),
       memory = { notes = m.notes or 0, entries = m.entries or 0, episodes = m.episodes or 0, last = ago(nil_if_null(m.lastEpisode)) },
     })
   end
@@ -127,6 +127,7 @@ local function render_text()
     if #c.credentials > 0 then field("holds", table.concat(c.credentials, " ") .. "  agents need your OK to spawn it") end
     if #c.abilities > 0 then field("can", table.concat(c.abilities, " ")) end
     if c.persona then field("persona", c.persona) end
+    if c.skin then field("skin", c.skin) end
     table.insert(lines, c.archived and "    u restore · P purge" or "    <CR> open memory · e edit · d archive")
     table.insert(lines, "")
   end
@@ -156,8 +157,9 @@ function M.load()
   require("corkboard.avatar").personas_changed()
 end
 
--- A brain's persona, or the default brain's for nil (corkboard.avatar);
--- nil if it has none. The brains are asked for once if they haven't been.
+-- A brain's persona and skin, or the default brain's for nil
+-- (corkboard.avatar); nil for either it hasn't. The brains are asked for
+-- once if they haven't been.
 local asked = false
 function M.persona_of(name)
   if not brains and not asked then
@@ -168,7 +170,8 @@ function M.persona_of(name)
     if name then return x.name == name end
     return x.default == true and not nil_if_null(x.archived)
   end)
-  return b and nil_if_null(b.persona)
+  if not b then return nil end
+  return nil_if_null(b.persona), nil_if_null(b.skin)
 end
 
 local pending = false
@@ -208,7 +211,7 @@ end
 -- A brain as lines, `key: value`, lists comma-separated, the description
 -- last and as long as it likes. :w makes it (a new one) or changes it.
 
-local FIELDS = { "name", "title", "account", "persona", "default", "credentials", "abilities" }
+local FIELDS = { "name", "title", "account", "persona", "skin", "default", "credentials", "abilities" }
 
 local function to_lines(b)
   local out = {}
@@ -240,6 +243,7 @@ local function from_lines(lines)
   local out = { name = b.name, title = b.title, description = vim.trim(table.concat(desc, "\n")) }
   out.account = (b.account and b.account ~= "") and b.account or vim.NIL
   out.persona = (b.persona and b.persona ~= "") and b.persona or vim.NIL
+  out.skin = (b.skin and b.skin ~= "") and b.skin or vim.NIL
   out.default = b.default == "true"
   for _, k in ipairs({ "credentials", "abilities" }) do
     out[k] = vim.iter(vim.split(b[k] or "", ",")):map(vim.trim):filter(function(x) return x ~= "" end):totable()
@@ -295,7 +299,7 @@ local ABILITIES = { "chat" }
 local function fields(b)
   return {
     name = b.name, title = b.title, description = nil_if_null(b.description) or "", account = nil_if_null(b.account),
-    credentials = list(b.credentials), abilities = list(b.abilities), persona = nil_if_null(b.persona), default = b.default == true,
+    credentials = list(b.credentials), abilities = list(b.abilities), persona = nil_if_null(b.persona), skin = nil_if_null(b.skin), default = b.default == true,
     updated = nil_if_null(b.updated),
   }
 end

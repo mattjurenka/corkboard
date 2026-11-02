@@ -17,6 +17,7 @@ local KEEP = 20
 local TEXT = 4000
 local TAIL = 256 * 1024
 local SAY = "mcp__corkboard-ui__say"
+local EMOTE = "mcp__corkboard-ui__emote"
 
 local panels = {} -- session buffer -> { buf, timer, path, offset, rest, said, muted, skip }
 
@@ -29,16 +30,20 @@ local function session_in_tab()
   end
 end
 
--- What Claude said in one record of the log: its calls to say, not a
--- subagent's.
+-- What Claude said in one record of the log: its calls to say, and to
+-- emote (an act, no words), not a subagent's.
 local function said(line)
   local ok, r = pcall(vim.json.decode, line, { luanil = { object = true, array = true } })
   if not ok or type(r) ~= "table" or r.type ~= "assistant" or r.isSidechain or type(r.message) ~= "table" then return {} end
   local out = {}
   for i, b in ipairs(type(r.message.content) == "table" and r.message.content or {}) do
-    local text = type(b) == "table" and b.type == "tool_use" and b.name == SAY and type(b.input) == "table" and b.input.text
+    local call = type(b) == "table" and b.type == "tool_use" and type(b.input) == "table"
+    local text = call and b.name == SAY and b.input.text
     text = type(text) == "string" and vim.trim(text) or ""
-    if text ~= "" then
+    local emote = call and b.name == EMOTE and b.input.emote
+    if type(emote) == "string" and emote ~= "" then
+      table.insert(out, { id = b.id or ("%s:%d"):format(r.uuid or "", i), emote = emote })
+    elseif text ~= "" then
       local mood = type(b.input.mood) == "string" and b.input.mood or nil
       table.insert(out, { id = b.id or ("%s:%d"):format(r.uuid or "", i), text = text:sub(1, TEXT), mood = mood })
     end
@@ -53,6 +58,12 @@ local function persona(src)
   return require("corkboard.personas").id(ok and id or nil)
 end
 
+-- Its skin colour, if its brain gives one.
+local function skin(src)
+  local ok, _, colour = pcall(require("corkboard.brains").persona_of, vim.b[src].corkboard_brain)
+  return ok and colour or nil
+end
+
 local function push(src)
   local a = panels[src]
   if not a then return end
@@ -62,6 +73,7 @@ local function push(src)
     muted = a.muted,
     skip = a.skip,
     persona = persona(src),
+    skin = skin(src),
   })
 end
 

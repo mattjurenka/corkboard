@@ -7,7 +7,7 @@
 //
 //   GET    /api/brains                  every brain, each with its memory's counts; ?archived=1 too
 //   POST   /api/brains                  { name, title, description?, account?, credentials?,
-//                                          abilities?, persona?, default? }
+//                                          abilities?, persona?, skin?, default? }
 //   GET    /api/brains/:name
 //   PATCH  /api/brains/:name            { updated, ...fields }: 409 + the brain on a stale updated
 //   DELETE /api/brains/:name            archive it: out of lists, spawns and grants, its memory kept;
@@ -35,6 +35,8 @@ export type Brain = {
   abilities: string[];
   // Who its sessions' avatar is (web/src/avatar/personas.ts), or the default one.
   persona: string | null;
+  // Its avatar's skin, #rrggbb, or the model's own.
+  skin: string | null;
   default: boolean;
   created: string;
   updated: string;
@@ -56,6 +58,7 @@ export const PEPPER = (at: string): Brain => ({
   credentials: ["google", "corkboard"],
   abilities: ["chat"],
   persona: null,
+  skin: null,
   default: true,
   created: at,
   updated: at,
@@ -97,6 +100,10 @@ export function fieldsOf(input: Record<string, unknown>): Partial<Brain> {
     if (input.persona !== null && !(PERSONAS as readonly unknown[]).includes(input.persona)) throw new Invalid(`persona must be one of ${PERSONAS.join(", ")}, or null`);
     f.persona = input.persona as string | null;
   }
+  if (input.skin !== undefined) {
+    if (input.skin !== null && (typeof input.skin !== "string" || !/^#[0-9a-f]{6}$/.test(input.skin))) throw new Invalid("skin must be a colour, #rrggbb, or null");
+    f.skin = input.skin as string | null;
+  }
   if (input.default !== undefined) {
     if (typeof input.default !== "boolean") throw new Invalid("default must be true or false");
     f.default = input.default;
@@ -105,17 +112,17 @@ export function fieldsOf(input: Record<string, unknown>): Partial<Brain> {
 }
 
 // A brain as the user's object keeps it, less the egress one made before
-// every slot was open had, and with no persona if one made before them.
+// every slot was open had, and with no persona or skin if made before them.
 export function brainOf(doc: string): Brain {
   const { egress: _, ...b } = JSON.parse(doc) as Brain & { egress?: string[] };
-  return { ...b, persona: b.persona ?? null };
+  return { ...b, persona: b.persona ?? null, skin: b.skin ?? null };
 }
 
 export function create(input: Record<string, unknown>, at = now()): Brain {
   if (typeof input.name !== "string" || !NAME.test(input.name)) throw new Invalid("name must be lowercase letters, digits and -, starting with a letter, at most 32");
   const f = fieldsOf(input);
   if (!f.title) throw new Invalid("a brain needs a title");
-  return { id: crypto.randomUUID(), name: input.name, description: "", account: null, credentials: [], abilities: [], persona: null, default: false, ...f, title: f.title, created: at, updated: at };
+  return { id: crypto.randomUUID(), name: input.name, description: "", account: null, credentials: [], abilities: [], persona: null, skin: null, default: false, ...f, title: f.title, created: at, updated: at };
 }
 
 // A brain token's brain, as a grant says it, if it's there and not archived.

@@ -73,6 +73,15 @@ describe("brains", () => {
     expect(cleared.body.persona).toBeNull();
   });
 
+  it("have a skin colour, or the model's own", async () => {
+    const made = await send("POST", "/api/brains", { name: "tan", title: "Tan", skin: "#c68a5e" });
+    expect(made.body.skin).toBe("#c68a5e");
+    expect((await send("GET", "/api/brains/pepper")).body.skin).toBeNull();
+    expect((await send("POST", "/api/brains", { name: "y", title: "y", skin: "brown" })).status).toBe(400);
+    const cleared = await send("PATCH", "/api/brains/tan", { updated: made.body.updated, skin: null });
+    expect(cleared.body.skin).toBeNull();
+  });
+
   it("have one default, which your own sessions remember in", async () => {
     const made = (await send("POST", "/api/brains", { name: "work", title: "Stable", default: true })).body;
     expect((await send("GET", "/api/brains/pepper")).body.default).toBe(false);

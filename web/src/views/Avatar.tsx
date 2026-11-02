@@ -13,14 +13,16 @@
 import { useEffect, useRef, useState } from "react";
 import { Spinner } from "@/components/Spinner";
 import { cn } from "@/lib/utils";
-import { persona as personaOf, line as quip, type Poked } from "@/avatar/personas";
+import { persona as personaOf, POKED, line as quip, upcoming, type Poked } from "@/avatar/personas";
+import { ACTS, type ActName } from "@/avatar/acts";
 import type { Mood, Stage } from "@/avatar/stage";
 import { isMood, Voice } from "@/avatar/voice";
 import { useNvim } from "@/nvim/context";
 import type { ViewProps } from "./index";
 
-type Said = { id: string; text: string; mood?: string };
-type AvatarState = { said?: Said[]; state?: string; muted?: boolean; skip?: number; persona?: string };
+// A thing said, or (emote) done.
+type Said = { id: string; text?: string; mood?: string; emote?: string };
+type AvatarState = { said?: Said[]; state?: string; muted?: boolean; skip?: number; persona?: string; skin?: string };
 
 const mood = (state?: string): Mood =>
   state === "working" || state === "starting" || state === "background" ? "thinking" : state === "asking" || state === "permission" ? "asking" : "idle";
@@ -79,18 +81,19 @@ export function Avatar({ state }: ViewProps<AvatarState>) {
     const key = `vrm:${persona.title}`;
     voice.current!.voice = persona.voice;
     s.idle = persona.idle;
+    for (const k of POKED) voice.current!.warm(upcoming(persona, k), persona.poked[k].tone);
     setLoading(true);
     setError("");
     loads.current = loads.current.then(async () => {
       try {
         const own = await saved(key);
-        await (own ? s.load(own) : s.load(new URL(persona.model, location.href).href, persona.recolor));
+        await (own ? s.load(own, false, state.skin) : s.load(new URL(persona.model, location.href).href, persona.recolor, state.skin));
       } catch (e) {
         setError(String((e as Error).message ?? e));
       }
       setLoading(false);
     });
-  }, [ready, persona]);
+  }, [ready, persona, state.skin]);
 
   // Each new thing said, said.
   useEffect(() => {
@@ -99,11 +102,16 @@ export function Avatar({ state }: ViewProps<AvatarState>) {
       seen.current = new Set(said.map((s) => s.id));
       return;
     }
+    const acts: ActName[] = [];
     for (const s of said) {
       if (seen.current.has(s.id)) continue;
       seen.current.add(s.id);
-      voice.current!.say(s.text, s.id, isMood(s.mood) ? s.mood : undefined);
+      if (s.emote) {
+        if (s.emote in ACTS) acts.push(s.emote as ActName);
+      } else if (s.text) voice.current!.say(s.text, s.id, isMood(s.mood) ? s.mood : undefined);
     }
+    // Several at once, one after another.
+    if (acts.length) stage.current?.play(...acts);
   }, [state.said]);
 
   useEffect(() => {
@@ -150,10 +158,13 @@ export function Avatar({ state }: ViewProps<AvatarState>) {
     const r = canvas.current!.getBoundingClientRect();
     return { x: ((e.clientX - r.left) / r.width) * 2 - 1, y: -((e.clientY - r.top) / r.height) * 2 + 1 };
   };
-  // Unless she's busy saying something, she says so.
+  // Unless she's busy saying something, she says so, as she starts to
+  // react; the next line for it is made ready.
   const say = (poked: Poked, now: number) => {
     const v = voice.current!;
-    if (!v.speaking) v.say(quip(persona, poked), `poke:${now}`, persona.poked[poked].tone);
+    if (v.speaking) return;
+    v.say(quip(persona, poked), `poke:${now}`, persona.poked[poked].tone);
+    v.warm(upcoming(persona, poked), persona.poked[poked].tone);
   };
   const down = (e: React.PointerEvent) => {
     if (e.button !== 0 || !stage.current) return;

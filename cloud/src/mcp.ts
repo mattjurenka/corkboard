@@ -545,6 +545,7 @@ const BRAIN_FIELDS = {
   credentials: strings("What it holds, as labels (github, google): a brain spawning with any waits for the user"),
   abilities: strings("Tools beyond memory: chat (the chat with the user)"),
   persona: str("Who its sessions' avatar is: tsundere, bikini, businesswoman, nerd, businessman or shirtless"),
+  skin: str("Its avatar's skin colour, #rrggbb, or null for the model's own"),
   default: { type: "boolean", description: "The brain the user's own sessions remember in" },
 };
 const brainValue = <T>(r: Result<T>): T => {

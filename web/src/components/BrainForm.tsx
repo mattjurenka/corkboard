@@ -14,7 +14,9 @@ import { PERSONAS } from "@/avatar/personas";
 
 type Draft = Omit<BrainFields, "updated">;
 
-const BLANK: Draft = { name: "", title: "", description: "", account: null, credentials: [], abilities: [], persona: null, default: false };
+// The avatar's skin tones; none is the model's own.
+const SKINS = { porcelain: "#f7e1d3", fair: "#efc9ad", light: "#e0ac87", tan: "#c68a5e", brown: "#9a6440", deep: "#5e3b26" };
+const BLANK: Draft = { name: "", title: "", description: "", account: null, credentials: [], abilities: [], persona: null, skin: null, default: false };
 const LABEL = /^[\w.-]{1,64}$/;
 
 // A title as a name: lowercase, dashes, starting with a letter, at most 32.
@@ -61,7 +63,7 @@ export function BrainForm() {
   };
   const start = (b: BrainFields | null) => {
     setFrom(b?.name ?? null);
-    set({ account: b?.account ?? null, credentials: b?.credentials ?? [], abilities: b?.abilities ?? [], persona: b?.persona ?? null });
+    set({ account: b?.account ?? null, credentials: b?.credentials ?? [], abilities: b?.abilities ?? [], persona: b?.persona ?? null, skin: b?.skin ?? null });
   };
   const save = async () => {
     if (busy || !d.title.trim() || (!base && !d.name)) return;
@@ -205,6 +207,18 @@ export function BrainForm() {
               <Tag on={!d.persona} mark={!d.persona ? "●" : "○"} onClick={() => set({ persona: null })}>
                 default
               </Tag>
+            </div>
+
+            <span className="text-muted-foreground">skin</span>
+            <div className="flex flex-wrap gap-x-2ch gap-y-half">
+              <Tag on={!d.skin} mark={!d.skin ? "●" : "○"} onClick={() => set({ skin: null })}>
+                as made
+              </Tag>
+              {Object.entries(SKINS).map(([name, hex]) => (
+                <Tag key={hex} on={d.skin === hex} mark={d.skin === hex ? "●" : "○"} onClick={() => set({ skin: hex })}>
+                  <span style={{ color: hex }}>██</span> {name}
+                </Tag>
+              ))}
             </div>
 
             <span className="text-muted-foreground">can</span>

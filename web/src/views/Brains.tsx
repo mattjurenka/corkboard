@@ -20,6 +20,7 @@ type Card = {
   credentials: string[];
   abilities: string[];
   persona?: string;
+  skin?: string;
   memory: { notes: number; entries: number; episodes: number; last?: string };
 };
 type BrainsState = { cards: Card[]; selected?: string; asking?: { name: string }; problem?: string; loading?: boolean };
@@ -146,6 +147,11 @@ function BrainCard({
           </Field>
         )}
         {c.persona && <Field label="persona">{c.persona}</Field>}
+        {c.skin && (
+          <Field label="skin">
+            <span style={{ color: c.skin }}>██</span> {c.skin}
+          </Field>
+        )}
       </dl>
       <p className="mt-half flex flex-wrap gap-x-2ch border-t pt-half">
         {c.archived ? (

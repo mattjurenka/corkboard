@@ -22,6 +22,7 @@ export type BrainFields = {
   credentials: string[];
   abilities: string[];
   persona: string | null;
+  skin: string | null;
   default: boolean;
   updated?: string;
 };
