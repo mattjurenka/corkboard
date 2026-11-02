@@ -11,7 +11,9 @@ import {
   type Challenge,
   type Creation,
   type DeviceCert,
+  type Grant,
   type Revocation,
+  type Rotation,
   type Signed,
   b64url,
   certBytes,
@@ -20,7 +22,9 @@ import {
   fromB64url,
   isCert,
   isRevocation,
+  grantBytes,
   revocationBytes,
+  rotationBytes,
 } from "./wire";
 
 export type Device = { id: string; sign: KeyPair; box: KeyPair };
@@ -72,4 +76,13 @@ export function checkCert(account: string, cert: Signed<DeviceCert>, revoked: It
   if (!verify(account, certBytes(cert.body), cert.sig)) return "certificate isn't signed by the account";
   for (const r of revoked) if (isRevocation(r.body) && r.body.account === account && r.body.device === cert.body.device && verify(account, revocationBytes(r.body), r.sig)) return "device is revoked";
   return null;
+}
+
+// Sharing and rotation (sharing.ts): the account key's word, as above.
+export function signGrant(account: AccountKeys, body: Grant): Signed<Grant> {
+  return { body, sig: sign(account.sign, grantBytes(body)) };
+}
+
+export function signRotation(account: AccountKeys, body: Rotation): Signed<Rotation> {
+  return { body, sig: sign(account.sign, rotationBytes(body)) };
 }

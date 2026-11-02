@@ -101,8 +101,47 @@ export const showCode = (c: string) => `${c.slice(0, 5)}-${c.slice(5)}`;
 // An op as the relay keeps and serves it. seq is the device's own count, so
 // a reader can tell when a device's ops are missing; pos is the relay's
 // order, which is what `since` counts in.
-export type WireOp = { id: string; device: string; seq: number; pos: number; nonce: string; ciphertext: string; ts: string };
-export type NewOp = { id: string; seq: number; nonce: string; ciphertext: string };
+// epoch: which of the object's keys sealed it (absent, 0).
+export type WireOp = { id: string; device: string; seq: number; pos: number; epoch?: number; nonce: string; ciphertext: string; ts: string };
+export type NewOp = { id: string; seq: number; epoch?: number; nonce: string; ciphertext: string };
+
+// A log's merged state up to pos upTo, which the ops at or before it are
+// replaced by. Only the owner makes one.
+export type Snapshot = { upTo: number; epoch: number; nonce: string; ciphertext: string };
+export type LogRead = { ops: WireOp[]; head: number; epoch: number; count: number; bytes: number; snapshot?: Snapshot };
+
+// Sharing: the owner's word that a member may read (or write) an object,
+// and the hash of the sealed box carrying its key to them, since a sealed
+// box says nothing of who sealed it.
+export type Role = "read" | "write";
+export type Grant = { v: 1; owner: string; object: string; member: string; role: Role; epoch: number; wrapped: string; at: number };
+// The account's key changing: signed by the key before it. account is the
+// account's id (its first key), which never changes.
+export type Rotation = { v: 1; account: string; from: string; to: string; box: string; at: number };
+
+export const ROLES: Role[] = ["read", "write"];
+
+export function isGrant(g: unknown): g is Grant {
+  const o = g as Grant;
+  return (
+    !!o && o.v === 1 && KEY.test(o.owner) && OPAQUE.test(o.object) && KEY.test(o.member) && ROLES.includes(o.role) && Number.isSafeInteger(o.epoch) && o.epoch >= 0 && KEY.test(o.wrapped) && Number.isSafeInteger(o.at)
+  );
+}
+export function isRotation(r: unknown): r is Rotation {
+  const o = r as Rotation;
+  return !!o && o.v === 1 && KEY.test(o.account) && KEY.test(o.from) && KEY.test(o.to) && KEY.test(o.box) && o.from !== o.to && Number.isSafeInteger(o.at);
+}
+
+export const grantBytes = (g: Grant) => signed("grant", g);
+export const rotationBytes = (r: Rotation) => signed("rotation", r);
+
+// An account as the relay shows it to anyone: its id, its key and box key
+// now, and the signed statements that get from the id to them.
+export type AccountView = { id: string; key: string; box: string; proof: { creation: Signed<Creation>; rotations: Signed<Rotation>[] } };
+
+// What a device whose cert stopped counting gets after a rotation: the
+// account's rotations, its new cert, and the new root sealed to its box key.
+export type Rotated = { rotations: Signed<Rotation>[]; cert: Signed<DeviceCert>; root: string };
 
 // Limits the relay holds clients to (cloud/src/log.ts).
 export const LIMITS = {
@@ -117,4 +156,11 @@ export const LIMITS = {
   read: 500,
   // An encrypted attachment.
   blob: 25 * 1024 * 1024,
+  // A snapshot's ciphertext.
+  snapshot: 16 * 1024 * 1024,
+  // When a log is worth compacting: ops, or bytes, kept since its snapshot.
+  compactOps: 2000,
+  compactBytes: 8 * 1024 * 1024,
+  // Members of one object.
+  members: 100,
 };

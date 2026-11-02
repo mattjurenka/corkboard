@@ -28,7 +28,8 @@ export type BoardState = { cards: Record<string, CardState>; clock: number };
 
 export const empty = (): BoardState => ({ cards: {}, clock: 0 });
 
-const CARD = /^[\w.-]{1,64}$/;
+// A record's id: a card's, or a brain's note:<id> and entry:<id>.
+const CARD = /^[\w.:-]{1,64}$/;
 
 // Applies one op (opened, with its id); false if it's not one this
 // understands, which is skipped, not fatal: a newer client may write more.
@@ -37,6 +38,9 @@ export function apply(state: BoardState, id: string, op: Op): boolean {
   if (op?.v !== 1 || !Number.isSafeInteger(op.clock) || op.clock < 0 || typeof op.device !== "string" || !c || typeof c.card !== "string" || !CARD.test(c.card)) return false;
   const stamp: Stamp = { clock: op.clock, device: op.device, op: id };
   state.clock = Math.max(state.clock, op.clock);
+  // Setting nothing makes no record: what a fresh log's first op is, to
+  // give a snapshot a position to cover (Replica.seed).
+  if (c.t === "card" && c.set && typeof c.set === "object" && !Object.keys(c.set).length) return true;
   const card = (state.cards[c.card] ??= { fields: {}, log: {} });
   if (c.t === "card") {
     if (!c.set || typeof c.set !== "object") return false;

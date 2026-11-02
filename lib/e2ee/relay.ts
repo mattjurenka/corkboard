@@ -7,23 +7,32 @@
 //   POST /e2ee/revoke             { revocation }: the account key's own signature is the auth
 //   GET  /e2ee/revoked            the account's revocations, for its devices to check
 //   /e2ee/pair...                 pairing mailboxes (pairing.ts)
-//   POST /e2ee/log/:object        { ops: NewOp[] }: { ops: [{ id, pos }] }
-//   GET  /e2ee/log/:object        ?since=&limit=: { ops: WireOp[], head }
-//   GET  /e2ee/log/:object/live   WebSocket, ?since=: { ops } messages, catch-up first
+//   GET  /e2ee/accounts/:id       anyone's public keys, with the proof they're the id's (AccountView)
+//   POST /e2ee/rotate             { rotation, certs, roots }: the account onto a new key
+//   POST /e2ee/rotated            { account, device }: a device's way onto it (Rotated)
+//   POST /e2ee/log/:object        { ops: NewOp[] }: { ops: [{ id, pos }] }; 409 { epoch } on a stale one
+//   GET  /e2ee/log/:object        ?since=&limit=: LogRead
+//   GET  /e2ee/log/:object/live   WebSocket, ?since=: { ops } and { snapshot } messages, catch-up first
+//   POST /e2ee/log/:object/snapshot   Snapshot (the owner's)
+//   DELETE /e2ee/log/:object      the whole log (the owner's)
+//   ?owner=<account id> on any of the log's: a log shared with this account by its owner
+//   POST /e2ee/grants             { grant, sealed }; DELETE /e2ee/grants/:object/:member
+//   GET  /e2ee/grants?object=     an object's grants (the owner's); GET /e2ee/shared, those to me
 //   PUT  /e2ee/blob/:id           an encrypted attachment; GET it back
 //
-// Everything but accounts, challenges, revocations and the new device's
+// Everything but accounts, challenges, revocations, rotated and the new device's
 // side of pairing wants a token from /e2ee/token, as a bearer (or, for a
 // browser's socket, the corkboard.bearer.<base64url> subprotocol). A token
 // that's expired or refused is got again, once, from the device's keys.
 
 import { answer, type Device } from "./device";
 import type { Delivery, MailboxView, PairTransport } from "./pairing";
-import type { LogTransport } from "./sync";
-import type { Creation, DeviceCert, NewOp, Revocation, Signed, WireOp } from "./wire";
+import { EpochChanged, type LogTransport } from "./sync";
+import type { AccountView, Creation, DeviceCert, Grant, LogRead, NewOp, Revocation, Rotated, Rotation, Signed, Snapshot, WireOp } from "./wire";
 import { b64url, utf8 } from "./wire";
 
-export type Token = { token: string; expires: number };
+// account: the account's id, which after a rotation is no longer the key its certs name.
+export type Token = { token: string; expires: number; account?: string };
 
 // fetch as the relay is called with it: a test's Worker, or the real one.
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -32,6 +41,7 @@ export class RelayError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly body: Record<string, unknown> = {},
   ) {
     super(message);
   }
@@ -57,8 +67,16 @@ export class Relay implements PairTransport, LogTransport {
     this.f = o.fetch ?? ((input, init) => fetch(input, init));
   }
 
+  // The account's id: what the relay last said, or before a rotation, the
+  // key its cert names, which is the same.
   get account() {
-    return this.o.cert?.body.account;
+    return this.o.token?.account ?? this.o.cert?.body.account;
+  }
+
+  // A new cert (after a rotation): the next call signs in with it.
+  useCert(cert: Signed<DeviceCert>) {
+    this.o.cert = cert;
+    this.o.token = undefined;
   }
 
   private async call<T>(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<T> {
@@ -68,7 +86,7 @@ export class Relay implements PairTransport, LogTransport {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const json = (await res.json().catch(() => ({}))) as { error?: string };
-    if (!res.ok) throw new RelayError(res.status, `${method} ${path}: ${json.error ?? res.status}`);
+    if (!res.ok) throw new RelayError(res.status, `${method} ${path}: ${json.error ?? res.status}`, json);
     return json as T;
   }
 
@@ -137,18 +155,78 @@ export class Relay implements PairTransport, LogTransport {
     else await this.authed("POST", `/e2ee/pair/${code}/cancel`, {});
   }
 
-  // Logs -------------------------------------------------------------------------
+  // Accounts' keys, rotation ---------------------------------------------------
 
-  async append(object: string, ops: NewOp[]) {
-    return (await this.authed<{ ops: { id: string; pos: number }[] }>("POST", `/e2ee/log/${object}`, { ops })).ops;
+  accountView(id: string) {
+    return this.call<AccountView>("GET", `/e2ee/accounts/${id}`);
   }
 
-  read(object: string, since: number, limit?: number) {
-    return this.authed<{ ops: WireOp[]; head: number }>("GET", `/e2ee/log/${object}?since=${since}${limit ? `&limit=${limit}` : ""}`);
+  rotate(rotation: Signed<Rotation>, certs: Signed<DeviceCert>[], roots: Record<string, string>) {
+    return this.authed<{ ok: true }>("POST", "/e2ee/rotate", { rotation, certs, roots });
+  }
+
+  rotated(account: string, device: string) {
+    return this.call<Rotated>("POST", "/e2ee/rotated", { account, device });
+  }
+
+  // Sharing ----------------------------------------------------------------------
+
+  grant(grant: Signed<Grant>, sealed: string) {
+    return this.authed<{ ok: true }>("POST", "/e2ee/grants", { grant, sealed });
+  }
+  ungrant(object: string, member: string) {
+    return this.authed<{ ok: true }>("DELETE", `/e2ee/grants/${object}/${member}`);
+  }
+  grants(object: string) {
+    return this.authed<{ grant: Signed<Grant>; sealed: string }[]>("GET", `/e2ee/grants?object=${object}`);
+  }
+  shared() {
+    return this.authed<{ grant: Signed<Grant>; sealed: string }[]>("GET", "/e2ee/shared");
+  }
+
+  // Logs -------------------------------------------------------------------------
+
+  // This account's own logs, or with owner, one another account shares.
+  private logPath(object: string, rest = "", owner?: string, query: Record<string, string | number | undefined> = {}) {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries({ ...query, owner })) if (v !== undefined) q.set(k, String(v));
+    const s = q.toString();
+    return `/e2ee/log/${object}${rest}${s ? `?${s}` : ""}`;
+  }
+
+  async append(object: string, ops: NewOp[], owner?: string) {
+    try {
+      return (await this.authed<{ ops: { id: string; pos: number }[] }>("POST", this.logPath(object, "", owner), { ops })).ops;
+    } catch (e) {
+      if (e instanceof RelayError && e.status === 409 && typeof e.body.epoch === "number") throw new EpochChanged(e.body.epoch);
+      throw e;
+    }
+  }
+
+  read(object: string, since: number, limit?: number, owner?: string) {
+    return this.authed<LogRead>("GET", this.logPath(object, "", owner, { since, limit }));
+  }
+
+  async snapshot(object: string, s: Snapshot) {
+    await this.authed("POST", this.logPath(object, "/snapshot"), s);
+  }
+
+  async deleteLog(object: string) {
+    await this.authed("DELETE", this.logPath(object));
+  }
+
+  // A log shared with this account, as a replica's transport: the owner's
+  // log, which only the owner compacts.
+  shares(owner: string): LogTransport {
+    return {
+      append: (object, ops) => this.append(object, ops, owner),
+      read: (object, since, limit) => this.read(object, since, limit, owner),
+      subscribe: (object, since, on) => this.subscribe(object, since, on, owner),
+    };
   }
 
   // Reconnects after a drop, from the last op it saw, until stopped.
-  subscribe(object: string, since: number, on: (ops: WireOp[]) => void): () => void {
+  subscribe(object: string, since: number, on: (ops: WireOp[], snapshot?: Snapshot) => void, owner?: string): () => void {
     let stopped = false;
     let ws: WebSocket | undefined;
     let cursor = since;
@@ -157,13 +235,13 @@ export class Relay implements PairTransport, LogTransport {
       if (stopped) return;
       const t = await this.token().catch(() => undefined);
       if (!t) return void setTimeout(connect, 5000);
-      const url = `${this.origin.replace(/^http/, "ws")}/e2ee/log/${object}/live?since=${cursor}`;
+      const url = `${this.origin.replace(/^http/, "ws")}${this.logPath(object, "/live", owner, { since: cursor })}`;
       ws = make(url, ["corkboard", `corkboard.bearer.${b64url(utf8(t))}`]);
       ws.addEventListener("message", (e: MessageEvent) => {
-        const m = JSON.parse(String(e.data)) as { ops?: WireOp[] };
-        if (!m.ops?.length) return;
-        cursor = Math.max(cursor, ...m.ops.map((o) => o.pos));
-        on(m.ops);
+        const m = JSON.parse(String(e.data)) as { ops?: WireOp[]; snapshot?: Snapshot };
+        if (!m.ops?.length && !m.snapshot) return;
+        cursor = Math.max(cursor, m.snapshot?.upTo ?? 0, ...(m.ops ?? []).map((o) => o.pos));
+        on(m.ops ?? [], m.snapshot);
       });
       ws.addEventListener("close", () => void (stopped || setTimeout(connect, 2000)));
     };

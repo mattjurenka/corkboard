@@ -12,3 +12,4 @@ export * from "./pairing";
 export * from "./merge";
 export * from "./sync";
 export * from "./relay";
+export * from "./sharing";

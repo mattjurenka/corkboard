@@ -168,10 +168,192 @@ encrypted side yet but `corkboard-bridge e2ee`.
   through the library against the Worker in vitest, not as a CLI against a running Worker.
 - Attachments: the blob routes and `sealBlob` exist; no op type names one yet.
 
+## Next: compaction, sharing, rotation (2026-11-02, being built)
+
+The wire additions, which every client (bridge, page, Android) speaks. All of
+it is still ciphertext to the relay; what it learns new is who shares an
+object with whom.
+
+### Records are generic
+
+`merge.ts`'s cards are records: an id, fields that are last-write-wins, and a
+log that only grows. A board's records are its cards; a brain's are `brain`
+(its settings), `note:<id>` (title, kind, body) and `entry:<id>` (at, day,
+who, text). The op format doesn't change (`{ t: "card" | "log", card, ... }`;
+`card` is the record id, `[\w.:-]{1,64}`).
+
+### The index
+
+Each account has one object of kind `index` (name `""`, its id and key
+derived from the root like any other's): a record per object the account
+has, id = the object's id, fields `{ kind, name, epoch, key? }`. `key` is
+there when the object's key isn't derived from this root (a random key,
+after sharing or rotation). Clients write an index record for each object
+they first push; rotation and the node read it to find everything.
+
+### Compaction: snapshots
+
+A snapshot is the merged state (`BoardState`, stamps and all, so merging
+continues) as one record, sealed under the object's key with AAD
+`aad(object, "snapshot:<epoch>:<upTo>")`, `upTo` being the last `pos` it
+covers.
+
+- `POST /e2ee/log/:object/snapshot { upTo, epoch, nonce, ciphertext }`, owner
+  only: the relay keeps it (in parts, under SQLite's 2 MB a value), deletes
+  ops with `pos <= upTo` (keeping their ids, so a repeated push of one is
+  still answered with its old position, not appended again) and counts the
+  log's bytes again. `upTo` must be ≤ head and above the last snapshot's;
+  a snapshot that raises the epoch must be at the head (409 otherwise: read
+  and try again). `LIMITS.snapshot` = 16 MiB.
+- `GET /e2ee/log/:object?since=` answers `{ ops, head, epoch, count, bytes }`
+  and, when `since < snapshot.upTo`, `snapshot: { upTo, epoch, nonce,
+  ciphertext }` with the ops after `upTo`. `count` and `bytes` are the ops
+  kept since the snapshot. The socket's catch-up sends `{ snapshot }` first
+  the same way.
+- A replica given a snapshot past its cursor takes the snapshot's state,
+  applies its own outbox's ops again (opened from the outbox), and carries
+  on from `upTo`.
+- The owner's clients compact when a read says more than 2000 ops or
+  8 MiB are kept since the snapshot; the node does it as it syncs.
+
+### Epochs
+
+Every op carries `epoch` (NewOp/WireOp; absent = 0). The relay keeps the
+log's epoch (raised only by a snapshot) and refuses a push under another
+(409 `{ error, epoch }`); the client gets the key for the new epoch, opens
+its outbox under the old one, seals it again under the new, and pushes.
+Epoch 0 of an object whose index entry has no `key` uses the derived key.
+
+### Sharing (brains first)
+
+An object is shared by its owner with another account, read or write.
+
+- An account's public keys: `GET /e2ee/accounts/:id` → `{ id, key, box,
+  proof }`, `proof` being its signed creation and each rotation since, so a
+  client checks the box key it seals to chains to the id it was given
+  (which the person got from the member out of band: `e2ee status` shows it).
+- Sharing first moves the object to a random key at the next epoch (a
+  snapshot at the head under it) if it's still on its derived one, so the
+  owner's rotation never has to change a shared object's id.
+- A grant, signed by the owner's current account key:
+  `{ v: 1, owner, object, member, role: "read" | "write", epoch, wrapped, at }`,
+  `wrapped` being the base64url SHA-256 of the sealed box (to the member's
+  box key) of `{ v: 1, owner, object, kind, name, epoch, key }`. Signing the
+  hash stops the relay swapping in a sealed box of its own (they're
+  anonymous). `POST /e2ee/grants { grant, sealed }`; a newer grant for the
+  same member replaces the last.
+- `DELETE /e2ee/grants/:object/:member` (owner) ends one; the owner then
+  rekeys: a new random key, a snapshot at the head under the next epoch,
+  and fresh grants to everyone left. What the removed member had, they keep.
+- `GET /e2ee/grants?object=` (owner): the object's grants.
+  `GET /e2ee/shared` (member): every grant to them, with its sealed box.
+- A member reads and writes the owner's log at `/e2ee/log/:object?owner=<owner id>`;
+  the relay checks the grant (and its role, for pushes). Snapshots and
+  deletes are the owner's alone.
+- Members' writes are only as trustworthy as the members: any of them could
+  write as any device of theirs (ops aren't signed per device yet).
+
+### Rotation
+
+Revoking a device stops it syncing, but its copy of the root still opens
+everything and still derives the account key, so it could certify a device
+of its own. Rotation ends that.
+
+- The relay knows an account by its first key forever (its **id**, which
+  logs, blobs and grants are under) and by its **current key**, which certs
+  must chain to. A rotation, signed by the current key:
+  `{ v: 1, account (id), from (current key), to (new key), box (new box key), at }`.
+- `POST /e2ee/rotate { rotation, certs, roots }`: `certs`, new certs for each
+  device kept, signed by the new key; `roots`, per device kept, the new root
+  sealed to its box key. The relay switches the key, ends every token, and
+  keeps the bundle for each device to fetch.
+- `POST /e2ee/rotated { account, device }` → `{ rotations, cert, root }`
+  for a device whose cert no longer counts: it checks each rotation is
+  signed by the key before it (from the one it knows), opens the root, and
+  checks `accountKeys(root)`'s key is the last rotation's `to`. Then it signs
+  in with the new cert.
+- The rotating device makes the new root (kept on disk before anything
+  else, so a crash can be resumed); for each object in the index, writes its
+  merged state into the new object (a new derived id; for a shared object
+  the same id with a new random key at the next epoch, and its grants
+  sealed again); writes the new index; posts the rotation; reads the old
+  logs once more for anything written meanwhile; deletes them
+  (`DELETE /e2ee/log/:object`); and shows the new recovery phrase. The old
+  one no longer works.
+- A device that had changes queued when the rotation came opens them under
+  the old key and queues them again on the new object.
+
+## Settled: claude.ai and the node
+
+Checked 2026-11-02 against Anthropic's connector docs and the live client metadata.
+
+- claude.ai takes any HTTPS URL as a custom connector, on every plan (Free is limited to one
+  custom connector; on Team and Enterprise an Owner adds it and each member connects). Web,
+  desktop and mobile share one client, and nothing about the server is hard-coded: the node's
+  own origin works as its own authorization server.
+- Requests come from Anthropic's servers, `160.79.104.0/21`, never from the user's device, so
+  the node must be on the public internet; a tailnet-only address fails. Before connecting,
+  Claude resolves the hostname through public DNS and refuses it unless every address is
+  globally routable: no `10/8`, `172.16/12`, `192.168/16`, CGNAT `100.64/10` (tailnet
+  addresses), loopback or link-local, and it needs an `A` record (connectors are IPv4-only).
+  The docs name no port or certificate rule beyond HTTPS; assume a publicly trusted cert (Let's
+  Encrypt is fine, self-signed isn't) and that a non-443 port works but is untested.
+- The URL must not redirect to another host: Claude drops `Authorization` on the redirect.
+- Transport: Streamable HTTP (legacy HTTP+SSE still works). A tool call gets 240 s and a result
+  up to about 150,000 characters. OAuth discovery, registration and token calls get 10 s,
+  refresh 30 s. Claude caches discovery metadata per URL for about five minutes.
+- Tailscale Funnel fits: TLS ends in tailscaled on the node and the relay only proxies TCP
+  ("cannot decrypt"); ports 443, 8443 or 10000; hostname `<device>.<tailnet>.ts.net`, where the
+  tailnet name is `tail<hex>` or a picked random pair, not free text; all plans, including the
+  free one; beta, with unpublished bandwidth limits (fine for MCP, not for media). Nothing
+  documents an idle timeout on long streams; send SSE keepalives anyway.
+
+What the node's OAuth and `/mcp` must do (the Worker's workers-oauth-provider setup already does
+all of it, with DCR and CIMD both on, and works with claude.ai today):
+
+- Answer an unauthenticated `/mcp` request with `401` and
+  `WWW-Authenticate: Bearer resource_metadata="https://<host>/.well-known/oauth-protected-resource", scope="assistant"`.
+  A tool error inside a `200` doesn't start sign-in.
+- Serve RFC 9728 protected resource metadata at `/.well-known/oauth-protected-resource` and
+  `/.well-known/oauth-protected-resource/mcp`, with `resource` equal to the URL the user typed,
+  path included (`https://<host>/mcp`; the Worker gives its bare origin, which Claude's docs say
+  not to rely on), and the node's origin first in `authorization_servers` (Claude reads only the
+  first).
+- Serve RFC 8414 metadata at `/.well-known/oauth-authorization-server` with `/authorize`,
+  `/token`, `code_challenge_methods_supported: ["S256"]`,
+  `client_id_metadata_document_supported: true` and `"none"` in
+  `token_endpoint_auth_methods_supported`. Without both of the last two Claude falls back to DCR,
+  so keep `/register` (RFC 7591, JSON body) too.
+- CIMD: claude.ai's `client_id` is `https://claude.ai/oauth/mcp-oauth-client-metadata`, a public
+  client (`token_endpoint_auth_method: "none"`) whose only redirect URI is
+  `https://claude.ai/api/mcp/auth_callback`. Claude Code's is
+  `https://claude.ai/oauth/claude-code-client-metadata`, redirecting to `http://localhost/callback`
+  and `http://127.0.0.1/callback` on any port, so match loopback redirects ignoring the port. The
+  node fetches these documents itself, so it needs outbound HTTPS and must refuse to fetch
+  non-public addresses (the Worker gets this from `global_fetch_strictly_public`).
+- PKCE S256 on every request; honour the RFC 8707 `resource` parameter and bind tokens to it
+  (compare canonical forms). `/token` takes form-urlencoded bodies, answers `invalid_grant` for a
+  dead refresh token, and rotates refresh tokens. Claude refreshes on `401` and up to five minutes
+  before expiry. Claude adds `offline_access` only if the AS lists it; no need to.
+- The consent page shows the redirect URI's host (claude.ai), as the Worker's does.
+- The connector dialog also takes a hand-entered client ID and optional secret ("Use your own
+  OAuth client"), so a node could skip CIMD and DCR, but nothing requires it.
+
+Sources:
+[authentication](https://claude.com/docs/connectors/building/authentication.md),
+[troubleshooting](https://claude.com/docs/connectors/building/troubleshooting.md),
+[lazy authentication](https://claude.com/docs/connectors/building/lazy-authentication.md),
+[build overview (transport, limits)](https://claude.com/docs/connectors/building/index.md),
+[add a connector by URL](https://claude.com/docs/connectors/custom/add-unlisted.md),
+[help center: custom connectors](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp),
+[Anthropic IP addresses](https://platform.claude.com/docs/en/api/ip-addresses),
+[claude.ai client metadata](https://claude.ai/oauth/mcp-oauth-client-metadata),
+[MCP authorization 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization),
+[Tailscale Funnel](https://tailscale.com/kb/1223/funnel),
+[tailnet name](https://tailscale.com/kb/1217/tailnet-name).
+
 ## Open questions
 
-- How claude.ai's connector handles a node with a self-chosen hostname, and whether its OAuth
-  client (CIMD) works against an arbitrary origin. Check before step 3.
 - Whether the phone talks to the node directly or through the relay (the relay would see only
   ciphertext if the phone and node encrypt between themselves).
 - The trust boundary of the web page: a page served from our domain can be changed to steal keys.

@@ -51,8 +51,8 @@ export function accountKeys(root: Uint8Array): AccountKeys {
   return { id: b64url(sign.public), sign, box: boxPair(derive(root, "account box")) };
 }
 
-export type ObjectKind = "board" | "brain" | "memory";
-export const KINDS: ObjectKind[] = ["board", "brain", "memory"];
+export type ObjectKind = "board" | "brain" | "memory" | "index";
+export const KINDS: ObjectKind[] = ["board", "brain", "memory", "index"];
 
 // An object's name (a board's key, a brain's name) goes in neither the
 // relay's view nor its ids: both are HKDF outputs.
