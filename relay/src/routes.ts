@@ -1,13 +1,13 @@
-// The relay for end-to-end encrypted accounts, beside the plaintext API
-// and Google sign-in, which go on working as they were. An account here is
-// its signing key; its devices sign in by signing a challenge, with a
-// certificate the account key signed. Logs (log.ts) and attachments hold
-// ciphertext only: nothing in this Worker has a key to anything a client
-// encrypted. See .agent/plans/e2ee.md, and lib/e2ee/relay.ts for the
+// The relay for end-to-end encrypted accounts, under /e2ee/*: in a relay
+// of your own (index.ts), or beside the hosted Worker's other routes. An
+// account here is its signing key; its devices sign in by signing a
+// challenge, with a certificate the account key signed. Logs (log.ts) and
+// attachments hold ciphertext only: nothing in the relay has a key to
+// anything a client encrypted. See .agent/plans/e2ee.md, and lib/e2ee/relay.ts for the
 // routes as a client calls them.
 //
-// The registry (registry.ts) lets accounts in, as it does Google ones:
-// with an invite, or made by an admin (POST /api/e2ee/accounts, api.ts).
+// Accounts (accounts.ts) are let in by whoever serves the routes: with an
+// invite, or made by an admin (createAccount with by).
 //
 // An account is known by its id (its first key: logs, blobs and grants are
 // under it, and tokens name it) and by its current key, which certs must
@@ -17,12 +17,12 @@
 // the member then reads (and with "write", pushes to) the owner's log.
 //
 // Signatures are checked with WebCrypto's Ed25519, against the bytes
-// lib/e2ee/wire.ts lays out; that file is all of lib/e2ee the Worker has.
+// lib/e2ee/wire.ts lays out; that file is all of lib/e2ee the relay has.
 
-import type { Env } from "./index";
-import { type E2eeAccount, registry } from "./registry";
-import type { Result } from "./board";
-import type { Appended } from "./log";
+import type { E2eeAccount, RelayAccounts } from "./accounts";
+import type { Appended, Log } from "./log";
+import type { Mailbox } from "./mailbox";
+import type { Result } from "./result";
 import {
   type AccountView,
   type Challenge,
@@ -52,6 +52,17 @@ import {
   revocationBytes,
   rotationBytes,
 } from "../../lib/e2ee/wire";
+
+// What the routes need of the Worker serving them. ORIGIN is its own
+// origin, no trailing slash: creations and challenges name it. MEDIA holds
+// the blobs, under e2ee/<account>/.
+export type RelayEnv = {
+  ORIGIN: string;
+  LOG: DurableObjectNamespace<Log>;
+  MAILBOX: DurableObjectNamespace<Mailbox>;
+  MEDIA: R2Bucket;
+};
+export type Accounts = DurableObjectStub<RelayAccounts>;
 
 export const E2EE_TOKEN = "cbe_";
 const TOKEN_TTL = 24 * 3600_000;
@@ -94,8 +105,8 @@ async function body(request: Request): Promise<Record<string, unknown>> {
   return {};
 }
 
-// Making an account. by: the admin making it (api.ts), who needs no invite.
-export async function createAccount(request: Request, env: Env, by: string | null): Promise<Response> {
+// Making an account. by: the admin making it, who needs no invite.
+export async function createAccount(request: Request, env: RelayEnv, accounts: Accounts, by: string | null): Promise<Response> {
   const { creation, cert } = await body(request);
   if (!isSigned(creation)) return error(400, "creation must be a signed statement");
   const c = creation.body as Creation;
@@ -106,13 +117,13 @@ export async function createAccount(request: Request, env: Env, by: string | nul
   const bad = await certProblem(cert);
   if (bad) return error(400, bad);
   if ((cert as Signed<DeviceCert>).body.account !== c.account) return error(400, "the certificate is for another account");
-  const made = (await registry(env).createE2ee({ id: c.account, box: c.box, invite: c.invite, by, creation: creation as Signed<Creation> })) as Result<E2eeAccount>;
+  const made = (await accounts.createE2ee({ id: c.account, box: c.box, invite: c.invite, by, creation: creation as Signed<Creation> })) as Result<E2eeAccount>;
   return made.ok ? json({ account: made.value.id }, 201) : error(made.status, made.error);
 }
 
 // The device a request is from, by its token: as a bearer, or a browser
 // socket's corkboard.bearer.<base64url> subprotocol. Kept a little while
-// per isolate, as accountOf is; a revocation here forgets it at once, and
+// per isolate; a revocation here forgets it at once, and
 // elsewhere within CACHE_MS.
 const CACHE_MS = 30_000;
 const cache = new Map<string, { who: Who | null; until: number }>();
@@ -131,13 +142,13 @@ function bearer(request: Request): string | undefined {
   }
 }
 
-async function whoIs(request: Request, env: Env): Promise<Who | null> {
+async function whoIs(request: Request, r: Accounts): Promise<Who | null> {
   const token = bearer(request);
   if (!token?.startsWith(E2EE_TOKEN)) return null;
   const hash = await sha256(token);
   const hit = cache.get(hash);
   if (hit && hit.until > Date.now()) return hit.who;
-  const t = await registry(env).e2eeToken(hash);
+  const t = await r.e2eeToken(hash);
   const who = t ? { account: t.account, device: t.device } : null;
   cache.set(hash, { who, until: Math.min(Date.now() + CACHE_MS, t?.expires ?? Infinity) });
   return who;
@@ -149,18 +160,17 @@ const BLOB = /^\/e2ee\/blob\/([^/]+)$/;
 const ACCOUNT = /^\/e2ee\/accounts\/([^/]+)$/;
 const GRANT = /^\/e2ee\/grants\/([^/]+)\/([^/]+)$/;
 
-const mailbox = (env: Env, code: string) => env.MAILBOX.get(env.MAILBOX.idFromName(code));
+const mailbox = (env: RelayEnv, code: string) => env.MAILBOX.get(env.MAILBOX.idFromName(code));
 // An account's log of an object: its own, or the owner's it's shared.
-const logOf = (env: Env, owner: string, object: string) => env.LOG.get(env.LOG.idFromName(`${owner}/${object}`));
+const logOf = (env: RelayEnv, owner: string, object: string) => env.LOG.get(env.LOG.idFromName(`${owner}/${object}`));
 const blobKey = (who: Who, id: string) => `e2ee/${who.account}/${id}`;
 
-export async function e2ee(request: Request, env: Env): Promise<Response> {
+export async function e2ee(request: Request, env: RelayEnv, r: Accounts): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;
-  const r = registry(env);
 
-  if (path === "/e2ee/accounts") return method === "POST" ? createAccount(request, env, null) : error(405, "method not allowed");
+  if (path === "/e2ee/accounts") return method === "POST" ? createAccount(request, env, r, null) : error(405, "method not allowed");
 
   if (path === "/e2ee/challenge") {
     if (method !== "POST") return error(405, "method not allowed");
@@ -248,7 +258,7 @@ export async function e2ee(request: Request, env: Env): Promise<Response> {
       if (step === "join") return reply(await box.join(secret, b as never));
       return reply(await box.cancel({ secret }));
     }
-    const who = await whoIs(request, env);
+    const who = await whoIs(request, r);
     if (!who) return error(401, "sign in with a device of the account first");
     if (!step) return method === "GET" ? reply(await box.viewApprover(code, who.account)) : error(405, "method not allowed");
     if (method !== "POST") return error(405, "method not allowed");
@@ -259,7 +269,7 @@ export async function e2ee(request: Request, env: Env): Promise<Response> {
     return error(404, "not found");
   }
 
-  const who = await whoIs(request, env);
+  const who = await whoIs(request, r);
   if (!who) return error(401, "sign in with a device of an encrypted account (POST /e2ee/challenge, then /e2ee/token)");
 
   if (path === "/e2ee/revoked") return method === "GET" ? json(await r.e2eeRevocations(who.account)) : error(405, "method not allowed");

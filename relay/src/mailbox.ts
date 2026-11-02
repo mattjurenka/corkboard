@@ -11,7 +11,7 @@
 // the new device's keys.
 
 import { DurableObject } from "cloudflare:workers";
-import type { Result } from "./board";
+import type { Result } from "./result";
 import { KEY } from "../../lib/e2ee/wire";
 
 export const PAIR_TTL = 10 * 60_000;

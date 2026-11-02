@@ -2,7 +2,7 @@ import { reset, runInDurableObject } from "cloudflare:test";
 import { env as bindings, exports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/index";
-import type { Log } from "../src/log";
+import type { Log } from "../../relay/src/log";
 import {
   type AccountKeys,
   type Device,

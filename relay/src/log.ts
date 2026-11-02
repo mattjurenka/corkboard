@@ -14,7 +14,7 @@
 // and a push sealed under another is refused (409, with the epoch).
 
 import { DurableObject } from "cloudflare:workers";
-import type { Result } from "./board";
+import type { Result } from "./result";
 import { LIMITS, OPAQUE, type LogRead, type NewOp, type Snapshot, type WireOp, b64url, fromB64url } from "../../lib/e2ee/wire";
 
 const SCHEMA = `

@@ -72,7 +72,7 @@
 //   POST  /api/workspace/redeem              { bridge, ticket }: the bridge, for the board: { key, name, root, remotes }
 //   /api/git                                 the first admin's Forgejo repositories, read-only, for
 //                                            admins (git.ts)
-//   POST  /api/e2ee/accounts               an end-to-end encrypted account, made by an admin with no invite (e2ee.ts)
+//   POST  /api/e2ee/accounts               an end-to-end encrypted account, made by an admin with no invite (relay/src/routes.ts)
 //   GET   /api/export                      the whole account, to move it to another Worker
 //   POST  /api/import                      that export, into an account with no boards yet
 //
@@ -104,9 +104,9 @@ import { dumpHolds, holdRoutes, restoreHolds, type HoldsDump } from "./holds";
 import { fleetRoutes } from "./fleet";
 import { MEDIA_ID, forget, mediaKey, serve } from "./media";
 import { gitRoutes } from "./git";
-import { createAccount } from "./e2ee";
+import { createAccount } from "../../relay/src/routes";
 import { goals } from "./goals";
-import { type Account as Registered, accountOf, adminRoutes } from "./registry";
+import { type Account as Registered, accountOf, adminRoutes, registry } from "./registry";
 import { type Answer, MACHINE_HEADER, type Settings, zone } from "./user";
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
@@ -805,8 +805,8 @@ export const api = {
         return (await users.disconnectBridge(bridge[1])) ? new Response(null, { status: 204 }) : error(404, `bridge ${bridge[1]} isn't connected`);
       }
       if (path.startsWith("/api/admin/")) return machine || !admin ? error(403, "for admins") : await adminRoutes(request, env, account, () => body(request));
-      // An encrypted account an admin makes, with no invite (e2ee.ts).
-      if (path === "/api/e2ee/accounts") return machine || !admin ? error(403, "for admins") : request.method === "POST" ? await createAccount(request, env, account.email) : error(405, "method not allowed");
+      // An encrypted account an admin makes, with no invite.
+      if (path === "/api/e2ee/accounts") return machine || !admin ? error(403, "for admins") : request.method === "POST" ? await createAccount(request, env, registry(env), account.email) : error(405, "method not allowed");
       if (path === "/api/live") return users.fetch(asMachine(request, machine));
       const brainParam = new URL(request.url).searchParams.get("brain");
       const brain = path.startsWith("/api/notes") || path === "/api/goals" || path.startsWith("/api/memory/") ? await brainNamed(env, ctx.props.userId, brainParam) : "";

@@ -1,0 +1,28 @@
+// A corkboard relay of your own (src/index.ts). Set ORIGIN to where it's
+// served, make the bucket (wrangler r2 bucket create corkboard-relay), set
+// the invite (wrangler secret put RELAY_INVITE), then wrangler deploy.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "corkboard-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [
+      // An object's log of ciphertext, named <account>/<object>.
+      { "name": "LOG", "class_name": "Log" },
+      // Pairing mailboxes, named by their code.
+      { "name": "MAILBOX", "class_name": "Mailbox" },
+      // The accounts, their devices' tokens and grants: one object.
+      { "name": "ACCOUNTS", "class_name": "Accounts" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Log", "Mailbox", "Accounts"] }],
+  // Encrypted attachments.
+  "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "corkboard-relay" }],
+  "vars": {
+    // This relay's own origin, no trailing slash: what clients' creations
+    // and sign-ins name.
+    "ORIGIN": "https://corkboard-relay.example.workers.dev"
+  }
+}
