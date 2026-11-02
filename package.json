@@ -18,7 +18,7 @@
     "test:cloud": "bun test/cloud-boards.ts",
     "test:plan": "bun test/day-plan.ts",
     "test:fleet": "bun test fleet/fleetd",
-    "test:e2ee": "bun test lib/e2ee"
+    "test:e2ee": "bun test lib/e2ee bridge/keystore"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

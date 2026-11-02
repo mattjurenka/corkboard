@@ -47,7 +47,8 @@ function entries(log: string, at: string) {
   return out.filter((e) => e.note.trim());
 }
 
-function cardsOf(dir: string) {
+// A board's card files as the Worker imports them (and e2ee.ts encrypts them).
+export function cardsOf(dir: string) {
   const tasks = join(dir, "tasks");
   const files = readdirSync(tasks).filter((n) => /^[a-z]+-\d+ - .*\.md$/i.test(n));
   return files.map((name) => {
@@ -90,48 +91,51 @@ async function api(method: string, path: string, body?: unknown) {
   return json;
 }
 
-const args = process.argv.slice(2);
-const dry = args.includes("--dry-run");
-const named = args.filter((a) => !a.startsWith("--"));
-const known = roots();
-const keys = named.length
-  ? named
-  : readdirSync(BOARDS).filter((k) => {
-      const root = known.get(k);
-      return root && !isUnder(root, "/tmp") && !isUnder(root, tmpdir()) && existsSync(root);
-    });
+// Run as a script; e2ee.ts imports cardsOf alone.
+if (import.meta.main) {
+  const args = process.argv.slice(2);
+  const dry = args.includes("--dry-run");
+  const named = args.filter((a) => !a.startsWith("--"));
+  const known = roots();
+  const keys = named.length
+    ? named
+    : readdirSync(BOARDS).filter((k) => {
+        const root = known.get(k);
+        return root && !isUnder(root, "/tmp") && !isUnder(root, tmpdir()) && existsSync(root);
+      });
 
-for (const key of keys) {
-  const dir = join(BOARDS, key);
-  if (!existsSync(join(dir, "tasks"))) {
-    console.error(`${key}: no such board in ${BOARDS}`);
-    process.exitCode = 1;
-    continue;
+  for (const key of keys) {
+    const dir = join(BOARDS, key);
+    if (!existsSync(join(dir, "tasks"))) {
+      console.error(`${key}: no such board in ${BOARDS}`);
+      process.exitCode = 1;
+      continue;
+    }
+    const root = known.get(key) ?? null;
+    const name = readFileSync(join(dir, "config.yml"), "utf8").match(/^project_name:\s*'?([^'\n]+)'?/m)?.[1] ?? key;
+    const cards = cardsOf(dir);
+    const logs = cards.reduce((n, c) => n + c.log.length, 0);
+    console.log(`${key}: ${cards.length} cards, ${logs} log entries${root ? `, from ${root}` : ""}`);
+    if (dry) {
+      for (const c of cards) console.log(`  ${c.id.padEnd(8)} ${c.status.padEnd(7)} ${c.title.slice(0, 60)}${Object.keys(c.extra).length ? `  +${Object.keys(c.extra).join(",")}` : ""}`);
+      continue;
+    }
+    await api("PUT", `/${key}`, { name, root });
+    await api("POST", `/${key}/import`, { cards });
+    // Read back and compare, so a lost field shows here and not weeks later.
+    const back: any[] = await api("GET", `/${key}/cards?log=1`);
+    const byId = new Map(back.map((c) => [c.id, c]));
+    const fields = ["title", "status", "agent", "agent_state", "attention", "priority", "ordinal", "labels", "dependencies", "description", "extra", "created", "updated"] as const;
+    const wrong = cards.flatMap((c) => {
+      const b = byId.get(c.id);
+      if (!b) return [`${c.id} missing`];
+      const off = fields.filter((f) => JSON.stringify(b[f]) !== JSON.stringify(c[f]));
+      if (b.log.length !== c.log.length || b.log.some((e: any, i: number) => e.note !== c.log[i].note || e.at !== c.log[i].at)) off.push("log" as never);
+      return off.length ? [`${c.id}: ${off.join(", ")}`] : [];
+    });
+    if (wrong.length) {
+      console.error(`  read back differently:\n    ${wrong.join("\n    ")}`);
+      process.exitCode = 1;
+    } else console.log(`  imported and read back: all ${cards.length} cards match`);
   }
-  const root = known.get(key) ?? null;
-  const name = readFileSync(join(dir, "config.yml"), "utf8").match(/^project_name:\s*'?([^'\n]+)'?/m)?.[1] ?? key;
-  const cards = cardsOf(dir);
-  const logs = cards.reduce((n, c) => n + c.log.length, 0);
-  console.log(`${key}: ${cards.length} cards, ${logs} log entries${root ? `, from ${root}` : ""}`);
-  if (dry) {
-    for (const c of cards) console.log(`  ${c.id.padEnd(8)} ${c.status.padEnd(7)} ${c.title.slice(0, 60)}${Object.keys(c.extra).length ? `  +${Object.keys(c.extra).join(",")}` : ""}`);
-    continue;
-  }
-  await api("PUT", `/${key}`, { name, root });
-  await api("POST", `/${key}/import`, { cards });
-  // Read back and compare, so a lost field shows here and not weeks later.
-  const back: any[] = await api("GET", `/${key}/cards?log=1`);
-  const byId = new Map(back.map((c) => [c.id, c]));
-  const fields = ["title", "status", "agent", "agent_state", "attention", "priority", "ordinal", "labels", "dependencies", "description", "extra", "created", "updated"] as const;
-  const wrong = cards.flatMap((c) => {
-    const b = byId.get(c.id);
-    if (!b) return [`${c.id} missing`];
-    const off = fields.filter((f) => JSON.stringify(b[f]) !== JSON.stringify(c[f]));
-    if (b.log.length !== c.log.length || b.log.some((e: any, i: number) => e.note !== c.log[i].note || e.at !== c.log[i].at)) off.push("log" as never);
-    return off.length ? [`${c.id}: ${off.join(", ")}`] : [];
-  });
-  if (wrong.length) {
-    console.error(`  read back differently:\n    ${wrong.join("\n    ")}`);
-    process.exitCode = 1;
-  } else console.log(`  imported and read back: all ${cards.length} cards match`);
 }
