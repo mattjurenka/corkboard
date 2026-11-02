@@ -10,11 +10,12 @@
 // sentence is made at a time. With its audio, when each of its phonemes is
 // said (bridge/kokoro-timing.ts).
 //
-// Our own voices that have a recording to be cloned from (<voice>.wav, and
-// <voice>-<mood>.wav for a mood) are said by Chatterbox Nano instead, which
-// can sound like it means it, when CORKBOARD_CHATTERBOX is a Python that has
-// it (or there's a virtualenv with it at ~/.local/share/corkboard/chatterbox):
-// bridge/chatterbox-speech.py, started the first time and kept (if it
+// Voices that have a recording to be cloned from (<voice>.wav, and
+// <voice>-<mood>.wav for a mood), which every persona's has, are said by
+// Chatterbox Nano instead, which can sound like it means it, when
+// CORKBOARD_CHATTERBOX is a Python that has it (or there's a virtualenv with
+// it at ~/.local/share/corkboard/chatterbox): bridge/chatterbox-speech.py,
+// started the first time and kept, and waited for while it starts (if it
 // won't start, Kokoro until the bridge does again). Its sentences come with
 // no phonemes, so the mouth follows the letters. If it can't, Kokoro.
 
@@ -157,9 +158,8 @@ export async function speech(req: Request): Promise<Response> {
   const python = await chatterbox;
   const made = last.then(async (): Promise<Said> => {
     const ref = python && (await reference(voice, mood));
-    // Kokoro until it's ready, as that takes from 15 s to more than a
-    // minute.
-    if (ref) cloning ??= clone(python).then((c) => (cloned = c), (err) => console.error(`speech: no chatterbox (${err instanceof Error ? err.message : err}), so Kokoro`));
+    // Starting takes from 15 s to more than a minute.
+    if (ref) await (cloning ??= clone(python).then((c) => (cloned = c), (err) => console.error(`speech: no chatterbox (${err instanceof Error ? err.message : err}), so Kokoro`)));
     if (ref && cloned) {
       try {
         return await cloned(text, ref);
