@@ -1,8 +1,9 @@
 // corkboard-bridge serve: the node (see .agent/plans/e2ee.md, "The node").
 // Headless: this machine signs in as its device of the encrypted account,
-// keeps decrypted replicas of the boards and brains it's given, and serves
-// /mcp (for claude.ai and Claude Code, with its own OAuth) and the phone's
-// API, on plain HTTP behind Tailscale Funnel or Caddy.
+// keeps decrypted replicas of the boards and brains its index lists (or
+// of those it's given), and serves /mcp (for claude.ai and Claude Code,
+// with its own OAuth) and the phone's API, on plain HTTP behind Tailscale
+// Funnel or Caddy.
 //
 //   corkboard-bridge serve [--port 8787] [--host 127.0.0.1] [--origin https://NAME]
 //                          [--board KEY]... [--brain NAME]... [--timezone ZONE]
@@ -15,8 +16,9 @@
 //                          a one-time code to approve a connector with at /authorize
 //
 // <state>/node/ has config.json (boards, brains, origin, port, host,
-// timezone: what the flags add to), oauth.json and calendar.json. The
-// account's passphrase, if it has one, is CORKBOARD_E2EE_PASSPHRASE.
+// timezone: what the flags add to), oauth.json and calendar.json. Boards
+// and brains given narrow the index to them. The account's passphrase, if
+// it has one, is CORKBOARD_E2EE_PASSPHRASE.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -24,6 +26,8 @@ import { CLOUD } from "../cloud";
 import { STATE_DIR } from "../dirs";
 import { Keystore } from "../keystore";
 import { Relay } from "../../lib/e2ee/relay";
+import { indexId, indexKey } from "../../lib/e2ee/sharing";
+import { Replica } from "../../lib/e2ee/sync";
 import { listObjects } from "./objects";
 import { Replicas } from "./replicas";
 import { Data } from "./data";
@@ -65,9 +69,11 @@ async function run(args: string[]) {
   const relay = new Relay({ origin: CLOUD, device: d.device, cert: d.cert, token: store.token(), onToken: (t) => store.saveToken(t) });
   await relay.token();
 
-  const objects = listObjects(root, { boards: [...(c.boards ?? []), ...options(args, "--board")], brains: [...(c.brains ?? []), ...options(args, "--brain")] });
-  if (!objects.length) console.error("node: no boards or brains given (--board KEY, --brain NAME, or config.json); serving nothing");
-  const replicas = await Replicas.open({ objects, transport: relay, device: d.device.id, store: (o) => store.replica(o) });
+  const index = await Replica.open({ transport: relay, key: indexKey(root), object: indexId(root), device: d.device.id, store: store.replica(indexId(root)) });
+  await index.pull().catch((e) => console.error(`node: reading the index: ${(e as Error).message}`));
+  const objects = listObjects(root, { boards: [...(c.boards ?? []), ...options(args, "--board")], brains: [...(c.brains ?? []), ...options(args, "--brain")] }, index);
+  if (!objects.length) console.error("node: the index lists no boards or brains, and none were given (--board KEY, --brain NAME, or config.json); serving nothing");
+  const replicas = await Replicas.open({ objects, transport: relay, device: d.device.id, store: (o) => store.replica(o), index });
   await replicas.start();
   const data = new Data(replicas, option(args, "--timezone") ?? c.timezone ?? localZone());
   const search = new Search(data);

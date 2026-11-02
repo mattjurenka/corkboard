@@ -469,9 +469,11 @@ with `https://NAME/mcp`, and when the node's page asks, type the code from
 
 - Not run against a real relay or with claude.ai yet: everything is tested through the
   in-memory transport and requests to the handler.
-- Objects come from flags until the index lands; shared objects (`owner`), epochs, snapshots
-  and compaction are the adapter's and the replica's to take up when `lib/e2ee` has them. The
-  node doesn't compact.
+- Objects come from the account's index (flags narrow it), each at its entry's epoch and key;
+  the node adds what it writes first to the index, and compacts its own logs when they've grown.
+  It reads the index at start and on each sync but doesn't open objects another device adds
+  while it runs, doesn't list objects shared with this account yet, and never updates an
+  entry's epoch or key (sharing and rotation do).
 - Two devices making a card at once can pick the same `TASK-n` and merge into one card; note
   appends from two places at once keep one (a body is one last-write-wins field).
 - Not on the node yet: attachments, `create_board`, day plans (`plan_read`, `plan_propose`) and

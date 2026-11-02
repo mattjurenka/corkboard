@@ -3,8 +3,13 @@
 // following its log live. A change is applied at once and pushed behind
 // the caller; a push that fails is tried again until it goes. Every few
 // minutes each is synced whole as well, in case a socket died quietly.
+//
+// The account's index comes along: an object of ours the node writes that
+// it doesn't list yet goes into it. A log of ours that has grown past what
+// lib/e2ee thinks worth keeping is compacted as it syncs.
 
 import type { CardChange } from "../../lib/e2ee/merge";
+import { entries, remember } from "../../lib/e2ee/sharing";
 import { type LogTransport, type ReplicaStore, Replica, memoryStore } from "../../lib/e2ee/sync";
 import type { NodeObject } from "./objects";
 
@@ -31,12 +36,24 @@ export class Replicas {
   private listeners: ((o: NodeObject) => void)[] = [];
   private timer?: Timer;
 
-  private constructor(private transport: LogTransport) {}
+  private constructor(
+    private transport: LogTransport,
+    private index?: Replica,
+  ) {}
 
-  static async open(o: { objects: NodeObject[]; transport: LogTransport; device: string; store?: (object: string) => ReplicaStore }): Promise<Replicas> {
-    const r = new Replicas(o.transport);
+  // index: the account's index, opened (objects.ts lists from it).
+  static async open(o: { objects: NodeObject[]; transport: LogTransport; device: string; store?: (object: string) => ReplicaStore; index?: Replica }): Promise<Replicas> {
+    const r = new Replicas(o.transport, o.index);
     for (const obj of o.objects) {
-      const rep = await Replica.open({ transport: o.transport, key: obj.key, object: obj.object, device: o.device, store: o.store?.(obj.object) ?? memoryStore() });
+      const rep = await Replica.open({
+        transport: o.transport,
+        key: obj.key,
+        epoch: obj.epoch,
+        keyOf: obj.keyOf,
+        object: obj.object,
+        device: o.device,
+        store: o.store?.(obj.object) ?? memoryStore(),
+      });
       r.kept.set(`${obj.kind}/${obj.name}`, { o: obj, rep, pushing: Promise.resolve(), synced: null, error: null });
     }
     return r;
@@ -66,6 +83,29 @@ export class Replicas {
     await k.rep.change(...changes);
     this.changed(k);
     void this.push(k);
+    await this.remember(k);
+  }
+
+  // An object of ours, written here, that the index doesn't list yet.
+  private async remember(k: Kept) {
+    const index = this.index;
+    if (!index || k.o.owner || entries(index).some((e) => e.object === k.o.object)) return;
+    try {
+      await remember(index, { object: k.o.object, kind: k.o.kind, name: k.o.name, epoch: k.rep.currentEpoch });
+      await index.push();
+    } catch (e) {
+      console.error(`node: ${k.o.kind} ${k.o.name} not in the index yet: ${(e as Error).message}`);
+    }
+  }
+
+  // A log of ours that's worth it, compacted; behind the object's pushes.
+  // A failure is only logged: the log is still whole, just long.
+  private compact(rep: Replica, what: string, owner?: string): Promise<void> {
+    if (owner || !this.transport.snapshot || !rep.worthCompacting) return Promise.resolve();
+    return rep.compact().then(
+      () => {},
+      (e) => console.error(`node: compacting ${what}: ${(e as Error).message}`),
+    );
   }
 
   // One push at a time per object; a failure is tried again later.
@@ -91,13 +131,26 @@ export class Replicas {
       k.synced = new Date().toISOString();
       k.error = null;
       if (pulled) this.changed(k);
+      k.pushing = k.pushing.then(() => this.compact(k.rep, `${k.o.kind} ${k.o.name}`, k.o.owner));
+      await k.pushing;
     } catch (e) {
       k.error = (e as Error).message;
     }
   }
 
+  private async syncIndex() {
+    const index = this.index;
+    if (!index) return;
+    try {
+      await index.sync();
+      await this.compact(index, "the index");
+    } catch (e) {
+      console.error(`node: syncing the index: ${(e as Error).message}`);
+    }
+  }
+
   async syncAll() {
-    await Promise.all([...this.kept.values()].map((k) => this.sync(k)));
+    await Promise.all([this.syncIndex(), ...[...this.kept.values()].map((k) => this.sync(k))]);
   }
 
   // Pulls each, then follows each; live: false only syncs (a transport
@@ -110,9 +163,7 @@ export class Replicas {
           k.synced = new Date().toISOString();
           if (n) this.changed(k);
         });
-    this.timer = setInterval(() => {
-      for (const k of this.kept.values()) void this.sync(k);
-    }, RESYNC_MS);
+    this.timer = setInterval(() => void this.syncAll(), RESYNC_MS);
   }
 
   // What's pushed so far, for a clean exit, and the sockets closed.

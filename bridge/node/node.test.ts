@@ -3,9 +3,10 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newRoot } from "../../lib/e2ee/keys";
-import { type LogTransport, Replica } from "../../lib/e2ee/sync";
-import { type NewOp, type WireOp, b64url } from "../../lib/e2ee/wire";
+import { newRoot, random } from "../../lib/e2ee/keys";
+import { entries, indexId, indexKey, remember } from "../../lib/e2ee/sharing";
+import { EpochChanged, type LogTransport, Replica } from "../../lib/e2ee/sync";
+import { type NewOp, type Snapshot, type WireOp, b64url } from "../../lib/e2ee/wire";
 import { listObjects, noteRecord } from "./objects";
 import { Replicas } from "./replicas";
 import { Data } from "./data";
@@ -13,31 +14,47 @@ import { Search } from "./search";
 import { OAuthStore, publicAddress, redirectAllowed, sameRedirect } from "./oauth";
 import { node, originOf } from "./server";
 
-// A relay in memory: a log per object, ordered by pos, as the Worker keeps them.
-function relay(): LogTransport {
-  const logs = new Map<string, WireOp[]>();
+// A relay in memory: a log per object, ordered by pos, as the Worker keeps
+// them, with its epoch and snapshot. state.pad is added to what a read
+// says is kept, to make a log worth compacting; state.refuse fails snapshots.
+type Log = { ops: WireOp[]; ids: Map<string, number>; head: number; epoch: number; snapshot?: Snapshot };
+function relay(): LogTransport & { state: { pad: number; refuse: boolean; logs: Map<string, Log> } } {
+  const state = { pad: 0, refuse: false, logs: new Map<string, Log>() };
+  const logOf = (object: string) => state.logs.get(object) ?? (state.logs.set(object, { ops: [], ids: new Map(), head: 0, epoch: 0 }), state.logs.get(object)!);
   return {
+    state,
     async append(object: string, ops: NewOp[]) {
-      const log = logs.get(object) ?? [];
-      logs.set(object, log);
+      const log = logOf(object);
       return ops.map((o) => {
-        const had = log.find((w) => w.id === o.id);
-        if (had) return { id: o.id, pos: had.pos };
-        const w: WireOp = { ...o, device: DEVICE_OF.get(o.id) ?? "?", pos: log.length + 1, ts: new Date().toISOString() };
-        log.push(w);
+        const had = log.ids.get(o.id);
+        if (had) return { id: o.id, pos: had };
+        if ((o.epoch ?? 0) !== log.epoch) throw new EpochChanged(log.epoch);
+        const w: WireOp = { ...o, device: DEVICE_OF.get(o.id) ?? "?", pos: ++log.head, ts: new Date().toISOString() };
+        log.ops.push(w);
+        log.ids.set(o.id, w.pos);
         return { id: o.id, pos: w.pos };
       });
     },
     async read(object: string, since: number) {
-      const log = logs.get(object) ?? [];
-      return { ops: log.filter((w) => w.pos > since), head: log.length };
+      const log = logOf(object);
+      const snap = log.snapshot && since < log.snapshot.upTo ? log.snapshot : undefined;
+      const ops = log.ops.filter((w) => w.pos > (snap?.upTo ?? since));
+      return { ops, head: log.head, epoch: log.epoch, count: log.ops.length && log.ops.length + state.pad, bytes: 0, ...(snap && { snapshot: snap }) };
+    },
+    async snapshot(object: string, s: Snapshot) {
+      const log = logOf(object);
+      if (state.refuse) throw new Error("no snapshots today");
+      if (s.upTo > log.head || s.upTo <= (log.snapshot?.upTo ?? 0) || (s.epoch > log.epoch && s.upTo !== log.head)) throw Object.assign(new Error("conflict"), { status: 409 });
+      log.snapshot = s;
+      log.epoch = s.epoch;
+      log.ops = log.ops.filter((w) => w.pos > s.upTo);
     },
   };
 }
 // The relay labels an op with the device that signed in to push it; here,
 // each pushing transport says which device it is.
 const DEVICE_OF = new Map<string, string>();
-const as = (t: LogTransport, device: string): LogTransport => ({
+const as = <T extends LogTransport>(t: T, device: string): T => ({
   ...t,
   append: (object, ops) => {
     for (const o of ops) DEVICE_OF.set(o.id, device);
@@ -353,5 +370,80 @@ describe("the phone's API", () => {
     expect(calls.map((c) => c.method)).toEqual(["POST", "GET", "DELETE", "POST", "POST"]);
     expect(calls[3].body.summary).toBe("Deep: the node");
     expect(calls[4].body.summary).toBe("✅ Plan approved");
+  });
+});
+
+describe("the node's objects, from the account's index", () => {
+  const root = newRoot();
+  const shared = relay();
+  const card = (title: string) => ({ t: "card" as const, card: "TASK-1", set: { title, status: "ready", labels: [], dependencies: [], created: "2026-11-01T00:00:00Z", updated: "2026-11-01T00:00:00Z" } });
+  const openIndex = (device: string) => Replica.open({ transport: as(shared, device), key: indexKey(root), object: indexId(root), device });
+  let index: Replica;
+  let replicas: Replicas;
+  let brainKey: Uint8Array;
+  beforeAll(async () => {
+    // The laptop pushed a board, and a brain it then moved onto a random
+    // key (as sharing does), and listed both.
+    const laptop = await openIndex("laptop");
+    const [home] = listObjects(root, { boards: ["home"], brains: [] });
+    const board = await Replica.open({ transport: as(shared, "laptop"), key: home.key, object: home.object, device: "laptop" });
+    await board.change(card("Water the plants"));
+    await board.push();
+    await remember(laptop, { object: home.object, kind: "board", name: "home", epoch: 0 });
+    const [notes] = listObjects(root, { boards: [], brains: ["notes"] });
+    const brain = await Replica.open({ transport: as(shared, "laptop"), key: notes.key, object: notes.object, device: "laptop" });
+    await brain.change({ t: "card", card: noteRecord("user"), set: { kind: "person", title: "Matthew", body: "Likes monospace." } });
+    brainKey = random(32);
+    await brain.rekey(brainKey);
+    await remember(laptop, { object: notes.object, kind: "brain", name: "notes", epoch: brain.currentEpoch, key: b64url(brainKey) });
+    await laptop.push();
+
+    index = await openIndex("node");
+    await index.pull();
+    replicas = await Replicas.open({ objects: listObjects(root, { boards: [], brains: [] }, index), transport: as(shared, "node"), device: "node", index });
+    await replicas.start({ live: false });
+  });
+  afterAll(() => replicas.stop());
+
+  it("serves what the index lists, one on a random key among them", async () => {
+    expect(replicas.objects().map((o) => `${o.kind}/${o.name}@${o.epoch}`).sort()).toEqual(["board/home@0", "brain/notes@1"]);
+    expect(replicas.get("board", "home")!.cards()[0].title).toBe("Water the plants");
+    expect(replicas.get("brain", "notes")!.cards().find((c) => c.id === noteRecord("user"))!.body).toBe("Likes monospace.");
+    // Its writes go out under the new key, and the laptop reads them.
+    await replicas.change("brain", "notes", { t: "card", card: noteRecord("dog"), set: { kind: "person", title: "Dog", body: "Walks at noon." } });
+    await replicas.settled();
+    const [notes] = listObjects(root, { boards: [], brains: [] }, index).filter((o) => o.kind === "brain");
+    const other = await Replica.open({ transport: as(shared, "laptop"), key: brainKey, epoch: 1, object: notes.object, device: "laptop" });
+    await other.pull();
+    expect(other.cards().find((c) => c.id === noteRecord("dog"))!.title).toBe("Dog");
+  });
+
+  it("narrows the index to the names given, and lists a new one when it first writes it", async () => {
+    expect(listObjects(root, { boards: ["home"], brains: [] }, index).map((o) => o.name)).toEqual(["home"]);
+    const fresh = await Replicas.open({ objects: listObjects(root, { boards: ["errands"], brains: [] }, index), transport: as(shared, "node"), device: "node", index });
+    expect(fresh.objects().map((o) => `${o.kind}/${o.name}@${o.epoch}`)).toEqual(["board/errands@0"]);
+    await fresh.change("board", "errands", card("Buy stamps"));
+    await fresh.settled();
+    const laptop = await openIndex("laptop");
+    await laptop.pull();
+    expect(entries(laptop).find((e) => e.name === "errands")).toMatchObject({ kind: "board", epoch: 0 });
+    await fresh.stop();
+  });
+
+  it("compacts a log of its own once it's worth it, and lives through a refusal", async () => {
+    const home = replicas.objects("board")[0];
+    shared.state.refuse = true;
+    shared.state.pad = 5000;
+    await replicas.syncAll();
+    expect(shared.state.logs.get(home.object)!.snapshot).toBeUndefined();
+    shared.state.refuse = false;
+    await replicas.syncAll();
+    shared.state.pad = 0;
+    expect(shared.state.logs.get(home.object)!.snapshot?.upTo).toBe(1);
+    expect(shared.state.logs.get(index.object)!.snapshot).toBeDefined();
+    // A device new to the board starts from the snapshot.
+    const late = await Replica.open({ transport: as(shared, "phone"), key: home.key, object: home.object, device: "phone" });
+    await late.pull();
+    expect(late.cards()[0].title).toBe("Water the plants");
   });
 });
