@@ -52,5 +52,14 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 
+    // libsodium for e2ee: the aar brings its .so per ABI, and JNA its own.
+    // 5.1, not 5.2: 5.2 is built for Java 21, which the JVM tests run without.
+    implementation("com.goterl:lazysodium-android:5.1.0@aar")
+    implementation("net.java.dev.jna:jna:5.12.1@aar")
+
     testImplementation("junit:junit:4.13.2")
+    // The same libsodium on the JVM, with a desktop build bundled.
+    testImplementation("com.goterl:lazysodium-java:5.1.4")
+    testImplementation("net.java.dev.jna:jna:5.12.1")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
 }
