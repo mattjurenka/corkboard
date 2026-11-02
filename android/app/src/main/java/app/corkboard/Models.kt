@@ -61,8 +61,11 @@ data class Goal(
 
 // A message between the user and a brain (cloud/src/user.ts's chat). byUser:
 // the user's own; a Worker from before it signs them all "matt".
+// delivered: when Pepper was given it, null while it can still be changed;
+// a Worker from before sends none, and everything has been.
 @Serializable
-data class ChatMessage(val id: Long, val at: String, val who: String, val text: String, @SerialName("by_user") val byUser: Boolean? = null) {
+data class ChatMessage(val id: Long, val at: String, val who: String, val text: String, @SerialName("by_user") val byUser: Boolean? = null, val delivered: String? = "") {
+    val pending get() = mine && delivered == null
     val mine get() = byUser ?: (who == "matt")
 }
 
@@ -203,6 +206,7 @@ data class Turns(val items: List<Turn> = emptyList(), val reset: Boolean = false
 @Serializable
 data class Terminal(val lines: List<String> = emptyList(), val width: Int? = null, val colors: List<List<List<Double>>>? = null, val palette: List<String>? = null)
 
+@Serializable
 data class Fleet(val environments: List<FleetEnvironment> = emptyList(), val spawns: List<Spawn> = emptyList(), val bridges: List<Bridge> = emptyList())
 
 // A spawn in one of these is over.

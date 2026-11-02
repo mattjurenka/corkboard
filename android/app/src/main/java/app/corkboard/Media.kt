@@ -47,6 +47,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 import java.io.File
 
 // The files agents attached to cards (attach_file), as corkboard's media
@@ -55,6 +56,7 @@ import java.io.File
 // video to play, text to read; anything else (a PDF, audio) opens in the app
 // the phone has for it. Files are kept in the cache once fetched.
 
+@Serializable
 data class Attached(val board: BoardInfo, val card: Card, val file: MediaFile)
 
 private suspend fun attached(): List<Attached> = coroutineScope {
@@ -71,12 +73,12 @@ fun bytes(n: Long) = when {
 
 @Composable
 fun MediaScreen(go: (Screen) -> Unit) {
-    var files by remember { mutableStateOf<List<Attached>?>(null) }
+    var files by remember { mutableStateOf(Cache.read<List<Attached>>("media")) }
     var problem by remember { mutableStateOf<String?>(null) }
     var loads by remember { mutableStateOf(0) }
     LaunchedEffect(loads) {
         try {
-            files = attached()
+            files = attached().also { Cache.write("media", it) }
             problem = null
         } catch (e: Exception) {
             problem = e.message ?: e.toString()

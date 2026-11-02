@@ -50,7 +50,7 @@ fun stateColor(state: String): Color = when (state) {
 }
 
 // fleetd looks at least every minute; one not heard from in three is gone.
-private fun stale(e: FleetEnvironment) = (age(e.seen) ?: Long.MAX_VALUE) > 180
+fun stale(e: FleetEnvironment) = (age(e.seen) ?: Long.MAX_VALUE) > 180
 
 // A VM's config in a line: "2 cores · allowlist 4 · 10.80.0.2".
 private fun summary(c: VmConfig?): String? {
@@ -131,6 +131,10 @@ fun FleetScreen(go: (Screen) -> Unit) {
                     fontWeight = if (view == label) FontWeight.SemiBold else FontWeight.Normal,
                     modifier = Modifier.clickable(role = Role.Tab) { view = label; App.store.fleetView = label },
                 )
+            }
+            f?.environments?.firstOrNull { it.templates.isNotEmpty() && !stale(it) }?.let { e ->
+                Spacer(Modifier.weight(1f))
+                Text("+ session", color = Monokai.cyan, modifier = Modifier.clickable(role = Role.Button) { go(Screen.NewSession(e.name)) })
             }
         }
         Rule(Monokai.base01)

@@ -21,6 +21,8 @@
 //                                            fleet's; ?bridge=<id>&machine= for a bridge's (user.ts)
 //   GET   /api/chat                          the chat with Pepper, oldest first: ?after=id, else the newest 100
 //   POST  /api/chat                          { text }: the user says something to Pepper
+//   PATCH, DELETE /api/chat/:id              { text }: change or take back one of theirs Pepper doesn't have yet
+//   POST  /api/chat/:id/delivered            pepperd passed it on to Pepper: its text as it is now
 //   GET   /api/sessions                      each connected bridge, with its pages' Claude Code sessions
 //   GET   /api/sessions/:bridge/:key         { lines }: what the session's terminal shows
 //   POST  /api/sessions/:bridge/:key/say     { text?, keys? }: typed into it, the keys after the text
@@ -353,6 +355,18 @@ async function memoryRoutes(request: Request, memory: Memories, grant: Grant): P
 
 // The user's messages are signed with their name, or their address's.
 async function chat(request: Request, users: Users, account: Registered): Promise<Response> {
+  const one = new URL(request.url).pathname.match(/^\/api\/chat\/(\d+)(\/delivered)?$/);
+  if (one) {
+    const id = Number(one[1]);
+    if (one[2]) return request.method === "POST" ? reply(await users.deliver(id)) : error(405, "method not allowed");
+    if (request.method === "PATCH") return reply(await users.edit(id, chatText((await body(request)).text)));
+    if (request.method === "DELETE") {
+      const gone = await users.unsay(id);
+      return gone.ok ? new Response(null, { status: 204 }) : reply(gone);
+    }
+    return error(405, "method not allowed");
+  }
+  if (new URL(request.url).pathname !== "/api/chat") return error(404, "not found");
   if (request.method === "GET") {
     const after = Number(new URL(request.url).searchParams.get("after") ?? 0);
     if (!Number.isInteger(after) || after < 0) throw new Invalid("after must be a message id");
@@ -801,7 +815,7 @@ export const api = {
       if (path === "/api/memory/vectors") return json(await (await memoryOf(env, ctx.props.userId, brain)).vectorState());
       if (path.startsWith("/api/memory/")) return await browse(request, await memoryOf(env, ctx.props.userId, brain));
       if (path.startsWith("/api/plans/")) return await plans(request, env, users, ctx);
-      if (path === "/api/chat") return await chat(request, users, account);
+      if (path === "/api/chat" || path.startsWith("/api/chat/")) return await chat(request, users, account);
       if (path.startsWith("/api/sessions")) return await sessions(request, users, machine);
       if (path.startsWith("/api/workspace/")) return await workspace(request, env, ctx.props, users, machine);
       // Forgejo is read with one token, the first admin's (git.ts), so it's

@@ -208,6 +208,49 @@ describe("chat", () => {
     expect(await (await call(owner, "GET", "/api/chat")).json<any[]>()).toEqual([]);
   });
 
+  it("lets the user change or take back a message until it's passed on", async () => {
+    const first = await (await call(owner, "POST", "/api/chat", { text: "gym at 6" })).json<any>();
+    const second = await (await call(owner, "POST", "/api/chat", { text: "never mind" })).json<any>();
+    expect(first.delivered).toBeNull();
+    const edited = await call(owner, "PATCH", `/api/chat/${first.id}`, { text: "  gym at 7  " });
+    expect(edited.status).toBe(200);
+    expect(await edited.json<any>()).toMatchObject({ id: first.id, text: "gym at 7", delivered: null });
+    expect((await call(owner, "DELETE", `/api/chat/${second.id}`)).status).toBe(204);
+    expect((await call(owner, "DELETE", `/api/chat/${second.id}`)).status).toBe(404);
+
+    const passed = await (await call(owner, "POST", `/api/chat/${first.id}/delivered`, {})).json<any>();
+    expect(passed).toMatchObject({ text: "gym at 7", delivered: expect.any(String) });
+    // Again, it's as it was.
+    expect(await (await call(owner, "POST", `/api/chat/${first.id}/delivered`, {})).json<any>()).toEqual(passed);
+    expect((await call(owner, "PATCH", `/api/chat/${first.id}`, { text: "gym at 8" })).status).toBe(409);
+    expect((await call(owner, "DELETE", `/api/chat/${first.id}`)).status).toBe(409);
+    expect((await call(owner, "POST", `/api/chat/${second.id}/delivered`, {})).status).toBe(404);
+
+    // Pepper's own aren't the user's to change.
+    const reply = await tool(await pepperToken(), "chat_send", { text: "7 it is." });
+    expect((await call(owner, "PATCH", `/api/chat/${reply.id}`, { text: "8" })).status).toBe(404);
+    const all = await (await call(owner, "GET", "/api/chat")).json<any[]>();
+    expect(all.map((m) => m.text)).toEqual(["gym at 7", "7 it is."]);
+  });
+
+  it("tells the live sockets of a change and a message taken back", async () => {
+    const live = await worker("/api/live", { headers: { Authorization: `Bearer ${owner}`, Upgrade: "websocket" } });
+    const ws = live.webSocket!;
+    ws.accept();
+    const events: any[] = [];
+    ws.addEventListener("message", (e) => events.push(JSON.parse(e.data as string)));
+    const m = await (await call(owner, "POST", "/api/chat", { text: "one" })).json<any>();
+    await call(owner, "PATCH", `/api/chat/${m.id}`, { text: "two" });
+    await call(owner, "DELETE", `/api/chat/${m.id}`);
+    for (let i = 0; i < 50 && events.length < 3; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(events).toEqual([
+      { type: "chat", message: expect.objectContaining({ id: m.id, text: "one" }) },
+      { type: "chat", message: expect.objectContaining({ id: m.id, text: "two" }) },
+      { type: "chat-gone", id: m.id },
+    ]);
+    ws.close();
+  });
+
   it("refuses empty or overlong messages and bad ids", async () => {
     expect((await call(owner, "POST", "/api/chat", { text: " " })).status).toBe(400);
     expect((await call(owner, "POST", "/api/chat", { text: "x".repeat(4001) })).status).toBe(400);

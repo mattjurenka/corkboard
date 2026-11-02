@@ -2,6 +2,7 @@ package app.corkboard
 
 import android.content.Context
 import kotlinx.serialization.encodeToString
+import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -91,3 +92,28 @@ fun today(): String = LocalDateTime.now().minusHours(DAY_STARTS_HOUR.toLong()).t
 
 // Minutes since the midnight that began today(), so past 1440 before 4am.
 fun minuteNow(): Int = LocalTime.now().let { it.hour * 60 + it.minute + if (it.hour < DAY_STARTS_HOUR) 24 * 60 else 0 }
+
+// What was last seen of each list, in the cache dir, to show at once while
+// it's read afresh. Nulls are kept, since a queued message is one with none.
+object Cache {
+    val json = kotlinx.serialization.json.Json(Cloud.json) { explicitNulls = true }
+    private val dir get() = java.io.File(App.instance.cacheDir, "lists")
+
+    fun file(name: String) = java.io.File(dir, name.replace(Regex("[^A-Za-z0-9._-]"), "_") + ".json")
+
+    inline fun <reified T> read(name: String): T? =
+        runCatching { json.decodeFromString<T>(file(name).readText()) }.getOrNull()
+
+    inline fun <reified T> write(name: String, value: T) {
+        val text = json.encodeToString(value)
+        Repo.scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val f = file(name)
+                f.parentFile?.mkdirs()
+                val part = java.io.File(f.path + ".part")
+                part.writeText(text)
+                part.renameTo(f)
+            }
+        }
+    }
+}

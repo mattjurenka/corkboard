@@ -52,6 +52,8 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 // One of a bridge's Claude Code sessions, from the fleet. One whose log is
@@ -191,7 +193,7 @@ fun SessionScreen(at: Screen.Session, back: () -> Unit) {
 @Composable
 private fun Lines(at: Screen.Session, s: BridgeSession?, bridge: Bridge?, fleet: Fleet?, back: () -> Unit) {
     val scope = rememberCoroutineScope()
-    var terminal by remember { mutableStateOf<Terminal?>(null) }
+    var terminal by remember { mutableStateOf(Cache.read<Terminal>("terminal-${at.bridge}-${at.key}")) }
     var text by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     // Bumped to look again now rather than at the next tick.
@@ -201,7 +203,7 @@ private fun Lines(at: Screen.Session, s: BridgeSession?, bridge: Bridge?, fleet:
     LaunchedEffect(at, s != null, again) {
         while (s != null) {
             try {
-                terminal = Cloud.terminal(at.bridge, s)
+                terminal = Cloud.terminal(at.bridge, s).also { Cache.write("terminal-${at.bridge}-${at.key}", it) }
                 error = null
             } catch (e: Exception) {
                 error = e.message
@@ -339,6 +341,13 @@ private fun Conversation(at: Screen.Session, s: BridgeSession?, machine: String?
         }
     }
 
+    // As last seen, until the attach stream's first batch (a reset) replaces it.
+    val cached = "turns-${at.bridge}-${at.key}"
+    LaunchedEffect(Unit) { if (items.isEmpty()) Cache.read<List<Turn>>(cached)?.let { take(it, reset = false) } }
+    LaunchedEffect(Unit) {
+        snapshotFlow { items.toList() + results.values }.drop(1).collectLatest { delay(1_000); Cache.write(cached, it) }
+    }
+
     LaunchedEffect(s != null, tries) {
         val session = s ?: return@LaunchedEffect
         socket?.close(1000, null)
@@ -382,9 +391,9 @@ private fun Conversation(at: Screen.Session, s: BridgeSession?, machine: String?
     LaunchedEffect(list) {
         snapshotFlow { list.isScrollInProgress to list.canScrollForward }.collect { (moving, more) -> if (moving) stick = !more }
     }
-    LaunchedEffect(items.size, results.size, ended) {
+    LaunchedEffect(items.size, results.size, ended, s?.state == "working") {
         // Past the last item's end; the list stops at its bottom.
-        if (stick && items.isNotEmpty()) list.scrollToItem(items.size - 1 + if (ended != null) 1 else 0, 1_000_000)
+        if (stick && items.isNotEmpty()) list.scrollToItem(items.size - 1 + (if (ended != null) 1 else 0) + (if (s?.state == "working") 1 else 0), 1_000_000)
     }
 
     fun type(line: String, keys: List<String>) {
@@ -418,6 +427,7 @@ private fun Conversation(at: Screen.Session, s: BridgeSession?, machine: String?
         ) {
             if (items.isEmpty()) item { Text(if (following) "…" else ended ?: "", color = Monokai.base04) }
             items(items, key = { it.id }) { t -> TurnRow(t, t.call?.let { results[it] }, open == t.id) { open = if (open == t.id) null else t.id } }
+            if (s?.state == "working") item(key = "working") { Text("✻ working…", color = Monokai.cyan) }
             ended?.takeIf { items.isNotEmpty() }?.let { item { Text(it, style = Small) } }
         }
         s?.detail?.takeIf { s.state == "permission" || s.state == "asking" }?.let {

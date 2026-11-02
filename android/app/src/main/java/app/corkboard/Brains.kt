@@ -59,7 +59,7 @@ fun BrainsScreen(go: (Screen) -> Unit) {
     val changed by Repo.brainsChanged.collectAsState()
     val scope = rememberCoroutineScope()
     var archived by brainsArchived
-    var brains by remember { mutableStateOf<List<Brain>?>(null) }
+    var brains by remember { mutableStateOf(Cache.read<List<Brain>>("brains-$archived")) }
     var open by remember { mutableStateOf<String?>(null) }
     var confirm by remember { mutableStateOf<String?>(null) }
     var typed by remember { mutableStateOf("") }
@@ -68,7 +68,7 @@ fun BrainsScreen(go: (Screen) -> Unit) {
 
     LaunchedEffect(archived, changed) {
         try {
-            brains = Cloud.brains(archived)
+            brains = Cloud.brains(archived).also { Cache.write("brains-$archived", it) }
         } catch (e: Exception) {
             error = e.message
         }

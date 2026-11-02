@@ -90,9 +90,13 @@ async function renew(state: State) {
 async function pass(state: State) {
   const said = ((await api("GET", `/api/chat?after=${state.last}`)) as Message[]).filter(byUser);
   for (const m of said) {
-    await tmux(["load-buffer", "-b", "phone", "-"], `[phone] ${m.text}`);
-    await tmux(["paste-buffer", "-p", "-d", "-b", "phone", "-t", SESSION]);
-    await tmux(["send-keys", "-t", SESSION, "Enter"]);
+    // Marked passed on first, so it can't change after; its text as it is now. Taken back: skipped.
+    const now = await api("POST", `/api/chat/${m.id}/delivered`, {}).catch((e: Error) => (e.message.includes("no message") ? null : Promise.reject(e)));
+    if (now) {
+      await tmux(["load-buffer", "-b", "phone", "-"], `[phone] ${now.text}`);
+      await tmux(["paste-buffer", "-p", "-d", "-b", "phone", "-t", SESSION]);
+      await tmux(["send-keys", "-t", SESSION, "Enter"]);
+    }
     state.last = m.id;
     save(state);
   }

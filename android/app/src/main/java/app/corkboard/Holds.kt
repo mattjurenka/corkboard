@@ -56,15 +56,15 @@ fun HoldsScreen(go: (Screen) -> Unit) {
     val changed by Repo.brainsChanged.collectAsState()
     val fleet by Repo.fleet.collectAsState()
     val scope = rememberCoroutineScope()
-    var holds by remember { mutableStateOf<List<Hold>?>(null) }
-    var brains by remember { mutableStateOf<List<Brain>>(emptyList()) }
+    var holds by remember { mutableStateOf(Cache.read<List<Hold>>("holds")) }
+    var brains by remember { mutableStateOf(Cache.read<List<Brain>>("brains-true") ?: emptyList()) }
     var busy by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(changed) {
         try {
-            holds = Cloud.holds()
-            brains = Cloud.brains(true)
+            holds = Cloud.holds().also { Cache.write("holds", it) }
+            brains = Cloud.brains(true).also { Cache.write("brains-true", it) }
         } catch (e: Exception) {
             error = e.message
         }

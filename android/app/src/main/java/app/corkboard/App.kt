@@ -10,6 +10,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
@@ -48,18 +50,30 @@ class App : Application() {
 object Repo {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     val plan = MutableStateFlow(App.store.plan?.takeIf { it.date == today() })
-    val chat = MutableStateFlow<List<ChatMessage>>(emptyList())
+    // The chat, the fleet and the goals start as last seen (Cache) and are read afresh.
+    val chat = MutableStateFlow(Cache.read<List<ChatMessage>>("chat") ?: emptyList())
     val signedIn = MutableStateFlow(App.store.auth != null)
     val problem = MutableStateFlow<String?>(null)
     val signInError = MutableStateFlow<String?>(null)
     // Whether /api/chat exists on this Worker yet.
     val chatReady = MutableStateFlow(true)
-    // Null until it's first heard.
-    val fleet = MutableStateFlow<Fleet?>(null)
+    // Null until it's first heard, or was seen on a run before.
+    val fleet = MutableStateFlow(Cache.read<Fleet>("fleet"))
     // Bumped on each brain the Worker says changed, for the brains tab to read again.
     val brainsChanged = MutableStateFlow(0)
     // Read with the plan; they change only when Pepper rewrites a goal note.
-    val goals = MutableStateFlow<List<Goal>>(emptyList())
+    val goals = MutableStateFlow(Cache.read<List<Goal>>("goals") ?: emptyList())
+
+    init {
+        keep("chat", chat)
+        keep("fleet", fleet)
+        keep("goals", goals)
+    }
+
+    // Written a second after it settles, for the next start.
+    private inline fun <reified T> keep(name: String, flow: MutableStateFlow<T>) {
+        scope.launch { flow.drop(1).collectLatest { delay(1_000); Cache.write(name, it) } }
+    }
 
     private var socket: WebSocket? = null
     private var following: Job? = null
@@ -135,8 +149,13 @@ object Repo {
         fleet.value = f.copy(environments = (f.environments.filter { it.name != e.name } + e).sortedBy { it.name })
     }
 
+    // New, or one changed: edited, or passed on to Pepper.
     fun addMessage(m: ChatMessage) {
-        if (chat.value.none { it.id == m.id }) chat.value = (chat.value + m).sortedBy { it.id }
+        chat.value = (chat.value.filter { it.id != m.id } + m).sortedBy { it.id }
+    }
+
+    fun dropMessage(id: Long) {
+        chat.value = chat.value.filter { it.id != id }
     }
 
     // Refresh, then follow the live socket, reconnecting while in front.
@@ -180,6 +199,7 @@ object Repo {
         when (e["type"]?.jsonPrimitive?.content) {
             "plan" -> setPlan(Cloud.json.decodeFromJsonElement(e["plan"]!!))
             "chat" -> addMessage(Cloud.json.decodeFromJsonElement(e["message"]!!))
+            "chat-gone" -> dropMessage(e["id"]!!.jsonPrimitive.content.toLong())
             "fleet" -> setEnvironment(Cloud.json.decodeFromJsonElement(e["environment"]!!))
             "spawn" -> setSpawn(Cloud.json.decodeFromJsonElement(e["spawn"]!!))
             "bridge" -> setBridge(Cloud.json.decodeFromJsonElement(e["bridge"]!!))

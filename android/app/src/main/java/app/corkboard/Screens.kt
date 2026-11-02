@@ -498,27 +498,65 @@ fun ChatScreen(draft: String) {
     val scope = rememberCoroutineScope()
     var text by remember { mutableStateOf(draft) }
     var error by remember { mutableStateOf<String?>(null) }
+    // The queued message being changed in the field, if one is.
+    var editing by remember { mutableStateOf<Long?>(null) }
     val list = rememberLazyListState()
-    LaunchedEffect(messages.size) { if (messages.isNotEmpty()) list.animateScrollToItem(messages.size - 1) }
+    // Pepper's yet to be given the queued ones, so they wait at the foot;
+    // once the last one's had, Pepper is thinking until it answers.
+    val (queued, said) = messages.partition { it.pending }
+    val thinking = queued.isEmpty() && said.lastOrNull()?.mine == true
+    val count = said.size + queued.size + if (thinking) 1 else 0
+    LaunchedEffect(count) { if (count > 0) list.animateScrollToItem(count - 1) }
+    if (editing != null && queued.none { it.id == editing }) editing = null
     val dictation = rememberDictation(onHeard = { text = it; error = null }, onError = { error = it })
     Page {
-        Header("pepper", if (dictation.listening) "listening…" else if (messages.lastOrNull()?.mine == true) "thinking…" else "chat")
+        Header("pepper", if (dictation.listening) "listening…" else "chat")
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             if (!ready) item { Text("This Worker has no chat yet: deploy the cloud/ update for messages to reach Pepper.", color = Monokai.orange) }
             if (ready && messages.isEmpty()) item { Text("Nothing yet. Pepper answers here, and can change today's plan while you talk.", color = Monokai.base04) }
-            items(messages, key = { it.id }) { m ->
+            items(said, key = { it.id }) { m ->
                 Column {
                     Text(if (m.mine) "you" else m.who, style = Small.copy(color = if (m.mine) Monokai.base04 else Monokai.purple))
                     if (!m.mine) Markdown(m.text, Modifier.padding(top = 2.dp))
                     else Text(m.text, modifier = Modifier.padding(top = 2.dp))
                 }
             }
+            items(queued, key = { it.id }) { m ->
+                Column {
+                    Row {
+                        Text("you · queued", style = Small, modifier = Modifier.weight(1f))
+                        Text(
+                            if (editing == m.id) "editing" else "edit",
+                            style = Small.copy(color = if (editing == m.id) Monokai.purple else Monokai.base04),
+                            modifier = Modifier.clickable(role = Role.Button) { editing = m.id; text = m.text; error = null }.padding(horizontal = 8.dp),
+                        )
+                        Text(
+                            "take back",
+                            style = Small.copy(color = Monokai.orange),
+                            modifier = Modifier.clickable(role = Role.Button) {
+                                scope.launch {
+                                    try {
+                                        Cloud.unsay(m.id)
+                                        Repo.dropMessage(m.id)
+                                        if (editing == m.id) { editing = null; text = "" }
+                                        error = null
+                                    } catch (e: Exception) {
+                                        error = e.message
+                                    }
+                                }
+                            }.padding(start = 8.dp),
+                        )
+                    }
+                    Text(m.text, color = Monokai.base04, modifier = Modifier.padding(top = 2.dp))
+                }
+            }
+            if (thinking) item(key = "thinking") { Text("✻ thinking…", color = Monokai.purple) }
         }
         error?.let { Text(it, color = Monokai.orange, modifier = Modifier.padding(horizontal = 16.dp)) }
         Rule()
         Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(
-                Modifier.weight(1f).heightIn(min = 52.dp).border(1.dp, Monokai.base02).padding(horizontal = 12.dp, vertical = 8.dp),
+                Modifier.weight(1f).heightIn(min = 52.dp).border(1.dp, if (editing != null) Monokai.purple else Monokai.base02).padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("› ", color = Monokai.purple)
@@ -538,16 +576,22 @@ fun ChatScreen(draft: String) {
                     )
                 }
             }
-            Solid("send", color = Monokai.purple, enabled = ready && text.isNotBlank()) {
+            if (editing != null) {
+                Outline("×", color = Monokai.base04) { editing = null; text = "" }
+            }
+            Solid(if (editing != null) "save" else "send", color = Monokai.purple, enabled = ready && text.isNotBlank()) {
                 dictation.stop()
                 val sending = text.trim()
+                val id = editing
                 text = ""
+                editing = null
                 scope.launch {
                     try {
-                        Repo.addMessage(Cloud.say(sending))
+                        Repo.addMessage(if (id != null) Cloud.editChat(id, sending) else Cloud.say(sending))
                         error = null
                     } catch (e: Exception) {
-                        text = sending
+                        // Too late to change: Pepper has it, so it stays as it was.
+                        if (id == null || !(e is Cloud.Failed && e.status == 409)) { text = sending; editing = id }
                         error = e.message
                     }
                 }
@@ -555,7 +599,6 @@ fun ChatScreen(draft: String) {
         }
     }
 }
-
 
 // Talking instead of typing. Android's recognizer runs here rather than in
 // its "speak now" dialog, which is the Google app's window and so locked

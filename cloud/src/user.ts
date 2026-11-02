@@ -97,6 +97,11 @@ export class User extends DurableObject {
       this.sql.exec("ALTER TABLE chat ADD COLUMN by_user INTEGER NOT NULL DEFAULT 0");
       this.sql.exec("UPDATE chat SET by_user = 1 WHERE who = 'matt'");
     }
+    // When a user's message was passed on to Pepper (pepperd); until then it can be changed.
+    if (!this.sql.exec("SELECT 1 FROM pragma_table_info('chat') WHERE name = 'delivered'").toArray().length) {
+      this.sql.exec("ALTER TABLE chat ADD COLUMN delivered TEXT");
+      this.sql.exec("UPDATE chat SET delivered = at WHERE by_user = 1");
+    }
     // Briefly the portal's Forgejo sign-ins (2026-10-30), now a Worker secret (git.ts).
     this.sql.exec("DROP TABLE IF EXISTS links");
   }
@@ -179,6 +184,8 @@ export class User extends DurableObject {
     const n = restore(this.sql, d);
     // An export from before by_user: the user's messages were "matt"'s.
     if (d.chat?.length && !("by_user" in d.chat[0])) this.sql.exec("UPDATE chat SET by_user = 1 WHERE who = 'matt'");
+    // One from before delivered: what was said then was passed on long ago.
+    if (d.chat?.length && !("delivered" in d.chat[0])) this.sql.exec("UPDATE chat SET delivered = at WHERE by_user = 1");
     return ok(n);
   }
 
@@ -399,6 +406,39 @@ export class User extends DurableObject {
     const message = messageOf(this.sql.exec("INSERT INTO chat (at, who, text, by_user) VALUES (?, ?, ?, ?) RETURNING *", now(), who, text, byUser ? 1 : 0).one());
     this.broadcast({ type: "chat", message });
     return message;
+  }
+
+  // The user's own message, changed or taken back before it's passed on.
+  private pending(id: number): Result<ChatMessage> {
+    const row = this.sql.exec("SELECT * FROM chat WHERE id = ? AND by_user = 1", id).toArray()[0];
+    if (!row) return refuse(404, `no message ${id}`);
+    const m = messageOf(row);
+    return m.delivered ? refuse(409, "Pepper has it already") : ok(m);
+  }
+
+  edit(id: number, text: string): Result<ChatMessage> {
+    const was = this.pending(id);
+    if (!was.ok) return was;
+    const message = messageOf(this.sql.exec("UPDATE chat SET text = ? WHERE id = ? RETURNING *", text, id).one());
+    this.broadcast({ type: "chat", message });
+    return ok(message);
+  }
+
+  unsay(id: number): Result<null> {
+    const was = this.pending(id);
+    if (!was.ok) return was;
+    this.sql.exec("DELETE FROM chat WHERE id = ?", id);
+    this.broadcast({ type: "chat-gone", id });
+    return ok(null);
+  }
+
+  // pepperd passes it on: from now it's as it was said. Again, it's as it was.
+  deliver(id: number): Result<ChatMessage> {
+    const row = this.sql.exec("UPDATE chat SET delivered = coalesce(delivered, ?) WHERE id = ? AND by_user = 1 RETURNING *", now(), id).toArray()[0];
+    if (!row) return refuse(404, `no message ${id}`);
+    const message = messageOf(row);
+    this.broadcast({ type: "chat", message });
+    return ok(message);
   }
 
   // Fleet -----------------------------------------------------------------------------
@@ -682,6 +722,7 @@ const messageOf = (r: Record<string, SqlStorageValue>): ChatMessage => ({
   who: r.who as string,
   text: r.text as string,
   by_user: r.by_user === 1,
+  delivered: (r.delivered as string | null) ?? null,
 });
 
 // What a socket is, besides the phone's or the day plan's own: a bridge's,

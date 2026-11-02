@@ -33,9 +33,12 @@ import kotlinx.coroutines.launch
 @Composable
 fun NewSessionScreen(environment: String, go: (Screen) -> Unit, back: () -> Unit) {
     val fleet by Repo.fleet.collectAsState()
-    val templates = fleet?.environments?.firstOrNull { it.name == environment }?.templates.orEmpty().toSortedMap()
+    // Where it starts: the environment it was opened for, or another that's up and runs VM types.
+    var place by remember { mutableStateOf(environment) }
+    val places = fleet?.environments.orEmpty().filter { it.templates.isNotEmpty() && !stale(it) }.map { it.name }
+    val templates = fleet?.environments?.firstOrNull { it.name == place }?.templates.orEmpty().toSortedMap()
     val scope = rememberCoroutineScope()
-    var boards by remember { mutableStateOf<List<BoardInfo>?>(null) }
+    var boards by remember { mutableStateOf(Cache.read<List<BoardInfo>>("boards")) }
     var template by remember { mutableStateOf<String?>(null) }
     var board by remember { mutableStateOf<String?>(null) }
     var text by remember { mutableStateOf("") }
@@ -45,8 +48,9 @@ fun NewSessionScreen(environment: String, go: (Screen) -> Unit, back: () -> Unit
     LaunchedEffect(Unit) {
         try {
             boards = Cloud.boards().filter { !it.root.isNullOrEmpty() }.sortedBy { it.name.ifEmpty { it.key } }
+            Cache.write("boards", boards)
         } catch (e: Exception) {
-            boards = emptyList()
+            if (boards == null) boards = emptyList()
             error = e.message
         }
     }
@@ -54,10 +58,21 @@ fun NewSessionScreen(environment: String, go: (Screen) -> Unit, back: () -> Unit
     val project = board?.takeIf { b -> boards.orEmpty().any { it.key == b } } ?: boards?.firstOrNull()?.key
 
     Page {
-        Header("new session", environment)
+        Header("new session", place)
         Problem()
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
             Spacer(Modifier.height(12.dp))
+            if (places.size > 1 || places.none { it == place }) {
+                Panel("environment") {
+                    for (name in places) {
+                        PanelRow({ place = name; template = null }) {
+                            Check(name == place)
+                            Text(name, color = if (name == place) Monokai.cyan else Monokai.base05, modifier = Modifier.padding(start = 8.dp))
+                        }
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+            }
             Panel("vm") {
                 if (templates.isEmpty()) Text("its fleetd runs no VM types", style = Small, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
                 for ((name, t) in templates) {
@@ -114,7 +129,7 @@ fun NewSessionScreen(environment: String, go: (Screen) -> Unit, back: () -> Unit
                 error = null
                 scope.launch {
                     try {
-                        Repo.setSpawn(Cloud.startSession(environment, chosen!!, project, text.trim()))
+                        Repo.setSpawn(Cloud.startSession(place, chosen!!, project, text.trim()))
                         go(Screen.Fleet)
                     } catch (e: Exception) {
                         error = e.message

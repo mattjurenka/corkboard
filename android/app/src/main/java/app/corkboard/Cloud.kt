@@ -210,6 +210,14 @@ object Cloud {
     suspend fun say(text: String): ChatMessage =
         json.decodeFromJsonElement(api("POST", "/api/chat", buildJsonObject { put("text", text) }))
 
+    // One of the user's, changed or taken back while Pepper doesn't have it yet (else a 409).
+    suspend fun editChat(id: Long, text: String): ChatMessage =
+        json.decodeFromJsonElement(api("PATCH", "/api/chat/$id", buildJsonObject { put("text", text) }))
+
+    suspend fun unsay(id: Long) {
+        api("DELETE", "/api/chat/$id")
+    }
+
     suspend fun environments(): List<FleetEnvironment> = json.decodeFromJsonElement(api("GET", "/api/fleet/environments"))
 
     suspend fun spawns(states: String, limit: Int): List<Spawn> =
