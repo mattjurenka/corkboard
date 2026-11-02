@@ -8,6 +8,9 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
+      // Workers AI and Vectorize would open a session with Cloudflare, which
+      // wants an API token on CI; MEMORY_VECTORS below keeps them unused.
+      remoteBindings: false,
       miniflare: {
         bindings: {
           ORIGIN: "https://corkboard.test",
