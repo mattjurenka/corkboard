@@ -90,9 +90,10 @@ function unpack(archive: string, dest: string) {
   const tmp = `${dest}.unpack`;
   rmSync(tmp, { recursive: true, force: true });
   mkdirSync(tmp, { recursive: true });
-  // Windows' tar (bsdtar) reads zips too; elsewhere unzip does.
+  // Windows' own tar (bsdtar, not Git's GNU one) reads zips too; elsewhere unzip does.
+  const tar = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe") : "tar";
   if (archive.endsWith(".zip") && process.platform !== "win32") run(["unzip", "-q", archive, "-d", tmp]);
-  else run(["tar", "-xf", archive, "-C", tmp]);
+  else run([tar, "-xf", archive, "-C", tmp]);
   const [top] = readdirSync(tmp);
   rmSync(dest, { recursive: true, force: true });
   cpSync(join(tmp, top), dest, { recursive: true, verbatimSymlinks: true });

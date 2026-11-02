@@ -1,0 +1,75 @@
+# A tag v<version> (app/package.json's): the desktop app for each OS, built
+# with its compiled bridge and Neovim (scripts/build-bridge.ts) and put on a
+# draft GitHub release, which is published by hand once it's looked at.
+# electron-updater reads the published ones.
+#
+# Secrets, each optional; what's missing is left unsigned:
+#   macOS     CSC_LINK, CSC_KEY_PASSWORD; APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
+#   Windows   AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_SIGN_ENDPOINT,
+#             AZURE_SIGN_ACCOUNT, AZURE_SIGN_PROFILE, AZURE_SIGN_PUBLISHER
+#             (or WIN_CSC_LINK, WIN_CSC_KEY_PASSWORD)
+#   all       GH_TOKEN, if the workflow's own token won't do
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  app:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: macos-latest
+            platform: mac
+          - os: windows-latest
+            platform: win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # git describe, for the bridge's version.
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: tag is the app's version
+        shell: bash
+        run: |
+          version=$(bun -p 'require("./app/package.json").version')
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME, app/package.json $version"; exit 1; }
+
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun scripts/build-bridge.ts --target ${{ matrix.platform }}
+      - run: bun scripts/smoke-bridge.ts
+
+      - run: bun install --frozen-lockfile
+        working-directory: app
+      - name: package and publish
+        working-directory: app
+        run: bunx electron-builder --config electron-builder.config.js --${{ matrix.platform }} --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_SIGN_ENDPOINT: ${{ secrets.AZURE_SIGN_ENDPOINT }}
+          AZURE_SIGN_ACCOUNT: ${{ secrets.AZURE_SIGN_ACCOUNT }}
+          AZURE_SIGN_PROFILE: ${{ secrets.AZURE_SIGN_PROFILE }}
+          AZURE_SIGN_PUBLISHER: ${{ secrets.AZURE_SIGN_PUBLISHER }}
