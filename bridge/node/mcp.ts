@@ -1,0 +1,562 @@
+// The node's /mcp: the Worker's MCP tools (cloud/src/mcp.ts) for cards,
+// notes and memory, over the node's replicas instead of its Durable Objects.
+// Same names, descriptions and rules, so a client moved from the Worker to
+// the node sees the same tools, less those with nothing on the node yet:
+// attachments, boards made over MCP, day plans, the chat and the fleet.
+//
+// Streamable HTTP, stateless, as the Worker's: each POST is a JSON-RPC
+// message (or a batch) answered with JSON; GET is 405. Every tool here
+// answers from local state at once, so there's no long call to keep alive.
+//
+// Every caller is the user's own client: an OAuth token's scope says which
+// (owner or assistant, oauth.ts). An assistant can't write the soul, and
+// neither sees the brains' goals, as on the Worker.
+
+import { AGENT_STATES, type Card, PRIORITIES, STATUSES, waitingOn } from "../../cloud/src/cards";
+import { BRAIN_ONLY_KINDS, NOTE_KINDS, OWNER_ONLY_NOTES, date, note, noteId, slug } from "../../cloud/src/plans";
+import { range } from "../../cloud/src/dates";
+import { type Data, type FullCard, Invalid } from "./data";
+import type { Search } from "./search";
+
+export type Caller = { scope: "owner" | "assistant"; agent: string };
+
+class ToolError extends Error {}
+
+type Draft = FullCard & { logs: string[] };
+const FIELDS = ["title", "status", "agent", "agent_state", "attention", "priority", "ordinal", "labels", "dependencies", "description"] as const;
+
+type Call = { data: Data; search: Search; board: string; me: string; caller: Caller; cards: () => FullCard[] };
+
+// Read a card, change a draft of it, write what changed and its log
+// entries. A replica merges per field, so there's no version to retry on.
+async function change(c: Call, id: string, fn: (d: Draft) => void): Promise<Card> {
+  const current = c.data.card(c.board, id);
+  const draft: Draft = { ...structuredClone(current), logs: [] };
+  fn(draft);
+  const fields: Record<string, unknown> = {};
+  for (const k of FIELDS) if (JSON.stringify(draft[k]) !== JSON.stringify(current[k])) fields[k] = draft[k];
+  let written: Card = current;
+  if (Object.keys(fields).length) written = await c.data.updateCard(c.board, id, fields);
+  for (const n of draft.logs) await c.data.appendLog(c.board, id, c.me, n);
+  return written;
+}
+
+const logText = (log: FullCard["log"]) => log.map((e) => `- ${e.at} ${e.who}: ${e.note.replace(/\n/g, "\n  ")}`).join("\n");
+
+function summary(c: Card, cards: Card[]) {
+  return {
+    id: c.id,
+    title: c.title,
+    status: c.status,
+    agent: c.agent ?? "",
+    agent_state: c.agent_state ?? "",
+    attention: c.attention ?? "",
+    priority: c.priority ?? "",
+    ordinal: c.ordinal ?? "",
+    labels: c.labels,
+    dependencies: c.dependencies,
+    waiting_on: waitingOn(c, cards),
+  };
+}
+
+function full(c: FullCard) {
+  const { log, extra, version: _, ...fields } = c;
+  return { ...extra, ...fields, log: logText(log) };
+}
+
+type Tool = { description: string; properties?: Record<string, object>; required?: string[]; run: (a: any, c: Call) => Promise<unknown> | unknown };
+
+const str = (description: string) => ({ type: "string", description });
+const id = str("Card id, e.g. TASK-4");
+const strings = (description: string) => ({ type: "array", items: { type: "string" }, description });
+const labels = strings("Labels, replacing the card's");
+const dependencies = strings("Ids of cards this one waits on, e.g. TASK-4; replaces the card's");
+const priority = { type: "string", enum: [...PRIORITIES, ""], description: "high, medium or low; empty clears it, which counts as medium" };
+function priorityOf(v: unknown) {
+  if (v === "" || v === null) return null;
+  if (!PRIORITIES.includes(v as (typeof PRIORITIES)[number])) throw new ToolError(`priority must be one of ${PRIORITIES.join(", ")}`);
+  return v as (typeof PRIORITIES)[number];
+}
+const cleanList = (v: unknown) => (Array.isArray(v) ? v.map((s) => String(s).trim()).filter(Boolean) : []);
+const oneLine = (s: unknown) => String(s).replace(/\n/g, " ").trim();
+
+function holder(card: Card, me: string) {
+  if (card.agent !== me) throw new ToolError(`card ${card.id} is held by ${card.agent || "nobody"}, not ${me}; claim it first`);
+  if (card.agent_state === "queued") throw new ToolError(`card ${card.id} is queued for you; claim it first`);
+}
+
+function ask(card: Draft, me: string, message: string, wait: boolean) {
+  holder(card, me);
+  const text = message.trim();
+  if (!text) throw new ToolError("say what you need");
+  const line = text.split("\n")[0].trim();
+  card.attention = line.length > 200 ? line.slice(0, 199) + "…" : line;
+  if (wait) card.agent_state = "blocked";
+  card.logs.push(`${wait ? "blocked" : "needs you"}: ${text}`);
+}
+
+async function claim(c: Call, cardId: string, force = false): Promise<Card> {
+  const cards = c.cards();
+  return change(c, cardId, (card) => {
+    if (card.agent && card.agent !== c.me) throw new ToolError(`card ${cardId} is held by ${card.agent}`);
+    if (card.status === "done") throw new ToolError(`card ${cardId} is done`);
+    const waiting = waitingOn(card, cards);
+    if (waiting.length && !force) throw new ToolError(`card ${cardId} waits on ${waiting.join(", ")}; pass force to claim it anyway`);
+    if (card.agent === c.me && card.agent_state === "working") return;
+    card.status = "doing";
+    card.agent = c.me;
+    card.agent_state = "working";
+    card.attention = null;
+    card.logs.push("claimed");
+  });
+}
+
+const read = (c: Call, cardId: string) => full(c.data.card(c.board, cardId));
+const brief = (c: Call, card: Card) => summary(card, c.cards());
+const HANDED_OFF = "Handed off. End your turn now: this session will be cleared and the next started from your handoff.";
+
+const TOOLS: Record<string, Tool> = {
+  list_cards: {
+    description: "List cards (without their bodies), ordered by priority (high first; none is medium), then ordinal, then id. Filters are optional and combine.",
+    properties: {
+      status: { type: "string", enum: STATUSES },
+      agent_state: { type: "string", enum: AGENT_STATES },
+      agent: str("Only cards held by this agent"),
+      mine: { type: "boolean", description: "Only cards held by you" },
+    },
+    run: (a, c) => {
+      const cards = c.cards();
+      const rank = (x: Card) => ({ high: 0, medium: 1, low: 2 })[x.priority ?? "medium"];
+      return cards
+        .filter((x) => !a.status || x.status === a.status)
+        .filter((x) => !a.agent_state || x.agent_state === a.agent_state)
+        .filter((x) => !a.agent || x.agent === a.agent)
+        .filter((x) => !a.mine || x.agent === c.me)
+        .sort((x, y) => rank(x) - rank(y) || (x.ordinal ?? Infinity) - (y.ordinal ?? Infinity) || x.id.localeCompare(y.id, undefined, { numeric: true }))
+        .map((x) => summary(x, cards));
+    },
+  },
+  read_card: {
+    description: "Read a card: its fields, description and log.",
+    properties: { id },
+    required: ["id"],
+    run: (a, c) => read(c, a.id),
+  },
+  next_card: {
+    description:
+      "Claim the next card to work on and return it: a card queued for you first, else the top unassigned card in ready. Cards still waiting on dependencies are skipped. Returns null when there is nothing to do.",
+    run: async (_a, c) => {
+      const cards = c.cards();
+      const candidates = [...cards.filter((x) => x.agent === c.me && x.agent_state === "queued"), ...cards.filter((x) => x.status === "ready" && !x.agent)].filter(
+        (x) => !waitingOn(x, cards).length && !x.extra.budget_hold,
+      );
+      for (const x of candidates) {
+        try {
+          return read(c, (await claim(c, x.id)).id);
+        } catch {}
+      }
+      return null;
+    },
+  },
+  claim_card: {
+    description:
+      "Start work on a card: sets status doing, agent to you, agent_state working. Fails if another agent holds it, or if it waits on cards that aren't done (unless force).",
+    properties: { id, force: { type: "boolean", description: "Claim it even though its dependencies aren't done" } },
+    required: ["id"],
+    run: async (a, c) => read(c, (await claim(c, a.id, a.force === true)).id),
+  },
+  release_card: {
+    description: "Give up a card you hold without finishing it; it goes back to ready, unassigned.",
+    properties: { id, note: str("Why you are letting it go") },
+    required: ["id", "note"],
+    run: async (a, c) =>
+      brief(
+        c,
+        await change(c, a.id, (x) => {
+          holder(x, c.me);
+          x.status = "ready";
+          x.agent = null;
+          x.agent_state = null;
+          x.attention = null;
+          x.logs.push(`released: ${a.note}`);
+        }),
+      ),
+  },
+  log: {
+    description: "Append a timestamped entry to the card's implementation notes (its log). Use it for progress, decisions and findings.",
+    properties: { id, note: str("The entry; markdown is fine") },
+    required: ["id", "note"],
+    run: async (a, c) => brief(c, await change(c, a.id, (x) => x.logs.push(String(a.note).trim()))),
+  },
+  block: {
+    description:
+      "You need a human decision: marks the card blocked, logs your question and sends the user a desktop notification. Stop working on it until it is answered.",
+    properties: { id, question: str("What you need decided, with the options you see. The first line is the notification.") },
+    required: ["id", "question"],
+    run: async (a, c) => brief(c, await change(c, a.id, (x) => ask(x, c.me, String(a.question), true))),
+  },
+  request_user_action: {
+    description:
+      "Ask the user to do something only they can (log in somewhere, approve a change, check something on a device, look at a result). Sends them a desktop notification and shows the request on the card. With wait (the default) the card is marked blocked and you should stop until it is done; with wait: false you carry on meanwhile.",
+    properties: {
+      id,
+      message: str("What you need them to do, concretely. The first line is the notification."),
+      wait: { type: "boolean", description: "Whether you are stopped until they do it (default true)" },
+    },
+    required: ["id", "message"],
+    run: async (a, c) => brief(c, await change(c, a.id, (x) => ask(x, c.me, String(a.message), a.wait !== false))),
+  },
+  submit_for_review: {
+    description: "You finished a card: moves it to review and logs what changed and how you verified it.",
+    properties: { id, summary: str("What changed"), verification: str("How you checked it works") },
+    required: ["id", "summary", "verification"],
+    run: async (a, c) =>
+      brief(
+        c,
+        await change(c, a.id, (x) => {
+          holder(x, c.me);
+          x.status = "review";
+          x.agent_state = "needs-review";
+          x.attention = null;
+          x.logs.push(`${a.summary}\nVerified: ${a.verification}`);
+        }),
+      ),
+  },
+  handoff: {
+    description:
+      "Hand your work to a fresh session when your context is nearly full: the goal, what's done and verified, what's left, and what you learned that the next session would otherwise have to find again. On a card, it goes in the card's log. Then end your turn.",
+    properties: { id: str("The card you're on, if any"), text: str("The handoff, markdown") },
+    required: ["text"],
+    run: async (a, c) => {
+      await c.data.appendLog(c.board, a.id, c.me, `handoff:\n${String(a.text).trim()}`);
+      return HANDED_OFF;
+    },
+  },
+  update_card: {
+    description:
+      "Change a card's title, status, priority, ordinal, labels, dependencies or agent_state. Only the agent holding a card may change its agent_state.",
+    properties: {
+      id,
+      title: str("New title"),
+      status: { type: "string", enum: STATUSES },
+      priority,
+      ordinal: { type: "number", description: "Lower sorts first within a column" },
+      labels,
+      dependencies,
+      agent_state: { type: "string", enum: AGENT_STATES },
+    },
+    required: ["id"],
+    run: async (a, c) =>
+      brief(
+        c,
+        await change(c, a.id, (x) => {
+          if (a.status !== undefined && !STATUSES.includes(a.status)) throw new ToolError(`status must be one of ${STATUSES.join(", ")}`);
+          if (a.agent_state !== undefined) {
+            if (!AGENT_STATES.includes(a.agent_state)) throw new ToolError(`agent_state must be one of ${AGENT_STATES.join(", ")}`);
+            holder(x, c.me);
+          }
+          if (a.title !== undefined) x.title = oneLine(a.title);
+          if (a.status !== undefined) x.status = a.status;
+          if (a.priority !== undefined) x.priority = priorityOf(a.priority);
+          if (a.ordinal !== undefined) {
+            if (typeof a.ordinal !== "number" || !Number.isFinite(a.ordinal)) throw new ToolError("ordinal must be a number");
+            x.ordinal = a.ordinal;
+          }
+          if (a.labels !== undefined) x.labels = cleanList(a.labels);
+          if (a.dependencies !== undefined) x.dependencies = cleanList(a.dependencies).map((d) => d.toUpperCase());
+          if (a.agent_state !== undefined) {
+            x.agent_state = a.agent_state;
+            x.attention = null;
+          }
+        }),
+      ),
+  },
+  archive_card: {
+    description:
+      "Take a card off the board: it leaves the board and list_cards but is kept, and read_card still reads it. For cards that are finished with or no longer wanted. It must not be held by an agent at work.",
+    properties: { id, note: str("Why it's being archived; goes in its log") },
+    required: ["id", "note"],
+    run: async (a, c) => {
+      const card = c.data.card(c.board, a.id);
+      if (card.agent && card.agent_state && ["queued", "working", "blocked"].includes(card.agent_state))
+        throw new ToolError(`card ${a.id} is ${card.agent_state} with ${card.agent}; release it first`);
+      await c.data.appendLog(c.board, a.id, c.me, `archived: ${String(a.note).trim()}`);
+      return brief(c, await c.data.archive(c.board, a.id, true));
+    },
+  },
+  write_description: {
+    description: "Replace a card's description. Its log is kept as it is; add to the log with the log tool.",
+    properties: { id, description: str("The new description, markdown") },
+    required: ["id", "description"],
+    run: async (a, c) => brief(c, await change(c, a.id, (x) => (x.description = String(a.description).trim()))),
+  },
+  create_card: {
+    description: "Create a card, e.g. for follow-up work you found. It goes in backlog unless you say otherwise.",
+    properties: {
+      title: str("One line"),
+      description: str("What needs doing and why, markdown"),
+      status: { type: "string", enum: STATUSES },
+      priority,
+      labels,
+      dependencies,
+      parent: str("Id of the card this came out of; both cards get a log entry linking them"),
+      attention: str("What you're asking the user about this card, one line; corkboard notifies them. Not for card agents"),
+    },
+    required: ["title"],
+    run: async (a, c) => {
+      const parent = a.parent ? String(a.parent).toUpperCase() : undefined;
+      if (parent) c.data.card(c.board, parent);
+      if (a.status !== undefined && !STATUSES.includes(a.status)) throw new ToolError(`status must be one of ${STATUSES.join(", ")}`);
+      const title = oneLine(a.title ?? "");
+      if (!title) throw new ToolError("a card needs a title");
+      const attention = typeof a.attention === "string" ? oneLine(a.attention) : "";
+      const card = await c.data.createCard(c.board, {
+        title,
+        description: typeof a.description === "string" ? a.description.trim() : "",
+        status: a.status ?? "backlog",
+        priority: a.priority === undefined ? null : priorityOf(a.priority),
+        labels: cleanList(a.labels),
+        dependencies: cleanList(a.dependencies).map((d) => d.toUpperCase()),
+        ...(attention ? { attention: attention.length > 200 ? attention.slice(0, 199) + "…" : attention } : {}),
+      });
+      if (parent) {
+        await c.data.appendLog(c.board, parent, c.me, `follow-up: ${card.id}`);
+        await c.data.appendLog(c.board, card.id, c.me, `created from ${parent}`);
+      }
+      return brief(c, card);
+    },
+  },
+};
+
+const INSTRUCTIONS = (me: string) => `The corkboard project board: one card per task. You are "${me}".
+To pick up work, call next_card (or claim_card for a specific card). While working, log progress with log.
+If you need a human decision, call block with your question and stop. If you need the user to do something
+(log in, approve, test on a device), call request_user_action; both notify them on their desktop.
+When done, call submit_for_review.
+Put follow-up work you discover in new cards with create_card (parent: the card you are on).`;
+
+// Memory --------------------------------------------------------------------------------
+
+type MemoryCall = { data: Data; search: Search; brain: string; caller: Caller; hidden: readonly string[] };
+type MemoryTool = { description: string; properties?: Record<string, object>; required?: string[]; run: (a: any, c: MemoryCall) => Promise<unknown> | unknown };
+
+const kinds = (hidden: readonly string[]) => NOTE_KINDS.filter((k) => !hidden.includes(k));
+
+function visible(id: string, c: MemoryCall) {
+  const n = c.data.note(c.brain, id);
+  if (!n || c.hidden.includes(n.kind)) throw new ToolError(`no note ${id}`);
+  return n;
+}
+
+function writable(id: string, c: MemoryCall) {
+  if (OWNER_ONLY_NOTES.has(id) && c.caller.scope !== "owner") throw new ToolError(`only the user writes the ${id} note`);
+}
+
+const MEMORY_TOOLS: Record<string, MemoryTool> = {
+  notes_search: {
+    description:
+      "Search your notes: day records, decisions, projects, people, reviews, memory, drafts, and whatever else kind lists. With no query, the newest. Every word must match.",
+    properties: { query: str("Words to find"), kind: { type: "string", enum: NOTE_KINDS }, limit: { type: "integer", description: "At most this many (default 20)" } },
+    run: (a, c) => c.search.notes(c.brain, a.query ? String(a.query) : undefined, a.kind, Math.min(Number(a.limit) || 20, 100), c.hidden),
+  },
+  note_read: {
+    description: "Read a note.",
+    properties: { id: str("The note's id") },
+    required: ["id"],
+    run: (a, c) => visible(noteId(String(a.id)), c),
+  },
+  note_write: {
+    description:
+      "Write a note, replacing it if it exists. Without an id, one is made from the title. Returns the note, with its id and version. Pass the version you read to be refused if someone changed it since (0 for a note that must not exist yet).",
+    properties: {
+      id: str("lowercase-and-dashes; from the title if left out"),
+      kind: { type: "string", enum: NOTE_KINDS },
+      title: str("One line"),
+      body: str("Markdown"),
+      version: { type: "integer", description: "The note's version as you read it" },
+    },
+    required: ["kind", "title", "body"],
+    run: async (a, c) => {
+      const id = noteId(a.id ? String(a.id) : slug(String(a.title ?? "")));
+      writable(id, c);
+      if (c.hidden.includes(a.kind)) throw new ToolError(`kind must be one of ${kinds(c.hidden).join(", ")}`);
+      const was = c.data.note(c.brain, id);
+      if (was && c.hidden.includes(was.kind)) throw new ToolError(`the id ${id} is taken; choose another`);
+      if (a.version !== undefined && (!Number.isInteger(a.version) || a.version < 0)) throw new ToolError("version must be the note's version, from note_read");
+      return c.data.putNote(c.brain, id, note(a), a.version);
+    },
+  },
+  note_append: {
+    description: "Add a timestamped line to a note, such as today's day record, without rewriting it.",
+    properties: { id: str("The note's id"), text: str("What to add") },
+    required: ["id", "text"],
+    run: async (a, c) => {
+      const id = noteId(String(a.id));
+      writable(id, c);
+      visible(id, c);
+      if (typeof a.text !== "string" || !a.text.trim()) throw new ToolError("say what to add");
+      return c.data.appendNote(c.brain, id, c.caller.agent, a.text);
+    },
+  },
+  memory_context: {
+    description:
+      "What you start a session with: who you are and who the user is, the last few days' log and day records, and what you've learned. Your session start hook already loads it; call this after a long session to see it again.",
+    properties: { budget: { type: "integer", description: "At most this many characters (default 24000)" } },
+    run: (a, c) => c.search.context(c.brain, Math.min(Math.max(Number(a.budget) || 24_000, 1000), 200_000), c.hidden),
+  },
+  memory_recall: {
+    description:
+      "Search everything you remember, notes and log alike, for any of the words; the best matches first, each with a snippet. Read a whole note with note_read.",
+    properties: { query: str("What you're trying to remember, in words it would be written in"), limit: { type: "integer", description: "At most this many (default 15)" } },
+    required: ["query"],
+    run: (a, c) => {
+      if (typeof a.query !== "string" || !a.query.trim()) throw new ToolError("say what to recall");
+      return c.search.recall(c.brain, a.query, Math.min(Number(a.limit) || 15, 50), c.hidden);
+    },
+  },
+  memory_remember: {
+    description:
+      "Write a line in today's log: something that happened, was decided or was learned, in a sentence or two that will make sense on its own later. Every agent of yours shares the log.",
+    properties: { text: str("What to remember") },
+    required: ["text"],
+    run: (a, c) => {
+      if (typeof a.text !== "string" || !a.text.trim()) throw new ToolError("say what to remember");
+      if (a.text.length > 4000) throw new ToolError("keep it under 4000 characters; a longer record is a note");
+      return c.data.remember(c.brain, c.caller.agent, a.text);
+    },
+  },
+  memory_log: {
+    description:
+      'The log for some days, oldest first: when as words ("yesterday", "last week", "last Tuesday", "Oct 24", "3 days ago") or from and to as YYYY-MM-DD. The dates are worked out for you; don\'t do date arithmetic yourself.',
+    properties: { when: str("Which days, in words"), from: str("YYYY-MM-DD"), to: str("YYYY-MM-DD; from, if left out") },
+    run: (a, c) => {
+      let from: string, to: string;
+      if (a.from) [from, to] = [date(a.from), a.to ? date(a.to) : date(a.from)];
+      else {
+        const r = range(String(a.when ?? "today"), c.data.today());
+        if (!r) throw new ToolError(`can't tell which days "${a.when}" means; say from and to`);
+        [from, to] = [r.from, r.to];
+      }
+      if (to < from) throw new ToolError("to is before from");
+      return { from, to, entries: c.data.entries(c.brain, from, to) };
+    },
+  },
+  memory_grep: {
+    description: "Every line in your notes and log that contains this text, case ignored, newest notes first. For when you know the exact words.",
+    properties: { text: str("The text to find"), limit: { type: "integer", description: "At most this many lines (default 50)" } },
+    required: ["text"],
+    run: (a, c) => {
+      if (typeof a.text !== "string" || !a.text.trim()) throw new ToolError("say what to find");
+      return c.search.grep(c.brain, a.text.trim(), Math.min(Number(a.limit) || 50, 200), c.hidden);
+    },
+  },
+  brain_list: {
+    description: "The brains: who agents work for, each with its memory. One is the default, which your own sessions remember in.",
+    run: (_a, c) => c.data.brains().map((b) => ({ ...b, default: b.name === c.data.defaultBrain() })),
+  },
+  brain_read: {
+    description: "One brain: its record, and its memory's counts (notes, entries).",
+    properties: { name: str("The brain's name") },
+    required: ["name"],
+    run: (a, c) => {
+      const name = String(a.name);
+      if (!c.data.brains().some((b) => b.name === name)) throw new ToolError(`no brain ${name}; brain_list lists them`);
+      return { ...c.data.brain(name), memory: { notes: c.data.notes(name).length, entries: c.data.entries(name).length } };
+    },
+  },
+};
+
+// Tools and calls ------------------------------------------------------------------------
+
+function toolsFor(hidden: readonly string[]) {
+  const ownKinds = (properties: Record<string, object>) =>
+    Object.fromEntries(Object.entries(properties).map(([k, p]) => [k, "enum" in p && p.enum === NOTE_KINDS ? { ...p, enum: kinds(hidden) } : p]));
+  return [
+    {
+      name: "list_boards",
+      description: "List the boards: their keys (for every other tool's board argument), names and project paths.",
+      inputSchema: { type: "object", properties: {}, required: [] },
+    },
+    ...Object.entries(TOOLS).map(([name, t]) => ({
+      name,
+      description: t.description,
+      inputSchema: { type: "object", properties: { board: str("The board's key, from list_boards"), ...t.properties }, required: ["board", ...(t.required ?? [])] },
+    })),
+    ...Object.entries(MEMORY_TOOLS).map(([name, t]) => ({
+      name,
+      description: t.description,
+      inputSchema: { type: "object", properties: ownKinds(t.properties ?? {}), required: t.required ?? [] },
+    })),
+  ];
+}
+
+export type Node = { data: Data; search: Search };
+
+async function callTool(node: Node, caller: Caller, name: string, args: any): Promise<unknown> {
+  const { data, search } = node;
+  if (name === "list_boards") return data.boards().map((b) => ({ key: b.key, name: b.key, root: null, cards: b.cards }));
+  const hidden = BRAIN_ONLY_KINDS;
+  if (MEMORY_TOOLS[name]) {
+    const brain = data.defaultBrain();
+    if (!brain) throw new ToolError("there's no brain on this node to remember in; start it with --brain NAME");
+    return MEMORY_TOOLS[name].run({ ...args }, { data, search, brain, caller, hidden });
+  }
+  if (name === "handoff" && args.id === undefined) return HANDED_OFF;
+  const tool = TOOLS[name];
+  if (!tool) throw new ToolError(`unknown tool ${name}`);
+  const board = String(args.board ?? "");
+  if (!board) throw new ToolError("say which board, from list_boards");
+  if (!data.replicas.get("board", board)) throw new ToolError(`no board ${board}; list_boards lists them`);
+  if (args.id !== undefined) args.id = String(args.id).toUpperCase();
+  if (!["read_card", "block", "request_user_action", "release_card"].includes(name) && typeof args.id === "string") {
+    const extra = data.card(board, args.id).extra;
+    if (extra.budget_hold)
+      throw new ToolError(`budget reached on ${args.id}: ${extra.budget_hold}. Stop working on it and wait; the user has been told and will answer on the card.`);
+  }
+  let listed: FullCard[] | undefined;
+  return tool.run(args, { data, search, board, me: caller.agent, caller, cards: () => (listed ??= data.cards(board)) });
+}
+
+type Message = { jsonrpc?: string; id?: string | number | null; method?: string; params?: any };
+
+async function handle(node: Node, caller: Caller, msg: Message): Promise<object | undefined> {
+  const { id, method, params } = msg ?? {};
+  const reply = (result: unknown) => ({ jsonrpc: "2.0", id, result });
+  switch (method) {
+    case "initialize":
+      return reply({
+        protocolVersion: params?.protocolVersion ?? "2025-06-18",
+        capabilities: { tools: {} },
+        serverInfo: { name: "corkboard-node", version: "0.1.0" },
+        instructions: INSTRUCTIONS(caller.agent),
+      });
+    case "ping":
+      return reply({});
+    case "tools/list":
+      return reply({ tools: toolsFor(BRAIN_ONLY_KINDS) });
+    case "tools/call":
+      try {
+        const out = await callTool(node, caller, String(params?.name), { ...(params?.arguments ?? {}) });
+        return reply({ content: [{ type: "text", text: typeof out === "string" ? out : JSON.stringify(out, null, 2) }] });
+      } catch (e) {
+        if (e instanceof ToolError || e instanceof Invalid) return reply({ content: [{ type: "text", text: e.message }], isError: true });
+        throw e;
+      }
+    default:
+      return id === undefined ? undefined : { jsonrpc: "2.0", id: id ?? null, error: { code: -32601, message: `unknown method ${method}` } };
+  }
+}
+
+export async function mcp(request: Request, node: Node, caller: Caller): Promise<Response> {
+  if (request.method !== "POST") return new Response("POST JSON-RPC here; this server has no stream", { status: 405, headers: { Allow: "POST" } });
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } }, { status: 400 });
+  }
+  const batch = Array.isArray(body);
+  const answers = (await Promise.all((batch ? (body as unknown[]) : [body]).map((m) => handle(node, caller, m as Message)))).filter(Boolean);
+  if (!answers.length) return new Response(null, { status: 202 });
+  return Response.json(batch ? answers : answers[0]);
+}

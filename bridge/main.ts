@@ -7,6 +7,7 @@
 //   corkboard-bridge memory-sync ...             bridge/memory-sync.ts
 //   corkboard-bridge login|token|machine ...     bridge/cloud.ts
 //   corkboard-bridge e2ee ...                    bridge/e2ee.ts
+//   corkboard-bridge serve ...                   the node, headless (bridge/node/serve.ts)
 //
 // Each reads its arguments from process.argv as if run on its own, so the
 // subcommand comes out of it first.
@@ -25,6 +26,9 @@ if (command === "mcp") {
   await cli(process.argv.slice(2));
 } else if (command === "e2ee") {
   const { cli } = await import("./e2ee");
+  await cli(process.argv.slice(3));
+} else if (command === "serve") {
+  const { cli } = await import("./node/serve");
   await cli(process.argv.slice(3));
 } else {
   await import("./server");
