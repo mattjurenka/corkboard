@@ -44,7 +44,7 @@ const WEB_ROOT = join(RESOURCES, "web", "dist");
 // reload shows the source as it is now.
 const DEV = process.argv.includes("--dev");
 const PLUGIN_ROOT = join(RESOURCES, "nvim");
-// The repo, for `bun run dev`'s builds and commits.
+// The repo, for `bun run dev`'s builds.
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 // This bridge's commit, as it started: the repo's, or, built with no repo
 // (the flake, scripts/build-bridge.ts), the one written beside the code or
@@ -542,27 +542,8 @@ function arrived(ws: Bun.ServerWebSocket<Session>, context: { cwd?: string; proj
 
 // The day plan's window, while one is open.
 let planWindow: Bun.ServerWebSocket<Session> | undefined;
-// Every page's socket, for the reload below.
+// Every page's socket.
 const pages = new Set<Bun.ServerWebSocket<Session>>();
-
-// In dev, a new commit reloads every page: the build, Neovim and its plugin
-// as committed, rather than each save half way through a change. A reload
-// starts the page's Neovim again, terminals and all.
-async function head() {
-  const proc = Bun.spawn(["git", "rev-parse", "HEAD"], { cwd: REPO, stdout: "pipe", stderr: "ignore" });
-  const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-  return code === 0 ? out.trim() : undefined;
-}
-if (DEV) {
-  let last = await head();
-  setInterval(async () => {
-    const now = await head();
-    if (!now || now === last) return;
-    last = now;
-    console.log(`commit ${now.slice(0, 7)}: reloading ${pages.size} page(s)`);
-    for (const ws of pages) ws.send(JSON.stringify([2, "corkboard.reload", []]));
-  }, 2000);
-}
 
 const ISOLATED = { "cross-origin-embedder-policy": "require-corp", "cross-origin-resource-policy": "same-origin" };
 const IMMUTABLE = "private, max-age=31536000, immutable";
