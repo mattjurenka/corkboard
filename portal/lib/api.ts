@@ -59,6 +59,9 @@ export async function signIn(): Promise<never> {
   const state = b64url(crypto.getRandomValues(new Uint8Array(16)))
   const challenge = b64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))))
   sessionStorage.setItem(KEY, JSON.stringify({ verifier, state, back: location.pathname + location.search }))
+  // An invite in the page's address (an admin's link, cloud/src/registry.ts)
+  // goes with the sign-in.
+  const invite = new URLSearchParams(location.search).get("invite")
   const q = new URLSearchParams({
     response_type: "code",
     client_id: a.client_id!,
@@ -67,6 +70,7 @@ export async function signIn(): Promise<never> {
     state,
     code_challenge: challenge,
     code_challenge_method: "S256",
+    ...(invite && { invite }),
   })
   location.assign("/authorize?" + q)
   return new Promise<never>(() => {})
@@ -197,6 +201,30 @@ export type Hold = {
   brains: string[]
   templates: string[]
 }
+// Who's signed in, their settings, and what's here for them (/api/me).
+export type Me = {
+  sub: string
+  email: string
+  name: string | null
+  role: "admin" | "user"
+  settings: { timezone: string; name: string | null; calendar: string | null }
+  features: { git: boolean; admin: boolean; calendar: boolean }
+}
+// An OAuth client signed in as you (/api/grants); current: this page's.
+export type Grant = { id: string; client: string; client_id: string; scope: string[]; created: string; current: boolean }
+export type MachineToken = { id: string; environment: string; label: string | null; created: string | null; expires: string | null; used: string | null }
+// The registry's (cloud/src/registry.ts), for admins.
+export type Account = {
+  sub: string
+  email: string
+  name: string | null
+  role: "admin" | "user"
+  status: "active" | "waitlisted" | "disabled"
+  created: string
+  seen: string | null
+  invite: string | null
+}
+export type Invite = { code: string; label: string; used: number; uses: number | null; expires: string | null; created: string; by: string; revoked: string | null }
 export type Spawn = {
   id: string
   template: string
