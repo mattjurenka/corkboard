@@ -67,7 +67,7 @@ const MOOD_FX: Record<Tone, Effect[]> = {
   sad: ["gloom"],
   surprised: ["shock"],
 };
-const ACT_FX: Partial<Record<ActName, Effect>> = { huff: "vein", flinch: "shock", pat: "blush", proud: "sparkle" };
+const ACT_FX: Partial<Record<ActName, Effect>> = { huff: "vein", flinch: "shock", pat: "blush", proud: "sparkle", eat: "blush" };
 
 // Up and back down over a span of seconds, since a moment.
 const swell = (since: number, span: number) => (since > 0 && since < span ? Math.sin((since / span) * Math.PI) : 0);
@@ -209,6 +209,8 @@ export class Stage {
   private fx?: Fx;
   private size = { w: 0, h: 0 };
   mood: Mood = "idle";
+  // A treat held at its mouth: it opens for it.
+  hungry = false;
   private was: Mood = "idle";
 
   constructor(
@@ -378,6 +380,25 @@ export class Stage {
   // Its eyes on the pointer, or (null) not.
   point(at: { x: number; y: number } | null) {
     this.pointer = at ? new THREE.Vector2(at.x, at.y) : undefined;
+  }
+
+  // Whether at is at its mouth: within a few centimetres of it, as it's
+  // seen.
+  mouthAt(at: { x: number; y: number }): boolean {
+    const vrm = this.vrm;
+    const head = vrm?.humanoid.getRawBoneNode("head");
+    if (!vrm || !head) return false;
+    const left = vrm.humanoid.getRawBoneNode("leftEye");
+    const right = vrm.humanoid.getRawBoneNode("rightEye");
+    const p =
+      left && right
+        ? left.getWorldPosition(new THREE.Vector3()).add(right.getWorldPosition(new THREE.Vector3())).multiplyScalar(0.5).add(new THREE.Vector3(0, -0.06, 0.02))
+        : head.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.01, 0.07));
+    const { w, h } = this.size;
+    const c = p.clone().project(this.camera);
+    const r = p.clone().add(new THREE.Vector3(0.06, 0, 0)).project(this.camera);
+    const reach = Math.hypot(((r.x - c.x) * w) / 2, ((r.y - c.y) * h) / 2);
+    return Math.hypot(((at.x - c.x) * w) / 2, ((at.y - c.y) * h) / 2) < reach;
   }
 
   // What's under the pointer at: its head (or hair), the rest of it, or
@@ -611,7 +632,8 @@ export class Stage {
 
     const [shape, open] = this.voice.mouth();
     for (const v of VISEMES) {
-      this.mouth[v] = ease(this.mouth[v], v === shape ? open : 0, 22, dt);
+      const to = v === shape ? open : 0;
+      this.mouth[v] = ease(this.mouth[v], v === "aa" && this.hungry ? Math.max(to, 0.5) : to, 22, dt);
       ex.setValue(v, v === "aa" && this.act?.face?.aa !== undefined ? this.mouth[v] + (this.act.face.aa - this.mouth[v]) * w : this.mouth[v]);
     }
     this.smile = ease(this.smile, this.voice.speaking ? 0.25 : this.mood === "idle" ? 0.15 : 0, 2, dt);

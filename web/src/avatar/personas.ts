@@ -1,14 +1,15 @@
 // Who the avatar is: a brain's persona (cloud/src/brains.ts, picked in its
 // form), else the businesswoman. Each is a model, a voice, what they do when
-// left alone, and what they say and do when you click on them. How each
+// left alone, and what they say and do when you click on them (or feed them). How each
 // talks as Claude is corkboard.personas (nvim/lua/corkboard/personas.lua),
 // by the same ids.
 
 import type { ActName } from "./acts";
 import type { Mood as Tone } from "./voice";
 
-// A pat is a rub on her head; head, a click on it.
-export const POKED = ["pat", "head", "body", "miss", "again"] as const;
+// A pat is a rub on her head; head, a click on it; fed, a treat dragged to
+// her mouth.
+export const POKED = ["pat", "head", "body", "miss", "again", "fed"] as const;
 export type Poked = (typeof POKED)[number];
 
 export type Persona = {
@@ -82,6 +83,16 @@ export const PERSONAS = {
           "Stop it! You're going to make me lose my place.",
         ],
       },
+      fed: {
+        tone: "shy",
+        acts: ["eat", "snub"],
+        lines: [
+          "I wasn't hungry. But I'll eat it so it doesn't go to waste.",
+          "Mm. It's fine, I guess. Do you have another one? For science.",
+          "D-don't think you can just buy me with snacks! Okay, maybe a little.",
+          "Who said you could feed me? Next time, ask first. Then do it anyway.",
+        ],
+      },
     },
   },
   // Sunny, cheeky, on holiday in her head.
@@ -142,6 +153,16 @@ export const PERSONAS = {
           "Okay, okay, you win! Truce! I'll get you a drink.",
           "That's a lot of pokes. Do you need a break? I think you need a break.",
           "Alright, tickle war is over. Back to the code, I promise.",
+        ],
+      },
+      fed: {
+        tone: "happy",
+        acts: ["eat", "sway"],
+        lines: [
+          "Ooh, a treat! You know the way to my heart.",
+          "Yum! That's way better than sandy sandwiches.",
+          "Snacks on the beach, my favourite. Well, almost on the beach.",
+          "Mm! Okay, you're officially my favourite person today.",
         ],
       },
     },
@@ -206,6 +227,16 @@ export const PERSONAS = {
           "Shall I put a recurring poke on your calendar, or are we done?",
         ],
       },
+      fed: {
+        tone: "happy",
+        acts: ["eat", "proud"],
+        lines: [
+          "Thank you. I skipped lunch for the stand-up.",
+          "A working snack. Very efficient of you.",
+          "That's delicious. I'll allow it on the expense report.",
+          "Sugar before a code review. Strategic. I approve.",
+        ],
+      },
     },
   },
   // Eager and earnest, delighted by the details, a little awkward.
@@ -268,6 +299,16 @@ export const PERSONAS = {
           "I'm going to have to throttle these. Sorry. It's for the system's health.",
         ],
       },
+      fed: {
+        tone: "excited",
+        acts: ["eat", "proud"],
+        lines: [
+          "Oh! Glucose! Brains run on glucose, did you know that?",
+          "Mm! Snacks are basically fuel for debugging.",
+          "Thank you! I forgot to eat again. I always forget to eat.",
+          "This is excellent. Ten out of ten. I'd write a review.",
+        ],
+      },
     },
   },
   // Polished and assured, a charmer in a good suit.
@@ -328,6 +369,16 @@ export const PERSONAS = {
           "That's quite enough. Let's take this offline.",
           "I'm going to need you to stop. Effective immediately.",
           "Shall I schedule these, or are we done for the quarter?",
+        ],
+      },
+      fed: {
+        tone: "happy",
+        acts: ["eat", "proud"],
+        lines: [
+          "How thoughtful. Client entertainment, I'll call it.",
+          "Excellent choice. You have taste. I respect that.",
+          "Mm. A treat for the top performer. Fair.",
+          "Delicious. Let's make this a standing meeting.",
         ],
       },
     },
@@ -393,6 +444,16 @@ export const PERSONAS = {
           "Enough, kitten. I decide when we play. Back to work.",
           "That's enough, princess. Sit. Code. Now.",
           "Keep that up, kitten, and you'll be writing tests all night. With me watching.",
+        ],
+      },
+      fed: {
+        tone: "teasing",
+        acts: ["eat", "proud"],
+        lines: [
+          "Feeding me by hand, kitten? Good girl.",
+          "Mm. Sweet, like you, princess. Now back to work.",
+          "Trying to spoil me, kitten? It's working. Keep going.",
+          "You do know I have to work this off later, princess. Want to watch?",
         ],
       },
     },

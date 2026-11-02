@@ -4,7 +4,7 @@
 // she's poked and melting a little when her head is patted; arms folded
 // waiting on you, a hand to her chin thinking, a yawn, a sneaked look, a
 // sway with her hands behind her back, and pleased with herself when a job
-// is done, and jumping up and down for joy. Angles are
+// is done, and jumping up and down for joy; chewing a treat she's fed. Angles are
 // VRM 1's (the stage flips them for a VRM 0 model), left side; side is
 // which way she turns, 1 to her left.
 
@@ -29,6 +29,7 @@ export type ActName =
   | "sway"
   | "proud"
   | "jump"
+  | "eat"
   | "wave"
   | "thumbs"
   | "nod"
@@ -258,6 +259,22 @@ export const ACTS: Record<ActName, Act> = {
         look: [0, 0.1],
         // Crouched, she's lower by as much as her knees are bent.
         lift: up - 0.07 * bend,
+      };
+    },
+  },
+  // A treat in a hand to her mouth, a bite, then chewing, eyes shut, happy.
+  eat: {
+    span: 3.2,
+    at: (u) => {
+      const bite = step(u, 0) * (1 - step(u, 0.45));
+      const chew = u > 0.6 && u < 2.8 ? Math.max(0, Math.sin((u - 0.6) * 11)) : 0;
+      return {
+        pose: {
+          ...arm("right", [-0.9, -1.15, -0.62], [0, -2.5, 0]),
+          ...hand("right", 0.6, 0.5),
+          head: [0.08 - 0.12 * bite, 0, 0.06],
+        },
+        face: { happy: 0.8, blink: u > 0.6 ? 0.9 : 0.2, aa: 0.8 * bite + 0.35 * chew },
       };
     },
   },
