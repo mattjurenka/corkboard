@@ -13,6 +13,7 @@ import type { BoardInfo, Result } from "./board";
 import { type Dump, dump, restore } from "./dump";
 import { type Environment, type Spawn, type SpawnReport, FINAL, type SpawnState } from "./fleet";
 import { type Brain, brainOf, PEPPER } from "./brains";
+import type { Connection } from "./calendar";
 import {
   type Block,
   type ChatMessage,
@@ -52,6 +53,7 @@ CREATE TABLE IF NOT EXISTS spawns (id TEXT PRIMARY KEY, created TEXT NOT NULL, d
 CREATE TABLE IF NOT EXISTS bridges (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS board_roots (key TEXT NOT NULL, environment TEXT NOT NULL, root TEXT NOT NULL, PRIMARY KEY (key, environment));
 CREATE TABLE IF NOT EXISTS brains (name TEXT PRIMARY KEY, doc TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS calendar (id INTEGER PRIMARY KEY CHECK (id = 1), refresh TEXT NOT NULL, connected TEXT NOT NULL);
 `;
 
 export class User extends DurableObject {
@@ -249,8 +251,7 @@ export class User extends DurableObject {
   }
 
   // The proposal, as the user left it after undoing what they didn't want,
-  // becomes the day. The calendar was written by then (plan.lua runs
-  // dayplan apply first).
+  // becomes the day. The calendar is written after (api.ts, calendar.ts).
   accept(date: string, version: number, blocks: Block[]): Result<Plan> {
     return this.changePlan(date, version, (p) => {
       if (!p.proposal) return "there's no proposal to accept";
@@ -279,8 +280,29 @@ export class User extends DurableObject {
     });
   }
 
+  // How writing the calendar went for an accept, if it's still the plan's.
+  // Not a change of the plan's (its version stays), but it's heard live.
+  calendarWritten(date: string, accepted: string, result: { blocks: number } | { error: string }): void {
+    const p = this.plan(date);
+    if (p.accepted !== accepted) return;
+    p.calendar = { accepted, at: now(), ...result };
+    this.sql.exec("UPDATE plans SET doc = ? WHERE date = ?", JSON.stringify(p), date);
+    this.broadcast({ type: "plan", plan: p });
+  }
+
   deletePlan(date: string): void {
     this.sql.exec("DELETE FROM plans WHERE date = ?", date);
+  }
+
+  // The calendar's connection (calendar.ts) ------------------------------------------
+
+  connectCalendar(refresh: string): void {
+    this.sql.exec("INSERT OR REPLACE INTO calendar (id, refresh, connected) VALUES (1, ?, ?)", refresh, now());
+  }
+
+  calendarConnection(): Connection | null {
+    const row = this.sql.exec("SELECT refresh, connected FROM calendar").toArray()[0];
+    return row ? { refresh: row.refresh as string, connected: row.connected as string } : null;
   }
 
   // Chat ------------------------------------------------------------------------------

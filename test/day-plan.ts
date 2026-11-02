@@ -1,31 +1,24 @@
 // The day plan end to end: a plan proposed over MCP shows up live in the day
 // plan's window (a headless Neovim, CORKBOARD_WINDOW=plan, with this script
-// as its bridge), what's said there reaches the Worker, and accepting runs
-// dayplan apply before telling the Worker.
+// as its bridge), what's said there reaches the Worker, and accepting is the
+// Worker's, which writes the calendar after (cloud/src/calendar.ts).
 //
 //   bun run test:plan         needs bun run login first
 //
 // Today's plan and the calendar are never touched: the date is in 2099
-// (CORKBOARD_PLAN_DATE) and dayplan is a stand-in that writes down what it
-// was given (CORKBOARD_DAYPLAN). The plan is deleted after.
+// (CORKBOARD_PLAN_DATE), further off than the Worker writes the calendar
+// for. The plan is deleted after.
 import { decodeMultiStream, encode } from "@msgpack/msgpack";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import * as boards from "../bridge/boards";
 import { CLOUD, token } from "../bridge/cloud";
 
 const DATE = `2099-01-${String(1 + Math.floor(Math.random() * 27)).padStart(2, "0")}`;
-const dir = mkdtempSync(join(tmpdir(), "corkboard-plan-"));
-const fake = join(dir, "dayplan");
-writeFileSync(fake, `#!/bin/sh\ncat > ${dir}/applied.json\necho "wrote the stand-in calendar"\n`);
-chmodSync(fake, 0o755);
 
 const nvim = Bun.spawn(["nvim", "--embed", "--headless", "--clean", "--cmd", `set rtp^=${new URL("../nvim", import.meta.url).pathname}`], {
   stdin: "pipe",
   stdout: "pipe",
   stderr: "inherit",
-  env: { ...process.env, CORKBOARD_WINDOW: "plan", CORKBOARD_PLAN_DATE: DATE, CORKBOARD_DAYPLAN: fake, CORKBOARD_PLAN_CLAUDE: "0" },
+  env: { ...process.env, CORKBOARD_WINDOW: "plan", CORKBOARD_PLAN_DATE: DATE, CORKBOARD_PLAN_CLAUDE: "0" },
 });
 const send = (m: unknown) => {
   nvim.stdin.write(encode(m));
@@ -108,13 +101,6 @@ try {
   await lua("require('corkboard.plan').accept()");
   const accepted = await until(() => api("GET", `/api/plans/${DATE}`), (p: any) => !!p.accepted);
   check("accepting writes the day on the Worker", !accepted.proposal && accepted.day.blocks.map((b: any) => b.id).join() === "linkedin,class,twilio", accepted.day);
-  const applied = JSON.parse(readFileSync(join(dir, "applied.json"), "utf8"));
-  check(
-    "dayplan was given the work blocks, not the fixed class",
-    applied.approve === true && applied.blocks.map((b: any) => b.title).join() === "Jobs: LinkedIn follow-ups,Side: Twilio application" &&
-      applied.blocks[0].start === `${DATE}T15:00` && applied.blocks[0].desc === "Open LinkedIn",
-    applied,
-  );
   const shown = await until(state, (s) => !s.plan.proposal && s.plan.blocks.length === 3);
   check("the window shows the accepted day", shown.plan.blocks.length === 3, shown.plan.blocks);
 
@@ -138,14 +124,6 @@ try {
   const byId = Object.fromEntries(kept.day.blocks.map((b: any) => [b.id, b]));
   check("an undone hunk keeps the old block; the rest is accepted", byId.linkedin?.start === 905 && byId.twilio?.title === "Side: Twilio application", kept.day.blocks);
 
-  // A failing dayplan leaves the plan unaccepted.
-  writeFileSync(fake, "#!/bin/sh\necho 'not signed in' >&2\nexit 1\n");
-  await mcp("plan_propose", { date: DATE, from: 0, blocks: [{ id: "x", start: 1200, stop: 1260, title: "Life: x", kind: "work" }] });
-  await until(state, (s) => s.plan.proposal === true);
-  await lua("require('corkboard.plan').accept()");
-  await Bun.sleep(1500);
-  const after = await api("GET", `/api/plans/${DATE}`);
-  check("when dayplan fails, nothing is accepted", !!after.proposal && after.day.blocks.length === 3, after);
 } catch (e) {
   check("ran", false, (e as Error).message);
 } finally {

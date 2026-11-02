@@ -40,6 +40,8 @@ export type Env = {
   TIMEZONE: string;
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
+  // The Claude calendar, which accepted plans are written to (calendar.ts).
+  CALENDAR_ID?: string;
   // Forgejo, whose repositories the portal browses (git.ts), and a read-only
   // token of the user's there (a secret); without them, none.
   FORGEJO_ORIGIN?: string;

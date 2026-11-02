@@ -50,6 +50,8 @@
     "TIMEZONE": "America/Phoenix",
     // The dayplan-512206 project's Web application client.
     "GOOGLE_CLIENT_ID": "911829084497-iab0dt2ufoiobeot2uanudsc1tc02s8o.apps.googleusercontent.com",
+    // The Claude calendar, which accepted plans go on (src/calendar.ts).
+    "CALENDAR_ID": "d4d3457c1699083d464ecbfc9817359e17534ad8c8056a346aed1d35db5f6633@group.calendar.google.com",
     // The portal's file browser (src/git.ts); FORGEJO_TOKEN is a secret.
     "FORGEJO_ORIGIN": "https://git.corkboard.fyi"
   }

@@ -12,6 +12,7 @@ export default defineConfig({
           TIMEZONE: "America/Phoenix",
           GOOGLE_CLIENT_ID: "google-client",
           GOOGLE_CLIENT_SECRET: "google-secret",
+          CALENDAR_ID: "claude@group.calendar.google.com",
           FORGEJO_ORIGIN: "https://git.test",
           FORGEJO_TOKEN: "forgejo-token",
           // Workers AI and Vectorize are remote; these tests stay local.

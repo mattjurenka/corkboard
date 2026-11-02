@@ -12,7 +12,6 @@ import { hostname } from "node:os";
 import { Cloud, Session as CloudSession, type Listener } from "./cloud-session";
 import { CLOUD, token } from "./cloud";
 import { host } from "./host";
-import { acceptedHere } from "./phone";
 import * as remote from "./remote";
 
 // The environment this machine is, as its fleetd names it (fleet/fleetd/queue.ts).
@@ -44,7 +43,6 @@ const cloud = new Cloud({
   remotes,
   machine: () => ({ ...host(), environment: ENVIRONMENT }),
   self: remote.self,
-  acceptedHere,
 });
 
 // A Neovim session's view of the cloud: what it follows, so closing the

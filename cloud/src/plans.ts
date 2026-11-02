@@ -56,6 +56,9 @@ export type Plan = {
   // What the user has said to change since the last proposal.
   asked: string[];
   accepted: string | null;
+  // How writing the Claude calendar went for that accept (calendar.ts):
+  // how many blocks it got, or why it got none.
+  calendar?: { accepted: string; at: string; blocks?: number; error?: string };
 };
 
 export const emptyPlan = (date: string): Plan => ({

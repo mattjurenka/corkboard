@@ -24,8 +24,6 @@ export type Link = {
   // Worker; null and undefined where there's neither.
   machine(): unknown;
   self(): string | undefined;
-  // A day plan accepted here (phone.ts), so the phone needn't say so again.
-  acceptedHere?(stamp: string): void;
 };
 
 // key: the board's, or USER for the user's own socket (plans).
@@ -548,12 +546,8 @@ export class Session {
         return (await send("GET", "")).plan;
       case "plan_say":
         return send("POST", "/say", { text: rest[0] });
-      case "plan_accept": {
-        // plan.lua wrote the calendar before asking, so phone.ts needn't.
-        const res = await send("POST", "/accept", { version: rest[0], blocks: rest[1] });
-        if (res.plan?.accepted) this.cloud.link.acceptedHere?.(res.plan.accepted);
-        return res;
-      }
+      case "plan_accept":
+        return send("POST", "/accept", { version: rest[0], blocks: rest[1] });
       case "plan_discard":
         return send("POST", "/discard", { version: rest[0] });
       case "plan_day":

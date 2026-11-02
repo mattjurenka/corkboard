@@ -17,7 +17,6 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import * as away from "./away";
 import * as boards from "./boards";
-import * as phone from "./phone";
 import * as remote from "./remote";
 import { speech } from "./speech";
 import * as wasm from "./wasm";
@@ -823,6 +822,5 @@ Bun.serve<Session, {}>({
 
 console.log(`corkboard on ${ORIGIN ?? `http://${HOST.includes(":") ? `[${HOST}]` : HOST}:${PORT}`}/${TOKEN ? `#token=${TOKEN}` : ""}`);
 
-// What the phone needs from this machine (phone.ts), and from this bridge (remote.ts).
-phone.start();
+// What the phone needs from this bridge (remote.ts).
 remote.start(PORT);

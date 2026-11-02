@@ -14,6 +14,7 @@ import {
   type AuthRequest,
   type ConsentDescription,
 } from "@cloudflare/workers-oauth-provider";
+import { STATE_PREFIX, connect, verifierFor } from "./calendar";
 import type { Env, Props } from "./index";
 
 const GOOGLE_AUTHORIZE = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -91,7 +92,9 @@ function claims(idToken: string): Record<string, unknown> {
   return JSON.parse(atob(padded));
 }
 
-async function googleUser(env: Env, code: string, verifier: string): Promise<{ sub: string; email: string } | string> {
+// refresh: Google's refresh token, which comes only with an offline consent
+// (the calendar's, calendar.ts).
+async function googleUser(env: Env, code: string, verifier: string): Promise<{ sub: string; email: string; refresh?: string } | string> {
   const res = await fetch(GOOGLE_TOKEN, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -105,14 +108,14 @@ async function googleUser(env: Env, code: string, verifier: string): Promise<{ s
     }),
   });
   if (!res.ok) return `Google refused the sign-in (${res.status})`;
-  const { id_token } = await res.json<{ id_token?: string }>();
+  const { id_token, refresh_token } = await res.json<{ id_token?: string; refresh_token?: string }>();
   if (!id_token) return "Google sent no identity";
   const c = claims(id_token);
   if (!["https://accounts.google.com", "accounts.google.com"].includes(c.iss as string)) return "the identity isn't from Google";
   if (c.aud !== env.GOOGLE_CLIENT_ID) return "the identity was issued to another app";
   if (typeof c.exp !== "number" || c.exp * 1000 < Date.now()) return "the identity has expired";
   if (c.email_verified !== true || typeof c.email !== "string") return "the Google account has no verified email";
-  return { sub: String(c.sub), email: c.email.toLowerCase() };
+  return { sub: String(c.sub), email: c.email.toLowerCase(), ...(refresh_token ? { refresh: refresh_token } : {}) };
 }
 
 async function authorize(request: Request, env: Env): Promise<Response> {
@@ -160,6 +163,7 @@ async function toGoogle(env: Env, req: AuthRequest, sending?: Headers): Promise<
 }
 
 async function callback(request: Request, env: Env): Promise<Response> {
+  if (new URL(request.url).searchParams.get("state")?.startsWith(STATE_PREFIX)) return calendarConnected(request, env);
   const oauth = env.OAUTH_PROVIDER;
   const { request: original, data, headers } = await oauth.finishUpstream<{ verifier: string }>(request);
   const params = new URL(request.url).searchParams;
@@ -183,12 +187,29 @@ async function callback(request: Request, env: Env): Promise<Response> {
   return redirect(redirectTo, headers);
 }
 
+// Back from the calendar's consent (calendar.ts's connect). Google's
+// identity is what says whose calendar it is: only ALLOWED_EMAIL's is kept.
+async function calendarConnected(request: Request, env: Env): Promise<Response> {
+  const params = new URL(request.url).searchParams;
+  const verifier = await verifierFor(env, params.get("state")!);
+  const code = params.get("code");
+  if (!verifier) return page("calendar not connected", "<p>That consent has expired.</p><p class=\"muted\">Start again at /calendar/connect.</p>", 400);
+  if (params.get("error") || !code) return page("calendar not connected", "<p>Google didn't give corkboard the calendar.</p>", 400);
+  const user = await googleUser(env, code, verifier);
+  if (typeof user === "string") return page("calendar not connected", `<p>${escape(user)}.</p>`, 502);
+  if (user.email !== env.ALLOWED_EMAIL.toLowerCase()) return page("calendar not connected", "<p>That isn't the account corkboard is for.</p>", 403);
+  if (!user.refresh) return page("calendar not connected", "<p>Google sent no refresh token.</p><p class=\"muted\">Start again at /calendar/connect.</p>", 502);
+  await env.USER.get(env.USER.idFromName(user.sub)).connectCalendar(user.refresh);
+  return page("calendar connected", "<p>Accepted plans now go on the Claude calendar.</p>");
+}
+
 export const auth = {
   async fetch(request: Request, env: Env): Promise<Response> {
     const path = new URL(request.url).pathname;
     try {
       if (path === "/authorize") return await authorize(request, env);
       if (path === "/callback") return await callback(request, env);
+      if (path === "/calendar/connect") return await connect(env);
       // Every other path is the portal's page (../portal, its own Worker).
       return env.PORTAL ? await env.PORTAL.fetch(request) : new Response("not found", { status: 404 });
     } catch (e) {

@@ -40,7 +40,8 @@
 //                                            (notes and entries are the default brain's, or ?brain='s)
 //   GET, DELETE /api/plans/:date             the day and any proposal (an empty plan if none); gone for good
 //   POST  /api/plans/:date/say               { text }: what to change, for the next proposal
-//   POST  /api/plans/:date/accept            { version, blocks }: the proposal, as the user left it
+//   POST  /api/plans/:date/accept            { version, blocks }: the proposal, as the user left it;
+//                                            the Claude calendar is written after (calendar.ts)
 //   POST  /api/plans/:date/discard           { version }
 //   PUT   /api/plans/:date/day               { version, blocks }: the day, edited
 //   POST  /api/tokens                        a card token for an agent: { board, card, agent }
@@ -80,7 +81,8 @@ import type { BoardInfo, Result } from "./board";
 import type { Dump } from "./dump";
 import { CARD_TOKEN, type Env, type Props } from "./index";
 import { type Grant, brainOf, hiddenFor, mcp, memoryOf } from "./mcp";
-import { blocks, chatText, date, note, noteId } from "./plans";
+import { calendarError, write as writeCalendar } from "./calendar";
+import { type Plan, blocks, chatText, date, note, noteId, today } from "./plans";
 import { NAME as BRAIN_NAME, brainRoutes, live } from "./brains";
 import { dumpHolds, holdRoutes, restoreHolds, type HoldsDump } from "./holds";
 import { fleetRoutes } from "./fleet";
@@ -384,7 +386,32 @@ async function sessions(request: Request, users: Users, machine?: string): Promi
   return reply(r);
 }
 
-async function plans(request: Request, users: Users): Promise<Response> {
+// An accepted day onto the Claude calendar, after the answer: how it went
+// is the plan's calendar, heard live. Only today's and the week ahead's:
+// a day gone by is the record of what was planned, and one further off
+// (test/day-plan.ts plans in 2099) isn't a calendar's yet.
+const CALENDAR_DAYS = 7;
+function toCalendar(env: Env, users: Users, ctx: ExecutionContext, result: Result<Plan>) {
+  if (!result.ok || !result.value.accepted) return;
+  const plan = result.value;
+  const ahead = (Date.parse(plan.date) - Date.parse(today(env.TIMEZONE))) / 86400_000;
+  if (ahead < 0 || ahead > CALENDAR_DAYS) return;
+  const accepted = plan.accepted!;
+  ctx.waitUntil(
+    (async () => {
+      let result: { blocks: number } | { error: string };
+      try {
+        result = { blocks: await writeCalendar(env, await users.calendarConnection(), plan) };
+      } catch (e) {
+        console.error(`calendar for ${plan.date}: ${calendarError(e)}`);
+        result = { error: calendarError(e) };
+      }
+      await users.calendarWritten(plan.date, accepted, result);
+    })().catch((e) => console.error(`calendar for ${plan.date}: ${e}`)),
+  );
+}
+
+async function plans(request: Request, env: Env, users: Users, ctx: ExecutionContext): Promise<Response> {
   const m = new URL(request.url).pathname.match(/^\/api\/plans\/([^/]+)(?:\/(say|accept|discard|day))?$/);
   if (!m) return error(404, "not found");
   const day = date(m[1]);
@@ -406,12 +433,18 @@ async function plans(request: Request, users: Users): Promise<Response> {
       if (typeof input.text !== "string" || !input.text.trim()) throw new Invalid("text must say what to change");
       return reply(await users.say(day, input.text.trim()));
     }
-    case "accept":
-      return reply(await users.accept(day, version(), blocks(input.blocks)));
+    case "accept": {
+      const accepted = await users.accept(day, version(), blocks(input.blocks));
+      toCalendar(env, users, ctx, accepted);
+      return reply(accepted);
+    }
     case "discard":
       return reply(await users.discard(day, version()));
-    default:
-      return reply(await users.setDay(day, version(), blocks(input.blocks)));
+    default: {
+      const edited = await users.setDay(day, version(), blocks(input.blocks));
+      toCalendar(env, users, ctx, edited);
+      return reply(edited);
+    }
   }
 }
 
@@ -618,7 +651,7 @@ export const api = {
       if (path === "/api/memory/entries" && request.method === "POST") return await importEntries(request, await memoryOf(env, ctx.props.userId, brain));
       if (path === "/api/memory/vectors") return json(await (await memoryOf(env, ctx.props.userId, brain)).vectorState());
       if (path.startsWith("/api/memory/")) return await browse(request, await memoryOf(env, ctx.props.userId, brain));
-      if (path.startsWith("/api/plans/")) return await plans(request, users);
+      if (path.startsWith("/api/plans/")) return await plans(request, env, users, ctx);
       if (path === "/api/chat") return await chat(request, users);
       if (path.startsWith("/api/sessions")) return await sessions(request, users, machine);
       if (path.startsWith("/api/workspace/")) return await workspace(request, env, ctx.props, users, machine);

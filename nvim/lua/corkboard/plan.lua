@@ -13,8 +13,8 @@
 -- The plan is today's on corkboard's Worker (cloud/src/plans.ts), read
 -- through the bridge and followed live: the assistant proposes (MCP
 -- plan_propose), the proposal shows here as a diff against the day, and
--- accepting it, which only happens here, writes the Claude calendar with
--- `dayplan apply` and then tells the Worker. A first plan of the day is a
+-- accepting it tells the Worker, which writes the Claude calendar
+-- (cloud/src/calendar.ts). A first plan of the day is a
 -- proposal against an empty day. It lives in the day plan's window
 -- (corkboard.window == "plan").
 
@@ -32,9 +32,6 @@ local function this_day() return os.date("%Y-%m-%d", os.time() - DAY_STARTS_HOUR
 -- The plan's date: today, or CORKBOARD_PLAN_DATE for tests, which must not
 -- touch today's.
 local function today() return vim.env.CORKBOARD_PLAN_DATE or this_day() end
-
--- What writes the calendar; CORKBOARD_DAYPLAN in tests, which must not.
-local DAYPLAN = vim.env.CORKBOARD_DAYPLAN or "dayplan"
 
 local function empty_day() return { blocks = {}, ranked = {}, later = {}, inputs = {} } end
 
@@ -59,8 +56,7 @@ local selected_hunk = 1
 local goals = {}
 local selected_goal
 
--- 9:30am, as the plan shows times. hhmm is 24-hour, for the calendar.
-local function hhmm(m) return string.format("%02d:%02d", math.floor(m / 60), m % 60) end
+-- 9:30am, as the plan shows times.
 local function clock(m)
   local h = math.floor(m / 60) % 24
   return string.format("%d:%02d%s", (h + 11) % 12 + 1, m % 60, h < 12 and "am" or "pm")
@@ -148,7 +144,7 @@ end
 local function effects(n)
   return {
     string.format("calendar: %d added, %d moved, %d removed", n["+"], n["~"], n["-"]),
-    "written to the Claude calendar with dayplan apply, which opens the gate",
+    "written to the Claude calendar, which opens the gate",
   }
 end
 
@@ -383,21 +379,6 @@ function M.replan()
   if head then vim.api.nvim_win_set_cursor(0, { head, 0 }) end
 end
 
--- dayplan apply's blocks: what's still ahead and isn't already a calendar
--- event, as local times on doc.date.
-local function calendar_blocks(blocks)
-  local at = function(m) return doc.date .. "T" .. (m >= 24 * 60 and "23:59" or hhmm(m)) end
-  -- What's past is only past today; another day's plan is written whole.
-  local from = doc.date == this_day() and now() or 0
-  local out = {}
-  for _, b in ipairs(blocks) do
-    if b.kind ~= "fixed" and b.stop > from then
-      table.insert(out, { title = b.title, desc = b.desc or "", start = at(math.max(b.start, from)), ["end"] = at(b.stop) })
-    end
-  end
-  return out
-end
-
 -- An answer from the Worker: { plan } or { conflict = the plan as it is }.
 local function settle(res, what)
   if res.conflict then
@@ -409,29 +390,20 @@ local function settle(res, what)
   return true
 end
 
--- The calendar first, then the Worker: a plan is only accepted once it's
--- on the calendar, which is what opens the dayplan gate.
+-- The Worker writes the calendar once it's accepted; how that went comes
+-- back as the plan's calendar (M.apply).
 function M.accept()
   if not (proposal and doc) then return end
-  local blocks, version = vim.deepcopy(proposal.blocks), doc.version
+  local blocks = vim.deepcopy(proposal.blocks)
   -- Accepting approves the day, which opens the dayplan gate; an empty plan
   -- would open it with nothing planned.
   if #blocks == 0 then return vim.notify("corkboard: nothing is left to accept; q keeps the plan as it was", vim.log.levels.WARN) end
-  local input = vim.json.encode({ blocks = calendar_blocks(blocks), approve = true })
-  vim.notify("corkboard: writing the plan to the calendar…")
-  vim.system({ DAYPLAN, "apply" }, { stdin = input, text = true }, vim.schedule_wrap(function(r)
-    if r.code ~= 0 then
-      return vim.notify("corkboard: dayplan apply failed, so the plan isn't accepted: " .. vim.trim(r.stderr ~= "" and r.stderr or r.stdout), vim.log.levels.ERROR)
-    end
-    local ok, res = pcall(cloud().call, "plan_accept", doc.date, version, blocks)
-    if not ok then
-      return vim.notify("corkboard: on the calendar, but the Worker didn't take it: " .. res .. "; accept again", vim.log.levels.ERROR)
-    end
-    if settle(res, "it was accepted") then
-      close_view(diff_buf)
-      vim.notify("corkboard: plan accepted. " .. vim.trim(r.stdout))
-    end
-  end))
+  local ok, res = pcall(cloud().call, "plan_accept", doc.date, doc.version, blocks)
+  if not ok then return vim.notify("corkboard: the plan isn't accepted: " .. res, vim.log.levels.ERROR) end
+  if settle(res, "it was accepted") then
+    close_view(diff_buf)
+    vim.notify("corkboard: plan accepted")
+  end
 end
 
 function M.discard()
@@ -537,11 +509,19 @@ function M.load()
   M.apply(res)
 end
 
+-- The accept whose calendar trouble was said, so it's said once.
+local calendar_said
+
 -- The Worker's plan becomes what's shown. A new version replaces any hunks
 -- undone here.
 function M.apply(plan)
   if plan.date ~= today() then return end
   if doc and plan.version < doc.version then return end
+  local cal = type(plan.calendar) == "table" and plan.calendar or nil
+  if cal and cal.error and cal.accepted ~= calendar_said then
+    calendar_said = cal.accepted
+    vim.schedule(function() vim.notify("corkboard: accepted, but not on the calendar: " .. cal.error, vim.log.levels.WARN) end)
+  end
   local was = doc and doc.version
   doc, problem = plan, nil
   day = vim.tbl_extend("force", empty_day(), plan.day or {})
