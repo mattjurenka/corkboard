@@ -52,8 +52,9 @@
 //   /api/holds                               what they hold, and its secrets (holds.ts)
 //   POST  /api/tokens/machine                { environment, label?, expires_in? }: a server's token,
 //                                            until revoked or expires_in seconds: this API but
-//                                            tickets, export and import, and of the fleet and
-//                                            sessions only that environment's
+//                                            tickets, export and import, of brains only their
+//                                            tokens, and of the fleet and sessions only that
+//                                            environment's
 //   GET   /api/tokens/machine                the machine tokens: { id, environment, label, created,
 //                                            expires, used }, never the token
 //   DELETE /api/tokens/machine/:id           revoke one
@@ -774,8 +775,9 @@ export const api = {
     try {
       if (path.startsWith("/api/tokens")) return await tokens(request, env, ctx.props, users, machine);
       if (path.startsWith("/api/spawns") || path.startsWith("/api/fleet/")) return await fleetRoutes(request, env, ctx.props, () => body(request), mintToken, machine);
+      // A machine mints a brain's token (pepperd, Pepper's) and does nothing else with brains.
       if (path === "/api/brains" || path.startsWith("/api/brains/"))
-        return machine ? error(403, "not with a machine token") : await brainRoutes(request, env, ctx.props, () => body(request), mintToken);
+        return machine && !/^\/api\/brains\/[^/]+\/tokens$/.test(path) ? error(403, "not with a machine token") : await brainRoutes(request, env, ctx.props, () => body(request), mintToken);
       if (path === "/api/holds" || path.startsWith("/api/holds/"))
         return machine ? error(403, "not with a machine token") : await holdRoutes(request, env, ctx.props.userId, () => body(request));
       if (path === "/api/me") return machine ? error(403, "not with a machine token") : await me(request, env, users, account);

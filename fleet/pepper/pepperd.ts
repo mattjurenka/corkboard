@@ -120,7 +120,8 @@ async function tick() {
     const s = await ready();
     do {
       again = false;
-      await renew(s);
+      // The token it has lasts days: a failed renewal mustn't hold up the chat.
+      await renew(s).catch((e) => console.error((e as Error).message));
       await pass(s);
     } while (again);
   } catch (e) {

@@ -69,6 +69,13 @@ describe("a machine token", () => {
     expect((await call(machine, "GET", "/memory/context")).status).toBe(403);
   });
 
+  it("mints a brain's token, and does nothing else with brains", async () => {
+    expect((await call(machine, "POST", "/api/brains/assistant/tokens", {})).status).toBe(201);
+    expect((await call(machine, "GET", "/api/brains")).status).toBe(403);
+    expect((await call(machine, "GET", "/api/brains/assistant")).status).toBe(403);
+    expect((await call(machine, "POST", "/api/brains/assistant/restore", {})).status).toBe(403);
+  });
+
   it("types into its own environment's sessions, never another's", async () => {
     const laptop = await bridge(owner, "?bridge=laptop-7777&machine=laptop", "laptop");
     // It says it's the laptop; it's put in its own environment anyway.
