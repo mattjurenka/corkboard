@@ -2,7 +2,7 @@ import { reset, runDurableObjectAlarm, runInDurableObject } from "cloudflare:tes
 import { env as bindings } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/index";
-import { google, login, ownerToken, worker } from "./login";
+import { google, login, ownerToken, pepper, worker } from "./login";
 import { bullets, parseRollup, render } from "../src/consolidate";
 import { today } from "../src/plans";
 
@@ -30,6 +30,7 @@ const pepperToken = async () => (await (await call(owner, "POST", "/api/brains/p
 
 beforeEach(async () => {
   owner = await ownerToken();
+  await pepper(owner);
   google("me@example.com");
   const { tokens } = await login({ scope: "assistant" });
   vi.restoreAllMocks();

@@ -12,7 +12,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { BoardInfo, Result } from "./board";
 import { type Dump, dump, restore } from "./dump";
 import { type Environment, type Spawn, type SpawnReport, FINAL, type SpawnState } from "./fleet";
-import { type Brain, brainOf, PEPPER } from "./brains";
+import { type Brain, brainOf, STARTER } from "./brains";
 import type { Connection } from "./calendar";
 import {
   type Block,
@@ -85,10 +85,10 @@ export class User extends DurableObject {
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
-    // Every user starts with Pepper, once: the table's first making.
+    // Every user starts with a brain, once: the table's first making.
     const fresh = !this.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'brains'").toArray().length;
     this.sql.exec(SCHEMA);
-    if (fresh) this.saveBrain(PEPPER(now()));
+    if (fresh) this.saveBrain(STARTER(now()));
     const boards = this.sql.exec("SELECT name FROM pragma_table_info('boards')").toArray();
     if (!boards.some((c) => c.name === "first_commit")) this.sql.exec("ALTER TABLE boards ADD COLUMN first_commit TEXT");
     if (!boards.some((c) => c.name === "remotes")) this.sql.exec("ALTER TABLE boards ADD COLUMN remotes TEXT");
@@ -172,7 +172,7 @@ export class User extends DurableObject {
   // Into a user with no boards yet.
   restore(d: Dump): Result<number> {
     if (this.boards().length) return refuse(409, "this account already has boards");
-    // The export's brains, not the Pepper a new account starts with.
+    // The export's brains, not the one a new account starts with.
     if (d.brains) this.sql.exec("DELETE FROM brains");
     // Its settings, not those signing in here made.
     if (d.settings) this.sql.exec("DELETE FROM settings");

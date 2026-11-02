@@ -2,7 +2,7 @@
 // the user's object (user.ts) rather than a constant. A brain is its memory
 // (memory.ts, one object per `<user>/<name>`), the Claude account its
 // spawned agents run as (fleet.ts), what it holds, and the tools beyond
-// memory its agents may use. Every user starts with Pepper. Its agents
+// memory its agents may use. Every user starts with one (STARTER). Its agents
 // reach the whole public internet, as every slot does.
 //
 //   GET    /api/brains                  every brain, each with its memory's counts; ?archived=1 too
@@ -49,13 +49,17 @@ export const ABILITIES = ["chat"] as const;
 // Its avatar's persona: web/src/avatar/personas.ts and nvim/lua/corkboard/personas.lua.
 export const PERSONAS = ["tsundere", "bikini", "businesswoman", "nerd", "businessman", "shirtless"] as const;
 
-export const PEPPER = (at: string): Brain => ({
+// The brain a new account starts with: a plain assistant that can chat with
+// the user, runs as no Claude account in particular and holds nothing. The
+// accounts from before this have Pepper, made then with the first admin's
+// own account and holds, and kept as it is.
+export const STARTER = (at: string): Brain => ({
   id: crypto.randomUUID(),
-  name: "pepper",
-  title: "Pepper",
-  description: "The user's personal assistant.",
-  account: "personal",
-  credentials: ["google", "corkboard"],
+  name: "assistant",
+  title: "Assistant",
+  description: "Your assistant.",
+  account: null,
+  credentials: [],
   abilities: ["chat"],
   persona: null,
   skin: null,

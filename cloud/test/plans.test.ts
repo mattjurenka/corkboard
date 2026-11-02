@@ -1,6 +1,6 @@
 import { reset } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { google, login, ownerToken, worker } from "./login";
+import { google, login, ownerToken, pepper, worker } from "./login";
 
 let owner: string;
 let assistant: string;
@@ -21,6 +21,7 @@ async function tool(token: string, name: string, args: object = {}) {
 
 beforeEach(async () => {
   owner = await ownerToken();
+  await pepper(owner);
   google("me@example.com");
   const { tokens } = await login({ scope: "assistant" });
   vi.restoreAllMocks();

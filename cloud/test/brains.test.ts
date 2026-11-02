@@ -1,7 +1,7 @@
 import { env, reset } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { tokenKey } from "../src/api";
-import { google, login, ownerToken, worker } from "./login";
+import { google, login, ownerToken, pepper, worker } from "./login";
 
 let owner: string;
 let assistant: string;
@@ -41,10 +41,10 @@ afterEach(async () => {
 });
 
 describe("brains", () => {
-  it("start as just Pepper, the default, with the chat", async () => {
+  it("start as a plain assistant, the default, with the chat and nothing held", async () => {
     const { body } = await send("GET", "/api/brains");
-    expect(body.map((b: any) => b.name)).toEqual(["pepper"]);
-    expect(body[0]).toMatchObject({ title: "Pepper", account: "personal", default: true, abilities: ["chat"], memory: { notes: 0, entries: 0, episodes: 0 } });
+    expect(body.map((b: any) => b.name)).toEqual(["assistant"]);
+    expect(body[0]).toMatchObject({ title: "Assistant", account: null, credentials: [], persona: null, default: true, abilities: ["chat"], memory: { notes: 0, entries: 0, episodes: 0 } });
   });
 
   it("are made, read, changed against their version, and named for good", async () => {
@@ -67,7 +67,7 @@ describe("brains", () => {
   it("have a persona, one of the avatar's, or none", async () => {
     const made = await send("POST", "/api/brains", { name: "work", title: "Stable", persona: "businesswoman" });
     expect(made.body.persona).toBe("businesswoman");
-    expect((await send("GET", "/api/brains/pepper")).body.persona).toBeNull();
+    expect((await send("GET", "/api/brains/assistant")).body.persona).toBeNull();
     expect((await send("POST", "/api/brains", { name: "x", title: "x", persona: "pirate" })).status).toBe(400);
     const cleared = await send("PATCH", "/api/brains/work", { updated: made.body.updated, persona: null });
     expect(cleared.body.persona).toBeNull();
@@ -76,7 +76,7 @@ describe("brains", () => {
   it("have a skin colour, or the model's own", async () => {
     const made = await send("POST", "/api/brains", { name: "tan", title: "Tan", skin: "#c68a5e" });
     expect(made.body.skin).toBe("#c68a5e");
-    expect((await send("GET", "/api/brains/pepper")).body.skin).toBeNull();
+    expect((await send("GET", "/api/brains/assistant")).body.skin).toBeNull();
     expect((await send("POST", "/api/brains", { name: "y", title: "y", skin: "brown" })).status).toBe(400);
     const cleared = await send("PATCH", "/api/brains/tan", { updated: made.body.updated, skin: null });
     expect(cleared.body.skin).toBeNull();
@@ -84,7 +84,7 @@ describe("brains", () => {
 
   it("have one default, which your own sessions remember in", async () => {
     const made = (await send("POST", "/api/brains", { name: "work", title: "Stable", default: true })).body;
-    expect((await send("GET", "/api/brains/pepper")).body.default).toBe(false);
+    expect((await send("GET", "/api/brains/assistant")).body.default).toBe(false);
     await tool(assistant, "memory_remember", { text: "Standup is at ten." });
     expect((await (await tokenFor("work")) && (await tool(await tokenFor("work"), "memory_recall", { query: "standup" })))[0].snippet).toContain("Standup");
     await send("PATCH", "/api/brains/work", { updated: made.updated, default: false });
@@ -93,10 +93,11 @@ describe("brains", () => {
 
   it("give their abilities' tools only to their own agents", async () => {
     await send("POST", "/api/brains", { name: "work", title: "Stable" });
-    expect(await names(await tokenFor("pepper"))).toContain("chat_send");
+    expect(await names(await tokenFor("assistant"))).toContain("chat_send");
     expect(await names(await tokenFor("work"))).not.toContain("chat_send");
     expect(await names(assistant)).not.toContain("chat_send");
-    // A token from before brains were data is still Pepper's.
+    // A token from before brains were data is still Pepper's, in an account that has it.
+    await pepper(owner);
     await (env as any).OAUTH_KV.put(await tokenKey("cbc_old"), JSON.stringify({ userId: "sub-me@example.com", email: "me@example.com", grant: { kind: "pepper", agent: "pepper" } }));
     expect(await names("cbc_old")).toContain("chat_send");
   });
@@ -106,8 +107,8 @@ describe("brains", () => {
     const t = await tokenFor("work");
     await tool(t, "memory_remember", { text: "Kept through an archive." });
     expect((await send("DELETE", "/api/brains/work")).body.archived).toBeTruthy();
-    expect((await send("GET", "/api/brains")).body.map((b: any) => b.name)).toEqual(["pepper"]);
-    expect((await send("GET", "/api/brains?archived=1")).body.map((b: any) => b.name)).toEqual(["pepper", "work"]);
+    expect((await send("GET", "/api/brains")).body.map((b: any) => b.name)).toEqual(["assistant"]);
+    expect((await send("GET", "/api/brains?archived=1")).body.map((b: any) => b.name)).toEqual(["assistant", "work"]);
     expect(await rpc(t, "tools/list")).toMatchObject({ status: 403 });
     expect((await send("POST", "/api/brains/work/tokens")).status).toBe(404);
     expect((await send("POST", "/api/brains", { name: "work", title: "New" })).status).toBe(409);
@@ -131,21 +132,21 @@ describe("brains", () => {
   it("go with the account's export", async () => {
     await send("POST", "/api/brains", { name: "work", title: "Stable" });
     const exported = (await send("GET", "/api/export")).body;
-    expect(Object.keys(exported.memory).sort()).toEqual(["pepper", "work"]);
+    expect(Object.keys(exported.memory).sort()).toEqual(["assistant", "work"]);
     expect(exported.user.brains.length).toBe(2);
   });
 });
 
 describe("brain tools", () => {
   it("list, make and change brains for your own clients only", async () => {
-    expect((await tool(assistant, "brain_list")).map((b: any) => b.name)).toEqual(["pepper"]);
+    expect((await tool(assistant, "brain_list")).map((b: any) => b.name)).toEqual(["assistant"]);
     const made = await tool(assistant, "brain_create", { name: "garden", title: "Garden" });
     expect(made.name).toBe("garden");
     expect((await tool(assistant, "brain_update", { name: "garden", updated: made.updated, title: "The garden" })).title).toBe("The garden");
     expect((await tool(assistant, "brain_update", { name: "garden", updated: made.updated, title: "x" })).error).toMatch(/changed since/);
     expect(await tool(assistant, "brain_read", { name: "garden" })).toMatchObject({ title: "The garden", memory: { notes: 0, entries: 0, episodes: 0, lastEpisode: null } });
     expect((await tool(assistant, "brain_read", { name: "nobody" })).error).toMatch(/no brain nobody/);
-    expect(await names(await tokenFor("pepper"))).not.toContain("brain_create");
-    expect(await names(await tokenFor("pepper"))).not.toContain("brain_read");
+    expect(await names(await tokenFor("assistant"))).not.toContain("brain_create");
+    expect(await names(await tokenFor("assistant"))).not.toContain("brain_read");
   });
 });

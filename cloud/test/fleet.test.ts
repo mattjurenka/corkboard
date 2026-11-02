@@ -1,7 +1,7 @@
 import { env, reset } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawn } from "../src/fleet";
-import { ownerToken, worker } from "./login";
+import { ownerToken, pepper, worker } from "./login";
 
 const BOARD = "home-matthew-corkboard";
 const USER = "sub-me@example.com";
@@ -39,6 +39,7 @@ const WORK = { name: "work", title: "Stable", account: "work", credentials: ["gr
 
 beforeEach(async () => {
   owner = await ownerToken();
+  await pepper(owner);
   await send("PUT", `/api/boards/${BOARD}`, { name: "corkboard", root: "/home/matthew/corkboard" });
   expect((await send("PUT", "/api/fleet/environments/local", { templates: TEMPLATES, egress: EGRESS, bindings: ["work"] })).status).toBe(200);
 });
@@ -301,7 +302,10 @@ describe("the MCP tools", () => {
     const st = await tool(owner, "spawn_status");
     expect(st.environments[0].templates.map((t: any) => t.name)).toEqual(["coding"]);
     expect(st.environments[0]).toMatchObject({ egress: EGRESS, bindings: ["work"] });
-    expect(st.brains).toEqual([{ name: "pepper", title: "Pepper", account: "personal", holdsCredentials: true }]);
+    expect(st.brains).toEqual([
+      { name: "assistant", title: "Assistant", account: null, holdsCredentials: false },
+      { name: "pepper", title: "Pepper", account: "personal", holdsCredentials: true },
+    ]);
     expect(st.spawns[0].id).toBe(s.id);
     expect((await tool(owner, "spawn_status", { id: s.id })).card).toBe(s.card);
     expect((await tool(owner, "spawn_status", { id: "nope000" })).error).toContain("no spawn");

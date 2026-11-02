@@ -30,7 +30,7 @@ describe("export and import", () => {
     const exported = await (await call(owner, "GET", "/api/export")).json<any>();
     expect(Object.keys(exported.boards)).toEqual(["corkboard"]);
     expect(exported.boards.corkboard.cards).toHaveLength(2);
-    expect(exported.memory.pepper.notes.map((n: any) => n.id)).toContain("who-am-i");
+    expect(exported.memory.assistant.notes.map((n: any) => n.id)).toContain("who-am-i");
     expect(exported.holds.records.github).toMatchObject({ about: "push to m/corkboard" });
     expect(exported.holds.secrets).toEqual({ github: "ghp_x" });
 

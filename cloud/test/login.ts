@@ -167,6 +167,18 @@ export async function ownerToken(email = "me@example.com", invite?: string) {
   return tokens.access_token;
 }
 
+// Pepper, as the first admin's account has it from before new accounts
+// started with a plain assistant (brains.ts's STARTER): the default brain,
+// with chat, a Claude account and two holds.
+export async function pepper(token: string) {
+  const res = await worker("/api/brains", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "pepper", title: "Pepper", description: "The user's personal assistant.", account: "personal", credentials: ["google", "corkboard"], abilities: ["chat"], default: true }),
+  });
+  if (res.status !== 201) throw new Error(`pepper: ${res.status} ${await res.text()}`);
+}
+
 // A second user, let in by an invite the admin's token makes: their token.
 export async function invitedToken(admin: string, email = "you@example.com") {
   const res = await worker("/api/admin/invites", {

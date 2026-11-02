@@ -818,7 +818,7 @@ function toolsFor(grant: Grant) {
           "Make a new board. With root (a project's absolute path on the user's machine) it's that project's board, the one corkboard shows there; without one it's a board of its own, for work that isn't in a repository. Returns its key, for every other tool's board argument.",
         inputSchema: {
           type: "object",
-          properties: { name: str("What it's called, one line"), root: str("The project's absolute path, like /home/matthew/corkboard") },
+          properties: { name: str("What it's called, one line"), root: str("The project's absolute path, like /home/you/project") },
           required: ["name"],
         },
       },
