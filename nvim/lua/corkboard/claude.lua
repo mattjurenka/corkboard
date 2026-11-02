@@ -17,7 +17,7 @@ end
 local function settings()
   local session = { hooks = { hook("claude-session.lua") } }
   return {
-    permissions = { allow = { "mcp__corkboard-ui__say" } },
+    permissions = { allow = { "mcp__corkboard-ui__say", "mcp__corkboard-ui__emote" } },
     hooks = {
       PostToolUse = {
         { matcher = "PushNotification", hooks = { hook("claude-notification.lua") } },

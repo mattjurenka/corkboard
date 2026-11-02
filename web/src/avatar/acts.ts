@@ -4,7 +4,7 @@
 // she's poked and melting a little when her head is patted; arms folded
 // waiting on you, a hand to her chin thinking, a yawn, a sneaked look, a
 // sway with her hands behind her back, and pleased with herself when a job
-// is done. Angles are
+// is done, and jumping up and down for joy. Angles are
 // VRM 1's (the stage flips them for a VRM 0 model), left side; side is
 // which way she turns, 1 to her left.
 
@@ -12,7 +12,8 @@ import type { VRMHumanBoneName } from "@pixiv/three-vrm";
 
 export type Pose = Partial<Record<VRMHumanBoneName, [number, number, number]>>;
 export type Face = Partial<Record<"angry" | "happy" | "sad" | "surprised" | "blink" | "aa", number>>;
-export type Frame = { pose: Pose; face?: Face; look?: [number, number] };
+// lift raises the whole model, in metres.
+export type Frame = { pose: Pose; face?: Face; look?: [number, number]; lift?: number };
 
 export type ActName =
   | "huff"
@@ -26,7 +27,13 @@ export type ActName =
   | "yawn"
   | "glance"
   | "sway"
-  | "proud";
+  | "proud"
+  | "jump"
+  | "wave"
+  | "thumbs"
+  | "nod"
+  | "bow"
+  | "shrug";
 type Act = { span: number; at: (u: number, side: number) => Frame };
 
 // An arm's bones, the left's as given and the right's mirrored.
@@ -51,8 +58,41 @@ function arm(side: "left" | "right", upper: [number, number, number], lower: [nu
 // Arms folded under her chest.
 const folded = (): Pose => ({ ...arm("left", [0.6, -0.35, -1.25], [0, -2.05, 0]), ...arm("right", [0.6, -0.35, -1.2], [0, -1.95, 0]) });
 
+// A hand's fingers, curled as far as curl (1 a fist), and its thumb out
+// as far as out.
+function hand(side: "left" | "right", curl: number, out = 0): Pose {
+  const d = side === "left" ? -1 : 1;
+  const pose: Pose = {};
+  for (const finger of ["Index", "Middle", "Ring", "Little"] as const) {
+    pose[`${side}${finger}Proximal`] = [0, 0, d * 1.4 * curl];
+    pose[`${side}${finger}Intermediate`] = [0, 0, d * 1.6 * curl];
+    pose[`${side}${finger}Distal`] = [0, 0, d * 1.1 * curl];
+  }
+  pose[`${side}ThumbMetacarpal`] = [0, d * 0.3 * out, 0];
+  pose[`${side}ThumbProximal`] = [0, d * 0.2 * out, 0];
+  pose[`${side}ThumbDistal`] = [0, 0, 0];
+  return pose;
+}
+
 // From 0 to 1 over a quarter second from at, u seconds into an act.
 const step = (u: number, at: number) => Math.max(0, Math.min(1, (u - at) / 0.25));
+
+// From 0 to 1, eased in and out.
+const smooth = (x: number) => {
+  const c = Math.max(0, Math.min(1, x));
+  return c * c * (3 - 2 * c);
+};
+
+// A hop, over 0 to 1, from a crouch to one: pushing off, in the air,
+// landing and crouched; how high (metres), and how far the knees are bent.
+function hop(q: number): { up: number; bend: number } {
+  if (q < 0.15) return { up: 0, bend: 1 - smooth(q / 0.15) };
+  if (q < 0.65) {
+    const a = Math.sin(((q - 0.15) / 0.5) * Math.PI);
+    return { up: 0.12 * a, bend: 0.25 * a };
+  }
+  return { up: 0, bend: smooth((q - 0.65) / 0.2) };
+}
 
 export const ACTS: Record<ActName, Act> = {
   // Hands on hips, nose in the air, looking away; a glance back to see if
@@ -127,13 +167,14 @@ export const ACTS: Record<ActName, Act> = {
       face: { angry: 0.35 + 0.15 * Math.max(0, Math.sin(u * 2)) },
     }),
   },
-  // A hand to her chin, the other arm under it, eyes up.
+  // A hand to her chin, the other forearm across her waist under its
+  // elbow, out in front of her, eyes up.
   ponder: {
     span: 5,
     at: (_u, side) => ({
       pose: {
         ...arm("right", [-0.8, -1.1, -0.7], [0, -2.4, 0]),
-        ...arm("left", [0.6, -0.35, -1.25], [0, -2.0, 0]),
+        ...arm("left", [0.6, -0.6, -1.15], [0, -1.7, 0]),
         head: [-0.08, 0.1 * side, 0.12],
       },
       look: [0.3 * side, 0.3],
@@ -192,6 +233,93 @@ export const ACTS: Record<ActName, Act> = {
     at: () => ({
       pose: { ...arms([1.57, -0.4, -0.72], [0, -1.75, 0]), head: [-0.15, 0, 0], chest: [-0.06, 0, 0] },
       face: { happy: 0.7, blink: 0.5 },
+    }),
+  },
+  // Three hops on the spot, hands up, for the joy of it.
+  jump: {
+    span: 3,
+    at: (u) => {
+      const k = (u - 0.3) / 0.7;
+      const { up, bend } = k < 0 ? { up: 0, bend: smooth(u / 0.3) } : k < 3 ? hop(k % 1) : { up: 0, bend: 1 - smooth((k - 3) / 0.5) };
+      const high = up / 0.12;
+      return {
+        pose: {
+          ...arms([0, -0.2, -1.1 + 2 * high], [0, -0.6 + 0.3 * high, 0]),
+          leftUpperLeg: [-0.5 * bend, 0, 0],
+          rightUpperLeg: [-0.5 * bend, 0, 0],
+          leftLowerLeg: [0.9 * bend, 0, 0],
+          rightLowerLeg: [0.9 * bend, 0, 0],
+          leftFoot: [-0.4 * bend, 0, 0],
+          rightFoot: [-0.4 * bend, 0, 0],
+          spine: [0.12 * bend, 0, 0],
+          head: [-0.1 * high, 0, 0],
+        },
+        face: { happy: 0.9, blink: 0.4 },
+        look: [0, 0.1],
+        // Crouched, she's lower by as much as her knees are bent.
+        lift: up - 0.07 * bend,
+      };
+    },
+  },
+  // The rest only the session plays, on purpose. A hand up by her head,
+  // palm out, waving.
+  wave: {
+    span: 2.8,
+    at: (u) => ({
+      pose: {
+        ...arm("right", [-1.57, -0.25, -0.2], [0, -1.65 + 0.3 * Math.sin(u * 9), 0]),
+        ...hand("right", 0),
+        head: [0, 0, 0.08],
+      },
+      face: { happy: 0.8 },
+    }),
+  },
+  // A fist out in front of her, thumb up.
+  thumbs: {
+    span: 2.6,
+    at: () => ({
+      pose: { ...arm("right", [0, -0.45, -1.2], [0, -1.6, 0]), ...hand("right", 1, 1), head: [0, 0, 0.06] },
+      face: { happy: 0.7, blink: 0.3 },
+    }),
+  },
+  // Yes, twice.
+  nod: {
+    span: 1.6,
+    at: (u) => {
+      const n = Math.max(0, Math.sin(Math.min(1, u / 1.2) * Math.PI * 2));
+      return { pose: { head: [0.22 * n, 0, 0], neck: [0.08 * n, 0, 0] }, face: { happy: 0.4 } };
+    },
+  },
+  // From the waist, a hand to her chest.
+  bow: {
+    span: 2.6,
+    at: (u) => {
+      const b = smooth(u / 0.6) * (1 - smooth((u - 1.6) / 0.6));
+      return {
+        pose: {
+          ...arm("right", [-0.9, -1.0, -0.9], [0, -2.0, 0]),
+          spine: [0.35 * b, 0, 0],
+          chest: [0.15 * b, 0, 0],
+          head: [0.15 * b, 0, 0],
+        },
+        face: { blink: 0.8 * b, happy: 0.4 },
+        look: [0, -0.2 * b],
+      };
+    },
+  },
+  // Shoulders up, palms up, head on one side: who knows?
+  shrug: {
+    span: 2.2,
+    at: (_u, side) => ({
+      pose: {
+        ...arms([0, -0.25, -1.25], [0, -1.3, 0.2], [-1.4, 0, 0]),
+        ...hand("left", 0.15),
+        ...hand("right", 0.15),
+        leftShoulder: [0, 0, 0.25],
+        rightShoulder: [0, 0, -0.25],
+        head: [0, 0, 0.18 * side],
+      },
+      face: { surprised: 0.3, happy: 0.2 },
     }),
   },
 };

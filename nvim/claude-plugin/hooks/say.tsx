@@ -27,8 +27,26 @@ export const SAY = {
   isDeferred: false,
 }
 
-// The tool is registered at session.start in work.tsx: an event takes one
+// emote: something the avatar does on purpose, which it never does on its
+// own.
+export const EMOTE = {
+  name: 'emote',
+  description:
+    'Have the avatar in the panel beside this session do something: wave, give a thumbs up, nod, bow, shrug or jump for joy. ' +
+    'Use it only while you are told the panel is open, now and then, when it fits what you are saying.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      emote: { type: 'string', enum: ['wave', 'thumbs', 'nod', 'bow', 'shrug', 'jump'], description: 'thumbs is a thumbs up' },
+    },
+    required: ['emote'],
+  },
+  isDeferred: false,
+}
+
+// The tools are registered at session.start in work.tsx: an event takes one
 // hook without a matcher.
 export const say: Register = on => {
   on('tool.call', { tool: 'mcp__corkboard-ui__say' }, async () => ({ result: 'said' }))
+  on('tool.call', { tool: 'mcp__corkboard-ui__emote' }, async () => ({ result: 'done' }))
 }
