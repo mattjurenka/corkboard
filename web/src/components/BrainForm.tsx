@@ -2,17 +2,19 @@
 // the page: its title, what it's for, and the rest picked rather than typed.
 // The account and what it holds are tags from the live brains', or one
 // added; a new brain names itself from its title and may start from another,
-// taking its account, what it holds and its abilities. Saved in Neovim
+// taking its account, what it holds, its abilities and its persona. The
+// persona is who its sessions' avatar is. Saved in Neovim
 // (corkboard.brains.save); a stale change gets the brain as it is now.
 
 import { useEffect, useRef, useState } from "react";
 import { useNvim } from "@/nvim/context";
 import { type BrainFields, store, useStore } from "@/store";
 import { cn } from "@/lib/utils";
+import { PERSONAS } from "@/avatar/personas";
 
 type Draft = Omit<BrainFields, "updated">;
 
-const BLANK: Draft = { name: "", title: "", description: "", account: null, credentials: [], abilities: [], default: false };
+const BLANK: Draft = { name: "", title: "", description: "", account: null, credentials: [], abilities: [], persona: null, default: false };
 const LABEL = /^[\w.-]{1,64}$/;
 
 // A title as a name: lowercase, dashes, starting with a letter, at most 32.
@@ -59,7 +61,7 @@ export function BrainForm() {
   };
   const start = (b: BrainFields | null) => {
     setFrom(b?.name ?? null);
-    set({ account: b?.account ?? null, credentials: b?.credentials ?? [], abilities: b?.abilities ?? [] });
+    set({ account: b?.account ?? null, credentials: b?.credentials ?? [], abilities: b?.abilities ?? [], persona: b?.persona ?? null });
   };
   const save = async () => {
     if (busy || !d.title.trim() || (!base && !d.name)) return;
@@ -195,6 +197,16 @@ export function BrainForm() {
               {d.credentials.length > 0 && <span className="text-review">agents need your OK to spawn it</span>}
             </div>
 
+            <span className="text-muted-foreground">persona</span>
+            <div className="flex flex-wrap items-end gap-ch">
+              {open.personas.map((p) => (
+                <Portrait key={p} id={p} on={d.persona === p} onClick={() => set({ persona: p })} />
+              ))}
+              <Tag on={!d.persona} mark={!d.persona ? "●" : "○"} onClick={() => set({ persona: null })}>
+                default
+              </Tag>
+            </div>
+
             <span className="text-muted-foreground">can</span>
             <div className="flex flex-wrap gap-x-2ch">
               {open.abilities.map((a) => (
@@ -234,6 +246,23 @@ export function BrainForm() {
 }
 
 // A tag, lit when it's picked.
+// A persona as its portrait (public/personas, bun run portraits) over its name.
+function Portrait({ id, on, onClick }: { id: string; on: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      onClick={onClick}
+      className={cn("flex w-[17ch] cursor-pointer flex-col border outline-none focus-visible:border-primary", on ? "border-primary bg-primary/20" : "text-muted-foreground hover:text-foreground")}
+    >
+      <img src={`personas/${id}.png`} alt="" draggable={false} className={cn("aspect-[4/5] w-full object-cover object-top", !on && "opacity-70")} />
+      <span className="truncate border-t px-ch text-left">
+        {on ? "●" : "○"} {(PERSONAS as Record<string, { title: string }>)[id]?.title.toLowerCase() ?? id}
+      </span>
+    </button>
+  );
+}
+
 function Tag({ on, mark, onClick, children }: { on: boolean; mark: string; onClick: () => void; children: React.ReactNode }) {
   return (
     <button

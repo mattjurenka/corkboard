@@ -7,7 +7,7 @@
 //
 //   GET    /api/brains                  every brain, each with its memory's counts; ?archived=1 too
 //   POST   /api/brains                  { name, title, description?, account?, credentials?,
-//                                          abilities?, default? }
+//                                          abilities?, persona?, default? }
 //   GET    /api/brains/:name
 //   PATCH  /api/brains/:name            { updated, ...fields }: 409 + the brain on a stale updated
 //   DELETE /api/brains/:name            archive it: out of lists, spawns and grants, its memory kept;
@@ -33,6 +33,8 @@ export type Brain = {
   account: string | null;
   credentials: string[];
   abilities: string[];
+  // Who its sessions' avatar is (web/src/avatar/personas.ts), or the default one.
+  persona: string | null;
   default: boolean;
   created: string;
   updated: string;
@@ -42,6 +44,9 @@ export type Brain = {
 // What a brain's agents may do beyond memory: Pepper's chat with the user.
 export const ABILITIES = ["chat"] as const;
 
+// Its avatar's persona: web/src/avatar/personas.ts and nvim/lua/corkboard/personas.lua.
+export const PERSONAS = ["tsundere", "bikini", "businesswoman"] as const;
+
 export const PEPPER = (at: string): Brain => ({
   id: crypto.randomUUID(),
   name: "pepper",
@@ -50,6 +55,7 @@ export const PEPPER = (at: string): Brain => ({
   account: "personal",
   credentials: ["google", "corkboard"],
   abilities: ["chat"],
+  persona: null,
   default: true,
   created: at,
   updated: at,
@@ -87,6 +93,10 @@ export function fieldsOf(input: Record<string, unknown>): Partial<Brain> {
   }
   if (input.credentials !== undefined) f.credentials = list(input.credentials, "credentials", LABEL);
   if (input.abilities !== undefined) f.abilities = list(input.abilities, "abilities", new RegExp(`^(${ABILITIES.join("|")})$`));
+  if (input.persona !== undefined) {
+    if (input.persona !== null && !(PERSONAS as readonly unknown[]).includes(input.persona)) throw new Invalid(`persona must be one of ${PERSONAS.join(", ")}, or null`);
+    f.persona = input.persona as string | null;
+  }
   if (input.default !== undefined) {
     if (typeof input.default !== "boolean") throw new Invalid("default must be true or false");
     f.default = input.default;
@@ -95,17 +105,17 @@ export function fieldsOf(input: Record<string, unknown>): Partial<Brain> {
 }
 
 // A brain as the user's object keeps it, less the egress one made before
-// every slot was open had.
+// every slot was open had, and with no persona if one made before them.
 export function brainOf(doc: string): Brain {
   const { egress: _, ...b } = JSON.parse(doc) as Brain & { egress?: string[] };
-  return b;
+  return { ...b, persona: b.persona ?? null };
 }
 
 export function create(input: Record<string, unknown>, at = now()): Brain {
   if (typeof input.name !== "string" || !NAME.test(input.name)) throw new Invalid("name must be lowercase letters, digits and -, starting with a letter, at most 32");
   const f = fieldsOf(input);
   if (!f.title) throw new Invalid("a brain needs a title");
-  return { id: crypto.randomUUID(), name: input.name, description: "", account: null, credentials: [], abilities: [], default: false, ...f, title: f.title, created: at, updated: at };
+  return { id: crypto.randomUUID(), name: input.name, description: "", account: null, credentials: [], abilities: [], persona: null, default: false, ...f, title: f.title, created: at, updated: at };
 }
 
 // A brain token's brain, as a grant says it, if it's there and not archived.

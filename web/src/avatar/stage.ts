@@ -9,7 +9,8 @@ import { MToonMaterial, type VRM, VRMLoaderPlugin, VRMUtils } from "@pixiv/three
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { ACTS, type ActName, type Face, type Frame, type Pose, weight } from "./acts";
-import type { Viseme, Voice } from "./voice";
+import { type Effect, Fx, type Head, type Touch } from "./fx";
+import type { Mood as Tone, Viseme, Voice } from "./voice";
 
 export type Mood = "idle" | "thinking" | "asking";
 
@@ -25,8 +26,8 @@ const HAIR_SHADE = new THREE.Color(0xe0b878);
 // The body's skin in shade; the model's own is barely darker than lit.
 const SKIN_SHADE = new THREE.Color(0xd9a3ad);
 
-type Feeling = "happy" | "sad" | "surprised";
-const FEELINGS: Feeling[] = ["happy", "sad", "surprised"];
+type Feeling = "happy" | "sad" | "surprised" | "angry";
+const FEELINGS: Feeling[] = ["happy", "sad", "surprised", "angry"];
 
 // What a line sounds like it means, roughly.
 function feeling(line: string): Feeling | null {
@@ -35,6 +36,38 @@ function feeling(line: string): Feeling | null {
   if (/\?/.test(line)) return "surprised";
   return null;
 }
+
+// What the session said a line's mood is, on the face and in an act.
+const MOOD_FEELING: Record<Tone, Feeling> = {
+  happy: "happy",
+  excited: "happy",
+  teasing: "happy",
+  shy: "happy",
+  annoyed: "angry",
+  sulky: "angry",
+  sad: "sad",
+  surprised: "surprised",
+};
+const MOOD_ACT: Partial<Record<Tone, ActName>> = {
+  excited: "proud",
+  teasing: "glance",
+  annoyed: "huff",
+  sulky: "snub",
+  shy: "sway",
+  surprised: "flinch",
+};
+// The marks over her for a line's mood, and for what she's doing.
+const MOOD_FX: Record<Tone, Effect[]> = {
+  happy: ["sparkle"],
+  excited: ["sparkle", "note"],
+  teasing: ["note"],
+  shy: ["blush"],
+  annoyed: ["vein"],
+  sulky: ["scribble"],
+  sad: ["gloom"],
+  surprised: ["shock"],
+};
+const ACT_FX: Partial<Record<ActName, Effect>> = { huff: "vein", flinch: "shock", pat: "blush", proud: "sparkle" };
 
 // Up and back down over a span of seconds, since a moment.
 const swell = (since: number, span: number) => (since > 0 && since < span ? Math.sin((since / span) * Math.PI) : 0);
@@ -116,7 +149,7 @@ export class Stage {
   private tilt = 0;
   private smile = 0;
   private line = "";
-  private feel: Record<Feeling, number> = { happy: 0, sad: 0, surprised: 0 };
+  private feel: Record<Feeling, number> = { happy: 0, sad: 0, surprised: 0, angry: 0 };
   private felt: Feeling | null = null;
   private beatAt = -10;
   private beatSide = 1;
@@ -125,6 +158,8 @@ export class Stage {
   private dartAt = 1;
   // What it's doing now, if anything, and after.
   private acts: ActName[] = [];
+  // What she does now and then when left alone: her persona's.
+  idle: ActName[] = ["shift", "stretch", "fold", "yawn", "glance", "sway"];
   private actAt = 0;
   private side = 1;
   private act?: Frame;
@@ -133,13 +168,18 @@ export class Stage {
   // Where the pointer is over it, in the camera's -1 to 1.
   private pointer?: THREE.Vector2;
   private ray = new THREE.Raycaster();
+  private cheeks: THREE.Object3D[] = [];
+  private fx?: Fx;
+  private size = { w: 0, h: 0 };
   mood: Mood = "idle";
   private was: Mood = "idle";
 
   constructor(
     private canvas: HTMLCanvasElement,
     private voice: Voice,
+    marks?: HTMLCanvasElement,
   ) {
+    if (marks) this.fx = new Fx(marks);
     this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -159,7 +199,9 @@ export class Stage {
     loop();
   }
 
-  async load(source: string | ArrayBuffer) {
+  // The model; the sample's clothes and hair are recolored, anyone else's
+  // are as they made them.
+  async load(source: string | ArrayBuffer, sample = false) {
     const loader = new GLTFLoader();
     loader.register((parser) => new VRMLoaderPlugin(parser));
     const gltf = typeof source === "string" ? await loader.loadAsync(source) : await loader.parseAsync(source, "");
@@ -175,12 +217,12 @@ export class Stage {
       o.frustumCulled = false;
       for (const m of [(o as THREE.Mesh).material ?? []].flat()) {
         if (m instanceof MToonMaterial) {
-          if (/CLOTH/.test(m.name) && m.map) {
+          if (sample && /CLOTH/.test(m.name) && m.map) {
             m.map = m.shadeMultiplyTexture = silhouette(m.map);
             m.color.copy(CLOTH);
             m.shadeColorFactor.copy(CLOTH_SHADE);
           }
-          if (/HAIR/.test(m.name) && m.map) {
+          if (sample && /HAIR/.test(m.name) && m.map) {
             m.map = m.shadeMultiplyTexture = recolor(m.map, HAIR_DARK, HAIR_LIGHT);
             m.color.setRGB(1, 1, 1);
             m.shadeColorFactor.copy(HAIR_SHADE);
@@ -189,7 +231,8 @@ export class Stage {
           // modelled detail (navel, collarbones) brought out.
           m.shadingToonyFactor = 0.95;
           if (/Body.*SKIN/.test(m.name)) {
-            m.shadeColorFactor.copy(SKIN_SHADE);
+            // Unless it's clothed, with its own shade painted.
+            if (m.shadeMultiplyTexture?.source === m.map?.source) m.shadeColorFactor.copy(SKIN_SHADE);
             m.shadingShiftFactor = -0.2;
             m.normalScale.setScalar(2.5);
           }
@@ -219,12 +262,41 @@ export class Stage {
     vrm.update(0);
     const head = vrm.humanoid.getNormalizedBoneNode("head");
     this.headY = head ? head.getWorldPosition(new THREE.Vector3()).y : 1.4;
+    this.cheeks = this.findCheeks(vrm);
     this.fit();
+  }
+
+  // Points on its cheeks' skin, carried by its head: a little out from and
+  // below its eyes, where a ray from in front first meets something that
+  // isn't hair.
+  private findCheeks(vrm: VRM): THREE.Object3D[] {
+    const head = vrm.humanoid.getRawBoneNode("head");
+    const left = vrm.humanoid.getRawBoneNode("leftEye");
+    const right = vrm.humanoid.getRawBoneNode("rightEye");
+    if (!head || !left || !right) return [];
+    vrm.scene.updateMatrixWorld(true);
+    const [l, r] = [left, right].map((n) => n.getWorldPosition(new THREE.Vector3()));
+    const mid = l.clone().add(r).multiplyScalar(0.5);
+    const out = r.clone().sub(l).setY(0).normalize();
+    return [-1, 1].flatMap((side) => {
+      const at = mid.clone().addScaledVector(out, side * 0.042).add(new THREE.Vector3(0, -0.038, 1));
+      this.ray.set(at, new THREE.Vector3(0, 0, -1));
+      const hit = this.ray
+        .intersectObject(vrm.scene, true)
+        .find((h) => ![(h.object as THREE.Mesh).material].flat().some((m) => /HAIR/i.test(m.name)));
+      if (!hit) return [];
+      const cheek = new THREE.Object3D();
+      cheek.position.copy(head.worldToLocal(hit.point.clone()));
+      head.add(cheek);
+      return [cheek];
+    });
   }
 
   resize(w: number, h: number) {
     if (!w || !h) return;
     this.renderer.setSize(w, h, false);
+    this.size = { w, h };
+    this.fx?.resize(w, h);
     this.camera.aspect = w / h;
     this.fit();
   }
@@ -253,6 +325,11 @@ export class Stage {
     this.side = Math.random() < 0.5 ? 1 : -1;
   }
 
+  // A hand at the pointer: patting her head, or poking.
+  touch(kind: Touch, at: { x: number; y: number }) {
+    this.fx?.put(kind, ((at.x + 1) / 2) * this.size.w, ((1 - at.y) / 2) * this.size.h, this.t);
+  }
+
   // Its eyes on the pointer, or (null) not.
   point(at: { x: number; y: number } | null) {
     this.pointer = at ? new THREE.Vector2(at.x, at.y) : undefined;
@@ -279,6 +356,47 @@ export class Stage {
       vrm.update(dt);
     }
     this.renderer.render(this.scene, this.camera);
+    if (this.fx) {
+      const tone = this.voice.speaking ? this.voice.mood : undefined;
+      const want = new Set(tone ? MOOD_FX[tone] : []);
+      const acting = this.acts.length && this.actWeight > 0.3 && ACT_FX[this.acts[0]];
+      if (acting) want.add(acting);
+      this.fx.draw([...want], vrm && this.head(vrm), this.t, dt);
+    }
+  }
+
+  // Where its face is on the screen, for the marks: between its eyes, or a
+  // little in front of its head without them.
+  private head(vrm: VRM): Head | undefined {
+    const { w, h } = this.size;
+    const on = (v: THREE.Vector3) => {
+      v.project(this.camera);
+      return new THREE.Vector2(((v.x + 1) / 2) * w, ((1 - v.y) / 2) * h);
+    };
+    const left = vrm.humanoid.getRawBoneNode("leftEye");
+    const right = vrm.humanoid.getRawBoneNode("rightEye");
+    if (left && right) {
+      // Hers, so on your right.
+      const l = left.getWorldPosition(new THREE.Vector3());
+      const r = right.getWorldPosition(new THREE.Vector3());
+      const apart = l.distanceTo(r);
+      const [a, b] = [on(l), on(r)];
+      const mid = a.clone().add(b).multiplyScalar(0.5);
+      const roll = Math.atan2(a.y - b.y, a.x - b.x);
+      const unit = (a.distanceTo(b) / Math.max(apart, 0.01)) * 0.1;
+      // Its cheeks in the marks' tenths of a metre, as they're turned.
+      const cheeks = this.cheeks.map((c) => {
+        const p = on(c.getWorldPosition(new THREE.Vector3())).sub(mid).rotateAround(new THREE.Vector2(), -roll);
+        return [p.x / unit, p.y / unit] as [number, number];
+      });
+      return { x: mid.x, y: mid.y, roll, unit, cheeks: cheeks.length === 2 ? cheeks : undefined };
+    }
+    const head = vrm.humanoid.getRawBoneNode("head");
+    if (!head) return undefined;
+    const p = head.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.07, 0.05));
+    const c = on(p.clone());
+    const d = on(p.add(new THREE.Vector3(0.1, 0, 0)));
+    return { x: c.x, y: c.y, roll: 0, unit: c.distanceTo(d) };
   }
 
   private bone(vrm: VRM, name: Parameters<VRM["humanoid"]["getNormalizedBoneNode"]>[0]) {
@@ -299,7 +417,10 @@ export class Stage {
     // other; a shrug on a question; and a feeling for the face.
     if (this.voice.text !== this.line) {
       this.line = this.voice.text;
-      this.felt = feeling(this.line);
+      const tone = this.voice.mood;
+      this.felt = tone ? MOOD_FEELING[tone] : feeling(this.line);
+      const act = tone && MOOD_ACT[tone];
+      if (this.line && act && !this.acts.length) this.play(act);
       if (this.line && Math.random() < 0.6) {
         this.beatAt = t;
         this.beatSide = -this.beatSide;
@@ -332,8 +453,8 @@ export class Stage {
           ? ["ponder"]
           : this.mood === "asking"
             ? ["fold", "glance"]
-            : ["shift", "shift", "stretch", "snub", "huff", "fold", "yawn", "glance", "sway", "sway"];
-      this.play(pick[Math.floor(Math.random() * pick.length)]);
+            : this.idle;
+      if (pick.length) this.play(pick[Math.floor(Math.random() * pick.length)]);
     }
     let since = t - this.actAt;
     while (this.acts.length && since > ACTS[this.acts[0]].span) {
@@ -452,7 +573,7 @@ export class Stage {
     for (const f of FEELINGS) this.feel[f] = ease(this.feel[f], f === felt ? 1 : 0, 3, dt);
     ex.setValue("happy", acted("happy", this.smile + this.feel.happy * 0.6));
     ex.setValue("sad", acted("sad", this.feel.sad * 0.45));
-    ex.setValue("angry", acted("angry", 0));
+    ex.setValue("angry", acted("angry", this.feel.angry * 0.5));
     // VRoid's surprise is a custom expression, not the preset.
     const surprised = acted("surprised", (this.mood === "asking" && !this.voice.speaking ? 0.2 : 0) + this.feel.surprised * 0.45);
     if (ex.getExpression("Surprised")) ex.setValue("Surprised", surprised);

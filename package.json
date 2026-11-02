@@ -6,6 +6,7 @@
     "dev": "bun bridge/server.ts --dev",
     "build": "vite build web",
     "dev:web": "vite web",
+    "portraits": "bun web/portraits.ts",
     "app": "electron app",
     "typecheck": "tsc -p .",
     "mcp": "bun mcp/board.ts",

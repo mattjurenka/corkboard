@@ -544,6 +544,7 @@ const BRAIN_FIELDS = {
   account: str("The Claude account its agents run as"),
   credentials: strings("What it holds, as labels (github, google): a brain spawning with any waits for the user"),
   abilities: strings("Tools beyond memory: chat (the chat with the user)"),
+  persona: str("Who its sessions' avatar is: tsundere, bikini or businesswoman"),
   default: { type: "boolean", description: "The brain the user's own sessions remember in" },
 };
 const brainValue = <T>(r: Result<T>): T => {

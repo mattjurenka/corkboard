@@ -38,9 +38,19 @@ local function said(line)
   for i, b in ipairs(type(r.message.content) == "table" and r.message.content or {}) do
     local text = type(b) == "table" and b.type == "tool_use" and b.name == SAY and type(b.input) == "table" and b.input.text
     text = type(text) == "string" and vim.trim(text) or ""
-    if text ~= "" then table.insert(out, { id = b.id or ("%s:%d"):format(r.uuid or "", i), text = text:sub(1, TEXT) }) end
+    if text ~= "" then
+      local mood = type(b.input.mood) == "string" and b.input.mood or nil
+      table.insert(out, { id = b.id or ("%s:%d"):format(r.uuid or "", i), text = text:sub(1, TEXT), mood = mood })
+    end
   end
   return out
+end
+
+-- Who the session's avatar is: its brain's persona, or the default brain's
+-- for a session of the user's own.
+local function persona(src)
+  local ok, id = pcall(require("corkboard.brains").persona_of, vim.b[src].corkboard_brain)
+  return require("corkboard.personas").id(ok and id or nil)
 end
 
 local function push(src)
@@ -51,6 +61,7 @@ local function push(src)
     state = require("corkboard.agents").state(src) or "idle",
     muted = a.muted,
     skip = a.skip,
+    persona = persona(src),
   })
 end
 
@@ -203,11 +214,20 @@ function M.changed(src)
   if panels[src] then push(src) end
 end
 
+-- The brains were read, or changed: each face follows its persona.
+function M.personas_changed()
+  for src in pairs(panels) do
+    push(src)
+  end
+end
+
 -- Whether what the session says next is heard: its panel is open and not
--- muted. The session hook asks, to have it told to use say.
+-- muted. The session hook asks, to have it told to use say, and how its
+-- persona talks: that, or false.
 function M.heard(src)
   local a = panels[src]
-  return a ~= nil and not a.muted and vim.api.nvim_buf_is_valid(a.buf) and #vim.fn.win_findbuf(a.buf) > 0
+  if not (a ~= nil and not a.muted and vim.api.nvim_buf_is_valid(a.buf) and #vim.fn.win_findbuf(a.buf) > 0) then return false end
+  return require("corkboard.personas").speaks(persona(src))
 end
 
 function M.setup()

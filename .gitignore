@@ -15,3 +15,6 @@ result-*
 
 # the /edit/ page the Worker serves (nix build ..#edit-page -o .edit)
 /cloud/.edit
+
+# python bytecode from bridge/chatterbox-speech.py
+__pycache__/

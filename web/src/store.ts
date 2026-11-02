@@ -21,12 +21,14 @@ export type BrainFields = {
   account: string | null;
   credentials: string[];
   abilities: string[];
+  persona: string | null;
   default: boolean;
   updated?: string;
 };
 // What a, or e on one, opens: the brain, none for a new one, the live
-// brains to pick accounts and labels from or start from, and the abilities.
-export type BrainFormData = { brain?: BrainFields; brains: BrainFields[]; abilities: string[] };
+// brains to pick accounts and labels from or start from, the abilities, and
+// the avatar's personas.
+export type BrainFormData = { brain?: BrainFields; brains: BrainFields[]; abilities: string[]; personas: string[] };
 
 // A hold as its form edits it (corkboard.holds fields()): secret, how long
 // ago it was set here; recorded false for a name with no record yet;

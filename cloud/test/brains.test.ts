@@ -64,6 +64,15 @@ describe("brains", () => {
     expect((await send("GET", "/api/brains/work")).body.title).toBe("Stable work");
   });
 
+  it("have a persona, one of the avatar's, or none", async () => {
+    const made = await send("POST", "/api/brains", { name: "work", title: "Stable", persona: "businesswoman" });
+    expect(made.body.persona).toBe("businesswoman");
+    expect((await send("GET", "/api/brains/pepper")).body.persona).toBeNull();
+    expect((await send("POST", "/api/brains", { name: "x", title: "x", persona: "pirate" })).status).toBe(400);
+    const cleared = await send("PATCH", "/api/brains/work", { updated: made.body.updated, persona: null });
+    expect(cleared.body.persona).toBeNull();
+  });
+
   it("have one default, which your own sessions remember in", async () => {
     const made = (await send("POST", "/api/brains", { name: "work", title: "Stable", default: true })).body;
     expect((await send("GET", "/api/brains/pepper")).body.default).toBe(false);

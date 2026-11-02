@@ -19,6 +19,7 @@ type Card = {
   archived?: string;
   credentials: string[];
   abilities: string[];
+  persona?: string;
   memory: { notes: number; entries: number; episodes: number; last?: string };
 };
 type BrainsState = { cards: Card[]; selected?: string; asking?: { name: string }; problem?: string; loading?: boolean };
@@ -144,6 +145,7 @@ function BrainCard({
             <Tags items={c.abilities} />
           </Field>
         )}
+        {c.persona && <Field label="persona">{c.persona}</Field>}
       </dl>
       <p className="mt-half flex flex-wrap gap-x-2ch border-t pt-half">
         {c.archived ? (

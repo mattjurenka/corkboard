@@ -1,6 +1,7 @@
 -- The brains (.agent/plans/brains.md, cloud/src/brains.ts): who agents work
--- for, each with its memory's counts, its account, what it holds and its
--- abilities. The default one is what your own sessions remember in.
+-- for, each with its memory's counts, its account, what it holds, its
+-- abilities and its avatar's persona (corkboard.personas). The default
+-- one is what your own sessions remember in.
 --
 -- The view is the agent://brains buffer, fourth among the tabs after the
 -- fleet: a plain listing with the browser's HTML drawn over it. The cursor's
@@ -74,7 +75,7 @@ local function state()
     table.insert(cards, {
       name = b.name, title = b.title, description = nil_if_null(b.description), account = nil_if_null(b.account),
       default = b.default or nil, archived = nil_if_null(b.archived) and ago(b.archived) or nil,
-      credentials = list(b.credentials), abilities = list(b.abilities),
+      credentials = list(b.credentials), abilities = list(b.abilities), persona = nil_if_null(b.persona),
       memory = { notes = m.notes or 0, entries = m.entries or 0, episodes = m.episodes or 0, last = ago(nil_if_null(m.lastEpisode)) },
     })
   end
@@ -125,6 +126,7 @@ local function render_text()
     field("runs as", c.account or "the machine's default account")
     if #c.credentials > 0 then field("holds", table.concat(c.credentials, " ") .. "  agents need your OK to spawn it") end
     if #c.abilities > 0 then field("can", table.concat(c.abilities, " ")) end
+    if c.persona then field("persona", c.persona) end
     table.insert(lines, c.archived and "    u restore · P purge" or "    <CR> open memory · e edit · d archive")
     table.insert(lines, "")
   end
@@ -151,6 +153,22 @@ function M.load()
   end
   if not selected and brains and brains[1] then selected = brains[1].name end
   redraw()
+  require("corkboard.avatar").personas_changed()
+end
+
+-- A brain's persona, or the default brain's for nil (corkboard.avatar);
+-- nil if it has none. The brains are asked for once if they haven't been.
+local asked = false
+function M.persona_of(name)
+  if not brains and not asked then
+    asked = true
+    M.load()
+  end
+  local b = vim.iter(brains or {}):find(function(x)
+    if name then return x.name == name end
+    return x.default == true and not nil_if_null(x.archived)
+  end)
+  return b and nil_if_null(b.persona)
 end
 
 local pending = false
@@ -163,9 +181,10 @@ local function reload()
   end, 300)
 end
 
--- From the bridge: the user's socket (fleet.lua passes brains' on).
+-- From the bridge: the user's socket (fleet.lua passes brains' on). Kept
+-- up while the view is there, or they've been read for a persona.
 function M.cloud_event(event)
-  if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
+  if not (buf and vim.api.nvim_buf_is_valid(buf)) and not brains then return end
   if event.type == "brain" or event.type == "reconnected" then reload() end
 end
 
@@ -189,7 +208,7 @@ end
 -- A brain as lines, `key: value`, lists comma-separated, the description
 -- last and as long as it likes. :w makes it (a new one) or changes it.
 
-local FIELDS = { "name", "title", "account", "default", "credentials", "abilities" }
+local FIELDS = { "name", "title", "account", "persona", "default", "credentials", "abilities" }
 
 local function to_lines(b)
   local out = {}
@@ -220,6 +239,7 @@ local function from_lines(lines)
   end
   local out = { name = b.name, title = b.title, description = vim.trim(table.concat(desc, "\n")) }
   out.account = (b.account and b.account ~= "") and b.account or vim.NIL
+  out.persona = (b.persona and b.persona ~= "") and b.persona or vim.NIL
   out.default = b.default == "true"
   for _, k in ipairs({ "credentials", "abilities" }) do
     out[k] = vim.iter(vim.split(b[k] or "", ",")):map(vim.trim):filter(function(x) return x ~= "" end):totable()
@@ -275,7 +295,8 @@ local ABILITIES = { "chat" }
 local function fields(b)
   return {
     name = b.name, title = b.title, description = nil_if_null(b.description) or "", account = nil_if_null(b.account),
-    credentials = list(b.credentials), abilities = list(b.abilities), default = b.default == true, updated = nil_if_null(b.updated),
+    credentials = list(b.credentials), abilities = list(b.abilities), persona = nil_if_null(b.persona), default = b.default == true,
+    updated = nil_if_null(b.updated),
   }
 end
 
@@ -283,7 +304,7 @@ local function form(b)
   local corkboard = require("corkboard")
   if not corkboard.attached() then return edit(b) end
   local live = vim.iter(brains or {}):filter(function(x) return not nil_if_null(x.archived) end):map(fields):totable()
-  corkboard.notify("corkboard.brain_form", { brain = b and fields(b) or nil, brains = live, abilities = ABILITIES })
+  corkboard.notify("corkboard.brain_form", { brain = b and fields(b) or nil, brains = live, abilities = ABILITIES, personas = require("corkboard.personas").IDS })
 end
 
 -- The form's save: name, and the updated it was read with, for a change;

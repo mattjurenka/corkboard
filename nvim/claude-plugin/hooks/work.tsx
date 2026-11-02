@@ -10,6 +10,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Block, Live } from '../types'
+import { SAY } from './say.tsx'
 
 const live = atom({ plugin: 'corkboard-ui', key: 'live' } as const, {})
 const minute = atom({ plugin: 'corkboard-ui', key: 'minute' } as const, 0)
@@ -99,6 +100,7 @@ async function poll($: EngineInterface, path: string, seen: { mtime: number }) {
 export const work: Register = on => {
   on('session.start', async ($, e, next) => {
     kind = (await $.env.get('CORKBOARD_SESSION')) ?? 'project'
+    await $.tool.register(SAY)
     const path = await $.env.get('CORKBOARD_LIVE')
     if (path) {
       const seen = { mtime: -1 }
