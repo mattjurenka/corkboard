@@ -31,6 +31,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
+      # The tests drive the relay with lib/e2ee, whose packages are the root's.
+      - run: bun install --frozen-lockfile
+        working-directory: .
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run test

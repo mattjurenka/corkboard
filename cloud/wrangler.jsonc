@@ -20,14 +20,19 @@
       // One per user and brain: its memory (src/memory.ts).
       { "name": "MEMORY", "class_name": "Memory" },
       // Who's let in, and the invites (src/registry.ts): one for the Worker.
-      { "name": "REGISTRY", "class_name": "Registry" }
+      { "name": "REGISTRY", "class_name": "Registry" },
+      // End-to-end encrypted accounts (src/e2ee.ts): logs of ciphertext, and
+      // pairing mailboxes.
+      { "name": "LOG", "class_name": "Log" },
+      { "name": "MAILBOX", "class_name": "Mailbox" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Board"] },
     { "tag": "v2", "new_sqlite_classes": ["User"] },
     { "tag": "v3", "new_sqlite_classes": ["Memory"] },
-    { "tag": "v4", "new_sqlite_classes": ["Registry"] }
+    { "tag": "v4", "new_sqlite_classes": ["Registry"] },
+    { "tag": "v5", "new_sqlite_classes": ["Log", "Mailbox"] }
   ],
   // Recall by meaning: embeddings from Workers AI, in one index with a
   // namespace per brain (src/memory.ts).

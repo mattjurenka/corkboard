@@ -166,7 +166,132 @@ export class Registry extends DurableObject {
     if (i.uses !== null && i.used >= i.uses) return "used";
     return this.saveInvite({ ...i, used: i.used + 1 });
   }
+
+  // End-to-end encrypted accounts (e2ee.ts) -----------------------------------------
+  //
+  // Known by their account key, not a Google sub, and let in the same way: an
+  // invite, or an admin making one. What's kept is only what the relay
+  // needs to say yes or no: the account, its revocations (signed, so its
+  // devices can check them), the sign-in challenges in flight, and tokens'
+  // hashes.
+
+  private e2eeSchema = false;
+  private e2ee() {
+    if (this.e2eeSchema) return;
+    this.sql.exec(E2EE_SCHEMA);
+    this.e2eeSchema = true;
+  }
+
+  e2eeAccount(id: string): E2eeAccount | undefined {
+    this.e2ee();
+    const row = this.sql.exec("SELECT doc FROM e2ee_accounts WHERE id = ?", id).toArray()[0];
+    return row ? (JSON.parse(row.doc as string) as E2eeAccount) : undefined;
+  }
+
+  e2eeAccounts(): E2eeAccount[] {
+    this.e2ee();
+    return this.sql
+      .exec("SELECT doc FROM e2ee_accounts")
+      .toArray()
+      .map((r) => JSON.parse(r.doc as string) as E2eeAccount)
+      .sort((a, b) => b.created.localeCompare(a.created));
+  }
+
+  // by: the admin who made it, when one did; otherwise the invite pays.
+  createE2ee(f: { id: string; box: string; invite: string | null; by: string | null }): Result<E2eeAccount> & { problem?: InviteProblem } {
+    this.e2ee();
+    if (this.e2eeAccount(f.id)) return { ok: false, status: 409, error: "that account already exists" };
+    let invite: string | null = null;
+    if (!f.by) {
+      if (!f.invite) return { ok: false, status: 403, error: "an invite is needed to make an account" };
+      const r = this.redeem(f.invite);
+      if (typeof r === "string") return { ok: false, status: 403, error: `that invite is ${r === "unknown" ? "not one of ours" : r}`, problem: r };
+      invite = r.code;
+    }
+    const a: E2eeAccount = { id: f.id, box: f.box, status: "active", created: now(), invite, by: f.by };
+    this.sql.exec("INSERT INTO e2ee_accounts (id, doc) VALUES (?, ?)", a.id, JSON.stringify(a));
+    return { ok: true, value: a };
+  }
+
+  setE2eeStatus(id: string, status: Status): Result<E2eeAccount> {
+    const a = this.e2eeAccount(id);
+    if (!a) return { ok: false, status: 404, error: `no account ${id}` };
+    const b = { ...a, status };
+    this.sql.exec("UPDATE e2ee_accounts SET doc = ? WHERE id = ?", JSON.stringify(b), id);
+    if (status !== "active") this.sql.exec("DELETE FROM e2ee_tokens WHERE account = ?", id);
+    return { ok: true, value: b };
+  }
+
+  e2eeChallenge(account: string, device: string, nonce: string, ttl: number): number {
+    this.e2ee();
+    const expires = Date.now() + ttl;
+    this.sql.exec("DELETE FROM e2ee_challenges WHERE expires < ?", Date.now());
+    this.sql.exec("INSERT INTO e2ee_challenges (nonce, account, device, expires) VALUES (?, ?, ?, ?)", nonce, account, device, expires);
+    return expires;
+  }
+
+  // Once only, and only for whom it was made.
+  takeE2eeChallenge(nonce: string, account: string, device: string): boolean {
+    this.e2ee();
+    const row = this.sql.exec("DELETE FROM e2ee_challenges WHERE nonce = ? RETURNING account, device, expires", nonce).toArray()[0];
+    return !!row && row.account === account && row.device === device && (row.expires as number) >= Date.now();
+  }
+
+  e2eeRevocations(account: string): { body: unknown; sig: string }[] {
+    this.e2ee();
+    return this.sql
+      .exec("SELECT doc FROM e2ee_revoked WHERE account = ? ORDER BY at", account)
+      .toArray()
+      .map((r) => JSON.parse(r.doc as string));
+  }
+
+  isRevoked(account: string, device: string): boolean {
+    this.e2ee();
+    return this.sql.exec("SELECT 1 FROM e2ee_revoked WHERE account = ? AND device = ?", account, device).toArray().length > 0;
+  }
+
+  // The revocation's signature was checked by the caller; its device's tokens go with it.
+  revokeE2ee(account: string, device: string, at: number, doc: string) {
+    this.e2ee();
+    this.sql.exec("INSERT INTO e2ee_revoked (account, device, at, doc) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING", account, device, at, doc);
+    this.sql.exec("DELETE FROM e2ee_tokens WHERE account = ? AND device = ?", account, device);
+  }
+
+  mintE2eeToken(hash: string, account: string, device: string, expires: number) {
+    this.e2ee();
+    this.sql.exec("DELETE FROM e2ee_tokens WHERE expires < ?", Date.now());
+    this.sql.exec("INSERT INTO e2ee_tokens (hash, account, device, expires) VALUES (?, ?, ?, ?)", hash, account, device, expires);
+  }
+
+  // A token's device, while the token, the device and the account are all good.
+  e2eeToken(hash: string): { account: string; device: string; expires: number } | undefined {
+    this.e2ee();
+    const row = this.sql.exec("SELECT account, device, expires FROM e2ee_tokens WHERE hash = ?", hash).toArray()[0];
+    if (!row || (row.expires as number) < Date.now()) return;
+    const account = row.account as string;
+    if (this.e2eeAccount(account)?.status !== "active" || this.isRevoked(account, row.device as string)) return;
+    return { account, device: row.device as string, expires: row.expires as number };
+  }
 }
+
+const E2EE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS e2ee_accounts (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS e2ee_revoked (account TEXT NOT NULL, device TEXT NOT NULL, at INTEGER NOT NULL, doc TEXT NOT NULL, PRIMARY KEY (account, device));
+CREATE TABLE IF NOT EXISTS e2ee_challenges (nonce TEXT PRIMARY KEY, account TEXT NOT NULL, device TEXT NOT NULL, expires INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS e2ee_tokens (hash TEXT PRIMARY KEY, account TEXT NOT NULL, device TEXT NOT NULL, expires INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS e2ee_tokens_device ON e2ee_tokens (account, device);
+`;
+
+export type E2eeAccount = {
+  // The account's signing key, base64url.
+  id: string;
+  // Its box key, for what's wrapped to the account.
+  box: string;
+  status: Status;
+  created: string;
+  invite: string | null;
+  by: string | null;
+};
 
 // The admins' addresses, lowercased.
 export const admins = (env: Env): string[] =>

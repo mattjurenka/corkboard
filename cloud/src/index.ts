@@ -1,12 +1,16 @@
 // The corkboard Worker. The OAuth provider owns the token, registration and
 // discovery endpoints; /api/*, /mcp and /memory/* reach api.ts only with a
-// valid access token; everything else (the sign-in pages, and the portal's
-// page by way of them) is auth.ts.
+// valid access token; /e2ee/* is the encrypted accounts' relay, with its
+// own sign-in (e2ee.ts); everything else (the sign-in pages, and the
+// portal's page by way of them) is auth.ts.
 
 import { OAuthProvider, type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import { api, tokenKey } from "./api";
 import { auth } from "./auth";
 import type { Board } from "./board";
+import { e2ee } from "./e2ee";
+import type { Log } from "./log";
+import type { Mailbox } from "./mailbox";
 import { upload } from "./media";
 import type { Grant } from "./mcp";
 import type { Memory } from "./memory";
@@ -14,6 +18,8 @@ import type { Registry } from "./registry";
 import type { User } from "./user";
 
 export { Board } from "./board";
+export { Log } from "./log";
+export { Mailbox } from "./mailbox";
 export { Memory } from "./memory";
 export { Registry } from "./registry";
 export { User } from "./user";
@@ -24,6 +30,10 @@ export type Env = {
   MEMORY: DurableObjectNamespace<Memory>;
   // Who's let in (registry.ts): one object for the Worker.
   REGISTRY: DurableObjectNamespace<Registry>;
+  // End-to-end encrypted accounts (e2ee.ts): an object's log of ciphertext,
+  // named <account>/<object>, and pairing mailboxes, named by their code.
+  LOG: DurableObjectNamespace<Log>;
+  MAILBOX: DurableObjectNamespace<Mailbox>;
   // Recall by meaning (src/vectors.ts): embeddings, and the index they're
   // kept in. MEMORY_VECTORS "off" does without both (the tests).
   AI: Ai;
@@ -125,6 +135,8 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     // An upload's URL is its own auth (media.ts), for an agent's curl.
     if (new URL(request.url).pathname.startsWith("/upload/")) return upload(request, env);
+    // The encrypted accounts' relay has tokens of its own (e2ee.ts).
+    if (new URL(request.url).pathname.startsWith("/e2ee/")) return e2ee(request, env);
     const bearer = bearerOf(request);
     if (!bearer) return oauth(env).fetch(request, env, ctx);
     const headers = new Headers(request.headers);
