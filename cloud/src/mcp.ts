@@ -484,7 +484,7 @@ export const hiddenFor = (grant: Grant) => (grant.kind === "pepper" || grant.kin
 
 export async function memoryOf(env: Env, user: string, brain: string) {
   const memory = env.MEMORY.get(env.MEMORY.idFromName(`${user}/${brain}`));
-  await memory.open(user, brain);
+  await memory.open(user, brain, (await env.USER.get(env.USER.idFromName(user)).settings()).timezone);
   return memory;
 }
 
@@ -715,7 +715,7 @@ const USER_TOOLS: Record<string, UserTool> = {
     properties: { text: str("What to say") },
     required: ["text"],
     ability: "chat",
-    run: async (a, c) => c.users.post(brainOf(c.grant) ?? "pepper", chatText(a.text)),
+    run: async (a, c) => c.users.post(brainOf(c.grant) ?? "assistant", chatText(a.text)),
   },
   spawn_agent: {
     description:
@@ -861,7 +861,8 @@ async function callTool(env: Env, user: string, grant: Grant, name: string, args
       const memory = brain
         ? await memoryOf(env, user, brain)
         : (new Proxy({}, { get: () => { throw new ToolError("there's no default brain to remember in; make one the default in the Brains view"); } }) as DurableObjectStub<Memory>);
-      return await USER_TOOLS[name].run({ ...args }, { env, user, users: env.USER.get(env.USER.idFromName(user)), memory, grant, timeZone: env.TIMEZONE });
+      const users = env.USER.get(env.USER.idFromName(user));
+      return await USER_TOOLS[name].run({ ...args }, { env, user, users, memory, grant, timeZone: (await users.settings()).timezone });
     } catch (e) {
       if (e instanceof Invalid || e instanceof Refused) throw new ToolError(e.message);
       throw e;

@@ -194,7 +194,8 @@ export function note(input: Record<string, unknown>): NoteInput {
 
 // Chat ---------------------------------------------------------------------------------
 
-// A message between the user ("matt", from the phone) and Pepper.
-export type ChatMessage = { id: number; at: string; who: string; text: string };
+// A message between the user (from the phone, by_user, signed with their
+// name) and a brain (who: its name).
+export type ChatMessage = { id: number; at: string; who: string; text: string; by_user: boolean };
 
 export const chatText = (v: unknown) => text("text", v, 4000);

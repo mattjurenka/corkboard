@@ -54,7 +54,30 @@ CREATE TABLE IF NOT EXISTS bridges (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS board_roots (key TEXT NOT NULL, environment TEXT NOT NULL, root TEXT NOT NULL, PRIMARY KEY (key, environment));
 CREATE TABLE IF NOT EXISTS brains (name TEXT PRIMARY KEY, doc TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS calendar (id INTEGER PRIMARY KEY CHECK (id = 1), refresh TEXT NOT NULL, connected TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), doc TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS machine_tokens (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
 `;
+
+// A machine's token as its list shows it (api.ts's /api/tokens/machine):
+// never the token, which is only in OAUTH_KV, by this id, its SHA-256. One
+// minted before there was a list joins it when it's next used, with no
+// label and no created.
+export type MachineToken = { id: string; environment: string; label: string | null; created: string | null; expires: string | null; used: string | null };
+
+// The user's own: where their "today" is (IANA), what their chat messages
+// are signed with, and the calendar accepted plans go on (calendar.ts).
+export type Settings = { timezone: string; name: string | null; calendar: string | null };
+const UNSET: Settings = { timezone: "UTC", name: null, calendar: null };
+
+// A zone Intl knows, as it names it, or null.
+export function zone(v: unknown): string | null {
+  if (typeof v !== "string" || !v || v.length > 64) return null;
+  try {
+    return new Intl.DateTimeFormat("en-US", { timeZone: v }).resolvedOptions().timeZone;
+  } catch {
+    return null;
+  }
+}
 
 export class User extends DurableObject {
   private sql: SqlStorage;
@@ -69,6 +92,11 @@ export class User extends DurableObject {
     const boards = this.sql.exec("SELECT name FROM pragma_table_info('boards')").toArray();
     if (!boards.some((c) => c.name === "first_commit")) this.sql.exec("ALTER TABLE boards ADD COLUMN first_commit TEXT");
     if (!boards.some((c) => c.name === "remotes")) this.sql.exec("ALTER TABLE boards ADD COLUMN remotes TEXT");
+    // Whether a message is the user's, now that they aren't all "matt".
+    if (!this.sql.exec("SELECT 1 FROM pragma_table_info('chat') WHERE name = 'by_user'").toArray().length) {
+      this.sql.exec("ALTER TABLE chat ADD COLUMN by_user INTEGER NOT NULL DEFAULT 0");
+      this.sql.exec("UPDATE chat SET by_user = 1 WHERE who = 'matt'");
+    }
     // Briefly the portal's Forgejo sign-ins (2026-10-30), now a Worker secret (git.ts).
     this.sql.exec("DROP TABLE IF EXISTS links");
   }
@@ -135,9 +163,10 @@ export class User extends DurableObject {
   }
 
   // Everything here, to copy it to another account's Worker (dump.ts). The
-  // bridges say who they are again when they connect there.
+  // bridges say who they are again when they connect there, and machine
+  // tokens, like sign-ins, don't move.
   dump(): Dump {
-    return dump(this.sql, ["bridges"]);
+    return dump(this.sql, ["bridges", "machine_tokens"]);
   }
 
   // Into a user with no boards yet.
@@ -145,7 +174,12 @@ export class User extends DurableObject {
     if (this.boards().length) return refuse(409, "this account already has boards");
     // The export's brains, not the Pepper a new account starts with.
     if (d.brains) this.sql.exec("DELETE FROM brains");
-    return ok(restore(this.sql, d));
+    // Its settings, not those signing in here made.
+    if (d.settings) this.sql.exec("DELETE FROM settings");
+    const n = restore(this.sql, d);
+    // An export from before by_user: the user's messages were "matt"'s.
+    if (d.chat?.length && !("by_user" in d.chat[0])) this.sql.exec("UPDATE chat SET by_user = 1 WHERE who = 'matt'");
+    return ok(n);
   }
 
   // Boards ----------------------------------------------------------------------------
@@ -294,6 +328,53 @@ export class User extends DurableObject {
     this.sql.exec("DELETE FROM plans WHERE date = ?", date);
   }
 
+  // Settings --------------------------------------------------------------------------
+
+  settings(): Settings {
+    const row = this.sql.exec("SELECT doc FROM settings").toArray()[0];
+    return row ? { ...UNSET, ...(JSON.parse(row.doc as string) as Partial<Settings>) } : UNSET;
+  }
+
+  setSettings(f: Partial<Settings>): Settings {
+    const s = { ...this.settings(), ...f };
+    this.sql.exec("INSERT OR REPLACE INTO settings (id, doc) VALUES (1, ?)", JSON.stringify(s));
+    return s;
+  }
+
+  // A new account's first settings (registry.ts's welcome): what's given,
+  // where nothing is set yet.
+  welcome(seed: { [K in keyof Settings]?: Settings[K] | null }): Settings {
+    const row = this.sql.exec("SELECT doc FROM settings").toArray()[0];
+    const was = row ? (JSON.parse(row.doc as string) as Partial<Settings>) : {};
+    const f: Partial<Settings> = { ...was };
+    for (const k of ["timezone", "name", "calendar"] as const) if (was[k] == null && seed[k] != null) (f as Record<string, unknown>)[k] = seed[k];
+    return this.setSettings(f);
+  }
+
+  // Machine tokens --------------------------------------------------------------------
+
+  // The live ones, newest first; an expired one goes, as its KV key has.
+  machineTokens(): MachineToken[] {
+    const all = this.sql.exec("SELECT doc FROM machine_tokens").toArray().map((r) => JSON.parse(r.doc as string) as MachineToken);
+    const at = now();
+    for (const t of all) if (t.expires && t.expires <= at) this.sql.exec("DELETE FROM machine_tokens WHERE id = ?", t.id);
+    return all.filter((t) => !t.expires || t.expires > at).sort((a, b) => (b.created ?? "").localeCompare(a.created ?? ""));
+  }
+
+  addMachineToken(t: MachineToken): void {
+    this.sql.exec("INSERT OR REPLACE INTO machine_tokens (id, doc) VALUES (?, ?)", t.id, JSON.stringify(t));
+  }
+
+  machineTokenUsed(id: string, environment: string): void {
+    const row = this.sql.exec("SELECT doc FROM machine_tokens WHERE id = ?", id).toArray()[0];
+    const t: MachineToken = row ? JSON.parse(row.doc as string) : { id, environment, label: null, created: null, expires: null, used: null };
+    this.addMachineToken({ ...t, used: now() });
+  }
+
+  forgetMachineToken(id: string): boolean {
+    return this.sql.exec("DELETE FROM machine_tokens WHERE id = ? RETURNING id", id).toArray().length > 0;
+  }
+
   // The calendar's connection (calendar.ts) ------------------------------------------
 
   connectCalendar(refresh: string): void {
@@ -309,12 +390,13 @@ export class User extends DurableObject {
 
   // The messages after an id, oldest first; with none, the newest `limit`.
   chat(after: number, limit: number): ChatMessage[] {
-    if (after > 0) return this.sql.exec("SELECT * FROM chat WHERE id > ? ORDER BY id LIMIT ?", after, limit).toArray() as ChatMessage[];
-    return (this.sql.exec("SELECT * FROM chat ORDER BY id DESC LIMIT ?", limit).toArray() as ChatMessage[]).reverse();
+    if (after > 0) return this.sql.exec("SELECT * FROM chat WHERE id > ? ORDER BY id LIMIT ?", after, limit).toArray().map(messageOf);
+    return this.sql.exec("SELECT * FROM chat ORDER BY id DESC LIMIT ?", limit).toArray().map(messageOf).reverse();
   }
 
-  post(who: string, text: string): ChatMessage {
-    const message = this.sql.exec("INSERT INTO chat (at, who, text) VALUES (?, ?, ?) RETURNING *", now(), who, text).one() as ChatMessage;
+  // byUser: the user's own, from the phone; else a brain's.
+  post(who: string, text: string, byUser = false): ChatMessage {
+    const message = messageOf(this.sql.exec("INSERT INTO chat (at, who, text, by_user) VALUES (?, ?, ?, ?) RETURNING *", now(), who, text, byUser ? 1 : 0).one());
     this.broadcast({ type: "chat", message });
     return message;
   }
@@ -452,6 +534,15 @@ export class User extends DurableObject {
     this.broadcast({ type: "bridge", bridge: { id, gone: true } });
   }
 
+  // Its socket closed, from the devices view: it connects again with its
+  // token unless that's revoked too.
+  disconnectBridge(id: string): boolean {
+    const sockets = this.connected(id);
+    for (const ws of sockets) ws.close(4001, "disconnected by the user");
+    this.dropBridge(id);
+    return sockets.length > 0;
+  }
+
   // A question for a bridge, answered by it or, after a while, refused.
   async ask(bridge: string, question: Question): Promise<Result<Answer>> {
     const ws = this.connected(bridge)[0];
@@ -584,6 +675,14 @@ export class User extends DurableObject {
     for (const s of this.ctx.getWebSockets(`streams:${from.bridge}`)) s.close(1011, "the bridge went away");
   }
 }
+
+const messageOf = (r: Record<string, SqlStorageValue>): ChatMessage => ({
+  id: r.id as number,
+  at: r.at as string,
+  who: r.who as string,
+  text: r.text as string,
+  by_user: r.by_user === 1,
+});
 
 // What a socket is, besides the phone's or the day plan's own: a bridge's,
 // or a stream to one of its sessions. pinned: the environment of the machine

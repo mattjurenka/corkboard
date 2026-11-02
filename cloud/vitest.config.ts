@@ -8,7 +8,8 @@ export default defineConfig({
       miniflare: {
         bindings: {
           ORIGIN: "https://corkboard.test",
-          ALLOWED_EMAIL: "me@example.com",
+          ADMIN_EMAILS: "me@example.com",
+          HOLDS_KEY: "holds-key-for-tests",
           TIMEZONE: "America/Phoenix",
           GOOGLE_CLIENT_ID: "google-client",
           GOOGLE_CLIENT_SECRET: "google-secret",

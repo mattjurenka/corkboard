@@ -18,13 +18,16 @@
       { "name": "BOARD", "class_name": "Board" },
       { "name": "USER", "class_name": "User" },
       // One per user and brain: its memory (src/memory.ts).
-      { "name": "MEMORY", "class_name": "Memory" }
+      { "name": "MEMORY", "class_name": "Memory" },
+      // Who's let in, and the invites (src/registry.ts): one for the Worker.
+      { "name": "REGISTRY", "class_name": "Registry" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Board"] },
     { "tag": "v2", "new_sqlite_classes": ["User"] },
-    { "tag": "v3", "new_sqlite_classes": ["Memory"] }
+    { "tag": "v3", "new_sqlite_classes": ["Memory"] },
+    { "tag": "v4", "new_sqlite_classes": ["Registry"] }
   ],
   // Recall by meaning: embeddings from Workers AI, in one index with a
   // namespace per brain (src/memory.ts).
@@ -45,8 +48,10 @@
   "services": [{ "binding": "PORTAL", "service": "corkboard-portal" }],
   "vars": {
     "ORIGIN": "https://portal.corkboard.fyi",
-    "ALLOWED_EMAIL": "matthewjurenka@gmail.com",
-    // Where "today" is, for plans.
+    // Always let in, as admins (src/registry.ts); anyone else needs an invite.
+    "ADMIN_EMAILS": "matthewjurenka@gmail.com",
+    // The first admin's zone and calendar from before each user had their
+    // own (src/user.ts's settings), which theirs start from.
     "TIMEZONE": "America/Phoenix",
     // The dayplan-512206 project's Web application client.
     "GOOGLE_CLIENT_ID": "911829084497-iab0dt2ufoiobeot2uanudsc1tc02s8o.apps.googleusercontent.com",
@@ -55,5 +60,7 @@
     // The portal's file browser (src/git.ts); FORGEJO_TOKEN is a secret.
     "FORGEJO_ORIGIN": "https://git.corkboard.fyi"
   }
-  // Secrets (wrangler secret put): GOOGLE_CLIENT_SECRET.
+  // Secrets (wrangler secret put): GOOGLE_CLIENT_SECRET, FORGEJO_TOKEN, and
+  // HOLDS_KEY, what holds' secrets are encrypted with (src/holds.ts). See
+  // DEPLOY-NOTES.md.
 }

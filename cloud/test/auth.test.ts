@@ -28,13 +28,13 @@ describe("sign-in", () => {
     expect(tokens!.access_token).toBeTruthy();
   });
 
-  it("goes to Google with PKCE and the allowed account as a hint", async () => {
+  it("goes to Google with PKCE, no hint of who's let in, and no calendar", async () => {
     google("me@example.com");
     const { toGoogle } = await login();
     expect(toGoogle!.searchParams.get("redirect_uri")).toBe("https://corkboard.test/callback");
     expect(toGoogle!.searchParams.get("code_challenge_method")).toBe("S256");
-    expect(toGoogle!.searchParams.get("login_hint")).toBe("me@example.com");
-    expect(toGoogle!.searchParams.get("scope")).toBe("openid email");
+    expect(toGoogle!.searchParams.has("login_hint")).toBe(false);
+    expect(toGoogle!.searchParams.get("scope")).toBe("openid email profile");
   });
 
   it("issues owner tokens to the allowed account", async () => {
@@ -46,18 +46,29 @@ describe("sign-in", () => {
     expect(tokens!.scope).toBe("owner");
   });
 
-  it("refuses any other Google account", async () => {
+  it("puts any other Google account on the waitlist", async () => {
     google("someone@else.com");
-    const { redirect, tokens } = await login();
+    const { status, body, tokens } = await login();
     expect(tokens).toBeUndefined();
-    expect(redirect!.searchParams.get("error")).toBe("access_denied");
+    expect(status).toBe(403);
+    expect(body).toContain("waitlist");
+    expect(body).toContain("someone@else.com");
   });
 
-  it("refuses an unverified email or a token for another app", async () => {
+  it("refuses an unverified email, a token for another app, or one Google didn't sign", async () => {
     google("me@example.com", "s", { email_verified: false });
     expect((await login()).status).toBe(502);
+    vi.restoreAllMocks();
     google("me@example.com", "s", { aud: "someone-else" });
     expect((await login()).status).toBe(502);
+    vi.restoreAllMocks();
+    google("me@example.com", "s", { exp: Math.floor(Date.now() / 1000) - 60 });
+    expect((await login()).status).toBe(502);
+    vi.restoreAllMocks();
+    google("me@example.com", "s", {}, { forged: true });
+    const forged = await login();
+    expect(forged.status).toBe(502);
+    expect(forged.body).toContain("signature");
   });
 
   it("sends Deny back to the client as access_denied, without Google", async () => {

@@ -50,19 +50,31 @@
 //   POST  /api/tokens/brain                  old: { brain }, as /api/brains/:brain/tokens
 //   /api/brains                              brains, as data (brains.ts)
 //   /api/holds                               what they hold, and its secrets (holds.ts)
-//   POST  /api/tokens/machine                { environment }: a server's token, until revoked: this
-//                                            API but tickets, export and import, and of the fleet
-//                                            and sessions only that environment's
+//   POST  /api/tokens/machine                { environment, label?, expires_in? }: a server's token,
+//                                            until revoked or expires_in seconds: this API but
+//                                            tickets, export and import, and of the fleet and
+//                                            sessions only that environment's
+//   GET   /api/tokens/machine                the machine tokens: { id, environment, label, created,
+//                                            expires, used }, never the token
+//   DELETE /api/tokens/machine/:id           revoke one
 //   POST  /api/tokens/revoke                 { token }
+//   GET   /api/grants                        the OAuth clients signed in as you: { id, client, scope, created }
+//   DELETE /api/grants/:id                   sign one out: its tokens stop working
+//   DELETE /api/bridges/:id                  close a bridge's socket (its token is its grant's or machine's)
+//   GET   /api/me                            { sub, email, name, role, settings, features }
+//   PATCH /api/me                            { name?, timezone?, calendar? }: the user's settings (user.ts)
+//   /api/admin                               accounts and invites, for admins (registry.ts)
 //   /api/spawns, /api/fleet/environments     the fleet's queue (fleet.ts)
 //   POST  /api/workspace/tickets             { bridge, board }: { url } that opens the board on that bridge's page
 //   POST  /api/workspace/redeem              { bridge, ticket }: the bridge, for the board: { key, name, root, remotes }
-//   /api/git                                 the user's Forgejo repositories, read-only (git.ts)
+//   /api/git                                 the first admin's Forgejo repositories, read-only, for
+//                                            admins (git.ts)
 //   GET   /api/export                      the whole account, to move it to another Worker
 //   POST  /api/import                      that export, into an account with no boards yet
 //
 // All of it needs the owner scope or a machine token. /mcp (mcp.ts) is behind the same token
-// check, and takes owner and assistant tokens, card tokens and Pepper's.
+// check, and takes owner and assistant tokens, card tokens and Pepper's. Every token, of
+// whatever kind, works only while its account is active in the registry (registry.ts).
 //
 // A brain's memory (memory.ts), for its sessions' hooks, with any token but
 // a card's; the brain is the token's:
@@ -89,7 +101,8 @@ import { fleetRoutes } from "./fleet";
 import { MEDIA_ID, forget, mediaKey, serve } from "./media";
 import { gitRoutes } from "./git";
 import { goals } from "./goals";
-import { type Answer, MACHINE_HEADER } from "./user";
+import { type Account as Registered, accountOf, adminRoutes } from "./registry";
+import { type Answer, MACHINE_HEADER, type Settings, zone } from "./user";
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const error = (status: number, message: string, extra: object = {}) => json({ error: message, ...extra }, status);
@@ -337,14 +350,53 @@ async function memoryRoutes(request: Request, memory: Memories, grant: Grant): P
   return error(404, "not found");
 }
 
-async function chat(request: Request, users: Users): Promise<Response> {
+// The user's messages are signed with their name, or their address's.
+async function chat(request: Request, users: Users, account: Registered): Promise<Response> {
   if (request.method === "GET") {
     const after = Number(new URL(request.url).searchParams.get("after") ?? 0);
     if (!Number.isInteger(after) || after < 0) throw new Invalid("after must be a message id");
     return json(await users.chat(after, 100));
   }
   if (request.method !== "POST") return error(405, "method not allowed");
-  return json(await users.post("matt", chatText((await body(request)).text)), 201);
+  const text = chatText((await body(request)).text);
+  const who = (await users.settings()).name ?? account.name ?? account.email.split("@")[0];
+  return json(await users.post(who, text, true), 201);
+}
+
+// The user's settings, and what this Worker does for them: features the
+// portal and the apps show only when they're there.
+async function me(request: Request, env: Env, users: Users, account: Registered): Promise<Response> {
+  const shown = async (s: Settings) => ({
+    sub: account.sub,
+    email: account.email,
+    name: s.name ?? account.name,
+    role: account.role,
+    settings: s,
+    features: {
+      git: account.role === "admin" && !!env.FORGEJO_ORIGIN && !!env.FORGEJO_TOKEN,
+      admin: account.role === "admin",
+      calendar: !!(await users.calendarConnection()),
+    },
+  });
+  if (request.method === "GET") return json(await shown(await users.settings()));
+  if (request.method !== "PATCH") return error(405, "method not allowed");
+  const { name, timezone, calendar, ...rest } = await body(request);
+  if (Object.keys(rest).length) throw new Invalid(`unknown field ${Object.keys(rest)[0]}`);
+  const f: Partial<Settings> = {};
+  if (name !== undefined) {
+    if (name !== null && (typeof name !== "string" || !name.trim() || name.length > 80)) throw new Invalid("name must be a line of at most 80 characters, or null");
+    f.name = typeof name === "string" ? name.trim() : null;
+  }
+  if (timezone !== undefined) {
+    const z = zone(timezone);
+    if (!z) throw new Invalid("timezone must be an IANA zone, like America/Phoenix");
+    f.timezone = z;
+  }
+  if (calendar !== undefined) {
+    if (calendar !== null && (typeof calendar !== "string" || !/^[\w.@#-]{1,200}$/.test(calendar))) throw new Invalid("calendar must be a Google calendar id, or null");
+    f.calendar = calendar as string | null;
+  }
+  return json(await shown(await users.setSettings(f)));
 }
 
 // The keys a session can be sent besides text (nvim/lua/corkboard/away.lua's).
@@ -391,17 +443,18 @@ async function sessions(request: Request, users: Users, machine?: string): Promi
 // a day gone by is the record of what was planned, and one further off
 // (test/day-plan.ts plans in 2099) isn't a calendar's yet.
 const CALENDAR_DAYS = 7;
-function toCalendar(env: Env, users: Users, ctx: ExecutionContext, result: Result<Plan>) {
+async function toCalendar(env: Env, users: Users, ctx: ExecutionContext, result: Result<Plan>) {
   if (!result.ok || !result.value.accepted) return;
   const plan = result.value;
-  const ahead = (Date.parse(plan.date) - Date.parse(today(env.TIMEZONE))) / 86400_000;
+  const settings = await users.settings();
+  const ahead = (Date.parse(plan.date) - Date.parse(today(settings.timezone))) / 86400_000;
   if (ahead < 0 || ahead > CALENDAR_DAYS) return;
   const accepted = plan.accepted!;
   ctx.waitUntil(
     (async () => {
       let result: { blocks: number } | { error: string };
       try {
-        result = { blocks: await writeCalendar(env, await users.calendarConnection(), plan) };
+        result = { blocks: await writeCalendar(env, await users.calendarConnection(), plan, settings) };
       } catch (e) {
         console.error(`calendar for ${plan.date}: ${calendarError(e)}`);
         result = { error: calendarError(e) };
@@ -435,14 +488,14 @@ async function plans(request: Request, env: Env, users: Users, ctx: ExecutionCon
     }
     case "accept": {
       const accepted = await users.accept(day, version(), blocks(input.blocks));
-      toCalendar(env, users, ctx, accepted);
+      await toCalendar(env, users, ctx, accepted);
       return reply(accepted);
     }
     case "discard":
       return reply(await users.discard(day, version()));
     default: {
       const edited = await users.setDay(day, version(), blocks(input.blocks));
-      toCalendar(env, users, ctx, edited);
+      await toCalendar(env, users, ctx, edited);
       return reply(edited);
     }
   }
@@ -469,24 +522,61 @@ async function mintToken(env: Env, props: Props, grant: NonNullable<Props["grant
 const mint = async (env: Env, props: Props, grant: NonNullable<Props["grant"]>) => json(await mintToken(env, props, grant), 201);
 
 const ENVIRONMENT = /^[\w.-]{1,64}$/;
+const TOKEN_ID = /^[0-9a-f]{64}$/;
+// Machine tokens' longest life, when one is given: ten years.
+const MACHINE_TTL_MAX = 10 * 365 * 24 * 3600;
+
+// A token's id in the lists: its SHA-256, which is its key here too.
+const tokenId = (token: string) => sha256(token);
+
+// A token of this user's, by its KV key; another user's is as good as none.
+async function own(env: Env, props: Props, key: string): Promise<Props | null> {
+  const p = await env.OAUTH_KV.get<Props>(key, "json");
+  return p && p.userId === props.userId ? p : null;
+}
 
 // machine: the environment, when a machine token asks. It mints and revokes
 // the tokens its agents use, but no machine's.
-async function tokens(request: Request, env: Env, props: Props, machine?: string): Promise<Response> {
+async function tokens(request: Request, env: Env, props: Props, users: Users, machine?: string): Promise<Response> {
   const path = new URL(request.url).pathname;
+  const one = path.match(/^\/api\/tokens\/machine\/([^/]+)$/);
+  if (one) {
+    if (machine) return error(403, "only the owner revokes a machine's token");
+    if (request.method !== "DELETE") return error(405, "method not allowed");
+    if (!TOKEN_ID.test(one[1])) return error(404, `no token ${one[1]}`);
+    const key = `card-token:${one[1]}`;
+    const listed = await users.forgetMachineToken(one[1]);
+    const p = await own(env, props, key);
+    if (!listed && !p) return error(404, `no token ${one[1]}`);
+    if (p) await env.OAUTH_KV.delete(key);
+    return new Response(null, { status: 204 });
+  }
+  if (path === "/api/tokens/machine" && request.method === "GET") {
+    if (machine) return error(403, "only the owner lists the machines' tokens");
+    return json(await users.machineTokens());
+  }
   if (request.method !== "POST") return error(405, "method not allowed");
   const input = await body(request);
   if (path === "/api/tokens/revoke") {
     if (typeof input.token !== "string") throw new Invalid("token must be the token to revoke");
     const key = await tokenKey(input.token);
-    if (machine && (await env.OAUTH_KV.get<Props>(key, "json"))?.grant?.kind === "machine") return error(403, "only the owner revokes a machine's token");
-    await env.OAUTH_KV.delete(key);
+    const p = await own(env, props, key);
+    if (machine && p?.grant?.kind === "machine") return error(403, "only the owner revokes a machine's token");
+    if (p) await env.OAUTH_KV.delete(key);
+    if (p?.grant?.kind === "machine") await users.forgetMachineToken(await tokenId(input.token));
     return new Response(null, { status: 204 });
   }
   if (path === "/api/tokens/machine") {
     if (machine) return error(403, "only the owner mints a machine's token");
-    if (typeof input.environment !== "string" || !ENVIRONMENT.test(input.environment)) throw new Invalid("environment must be the machine's environment name");
-    return json(await mintToken(env, props, { kind: "machine", environment: input.environment, agent: input.environment }, null), 201);
+    const { environment, label = null, expires_in = null } = input;
+    if (typeof environment !== "string" || !ENVIRONMENT.test(environment)) throw new Invalid("environment must be the machine's environment name");
+    if (label !== null && (typeof label !== "string" || label.length > 100)) throw new Invalid("label must be a line of at most 100 characters");
+    if (expires_in !== null && !(Number.isInteger(expires_in) && (expires_in as number) >= 60 && (expires_in as number) <= MACHINE_TTL_MAX))
+      throw new Invalid("expires_in must be seconds from now, at least 60, or null for until it's revoked");
+    const minted = await mintToken(env, props, { kind: "machine", environment, agent: environment }, expires_in as number | null);
+    const id = await tokenId(minted.token);
+    await users.addMachineToken({ id, environment, label: (label as string | null)?.trim() || null, created: new Date().toISOString().replace(/\.\d+Z$/, "Z"), expires: minted.expires_at, used: null });
+    return json({ ...minted, id }, 201);
   }
   if (path === "/api/tokens/pepper" || path === "/api/tokens/brain") {
     const name = path === "/api/tokens/pepper" ? "pepper" : String(input.brain ?? "");
@@ -504,6 +594,48 @@ async function tokens(request: Request, env: Env, props: Props, machine?: string
   const found = (await env.BOARD.get(env.BOARD.idFromName(`${props.userId}/${key}`)).get(card)) as Result<unknown>;
   if (!found.ok) return reply(found);
   return mint(env, props, { kind: "card", board: key, card, agent: agent.trim() });
+}
+
+// When each machine token was last used, as its list shows it: noted at
+// most this often, from each isolate.
+const USE_EVERY = 5 * 60_000;
+const used = new Map<string, number>();
+
+async function noteUse(users: Users, token: string, environment: string) {
+  const id = await tokenId(token);
+  if ((used.get(id) ?? 0) > Date.now() - USE_EVERY) return;
+  used.set(id, Date.now());
+  await users.machineTokenUsed(id, environment);
+}
+
+// The OAuth clients signed in as the user (the bridge, the portal, the
+// phone, Claude Code sessions), each a grant of the provider's; revoking
+// one ends its tokens. current: the one asking.
+async function grants(request: Request, env: Env, ctx: OAuthResourceContext<Props>): Promise<Response> {
+  const oauth = env.OAUTH_PROVIDER;
+  const id = new URL(request.url).pathname.match(/^\/api\/grants(?:\/([^/]+))?$/);
+  if (!id) return error(404, "not found");
+  if (id[1]) {
+    if (request.method !== "DELETE") return error(405, "method not allowed");
+    await oauth.revokeGrant(decodeURIComponent(id[1]), ctx.props.userId);
+    return new Response(null, { status: 204 });
+  }
+  if (request.method !== "GET") return error(405, "method not allowed");
+  const all = [];
+  let cursor: string | undefined;
+  do {
+    const page = await oauth.listUserGrants(ctx.props.userId, { cursor });
+    all.push(...page.items);
+    cursor = page.cursor;
+  } while (cursor && all.length < 500);
+  const names = new Map<string, string | null>();
+  for (const g of all) if (!names.has(g.clientId)) names.set(g.clientId, (await oauth.lookupClient(g.clientId).catch(() => null))?.clientName ?? null);
+  const at = (s: number) => new Date(s * 1000).toISOString().replace(/\.\d+Z$/, "Z");
+  return json(
+    all
+      .map((g) => ({ id: g.id, client: names.get(g.clientId) ?? g.clientId, client_id: g.clientId, scope: g.scope, created: at(g.createdAt), current: g.clientId === ctx.auth.clientId }))
+      .sort((a, b) => b.created.localeCompare(a.created)),
+  );
 }
 
 // Opening a board on another machine's bridge, from the portal (../portal):
@@ -612,6 +744,10 @@ async function grantOf(env: Env, ctx: OAuthResourceContext<Props>): Promise<Gran
 export const api = {
   async fetch(request: Request, env: Env, ctx: OAuthResourceContext<Props>): Promise<Response> {
     const path = new URL(request.url).pathname;
+    // Every token's account must be let in, whatever the token: one an
+    // admin has disabled since is refused here (registry.ts).
+    const account = await accountOf(env, ctx.props);
+    if (account?.status !== "active") return error(403, account?.status === "disabled" ? "this account is disabled" : "this account isn't let in");
     if (path === "/mcp") {
       const grant = await grantOf(env, ctx);
       if (!grant) return insufficientScope(ctx.auth, ["assistant"]);
@@ -632,14 +768,25 @@ export const api = {
     // API less what reaches past its own environment.
     const machine = ctx.props.grant?.kind === "machine" ? ctx.props.grant.environment : undefined;
     if (!machine && (ctx.props.grant || !ctx.auth.scope.includes("owner"))) return insufficientScope(ctx.auth, ["owner"]);
+    const users = env.USER.get(env.USER.idFromName(ctx.props.userId));
+    if (machine) await noteUse(users, ctx.auth.token, machine);
+    const admin = account.role === "admin";
     try {
-      if (path.startsWith("/api/tokens")) return await tokens(request, env, ctx.props, machine);
+      if (path.startsWith("/api/tokens")) return await tokens(request, env, ctx.props, users, machine);
       if (path.startsWith("/api/spawns") || path.startsWith("/api/fleet/")) return await fleetRoutes(request, env, ctx.props, () => body(request), mintToken, machine);
       if (path === "/api/brains" || path.startsWith("/api/brains/"))
         return machine ? error(403, "not with a machine token") : await brainRoutes(request, env, ctx.props, () => body(request), mintToken);
       if (path === "/api/holds" || path.startsWith("/api/holds/"))
         return machine ? error(403, "not with a machine token") : await holdRoutes(request, env, ctx.props.userId, () => body(request));
-      const users = env.USER.get(env.USER.idFromName(ctx.props.userId));
+      if (path === "/api/me") return machine ? error(403, "not with a machine token") : await me(request, env, users, account);
+      if (path === "/api/grants" || path.startsWith("/api/grants/")) return machine ? error(403, "not with a machine token") : await grants(request, env, ctx);
+      const bridge = path.match(/^\/api\/bridges\/([\w-]{1,64})$/);
+      if (bridge) {
+        if (machine) return error(403, "not with a machine token");
+        if (request.method !== "DELETE") return error(405, "method not allowed");
+        return (await users.disconnectBridge(bridge[1])) ? new Response(null, { status: 204 }) : error(404, `bridge ${bridge[1]} isn't connected`);
+      }
+      if (path.startsWith("/api/admin/")) return machine || !admin ? error(403, "for admins") : await adminRoutes(request, env, account, () => body(request));
       if (path === "/api/live") return users.fetch(asMachine(request, machine));
       const brainParam = new URL(request.url).searchParams.get("brain");
       const brain = path.startsWith("/api/notes") || path === "/api/goals" || path.startsWith("/api/memory/") ? await brainNamed(env, ctx.props.userId, brainParam) : "";
@@ -652,10 +799,12 @@ export const api = {
       if (path === "/api/memory/vectors") return json(await (await memoryOf(env, ctx.props.userId, brain)).vectorState());
       if (path.startsWith("/api/memory/")) return await browse(request, await memoryOf(env, ctx.props.userId, brain));
       if (path.startsWith("/api/plans/")) return await plans(request, env, users, ctx);
-      if (path === "/api/chat") return await chat(request, users);
+      if (path === "/api/chat") return await chat(request, users, account);
       if (path.startsWith("/api/sessions")) return await sessions(request, users, machine);
       if (path.startsWith("/api/workspace/")) return await workspace(request, env, ctx.props, users, machine);
-      if (path === "/api/git" || path.startsWith("/api/git/")) return machine ? error(403, "not with a machine token") : await gitRoutes(request, env);
+      // Forgejo is read with one token, the first admin's (git.ts), so it's
+      // the admins' alone.
+      if (path === "/api/git" || path.startsWith("/api/git/")) return machine || !admin ? error(403, "not for this account") : await gitRoutes(request, env);
       if ((path === "/api/export" || path === "/api/import") && machine) return error(403, "not with a machine token");
       if (path === "/api/export") return request.method === "GET" ? json(await exportAccount(env, ctx.props.userId, users)) : error(405, "method not allowed");
       if (path === "/api/import") return request.method === "POST" ? await importAccount(env, ctx.props.userId, users, await body(request)) : error(405, "method not allowed");

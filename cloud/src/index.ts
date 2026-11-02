@@ -10,16 +10,20 @@ import type { Board } from "./board";
 import { upload } from "./media";
 import type { Grant } from "./mcp";
 import type { Memory } from "./memory";
+import type { Registry } from "./registry";
 import type { User } from "./user";
 
 export { Board } from "./board";
 export { Memory } from "./memory";
+export { Registry } from "./registry";
 export { User } from "./user";
 
 export type Env = {
   BOARD: DurableObjectNamespace<Board>;
   USER: DurableObjectNamespace<User>;
   MEMORY: DurableObjectNamespace<Memory>;
+  // Who's let in (registry.ts): one object for the Worker.
+  REGISTRY: DurableObjectNamespace<Registry>;
   // Recall by meaning (src/vectors.ts): embeddings, and the index they're
   // kept in. MEMORY_VECTORS "off" does without both (the tests).
   AI: Ai;
@@ -34,16 +38,21 @@ export type Env = {
   // The Worker's own origin, no trailing slash: the token audience and
   // Google's redirect URI are built from it.
   ORIGIN: string;
-  // The one Google account allowed in.
-  ALLOWED_EMAIL: string;
-  // Where "today" is, for plans (IANA, America/Phoenix).
-  TIMEZONE: string;
+  // Who's let in, and as what (registry.ts): the admins' Google addresses,
+  // a comma list. Anyone else needs an invite.
+  ADMIN_EMAILS: string;
+  // Where the first admin's "today" is and their Claude calendar, which
+  // their settings (user.ts) start from: the Worker's from before each user
+  // had their own. Everyone else's start from where they sign in.
+  TIMEZONE?: string;
+  CALENDAR_ID?: string;
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
-  // The Claude calendar, which accepted plans are written to (calendar.ts).
-  CALENDAR_ID?: string;
+  // What holds' secrets are encrypted with (holds.ts), a secret: each
+  // user's key is derived from it and their sub.
+  HOLDS_KEY?: string;
   // Forgejo, whose repositories the portal browses (git.ts), and a read-only
-  // token of the user's there (a secret); without them, none.
+  // token of the first admin's there (a secret); without them, none. Admins only.
   FORGEJO_ORIGIN?: string;
   FORGEJO_TOKEN?: string;
   // The portal's page (../portal), which serves every path that isn't ours.

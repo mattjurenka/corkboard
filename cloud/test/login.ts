@@ -12,24 +12,46 @@ export const worker = (path: string, init?: RequestInit) =>
   exports.default.fetch(new Request(path.startsWith("http") ? path : `${ORIGIN}${path}`, init));
 
 const b64url = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const b64bytes = (b: ArrayBuffer) => b64url(String.fromCharCode(...new Uint8Array(b)));
+
+// Google's signing key, made here: its public half is what the stubbed
+// JWKS endpoint serves.
+export const CERTS = "https://www.googleapis.com/oauth2/v3/certs";
+const KID = `test-${crypto.randomUUID()}`;
+const RS256 = { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" };
+const keys = crypto.subtle.generateKey({ ...RS256, modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]) }, true, ["sign", "verify"]) as Promise<CryptoKeyPair>;
+
+export async function certs(): Promise<Response> {
+  const jwk = (await crypto.subtle.exportKey("jwk", (await keys).publicKey)) as JsonWebKey;
+  return Response.json({ keys: [{ ...jwk, kid: KID, alg: "RS256", use: "sig" }] }, { headers: { "Cache-Control": "public, max-age=3600" } });
+}
+
+// An id token as Google's would be; forged: signed with a key that isn't the one served.
+export async function idToken(claims: Record<string, unknown>, opts: { forged?: boolean } = {}): Promise<string> {
+  const head = `${b64url(JSON.stringify({ alg: "RS256", kid: KID, typ: "JWT" }))}.${b64url(JSON.stringify(claims))}`;
+  const key = opts.forged ? (await crypto.subtle.generateKey({ ...RS256, modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]) }, false, ["sign"]) as CryptoKeyPair).privateKey : (await keys).privateKey;
+  return `${head}.${b64bytes(await crypto.subtle.sign(RS256, key, new TextEncoder().encode(head)))}`;
+}
+
+export const claimsFor = (email: string, sub = `sub-${email}`, overrides: Record<string, unknown> = {}) => ({
+  iss: "https://accounts.google.com",
+  aud: "google-client",
+  sub,
+  email,
+  email_verified: true,
+  name: email.split("@")[0],
+  exp: Math.floor(Date.now() / 1000) + 3600,
+  ...overrides,
+});
 
 // The next sign-in at Google comes back as this account.
-export function google(email: string, sub = `sub-${email}`, overrides: Record<string, unknown> = {}) {
+export function google(email: string, sub = `sub-${email}`, overrides: Record<string, unknown> = {}, opts: { forged?: boolean } = {}) {
   const real = globalThis.fetch;
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
+    if (url === CERTS) return certs();
     if (url !== "https://oauth2.googleapis.com/token") return real(input, init);
-    const claims = {
-      iss: "https://accounts.google.com",
-      aud: "google-client",
-      sub,
-      email,
-      email_verified: true,
-      exp: Math.floor(Date.now() / 1000) + 3600,
-      ...overrides,
-    };
-    const idToken = `${b64url('{"alg":"none"}')}.${b64url(JSON.stringify(claims))}.sig`;
-    return Response.json({ access_token: "g", id_token: idToken });
+    return Response.json({ access_token: "g", id_token: await idToken(claimsFor(email, sub, overrides), opts) });
   });
 }
 
@@ -71,7 +93,7 @@ export async function register(redirect = REDIRECT) {
 }
 
 // Up to the consent page; returns what the rest of the flow needs.
-export async function consent(scope = "owner", redirect = REDIRECT) {
+export async function consent(scope = "owner", redirect = REDIRECT, invite?: string) {
   const clientId = await register(redirect);
   const { verifier, challenge } = await pkce();
   const jar = new Jar();
@@ -84,6 +106,7 @@ export async function consent(scope = "owner", redirect = REDIRECT) {
     state: "client-state",
     code_challenge: challenge,
     code_challenge_method: "S256",
+    ...(invite && { invite }),
   }).toString();
   const res = await worker(url.toString());
   jar.take(res);
@@ -93,10 +116,12 @@ export async function consent(scope = "owner", redirect = REDIRECT) {
 }
 
 // The whole flow. Returns the client's redirect, and tokens if it got a code.
-export async function login(opts: { scope?: string; decision?: string; approve?: string[]; redirect?: string } = {}) {
-  const c = await consent(opts.scope, opts.redirect);
+export async function login(opts: { scope?: string; decision?: string; approve?: string[]; redirect?: string; invite?: string } = {}) {
+  const c = await consent(opts.scope, opts.redirect, opts.invite);
   if (!c.handle) throw new Error(`no consent page: ${c.res.status} ${c.html}`);
   const form = new URLSearchParams({ handle: c.handle, decision: opts.decision ?? "approve" });
+  const invite = c.html.match(/name="invite" value="([^"]+)"/)?.[1];
+  if (invite) form.set("invite", invite);
   for (const s of opts.approve ?? (opts.scope ?? "owner").split(" ")) form.append("scope", s);
   const approved = await worker("/authorize", {
     method: "POST",
@@ -132,11 +157,23 @@ export async function login(opts: { scope?: string; decision?: string; approve?:
   return { redirect, tokens, clientId: c.clientId, toGoogle };
 }
 
-// A signed-in owner's access token.
-export async function ownerToken(email = "me@example.com") {
+// A signed-in owner's access token: the admin's (ADMIN_EMAILS, in
+// vitest.config.ts), or anyone's with an invite.
+export async function ownerToken(email = "me@example.com", invite?: string) {
   google(email);
-  const { tokens } = await login();
+  const { tokens, status, body } = await login({ invite });
   vi.restoreAllMocks();
-  if (!tokens?.access_token) throw new Error("sign-in failed");
+  if (!tokens?.access_token) throw new Error(`sign-in failed: ${status} ${body}`);
   return tokens.access_token;
+}
+
+// A second user, let in by an invite the admin's token makes: their token.
+export async function invitedToken(admin: string, email = "you@example.com") {
+  const res = await worker("/api/admin/invites", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${admin}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ label: email }),
+  });
+  if (res.status !== 201) throw new Error(`invite: ${res.status} ${await res.text()}`);
+  return ownerToken(email, (await res.json<{ code: string }>()).code);
 }

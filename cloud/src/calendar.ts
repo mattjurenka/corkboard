@@ -3,9 +3,11 @@
 // (dayplan reads it for the gate); the calendar is what the phone's routine,
 // Pepper and anyone looking at Google Calendar see of it.
 //
-// The owner connects it once at /calendar/connect: a Google consent for
-// calendar.events, separate from signing in, whose refresh token the User
-// object keeps. Writing is what `dayplan apply` did: clear the rest of the
+// Each user connects theirs once at /calendar/connect: a Google consent for
+// calendar.events, added to signing in's (which asks for no calendar),
+// whose refresh token their User object keeps. A user with no calendar in
+// their settings gets one made, "Claude", which is what calendar.app.created
+// is for; the first admin's is the one CALENDAR_ID names. Writing is what `dayplan apply` did: clear the rest of the
 // day, write the blocks (not the fixed ones, which are already someone's
 // events), then the approval marker, last, since it vouches for the rest.
 
@@ -16,6 +18,8 @@ const GOOGLE_AUTHORIZE = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN = "https://oauth2.googleapis.com/token";
 const API = "https://www.googleapis.com/calendar/v3";
 export const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events";
+// Making the Claude calendar, for a user who has none (createCalendar).
+export const CREATE_SCOPE = "https://www.googleapis.com/auth/calendar.app.created";
 // What the gate, the phone's routine and dayplan look for.
 export const APPROVAL = "✅ Plan approved";
 
@@ -37,11 +41,12 @@ export async function connect(env: Env): Promise<Response> {
     client_id: env.GOOGLE_CLIENT_ID,
     redirect_uri: `${env.ORIGIN}/callback`,
     response_type: "code",
-    scope: `openid email ${CALENDAR_SCOPE}`,
+    scope: `openid email ${CALENDAR_SCOPE} ${CREATE_SCOPE}`,
+    // Added to what signing in granted, asked for only here.
+    include_granted_scopes: "true",
     state,
     code_challenge: challenge,
     code_challenge_method: "S256",
-    login_hint: env.ALLOWED_EMAIL,
     // A refresh token comes only with a fresh consent.
     access_type: "offline",
     prompt: "consent",
@@ -114,12 +119,27 @@ export function calendarBlocks(blocks: Block[], from: number): { title: string; 
 }
 
 // The accepted day onto the calendar. Returns how many blocks were written.
-export async function write(env: Env, c: Connection | null, plan: Plan): Promise<number> {
+// A Claude calendar of the user's own, made with the access token their
+// connect just brought: its id, for their settings.
+export async function createCalendar(env: Env, access: string | undefined, timeZone: string): Promise<string> {
+  if (!access) throw new CalendarError("Google sent no access token to make the calendar with");
+  const res = await fetch(`${API}/calendars`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ summary: "Claude", description: "Day plans accepted in corkboard.", timeZone }),
+  });
+  const body = await res.json<{ id?: string }>().catch(() => ({}) as { id?: string });
+  if (!res.ok || !body.id) throw new CalendarError(`Google Calendar didn't make the calendar (${res.status})`);
+  return body.id;
+}
+
+// The accepted day onto the user's calendar, in their zone (settings, user.ts).
+export async function write(env: Env, c: Connection | null, plan: Plan, at: { calendar: string | null; timezone: string }): Promise<number> {
   if (!c) throw new CalendarError(`the calendar isn't connected; connect it at ${env.ORIGIN}/calendar/connect`);
-  if (!env.CALENDAR_ID) throw new CalendarError("the Worker has no CALENDAR_ID");
-  const zone = env.TIMEZONE;
+  if (!at.calendar) throw new CalendarError(`there's no calendar to write to; connect it at ${env.ORIGIN}/calendar/connect`);
+  const zone = at.timezone;
   const token = await accessToken(env, c);
-  const cal = `${API}/calendars/${encodeURIComponent(env.CALENDAR_ID)}/events`;
+  const cal = `${API}/calendars/${encodeURIComponent(at.calendar)}/events`;
   const call = async (method: string, url: string, body?: unknown) => {
     const res = await fetch(url, {
       method,

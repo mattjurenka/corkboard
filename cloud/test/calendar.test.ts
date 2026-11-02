@@ -1,6 +1,6 @@
 import { reset } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { login, ownerToken, worker } from "./login";
+import { CERTS, certs, claimsFor, idToken, invitedToken, login, ownerToken, worker } from "./login";
 
 let owner: string;
 let assistant: string;
@@ -39,9 +39,10 @@ function fakeGoogle(opts: { email?: string; expired?: boolean } = {}) {
         expect(form.get("refresh_token")).toBe("g-refresh");
         return Response.json({ access_token: "g-access" });
       }
-      const claims = { iss: "https://accounts.google.com", aud: "google-client", sub: "sub-me@example.com", email: opts.email ?? "me@example.com", email_verified: true, exp: Math.floor(Date.now() / 1000) + 3600 };
-      return Response.json({ access_token: "g", refresh_token: "g-refresh", id_token: `${b64url('{"alg":"none"}')}.${b64url(JSON.stringify(claims))}.sig` });
+      const email = opts.email ?? "me@example.com";
+      return Response.json({ access_token: "g-access", refresh_token: "g-refresh", id_token: await idToken(claimsFor(email)) });
     }
+    if (req.url === CERTS) return certs();
     if (url.origin !== "https://www.googleapis.com") return real(input, init);
     expect(req.headers.get("Authorization")).toBe("Bearer g-access");
     google.calls.push(`${req.method} ${url.pathname.split("/").pop()}`);

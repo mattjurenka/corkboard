@@ -126,8 +126,10 @@ export class Memory extends DurableObject<Env> {
 
   // Called before anything else on each request (memoryOf in mcp.ts): who
   // this is, and for Pepper's brain, the user's notes brought over once.
-  // Nothing else runs here until that's done.
-  async open(user: string, brain: string): Promise<void> {
+  // Nothing else runs here until that's done. timezone: the user's, kept
+  // for what runs on its own (the alarm's consolidation).
+  async open(user: string, brain: string, timezone?: string): Promise<void> {
+    if (timezone && this.meta("timezone") !== timezone) this.setMeta("timezone", timezone);
     if (this.meta("brain")) return this.backfill();
     await this.ctx.blockConcurrencyWhile(async () => {
       if (this.meta("brain")) return;
@@ -189,8 +191,14 @@ export class Memory extends DurableObject<Env> {
     return { ok: true, value: n };
   }
 
+  // Where the user's days are (their settings, user.ts), as open() last
+  // heard; before that, the Worker's from before there were settings.
+  private zone(): string {
+    return this.meta("timezone") ?? this.env.TIMEZONE ?? "UTC";
+  }
+
   private today() {
-    return today(this.env.TIMEZONE);
+    return today(this.zone());
   }
 
   // Notes -----------------------------------------------------------------------------
@@ -600,7 +608,7 @@ export class Memory extends DurableObject<Env> {
 
   // The day an instant is on, as entries are (the day turns over at 4am).
   private dayOf(at: string) {
-    return new Intl.DateTimeFormat("en-CA", { timeZone: this.env.TIMEZONE }).format(new Date(Date.parse(at) - DAY_STARTS_HOUR * 3600_000));
+    return new Intl.DateTimeFormat("en-CA", { timeZone: this.zone() }).format(new Date(Date.parse(at) - DAY_STARTS_HOUR * 3600_000));
   }
 
   // The days the next rollup reads: those since the last one's, up to
@@ -638,7 +646,7 @@ export class Memory extends DurableObject<Env> {
     const user = this.meta("user");
     const brain = this.meta("brain") ?? "?";
     const b = user ? await live(this.env, user, brain) : undefined;
-    const who = { name: brain, title: b?.title ?? brain, description: b?.description ?? "", timezone: this.env.TIMEZONE };
+    const who = { name: brain, title: b?.title ?? brain, description: b?.description ?? "", timezone: this.zone() };
     const memory = this.findNote("memory");
     const episodes: { id: string; prompt: string; input: string }[] = [];
     while (episodes.length < 3) {
@@ -755,7 +763,7 @@ export class Memory extends DurableObject<Env> {
 
   // Entries as Markdown, a heading a day, each day cut to `cap` characters.
   private logText(log: Entry[], newestFirst: boolean, cap = Infinity) {
-    const clock = new Intl.DateTimeFormat("en-GB", { timeZone: this.env.TIMEZONE, hour: "2-digit", minute: "2-digit" });
+    const clock = new Intl.DateTimeFormat("en-GB", { timeZone: this.zone(), hour: "2-digit", minute: "2-digit" });
     const byDay = new Map<string, Entry[]>();
     for (const e of log) byDay.set(e.day, [...(byDay.get(e.day) ?? []), e]);
     const days = [...byDay];

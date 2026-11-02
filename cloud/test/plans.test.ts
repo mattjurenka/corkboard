@@ -186,13 +186,13 @@ describe("chat", () => {
     const said = await call(owner, "POST", "/api/chat", { text: "  plan my day; gym is closed  " });
     expect(said.status).toBe(201);
     const first = await said.json<any>();
-    expect(first).toMatchObject({ who: "matt", text: "plan my day; gym is closed" });
+    expect(first).toMatchObject({ who: "me", by_user: true, text: "plan my day; gym is closed" });
     expect((await tool(pepper, "chat_read")).map((m: any) => m.text)).toEqual(["plan my day; gym is closed"]);
     const reply = await tool(pepper, "chat_send", { text: "On it: a proposal in a minute." });
     expect(reply.who).toBe("pepper");
     expect(await tool(pepper, "chat_read", { after: first.id })).toEqual([reply]);
     const all = await (await call(owner, "GET", "/api/chat")).json<any[]>();
-    expect(all.map((m) => m.who)).toEqual(["matt", "pepper"]);
+    expect(all.map((m) => [m.who, m.by_user])).toEqual([["me", true], ["pepper", false]]);
     expect(await (await call(owner, "GET", `/api/chat?after=${reply.id}`)).json<any[]>()).toEqual([]);
   });
 
