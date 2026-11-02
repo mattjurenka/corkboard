@@ -52,16 +52,6 @@ import { ORIGIN, invitedToken, ownerToken, worker } from "./login";
 const env = bindings as unknown as Env;
 const fetcher = (input: string, init?: RequestInit) => exports.default.fetch(new Request(input, init));
 
-// lib/e2ee's Relay.accountView asks GET /e2ee/accounts/:id with no token,
-// where the relay wants one; until it sends its own, this adds it.
-const fetchFor =
-  (relay: () => Relay, f = fetcher) =>
-  async (input: string, init?: RequestInit) => {
-    if (/^\/e2ee\/accounts\/[^/]+$/.test(new URL(input).pathname) && !new Headers(init?.headers).has("Authorization"))
-      init = { ...init, headers: { ...(init?.headers as Record<string, string>), Authorization: `Bearer ${await relay().token()}` } };
-    return f(input, init);
-  };
-
 let admin: string;
 beforeEach(async () => {
   admin = await ownerToken();
@@ -88,7 +78,7 @@ async function account(code?: string | null, opts: { bearer?: string } = {}): Pr
   const keys = accountKeys(root);
   const device = newDevice();
   const cert = certify(keys, device, "laptop");
-  const relay: Relay = new Relay({ origin: ORIGIN, fetch: fetchFor(() => relay), device, cert });
+  const relay: Relay = new Relay({ origin: ORIGIN, fetch: fetcher, device, cert });
   await relay.createAccount(creation(keys, ORIGIN, code === undefined ? await invite() : code), cert, opts.bearer);
   return { root, keys, device, cert, relay };
 }
@@ -620,10 +610,7 @@ describe("rotation", () => {
   it("moves the account onto a new key: old tokens end, kept devices follow, shared objects keep their ids", async () => {
     const a = await account();
     const b = await account();
-    const signedIn = (device: Device, cert: Signed<DeviceCert>) => {
-      const r: Relay = new Relay({ origin: ORIGIN, fetch: fetchFor(() => r), device, cert });
-      return r;
-    };
+    const signedIn = (device: Device, cert: Signed<DeviceCert>) => new Relay({ origin: ORIGIN, fetch: fetcher, device, cert });
     const phone = newDevice();
     const phoneCert = certify(a.keys, phone, "phone");
     const phoneRelay = signedIn(phone, phoneCert);
@@ -647,29 +634,13 @@ describe("rotation", () => {
     const bs = await Replica.open({ transport: b.relay.shares(a.keys.id), key: so.key, epoch: so.epoch, keyOf: memberKeys(b.relay, b.keys, b.keys.id, a.keys.id, brain.object), object: brain.object, device: b.device.id });
     await bs.pull();
 
-    // lib/e2ee's rotate() posts the shared object's new grants (signed by
-    // the new key) before the rotation, which the relay refuses while the
-    // old key is the account's; held here, and posted once it's rotated.
-    let rotated = false;
-    const held: { grant: Signed<any>; sealed: string }[] = [];
-    const laptopFetch = async (input: string, init?: RequestInit) => {
-      if (!rotated && init?.method === "POST" && input.endsWith("/e2ee/grants")) {
-        held.push(JSON.parse(String(init.body)));
-        return Response.json({ ok: true });
-      }
-      const res = await fetcher(input, init);
-      if (input.endsWith("/e2ee/rotate") && res.ok) rotated = true;
-      return res;
-    };
-    const laptop: Relay = new Relay({ origin: ORIGIN, fetch: fetchFor(() => laptop, laptopFetch), device: a.device, cert: a.cert });
+    const laptop = new Relay({ origin: ORIGIN, fetch: fetcher, device: a.device, cert: a.cert });
     const oldToken = await laptop.token();
     let kept: Uint8Array | undefined;
     const result = await rotate(laptop, a.root, a.keys.id, a.device, [a.cert.body, phoneCert.body], {
       replica: (_root, object, key, epoch) => Replica.open({ transport: laptop, key, epoch, object, device: a.device.id, store: memoryStore() }),
       keepRoot: async (r) => void (kept = r),
     });
-    expect(held).toHaveLength(1);
-    for (const g of held) await laptop.grant(g.grant, g.sealed);
     const next = accountKeys(result.root);
     expect(kept).toEqual(result.root);
     expect(laptop.account).toBe(a.keys.id);

@@ -182,13 +182,24 @@ export async function unshare(relay: Relay, root: Uint8Array, ownerId: string, i
 
 // A shared object onto a new random key, its grants sealed again for it.
 async function rekeyShared(relay: Relay, owner: AccountKeys, ownerId: string, index: Replica, rep: Replica, entry: IndexEntry) {
+  await regrant(relay, owner, ownerId, await rekey(index, rep, entry));
+}
+
+// A shared object onto a new random key at the next epoch, in the index.
+async function rekey(index: Replica, rep: Replica, entry: IndexEntry): Promise<IndexEntry> {
   const key = random(32);
   await rep.rekey(key);
   const next: IndexEntry = { ...entry, epoch: rep.currentEpoch, key: b64url(key) };
   await remember(index, next);
   await index.push();
+  return next;
+}
+
+// An object's grants sealed again for its entry's key, one per member.
+async function regrant(relay: Relay, owner: AccountKeys, ownerId: string, next: IndexEntry) {
+  const key = fromB64url(next.key!);
   const seen = new Set<string>();
-  for (const { grant } of await relay.grants(rep.object)) {
+  for (const { grant } of await relay.grants(next.object)) {
     if (seen.has(grant.body.member)) continue;
     seen.add(grant.body.member);
     const g = grantTo(owner, ownerId, await relay.accountView(grant.body.member), { ...next, role: grant.body.role, key });
@@ -260,13 +271,15 @@ export async function rotate(
   await oldIndex.sync();
   const newIndex = await r.replica(fresh, indexId(fresh), indexKey(fresh), 0);
   const moved: { rep: Replica; e: IndexEntry }[] = [];
+  const rekeyed: IndexEntry[] = [];
   const into = (e: IndexEntry) => r.replica(fresh, objectId(fresh, e.kind, e.name), objectKey(fresh, e.kind, e.name), 0);
   for (const e of entries(oldIndex)) {
     const rep = await r.replica(root, e.object, keyOf(root, e), e.epoch);
     await rep.sync();
     if (e.key) {
-      // Shared: the same id, a new random key at the next epoch, its grants sealed again.
-      await rekeyShared(relay, next, accountId, newIndex, rep, e);
+      // Shared: the same id, a new random key at the next epoch. Its grants
+      // are sealed again once the relay knows the new key that signs them.
+      rekeyed.push(await rekey(newIndex, rep, e));
       continue;
     }
     const to = await into(e);
@@ -284,6 +297,7 @@ export async function rotate(
   const cert = certs.find((c) => c.body.device === device.id)!;
   // Every token ended with the old key: the next call signs in with the new cert.
   relay.useCert(cert);
+  for (const e of rekeyed) await regrant(relay, next, accountId, e);
   // Anything written meanwhile goes across too (merging makes it harmless
   // twice), then the old logs go: they're still the account's, under its id.
   for (const { rep, e } of moved) {

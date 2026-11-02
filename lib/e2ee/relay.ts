@@ -20,7 +20,7 @@
 //   GET  /e2ee/grants?object=     an object's grants (the owner's); GET /e2ee/shared, those to me
 //   PUT  /e2ee/blob/:id           an encrypted attachment; GET it back
 //
-// Everything but accounts, challenges, revocations, rotated and the new device's
+// Everything but creating an account, challenges, revocations, rotated and the new device's
 // side of pairing wants a token from /e2ee/token, as a bearer (or, for a
 // browser's socket, the corkboard.bearer.<base64url> subprotocol). A token
 // that's expired or refused is got again, once, from the device's keys.
@@ -158,7 +158,7 @@ export class Relay implements PairTransport, LogTransport {
   // Accounts' keys, rotation ---------------------------------------------------
 
   accountView(id: string) {
-    return this.call<AccountView>("GET", `/e2ee/accounts/${id}`);
+    return this.authed<AccountView>("GET", `/e2ee/accounts/${id}`);
   }
 
   rotate(rotation: Signed<Rotation>, certs: Signed<DeviceCert>[], roots: Record<string, string>) {
