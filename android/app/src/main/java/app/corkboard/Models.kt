@@ -59,9 +59,12 @@ data class Goal(
     @SerialName("week_of") val weekOf: String? = null,
 )
 
-// A message between the user and Pepper (cloud/src/user.ts's chat).
+// A message between the user and a brain (cloud/src/user.ts's chat). byUser:
+// the user's own; a Worker from before it signs them all "matt".
 @Serializable
-data class ChatMessage(val id: Long, val at: String, val who: String, val text: String)
+data class ChatMessage(val id: Long, val at: String, val who: String, val text: String, @SerialName("by_user") val byUser: Boolean? = null) {
+    val mine get() = byUser ?: (who == "matt")
+}
 
 // The fleet (cloud/src/fleet.ts): each environment as its fleetd last told
 // the Worker, and the spawns queued, running or lately over. Memory in MiB.

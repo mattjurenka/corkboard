@@ -28,7 +28,9 @@ const DAY = 24 * 3600_000;
 
 // The newest message passed on, and the token Pepper has and when it was made.
 type State = { last: number; token?: string; minted?: number };
-type Message = { id: number; at: string; who: string; text: string };
+// by_user: the user's own, from the phone; a Worker from before it says "matt".
+type Message = { id: number; at: string; who: string; text: string; by_user?: boolean };
+const byUser = (m: Message) => m.by_user ?? m.who === "matt";
 
 function load(): State | undefined {
   try {
@@ -86,7 +88,7 @@ async function renew(state: State) {
 // Code queues what arrives while it's busy. Without a session (between days,
 // or restarting) they wait for the next try.
 async function pass(state: State) {
-  const said = ((await api("GET", `/api/chat?after=${state.last}`)) as Message[]).filter((m) => m.who === "matt");
+  const said = ((await api("GET", `/api/chat?after=${state.last}`)) as Message[]).filter(byUser);
   for (const m of said) {
     await tmux(["load-buffer", "-b", "phone", "-"], `[phone] ${m.text}`);
     await tmux(["paste-buffer", "-p", "-d", "-b", "phone", "-t", SESSION]);
@@ -140,7 +142,7 @@ async function follow() {
     ws.onmessage = (e) => {
       try {
         const event = JSON.parse(String(e.data));
-        if (event.type === "chat" && event.message?.who === "matt") tick();
+        if (event.type === "chat" && event.message && byUser(event.message)) tick();
       } catch {}
     };
     ws.onclose = () => {

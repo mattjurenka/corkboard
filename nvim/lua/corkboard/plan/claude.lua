@@ -9,8 +9,14 @@
 
 local M = {}
 
--- The pepper user's key only attaches (its authorized_keys' forced command).
-local ATTACH = { "ssh", "-t", "-o", "ServerAliveInterval=30", vim.env.CORKBOARD_PEPPER or "pepper@valheim.jurenka.software" }
+-- Where its session runs, as ssh's destination (user@host): the pepper
+-- user's key there only attaches (its authorized_keys' forced command).
+-- vim.g.corkboard_pepper_ssh, or $CORKBOARD_PEPPER; with neither, there's
+-- no session to attach to.
+local function destination()
+  local d = vim.g.corkboard_pepper_ssh or vim.env.CORKBOARD_PEPPER
+  return d ~= "" and d or nil
+end
 
 local buf
 
@@ -18,8 +24,13 @@ function M.alive() return require("corkboard.terminal").alive(buf) end
 
 -- Pepper attached to in a split (opts.split), or a tab.
 local function start(opts)
+  local to = destination()
+  if not to then
+    vim.notify("corkboard: no host for the assistant's session; set vim.g.corkboard_pepper_ssh or CORKBOARD_PEPPER", vim.log.levels.WARN)
+    return nil
+  end
   return require("corkboard.claude").start(vim.tbl_extend("force", opts or {}, {
-    attach = ATTACH,
+    attach = { "ssh", "-t", "-o", "ServerAliveInterval=30", to },
     vm = "pepper",
     brain = "pepper",
     kind = "pepper",

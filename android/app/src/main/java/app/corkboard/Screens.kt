@@ -502,14 +502,14 @@ fun ChatScreen(draft: String) {
     LaunchedEffect(messages.size) { if (messages.isNotEmpty()) list.animateScrollToItem(messages.size - 1) }
     val dictation = rememberDictation(onHeard = { text = it; error = null }, onError = { error = it })
     Page {
-        Header("pepper", if (dictation.listening) "listening…" else if (messages.lastOrNull()?.who == "matt") "thinking…" else "chat")
+        Header("pepper", if (dictation.listening) "listening…" else if (messages.lastOrNull()?.mine == true) "thinking…" else "chat")
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             if (!ready) item { Text("This Worker has no chat yet: deploy the cloud/ update for messages to reach Pepper.", color = Monokai.orange) }
             if (ready && messages.isEmpty()) item { Text("Nothing yet. Pepper answers here, and can change today's plan while you talk.", color = Monokai.base04) }
             items(messages, key = { it.id }) { m ->
                 Column {
-                    Text(if (m.who == "pepper") "pepper" else "you", style = Small.copy(color = if (m.who == "pepper") Monokai.purple else Monokai.base04))
-                    if (m.who == "pepper") Markdown(m.text, Modifier.padding(top = 2.dp))
+                    Text(if (m.mine) "you" else m.who, style = Small.copy(color = if (m.mine) Monokai.base04 else Monokai.purple))
+                    if (!m.mine) Markdown(m.text, Modifier.padding(top = 2.dp))
                     else Text(m.text, modifier = Modifier.padding(top = 2.dp))
                 }
             }
