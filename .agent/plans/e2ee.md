@@ -91,8 +91,9 @@ laptop app ─┐                         ┌─ phone app ──https──┐
    signed-challenge sign-in to the Worker alongside Google.
 2. *(Done but Android, see below.)* Encrypted op log in the DOs alongside the current API; a client library (bridge, web, Android)
    that encrypts, syncs and merges.
-3. `bridge serve` as the node: replicas, `/mcp` with its own OAuth, the phone API, memory,
-   calendar. Move Claude Code onto the local MCP.
+3. *(The node is built, see below; Claude Code isn't moved yet.)* `bridge serve` as the node:
+   replicas, `/mcp` with its own OAuth, the phone API, memory, calendar. Move Claude Code onto
+   the local MCP.
 4. Migration: each account's first node downloads its plaintext, encrypts it, re-uploads it; then
    the Worker deletes the plaintext and the server-side features are turned off for that account.
 5. Reachability helpers (Funnel setup in the app, the TLS-forwarding relay), a Docker image and a
@@ -167,6 +168,105 @@ encrypted side yet but `corkboard-bridge e2ee`.
 - The bridge CLI has been run compiled up to the relay call; its whole flows have been tested only
   through the library against the Worker in vitest, not as a CLI against a running Worker.
 - Attachments: the blob routes and `sealBlob` exist; no op type names one yet.
+
+## Done: step 3, the node (2026-11-02)
+
+`corkboard-bridge serve` (`bridge/node/`), headless, alongside everything else: the Worker's
+plaintext `/mcp` is untouched, and the node serves only objects that are already encrypted
+(`e2ee push-board`).
+
+- **Replicas** (`replicas.ts`): this machine signs in as its device (the keystore, as `e2ee`
+  does; a passphrase from `CORKBOARD_E2EE_PASSPHRASE`), opens a `Replica` per object, kept in
+  `<state>/e2ee/replicas/` beside the CLI's, pulls each, follows each log's socket, pushes each
+  change behind the caller (again every 10 s until it goes), and syncs everything every five
+  minutes in case a socket died quietly.
+- **Which objects** (`objects.ts`): `--board KEY` and `--brain NAME`, repeated, and
+  `<state>/node/config.json`'s `boards` and `brains`; ids and keys derived from the root. This
+  is the one file that reads the index once there is one: it answers
+  `{ kind, name, object, key, owner? }` and nothing else.
+- **Records** (`data.ts`): a board's are cards in the Worker's `Card` shape (`cloud/src/cards.ts`,
+  imported, as are `plans.ts` and `dates.ts`); a brain's are `brain`, `note:<id>`
+  `{ kind, title, body, created, updated, version, path? }` and `entry:<id>`
+  `{ at, day, who, text }`, an entry's id being base36 time and random. `merge.ts` here still
+  refuses a colon in a record id, so `objects.ts` asks it, and uses `note.<id>` and `entry.<id>`
+  until it doesn't. A note's version counts this node's writes, for `note_write`'s check only.
+- **`/mcp`** (`mcp.ts`): the Worker's tools and descriptions for cards (`list_boards`,
+  `list_cards`, `read_card`, `next_card`, `claim_card`, `release_card`, `log`, `block`,
+  `request_user_action`, `submit_for_review`, `handoff`, `update_card`, `archive_card`,
+  `write_description`, `create_card`) and memory (`notes_search`, `note_read`, `note_write`,
+  `note_append`, `memory_context`, `memory_recall`, `memory_remember`, `memory_log`,
+  `memory_grep`, `brain_list`, `brain_read`), in the default brain (its settings say `default`,
+  else the first given). Stateless Streamable HTTP answered with JSON: every tool answers from
+  local state at once, so there's no stream to keep alive yet.
+- **Search** (`search.ts`): bun:sqlite FTS5 in memory, made again from a brain's replica when
+  it has changed since the last search; `recall` is memory.ts's rank fusion of words, the day the
+  question names and an `Embedder` seam that nothing fills yet.
+- **OAuth** (`oauth.ts`), per "Settled" above: protected resource metadata at both paths
+  (`resource` `<origin>/mcp`), AS metadata, DCR, CIMD (fetched only from public addresses, 10 s,
+  no redirects, kept an hour), `/authorize` with S256 only, loopback redirects matched on any
+  port, `resource` checked in canonical form and bound to the grant, `/token` (form or JSON;
+  codes spent even when the exchange fails; refresh tokens rotated, a dead one `invalid_grant`),
+  the 401 with `resource_metadata` and `scope="assistant"`. Scopes `assistant` (claude.ai's;
+  can't write the soul) and `owner`. Access tokens (`cbn_`) last an hour, refresh tokens (`cbr_`)
+  30 idle days; all of it in `<state>/node/oauth.json` (0600), tokens and codes by SHA-256.
+- **Consent** is proof of owning the node: a one-time approval code (8 characters of Crockford
+  base32, ten minutes) from `corkboard-bridge e2ee approve-connector`, or printed by `serve` as
+  it starts. Compared by hash in constant time; five wrong codes in 15 minutes and the page
+  takes none until they age out. The page shows the client's name and the redirect's host.
+- **The phone's API** at `/api/node/*` (`server.ts` lists it): status, boards with cards, card
+  create/update/log, brains, notes, recall, entries, remember, and `POST calendar`. A bearer from
+  the same OAuth server, or `corkboard-bridge serve token [--name] [--days] [--scope]` (printed
+  once; `serve grants` and `serve revoke GRANT` to see and end them). `/health` needs none.
+- **Calendar** (`calendar.ts`): `cloud/src/calendar.ts`'s write, with the refresh token in
+  `<state>/node/calendar.json`. `serve calendar-login --client-id --client-secret` runs Google's
+  consent for a desktop OAuth client of the user's own back to a loopback port and makes a
+  "Claude" calendar unless `--calendar` names one; `--file` takes one made elsewhere. A plan is
+  written when the phone posts it to `/api/node/calendar` after accepting.
+- Tests: `bun run test:e2ee` takes in `bridge/node/node.test.ts` (DCR → consent → PKCE → token →
+  refresh and rotation → `/mcp`; the tools over replicas on an in-memory relay, read back by
+  another device; the phone's API; the calendar against a fake Google). `bridge/node` is in the
+  root `tsconfig.json`.
+
+### Running it
+
+```
+corkboard-bridge e2ee push-board KEY          # once per board, from a device with the root
+corkboard-bridge serve --board KEY --brain assistant --origin https://NAME
+```
+
+It listens on `127.0.0.1:8787`. claude.ai connects from Anthropic's servers (`160.79.104.0/21`),
+over IPv4, to a name in public DNS whose every address is globally routable, with no redirect
+to another host. So a tailnet-only address won't do:
+
+- **Tailscale Funnel**: `tailscale funnel --bg 8787`, and `--origin https://<device>.<tailnet>.ts.net`.
+  TLS ends in tailscaled on the node.
+- **Caddy on a VPS** (the node on the VPS, or reached over the tailnet from it, TLS ending in
+  Caddy): `NAME { reverse_proxy 127.0.0.1:8787 }`, and `--origin https://NAME`.
+
+Without `--origin` the node names itself from the request's `Host` (https unless it's this
+machine), which works behind both but is better given. Then in claude.ai: add a custom connector
+with `https://NAME/mcp`, and when the node's page asks, type the code from
+`corkboard-bridge e2ee approve-connector`.
+
+### Still to do, or known gaps
+
+- Not run against a real relay or with claude.ai yet: everything is tested through the
+  in-memory transport and requests to the handler.
+- Objects come from flags until the index lands; shared objects (`owner`), epochs, snapshots
+  and compaction are the adapter's and the replica's to take up when `lib/e2ee` has them. The
+  node doesn't compact.
+- Two devices making a card at once can pick the same `TASK-n` and merge into one card; note
+  appends from two places at once keep one (a body is one last-write-wins field).
+- Not on the node yet: attachments, `create_board`, day plans (`plan_read`, `plan_propose`) and
+  the chat, which need record types of their own; spawns and agents.
+- Memory consolidation, alarms, embeddings and Pepper are out of this step. The seams: the
+  `Embedder` in `search.ts`, and `Replicas.onChange`, which is what a consolidator or Pepper
+  would follow.
+- The calendar is written only when the phone posts the plan; once plans are records, the node
+  can write one when it sees an accept.
+- A CIMD host's DNS could change between the check and the fetch (rebinding).
+- SSE keepalives: nothing streams yet. A tool that takes long (a calendar write, recall by
+  meaning) should answer as SSE with comments as keepalives.
 
 ## Open questions
 
