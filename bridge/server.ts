@@ -850,5 +850,17 @@ Bun.serve<Session, {}>({
 
 console.log(`corkboard on ${ORIGIN ?? `http://${HOST.includes(":") ? `[${HOST}]` : HOST}:${PORT}`}/${TOKEN ? `#token=${TOKEN}` : ""}`);
 
+// Started by the desktop app (app/bridge.js): gone when it is, however it went.
+const PARENT = Number(process.env.CORKBOARD_PARENT_PID);
+if (PARENT) {
+  setInterval(() => {
+    try {
+      process.kill(PARENT, 0);
+    } catch {
+      process.exit(0);
+    }
+  }, 2000);
+}
+
 // What the phone needs from this bridge (remote.ts).
 remote.start(PORT);

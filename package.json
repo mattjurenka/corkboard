@@ -9,6 +9,8 @@
     "portraits": "bun web/portraits.ts",
     "lines": "bun web/lines.ts",
     "app": "electron app",
+    "build:bridge": "bun scripts/build-bridge.ts",
+    "dist": "bun scripts/build-bridge.ts --target os && bun run --cwd app dist --publish never",
     "typecheck": "tsc -p .",
     "mcp": "bun mcp/board.ts",
     "latency": "bun bridge/latency.ts",

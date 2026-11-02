@@ -18,3 +18,5 @@ result-*
 
 # python bytecode from bridge/chatterbox-speech.py
 __pycache__/
+# scripts/build-bridge.ts and electron-builder output
+/dist/
