@@ -51,6 +51,7 @@ let queue: InstanceType<typeof import("./queue").Queue>;
 beforeAll(async () => {
   process.env.CORKBOARD_CLOUD = `http://localhost:${server.port}`;
   process.env.XDG_STATE_HOME = join(dir, "state");
+  process.env.CORKBOARD_STATE_DIR = join(dir, "state/corkboard");
   process.env.CORKBOARD_FLEET_STATE = join(dir, "fleet");
   process.env.CORKBOARD_FLEET_MANIFEST = join(dir, "fleet.json");
   process.env.CORKBOARD_FLEET_ENVIRONMENT = "local";

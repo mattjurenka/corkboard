@@ -17,7 +17,7 @@
     "login": "bun bridge/cloud.ts login",
     "test:cloud": "bun test/cloud-boards.ts",
     "test:plan": "bun test/day-plan.ts",
-    "test:fleet": "bun test fleet/fleetd",
+    "test:fleet": "bun test --isolate fleet/fleetd",
     "test:e2ee": "bun test lib/e2ee bridge/keystore bridge/node"
   },
   "dependencies": {
