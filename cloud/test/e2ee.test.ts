@@ -93,7 +93,7 @@ describe("accounts", () => {
     const a = await account();
     const t = await a.relay.token();
     const call = (method: string, path: string, body?: unknown) =>
-      worker(path, { method, headers: { Authorization: `Bearer ${admin}`, "Content-Type": "application/json" }, body: body && JSON.stringify(body) });
+      worker(path, { method, headers: { Authorization: `Bearer ${admin}`, "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
     expect(await (await call("GET", "/api/admin/e2ee")).json()).toEqual([expect.objectContaining({ id: a.keys.id, status: "active" })]);
     expect((await call("PATCH", `/api/admin/e2ee/${a.keys.id}`, { status: "disabled" })).status).toBe(200);
     expect((await worker("/e2ee/revoked", { headers: { Authorization: `Bearer ${t}` } })).status).toBe(401);
