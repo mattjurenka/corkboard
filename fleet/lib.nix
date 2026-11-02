@@ -7,7 +7,7 @@
 # environment. Anything that cannot be placed is an evaluation error naming
 # every such template at once, never a runtime one.
 #
-# A brain is corkboard's (cloud/src/brains.ts), and a spawn's, not a
+# A brain is corkboard's (the hosted Worker's brains.ts), and a spawn's, not a
 # template's: what stays here is what only the host knows, its bindings, the
 # memory it mounts in a brain's spawns (.agent/plans/brains.md).
 { lib }:

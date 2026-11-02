@@ -1,4 +1,4 @@
-// fleetd's side of the Worker's queue (cloud/src/fleet.ts): it tells the
+// fleetd's side of the Worker's queue (its fleet.ts): it tells the
 // Worker what this environment can run, claims the spawns queued for it,
 // and says how each one went. Signed in as the bridge is (bridge/cloud.ts,
 // the owner's token); not signed in, fleetd runs the CLI's spawns alone.

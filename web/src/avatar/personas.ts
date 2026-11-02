@@ -1,4 +1,4 @@
-// Who the avatar is: a brain's persona (cloud/src/brains.ts, picked in its
+// Who the avatar is: a brain's persona (the hosted Worker's brains.ts, picked in its
 // form), else the businesswoman. Each is a model, a voice, what they do when
 // left alone, and what they say and do when you click on them (or feed them). How each
 // talks as Claude is corkboard.personas (nvim/lua/corkboard/personas.lua),

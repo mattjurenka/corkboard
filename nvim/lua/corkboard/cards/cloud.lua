@@ -356,7 +356,7 @@ function M.pepper_token() return request("pepper_token") end
 function M.brain_token(brain) return request("brain_token", brain) end
 
 -- Tell the Worker card id's agent is still running, so its claim doesn't
--- lapse (cloud/src/board.ts's leases). Not waited for: a heartbeat that
+-- lapse (the hosted Worker's board.ts leases). Not waited for: a heartbeat that
 -- doesn't arrive is made up by the next one.
 function M.touch(id, agent)
   local chan = channel()

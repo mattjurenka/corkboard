@@ -29,7 +29,7 @@
 #                            of its episodes (fleet/memory-hooks.nix)
 #   /mnt/share/secrets/      optional: a file per hold the spawn has (its
 #                            brain's and its template's) whose secret is
-#                            kept in corkboard (cloud/src/holds.ts)
+#                            kept in corkboard (the hosted Worker's holds.ts)
 #   /mnt/share/shell.json    optional: the tools the spawner brought, built
 #                            here and run in: { "packages": [...] } from this
 #                            guest's nixpkgs, or { "flake": ref }'s devShell
@@ -81,7 +81,7 @@ let
     tokenFile = "/mnt/share/brain-token";
   };
 
-  # A brain's consolidator (cloud/src/consolidate.ts): asks the Worker for
+  # A brain's consolidator (the hosted Worker's consolidate.ts): asks the Worker for
   # its next job, thinks about each part with Claude Code given no tools, no
   # MCP and no settings but the managed ones, and sends back what it said,
   # until there's nothing left. The Worker decides what it sees and what its

@@ -1,4 +1,4 @@
--- What brains hold (cloud/src/holds.ts): each hold, what it's for, whether
+-- What brains hold (the hosted Worker's holds.ts): each hold, what it's for, whether
 -- its secret is kept here (and handed to a spawn holding it) or where it is
 -- kept, and the brains and templates holding it; above them, the spawns an
 -- agent asked for that wait on you because of one.

@@ -21,11 +21,11 @@ jobs:
       - run: bun run test:e2ee
       - run: bun run build
 
-  cloud:
+  relay:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: cloud
+        working-directory: relay
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2

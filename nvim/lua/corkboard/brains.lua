@@ -1,4 +1,4 @@
--- The brains (.agent/plans/brains.md, cloud/src/brains.ts): who agents work
+-- The brains (.agent/plans/brains.md, the hosted Worker's brains.ts): who agents work
 -- for, each with its memory's counts, its account, what it holds, its
 -- abilities and its avatar's persona (corkboard.personas) and skin. The default
 -- one is what your own sessions remember in.

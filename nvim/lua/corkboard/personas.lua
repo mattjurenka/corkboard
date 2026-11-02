@@ -1,5 +1,5 @@
 -- Who a session's avatar is (corkboard.avatar): its brain's persona
--- (cloud/src/brains.ts), else the default. The page has each one's model,
+-- (the hosted Worker's brains.ts), else the default. The page has each one's model,
 -- voice and lines (web/src/avatar/personas.ts, by the same ids); here is
 -- how each talks, which the session is told while it's heard.
 

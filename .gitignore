@@ -13,9 +13,6 @@ result-*
 # emscripten cache for `nix develop .#wasm`
 /wasm/.emcache/
 
-# the /edit/ page the Worker serves (nix build ..#edit-page -o .edit)
-/cloud/.edit
-
 # python bytecode from bridge/chatterbox-speech.py
 __pycache__/
 # scripts/build-bridge.ts and electron-builder output

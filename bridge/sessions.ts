@@ -1,5 +1,5 @@
 // Serving Claude Code sessions to the phone and the fleet view, through the
-// Worker (cloud/src/user.ts): following the user's live socket as a bridge
+// Worker (its user.ts): following the user's live socket as a bridge
 // (?bridge=), saying what sessions there are whenever that changes, and
 // answering what's asked of one: its screen, something typed into it, and
 // its conversation as it goes, read from its log (transcript.ts), or its
@@ -47,7 +47,7 @@ export type Source = {
   peers?(bridges: Peer[]): void;
 };
 
-// Another bridge, as the Worker says of it (cloud/src/user.ts's Bridge).
+// Another bridge, as the Worker says of it (its user.ts Bridge).
 export type Peer = { id: string; machine: string; sessions: (Hosted & { spawn?: string | null; attach?: boolean; terminal?: boolean })[] };
 
 export type TerminalOut = { out(stream: string, data: string): void; end(stream: string, why: string): void };
@@ -61,7 +61,7 @@ export type Terminals = {
 // How much of the conversation a stream starts with.
 const FIRST = 200;
 // The bridge's page, when it's served from anywhere (server.ts's ORIGIN):
-// the portal opens boards there (cloud/src/portal.ts).
+// the portal opens boards there (the hosted Worker's portal.ts).
 const PAGE = process.env.CORKBOARD_ORIGIN;
 
 type Stream = { key: string; follower?: Follower; timer?: ReturnType<typeof setInterval> };

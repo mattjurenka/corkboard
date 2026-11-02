@@ -1,6 +1,6 @@
 # A brain's memory, as Claude Code hooks: every session starts with the
 # brain's context and ends by sending its transcript to corkboard's Worker
-# (cloud/src/memory.ts, .agent/plans/memory.md). The same for any agent of
+# (the hosted Worker's memory.ts, .agent/plans/memory.md). The same for any agent of
 # the brain, wherever it runs.
 #
 #   SessionStart   GET  /memory/context, printed, which Claude Code adds to

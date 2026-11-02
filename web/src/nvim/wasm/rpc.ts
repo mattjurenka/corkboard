@@ -315,7 +315,7 @@ export class EphemeralRpc extends WasmNvim {
     }
     const repo = open.repo ?? (open.board && manifest.cloud ? await this.repoOf(open.board) : undefined);
     if (!repo) throw new Error("which repository? ?repo=owner/name, or ?board= on a page the Worker serves");
-    // The Worker's git route (cloud/src/git.ts), signed in; a bridge's
+    // The Worker's git route (its git.ts), signed in; a bridge's
     // passes it on with its own sign-in, for its token.
     const git = manifest.cloud ? { Authorization: `Bearer ${await cloud.token()}` } : headers;
     const dir = `/work/${repo.name}`;

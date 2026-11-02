@@ -14,7 +14,7 @@
 -- through the bridge and followed live: the assistant proposes (MCP
 -- plan_propose), the proposal shows here as a diff against the day, and
 -- accepting it tells the Worker, which writes the Claude calendar
--- (cloud/src/calendar.ts). A first plan of the day is a
+-- (the hosted Worker's calendar.ts). A first plan of the day is a
 -- proposal against an empty day. It lives in the day plan's window
 -- (corkboard.window == "plan").
 

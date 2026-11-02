@@ -1,4 +1,4 @@
-// A brain's vault into its memory in corkboard's Worker (cloud/src/memory.ts):
+// A brain's vault into its memory in corkboard's Worker (its memory.ts):
 // until the vault is a mirror of the memory (.agent/plans/memory.md, step
 // 5), the files are the truth and this copies them up, one way.
 //

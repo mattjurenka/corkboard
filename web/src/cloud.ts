@@ -1,6 +1,6 @@
 // The Worker, for a page it serves itself (/edit/, a page with no machine):
 // the portal's sign-in, shared. The portal is an OAuth client of the Worker
-// on this same origin and keeps its tokens in localStorage (portal/lib/
+// on this same origin and keeps its tokens in localStorage (the portal's
 // api.ts); this page reads them there each time rather than keeping its own
 // copy, since refresh tokens rotate and the portal may have refreshed since.
 // Signing in goes by way of the portal, which comes back here after.
@@ -78,7 +78,7 @@ export function token(stale = false): Promise<string> {
 }
 
 // A WebSocket to the Worker, signed in: a browser can't set its headers,
-// so the token goes as a subprotocol (cloud/src/index.ts takes it there).
+// so the token goes as a subprotocol (the hosted Worker's index.ts takes it there).
 export function socket(url: string, t: string): WebSocket {
   return new WebSocket(url, ["corkboard", `corkboard.bearer.${b64url(new TextEncoder().encode(t))}`]);
 }

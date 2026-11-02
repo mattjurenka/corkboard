@@ -1,5 +1,5 @@
 // A new device joins the account by getting the root from one that has it,
-// through a mailbox on the relay (cloud/src/mailbox.ts) that lasts ten
+// through a mailbox on the relay (relay/src/mailbox.ts) that lasts ten
 // minutes and is gone once the root has been read.
 //
 //   new device                      relay                      approving device

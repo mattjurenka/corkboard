@@ -34,7 +34,7 @@
 //                              a one-time code (ten minutes) for approving a connector
 //                              at this machine's node's /authorize (bridge/node/)
 //
-// The relay is CORKBOARD_CLOUD's (cloud.ts). The passphrase, when there is
+// The relay is the server the bridge uses (cloud.ts). The passphrase, when there is
 // one, is CORKBOARD_E2EE_PASSPHRASE or asked for.
 
 import { existsSync, rmSync } from "node:fs";

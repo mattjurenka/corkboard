@@ -1,4 +1,4 @@
-// The node's /mcp: the Worker's MCP tools (cloud/src/mcp.ts) for cards,
+// The node's /mcp: the Worker's MCP tools (its mcp.ts) for cards,
 // notes and memory, over the node's replicas instead of its Durable Objects.
 // Same names, descriptions and rules, so a client moved from the Worker to
 // the node sees the same tools, less those with nothing on the node yet:
