@@ -88,7 +88,7 @@ export const PERSONAS = {
     title: "Beach",
     model: "bikini.vrm",
     recolor: true,
-    voice: "anime",
+    voice: "af_bella",
     idle: ["sway", "sway", "stretch", "stretch", "shift", "glance", "glance", "yawn", "proud"],
     poked: {
       pat: {
@@ -150,7 +150,7 @@ export const PERSONAS = {
     title: "Businesswoman",
     model: "businesswoman.vrm",
     recolor: false,
-    voice: "anime",
+    voice: "af_nicole",
     idle: ["fold", "fold", "ponder", "shift", "glance", "sway", "stretch"],
     poked: {
       pat: {

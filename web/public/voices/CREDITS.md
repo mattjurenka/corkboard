@@ -8,3 +8,6 @@ The recordings each voice is cloned from (bridge/speech.ts), and the clips.
 - `am_fenrir.wav`: Alex Brodie's lines from the same pack, by Dillon Becker, CC BY 4.0; joined and trimmed.
 - `bm_george.wav`: Adrian Praetzellis reading John Buchan's "The Thirty-Nine Steps", chapter 1, LibriVox,
   https://librivox.org/the-thirty-nine-steps-by-john-buchan/, public domain; trimmed.
+- `af_bella.wav`: Karen Cenon's lines from the same pack, by Dillon Becker, CC BY 4.0; joined and trimmed.
+- `af_nicole.wav`: Elizabeth Klett reading Charlotte Brontë's "Villette", chapter 2, LibriVox,
+  https://librivox.org/villette-by-charlotte-bronte/, public domain; trimmed.
