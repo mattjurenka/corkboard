@@ -26,7 +26,6 @@ const env = {
   CORKBOARD_PORT: String(port),
   CORKBOARD_TOKEN: token,
   CORKBOARD_NVIM: nvim,
-  CORKBOARD_PHONE: "0",
   CORKBOARD_REMOTE_SESSIONS: "0",
 };
 

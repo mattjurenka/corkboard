@@ -81,8 +81,6 @@ export async function startBridge({ resources, profile, path, onExit }) {
       CORKBOARD_TOKEN: token,
       CORKBOARD_PARENT_PID: String(process.pid),
       CORKBOARD_NVIM: join(dir, "nvim", "bin", exe("nvim")),
-      // The phone's calendar writing needs dayplan, which an install hasn't (phone.ts).
-      CORKBOARD_PHONE: process.env.CORKBOARD_PHONE ?? "0",
     },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
