@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 import { persona as personaOf, POKED, line as quip, upcoming, type Poked } from "@/avatar/personas";
 import { ACTS, type ActName } from "@/avatar/acts";
 import type { Mood, Stage } from "@/avatar/stage";
-import { isMood, Voice } from "@/avatar/voice";
+import { type Bridge, isMood, Voice } from "@/avatar/voice";
 import { useNvim } from "@/nvim/context";
 import type { ViewProps } from "./index";
 
@@ -31,15 +31,57 @@ type AvatarState = { said?: Said[]; state?: string; muted?: boolean; skip?: numb
 const mood = (state?: string): Mood =>
   state === "working" || state === "starting" || state === "background" ? "thinking" : state === "asking" || state === "permission" ? "asking" : "idle";
 
-export function Avatar({ state }: ViewProps<AvatarState>) {
+// A panel's stage, its canvases and its voice, by its buffer, kept from
+// when its tab is left until it's back: making them again and loading the
+// model onto them is a second or more of spinner. Its loop is paused
+// meanwhile. Past KEPT out of sight, the one unseen longest goes, each
+// being one of the browser's few WebGL contexts.
+type Kept = {
+  canvas: HTMLCanvasElement;
+  marks: HTMLCanvasElement;
+  voice: Voice;
+  stage?: Stage;
+  // What's on the stage (`${key}:${skin}`), and the loads to it, one after another.
+  model?: string;
+  loads: Promise<void>;
+  shown: boolean;
+};
+const kept = new Map<number, Kept>();
+const KEPT = 4;
+
+function keep(buf: number, bridge: Bridge): Kept {
+  let k = kept.get(buf);
+  if (!k) {
+    const canvas = document.createElement("canvas");
+    canvas.className = "absolute inset-0 size-full";
+    const marks = document.createElement("canvas");
+    marks.className = "pointer-events-none absolute inset-0 size-full";
+    k = { canvas, marks, voice: new Voice(bridge), loads: Promise.resolve(), shown: false };
+  }
+  // Last in the map is the last seen.
+  kept.delete(buf);
+  kept.set(buf, k);
+  return k;
+}
+
+function forget() {
+  const hidden = [...kept].filter(([, k]) => !k.shown);
+  for (const [buf, k] of hidden.slice(0, Math.max(0, hidden.length - KEPT))) {
+    k.stage?.dispose();
+    kept.delete(buf);
+  }
+}
+
+export function Avatar({ state, buf }: ViewProps<AvatarState>) {
   const nvim = useNvim();
+  const [k] = useState(() => keep(buf, nvim.bridge));
   const box = useRef<HTMLDivElement>(null);
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const marks = useRef<HTMLCanvasElement>(null);
-  const stage = useRef<Stage>(null);
-  const voice = useRef<Voice>(null);
+  const host = useRef<HTMLDivElement>(null);
+  const canvas = useRef<HTMLCanvasElement>(k.canvas);
+  const stage = useRef<Stage>(k.stage ?? null);
+  const voice = useRef<Voice>(k.voice);
   const seen = useRef<Set<string>>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!k.model);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState("");
   const [line, setLine] = useState({ text: "", at: 0, speaking: false });
@@ -50,23 +92,22 @@ export function Avatar({ state }: ViewProps<AvatarState>) {
   // The treats out, and the one being carried to her, where it is in the panel.
   const [treats, setTreats] = useState(false);
   const [held, setHeld] = useState<{ treat: Treat; x: number; y: number } | null>(null);
-  // Models load one after another, so the last persona asked for is the one on stage.
-  const loads = useRef<Promise<void>>(Promise.resolve());
   const persona = personaOf(state.persona);
 
-  voice.current ??= new Voice(nvim.bridge);
-
-  // The stage.
+  // The stage, kept or made.
   useEffect(() => {
     let live = true;
+    k.shown = true;
+    host.current!.append(k.canvas, k.marks);
     const sizes = new ResizeObserver(() => box.current && stage.current?.resize(box.current.clientWidth, box.current.clientHeight));
-    const v = voice.current!;
+    const v = voice.current;
     // The last line stays as it fades.
     v.onChange = () => setLine((l) => (v.speaking ? { text: v.text, at: v.at(), speaking: true } : { ...l, at: l.text.length, speaking: false }));
     import("@/avatar/stage").then(async ({ Stage }) => {
-      if (!live || !canvas.current) return;
-      const s = new Stage(canvas.current, v, marks.current ?? undefined);
+      if (!live) return;
+      const s = (k.stage ??= new Stage(k.canvas, v, k.marks));
       stage.current = s;
+      s.resume();
       const fit = () => box.current && s.resize(box.current.clientWidth, box.current.clientHeight);
       sizes.observe(box.current!);
       fit();
@@ -77,7 +118,9 @@ export function Avatar({ state }: ViewProps<AvatarState>) {
       sizes.disconnect();
       v.onChange = undefined;
       v.stop();
-      stage.current?.dispose();
+      k.stage?.pause();
+      k.shown = false;
+      forget();
     };
   }, []);
 
@@ -86,12 +129,19 @@ export function Avatar({ state }: ViewProps<AvatarState>) {
     const s = stage.current;
     if (!ready || !s) return;
     const key = `vrm:${persona.title}`;
-    voice.current!.voice = persona.voice;
+    voice.current.voice = persona.voice;
     s.idle = persona.idle;
-    for (const k of POKED) voice.current!.warm(upcoming(persona, k), persona.poked[k].tone);
+    for (const p of POKED) voice.current.warm(upcoming(persona, p), persona.poked[p].tone);
+    // Already on it, or on its way: a tab come back to.
+    const model = `${key}:${state.skin ?? ""}`;
+    if (k.model === model) {
+      k.loads.then(() => setLoading(false));
+      return;
+    }
+    k.model = model;
     setLoading(true);
     setError("");
-    loads.current = loads.current.then(async () => {
+    k.loads = k.loads.then(async () => {
       try {
         const own = await saved(key);
         await (own ? s.load(own, false, state.skin) : s.load(new URL(persona.model, location.href).href, persona.recolor, state.skin));
@@ -247,8 +297,8 @@ export function Avatar({ state }: ViewProps<AvatarState>) {
       onPointerLeave={() => stage.current?.point(null)}
       onClick={poke}
     >
-      <canvas ref={canvas} className="absolute inset-0 size-full" />
-      <canvas ref={marks} className="pointer-events-none absolute inset-0 size-full" />
+      {/* Its canvases, kept (Kept). */}
+      <div ref={host} className="absolute inset-0" />
       {loading && <Spinner className="absolute inset-0" />}
       {(error || voiceError) && <div className="absolute inset-x-0 top-0 px-2ch pt-row text-blocked">{error || voiceError}</div>}
       {state.muted && <div className="absolute top-0 right-0 px-2ch pt-row text-muted-foreground">muted</div>}

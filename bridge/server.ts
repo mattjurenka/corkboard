@@ -784,7 +784,17 @@ Bun.serve<Session, {}>({
     if (!(await file.exists())) return new Response("not found", { status: 404 });
     // The page that runs Neovim itself needs SharedArrayBuffer, and so
     // cross-origin isolation.
-    return new Response(file, { headers: path === "index.html" && inPage(url) ? { ...ISOLATED, "cross-origin-opener-policy": "same-origin" } : ISOLATED });
+    const headers: Record<string, string> = path === "index.html" && inPage(url) ? { ...ISOLATED, "cross-origin-opener-policy": "same-origin" } : { ...ISOLATED };
+    // Vite's assets have their hash in their name, so they're kept for
+    // good. The rest (the page, the avatar's 16 MB models) are asked after
+    // each time and come again only if they've changed.
+    if (path.startsWith("assets/")) headers["cache-control"] = IMMUTABLE;
+    else {
+      headers["cache-control"] = "no-cache";
+      headers.etag = `"${file.size.toString(36)}-${Math.floor(file.lastModified).toString(36)}"`;
+      if (req.headers.get("if-none-match") === headers.etag) return new Response(null, { status: 304, headers });
+    }
+    return new Response(file, { headers });
   },
 
   websocket: {

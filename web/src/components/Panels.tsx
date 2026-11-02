@@ -68,11 +68,11 @@ export function Panels() {
                   </div>
                 )}
                 <div className="absolute" style={{ inset: `${cellH}px ${cellW}px` }}>
-                  {View && state ? <View state={state} win={w.win} focused={!!w.focused} nvim={nvim} /> : <Spinner className="h-full" />}
+                  {View && state ? <View state={state} win={w.win} buf={w.buf} focused={!!w.focused} nvim={nvim} /> : <Spinner className="h-full" />}
                 </div>
               </div>
             ) : (
-              View && state ? <View state={state} win={w.win} focused={!!w.focused} nvim={nvim} /> : <Spinner className="h-full" />
+              View && state ? <View state={state} win={w.win} buf={w.buf} focused={!!w.focused} nvim={nvim} /> : <Spinner className="h-full" />
             )}
           </div>
         );

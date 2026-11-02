@@ -231,6 +231,16 @@ export class Stage {
     const back = new THREE.DirectionalLight(0xffffff, Math.PI * 0.3);
     back.position.set(-0.5, 1.5, -2);
     this.scene.add(key, fill, back, new THREE.AmbientLight(0xffffff, 0.22), this.camera, this.gaze);
+    this.resume();
+  }
+
+  // Drawing stopped, and started again, while its panel is out of sight
+  // (Avatar.tsx keeps it for when it's back).
+  pause() {
+    cancelAnimationFrame(this.frame);
+  }
+  resume() {
+    cancelAnimationFrame(this.frame);
     const loop = () => {
       this.frame = requestAnimationFrame(loop);
       this.tick(Math.min(this.clock.getDelta(), 0.1));

@@ -10,7 +10,8 @@ import { Plan, PlanDiff, PlanGoals, PlanPriority } from "./Plan";
 import { Usage } from "./Usage";
 import { ImageView, MarkdownView, PdfView } from "./Viewers";
 
-export type ViewProps<S = any> = { state: S; win: number; focused: boolean; nvim: Nvim };
+// buf: the view buffer the panel is over.
+export type ViewProps<S = any> = { state: S; win: number; buf: number; focused: boolean; nvim: Nvim };
 
 export const VIEWS: Record<string, React.ComponentType<ViewProps>> = {
   board: Board,
