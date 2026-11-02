@@ -9,6 +9,7 @@ The recordings each voice is cloned from (bridge/speech.ts), and the clips.
   https://librivox.org/my-true-love-by-sir-philip-sidney, public domain; trimmed.
 - `bm_george.wav`: Adrian Praetzellis reading John Buchan's "The Thirty-Nine Steps", chapter 1, LibriVox,
   https://librivox.org/the-thirty-nine-steps-by-john-buchan/, public domain; trimmed.
-- `af_bella.wav`: Karen Cenon's lines from the same pack, by Dillon Becker, CC BY 4.0; joined and trimmed.
+- `af_bella.wav`: kaylawhy reading Shelley's "Drama" in "Love Poems by Famous Authors", section 24, LibriVox,
+  https://librivox.org/love-poems-by-famous-authors-by-various/, public domain; trimmed.
 - `af_nicole.wav`: Elizabeth Klett reading Charlotte Brontë's "Villette", chapter 2, LibriVox,
   https://librivox.org/villette-by-charlotte-bronte/, public domain; trimmed.
