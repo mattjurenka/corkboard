@@ -149,7 +149,7 @@ export const PERSONAS = {
   businesswoman: {
     title: "Businesswoman",
     model: "businesswoman.vrm",
-    recolor: true,
+    recolor: false,
     voice: "anime",
     idle: ["fold", "fold", "ponder", "shift", "glance", "sway", "stretch"],
     poked: {
