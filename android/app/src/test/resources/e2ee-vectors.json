@@ -1,0 +1,3619 @@
+{
+  "root": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "account": {
+    "signSeed": "a506dddc4512ad4fe4276f026c1aec4e2e29abcb30777aed24d95a3d603184d5",
+    "id": "sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ",
+    "boxSecret": "29c719e89bd360a6092e1e55252ed89696888dc4fa8c7fb915eae25d0c239722",
+    "box": "47w0fMKLBYqHzH9DjFmqesBeEnpDoUyALB5vA4-doAU"
+  },
+  "derive": [
+    {
+      "label": "account sign",
+      "length": 32,
+      "out": "a506dddc4512ad4fe4276f026c1aec4e2e29abcb30777aed24d95a3d603184d5"
+    },
+    {
+      "label": "account box",
+      "length": 32,
+      "out": "29c719e89bd360a6092e1e55252ed89696888dc4fa8c7fb915eae25d0c239722"
+    },
+    {
+      "label": "object id board\u0000home",
+      "length": 16,
+      "out": "bcdc30ca1d5bb6631d6e980966ff16a7"
+    },
+    {
+      "label": "anything at all",
+      "length": 64,
+      "out": "0e8160a5c118aa54186421d16b56b82ede5753c10cc59d77d9af661ebe3b1b4711fc0edbd098c16ba16b82330f0705a26b4046c46752957a83a979d4e5b31acd"
+    }
+  ],
+  "objects": [
+    {
+      "kind": "board",
+      "name": "home",
+      "key": "54d62b3a9671ab9ba0216afcc3d4e73bb6eca8f1cbb743156d2bfea90c703c48",
+      "id": "vNwwyh1btmMdbpgJZv8Wpw"
+    },
+    {
+      "kind": "board",
+      "name": "a/b é ✓",
+      "key": "037be588c7b5dee8e1084b7f04c949c11ae6c4e6fb15db2b06ee8f51f76ed4eb",
+      "id": "ySkypPMXBRb7ln7fNynePQ"
+    },
+    {
+      "kind": "brain",
+      "name": "pepper",
+      "key": "c1bab039c662e2af46fdf3b0b98e8a1e01c054f358be72513844c5afd3e597a2",
+      "id": "gPHuSTT5ZFEFmVNWF7EfSA"
+    },
+    {
+      "kind": "memory",
+      "name": "",
+      "key": "9fbd912fd35a391bc782af0d9057a311742a9cc2df85d4b1e6b73fad4ef8b8da",
+      "id": "nc8NryM0obV2CtWCWfozYQ"
+    },
+    {
+      "kind": "index",
+      "name": "",
+      "key": "8aa1d922623e8183eb09c4e6cad925068bf5cfcefeebfb62209014797ea6d0fb",
+      "id": "NLOuLa6ClFPntDlwojXQfw"
+    }
+  ],
+  "b64": [
+    {
+      "hex": "",
+      "b64": ""
+    },
+    {
+      "hex": "00",
+      "b64": "AA"
+    },
+    {
+      "hex": "fffe",
+      "b64": "__4"
+    },
+    {
+      "hex": "fbff",
+      "b64": "-_8"
+    },
+    {
+      "hex": "0102030405",
+      "b64": "AQIDBAU"
+    }
+  ],
+  "canonical": [
+    {
+      "object": {
+        "b": 1,
+        "a": "x",
+        "c": null
+      },
+      "text": "{\"a\":\"x\",\"b\":1,\"c\":null}"
+    },
+    {
+      "object": {
+        "name": "phöne \"one\"\n\t\u0001\u001f  ✓ 😀",
+        "n": 9007199254740991,
+        "neg": -5,
+        "z": 0
+      },
+      "text": "{\"n\":9007199254740991,\"name\":\"phöne \\\"one\\\"\\n\\t\\u0001\\u001f  ✓ 😀\",\"neg\":-5,\"z\":0}"
+    },
+    {
+      "object": {
+        "9": "nine",
+        "10": "ten",
+        "B": "upper",
+        "a": "lower",
+        "_": "under"
+      },
+      "text": "{\"10\":\"ten\",\"9\":\"nine\",\"B\":\"upper\",\"_\":\"under\",\"a\":\"lower\"}"
+    }
+  ],
+  "device": {
+    "signSeed": "960831b59f9805680de9e5ca686efcd523a0aeb49a34163357242871d6c732fd",
+    "boxSecret": "19e6924e1d1bb24faca7d335439d8143b8b61d7c125d8c604a21a1a0b9c93d50",
+    "id": "sT7ug2yNb4iHSpPfGkC1H3QYpz9FdOGtHyQqbefhkAc",
+    "box": "C-vP41BSUabSEjHdzrFWqKCnHM-epIzbOR04MClUfWY"
+  },
+  "cert": {
+    "body": {
+      "v": 1,
+      "account": "sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ",
+      "device": "sT7ug2yNb4iHSpPfGkC1H3QYpz9FdOGtHyQqbefhkAc",
+      "box": "C-vP41BSUabSEjHdzrFWqKCnHM-epIzbOR04MClUfWY",
+      "name": "phone",
+      "issued": 1762077600000
+    },
+    "sig": "j0MgpXuNNhRlA9n1pHyYZQgA_uJ9JOlj41q8yN4rwpSq236p4vPwrWYJ9Tb0Dx-M9ZENXvY3vTTKM_VUZBdGCQ",
+    "bytes": "corkboard-e2ee/v1 device-cert\n{\"account\":\"sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ\",\"box\":\"C-vP41BSUabSEjHdzrFWqKCnHM-epIzbOR04MClUfWY\",\"device\":\"sT7ug2yNb4iHSpPfGkC1H3QYpz9FdOGtHyQqbefhkAc\",\"issued\":1762077600000,\"name\":\"phone\",\"v\":1}"
+  },
+  "revocation": {
+    "body": {
+      "v": 1,
+      "account": "sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ",
+      "device": "4ErMM9oRgghjbsrWtA2RJwx3DO7DOXTZvIXyfzLjZmc",
+      "at": 1762077600001
+    },
+    "sig": "N9ocXJWMnVew-gEclAygihroVwhF7MNEsvha2CHodTZ4CATOW7VUpu6HEGg9CERWeGx3YyeJzvlJvSQ63SZcAg",
+    "bytes": "corkboard-e2ee/v1 revocation\n{\"account\":\"sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ\",\"at\":1762077600001,\"device\":\"4ErMM9oRgghjbsrWtA2RJwx3DO7DOXTZvIXyfzLjZmc\",\"v\":1}"
+  },
+  "creation": {
+    "body": {
+      "v": 1,
+      "origin": "https://portal.corkboard.fyi",
+      "account": "sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ",
+      "box": "47w0fMKLBYqHzH9DjFmqesBeEnpDoUyALB5vA4-doAU",
+      "invite": null
+    },
+    "sig": "q5Fp-c_1gvUFm6kcvvrbpa4XYI0njgFPY1ZPSX_WSZsa0sWyla6Spr6a0Uevmt7qSiQPDjtM85txSvK4DGjkCQ",
+    "bytes": "corkboard-e2ee/v1 create-account\n{\"account\":\"sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ\",\"box\":\"47w0fMKLBYqHzH9DjFmqesBeEnpDoUyALB5vA4-doAU\",\"invite\":null,\"origin\":\"https://portal.corkboard.fyi\",\"v\":1}"
+  },
+  "creationInvite": {
+    "body": {
+      "v": 1,
+      "origin": "https://portal.corkboard.fyi",
+      "account": "sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ",
+      "box": "47w0fMKLBYqHzH9DjFmqesBeEnpDoUyALB5vA4-doAU",
+      "invite": "inv_abc"
+    },
+    "sig": "XvNy4VkOwF4mUIZS-LlQeNE_ZDa0pzNV2uZStqVbtbrFCzsqokzU2_I-nu4nnommd2eal3RtKJOkV0f_xJloBA",
+    "bytes": "corkboard-e2ee/v1 create-account\n{\"account\":\"sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ\",\"box\":\"47w0fMKLBYqHzH9DjFmqesBeEnpDoUyALB5vA4-doAU\",\"invite\":\"inv_abc\",\"origin\":\"https://portal.corkboard.fyi\",\"v\":1}"
+  },
+  "challenge": {
+    "body": {
+      "v": 1,
+      "origin": "https://portal.corkboard.fyi",
+      "nonce": "bm9uY2Utbm9uY2Utbm9uY2Utbm9uY2Utbm9uY2Utbm8",
+      "account": "sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ",
+      "device": "sT7ug2yNb4iHSpPfGkC1H3QYpz9FdOGtHyQqbefhkAc"
+    },
+    "sig": "ZWACxgzOqQGw75IzqWLX9OyvTopiTwD2wVsbAAN3nkSyvNOYSEnzlGteAl3aobO2sLFll3Wlnynx8kZrEfpVAQ",
+    "bytes": "corkboard-e2ee/v1 challenge\n{\"account\":\"sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ\",\"device\":\"sT7ug2yNb4iHSpPfGkC1H3QYpz9FdOGtHyQqbefhkAc\",\"nonce\":\"bm9uY2Utbm9uY2Utbm9uY2Utbm9uY2Utbm9uY2Utbm8\",\"origin\":\"https://portal.corkboard.fyi\",\"v\":1}"
+  },
+  "pairing": {
+    "approverSecret": "f91386f46745fb8f117e106d9c78186fcc60bf161a28d04395e2c8ce385fe758",
+    "transcript": {
+      "v": 1,
+      "code": "ABCDE12345",
+      "approver": "DcOpU-TVipBgeiqH93tvQnYfc8NZYJjTo7Gh-uFsDzQ",
+      "box": "C-vP41BSUabSEjHdzrFWqKCnHM-epIzbOR04MClUfWY",
+      "device": "sT7ug2yNb4iHSpPfGkC1H3QYpz9FdOGtHyQqbefhkAc"
+    },
+    "transcriptBytes": "corkboard-e2ee/v1 pair-transcript\n{\"approver\":\"DcOpU-TVipBgeiqH93tvQnYfc8NZYJjTo7Gh-uFsDzQ\",\"box\":\"C-vP41BSUabSEjHdzrFWqKCnHM-epIzbOR04MClUfWY\",\"code\":\"ABCDE12345\",\"device\":\"sT7ug2yNb4iHSpPfGkC1H3QYpz9FdOGtHyQqbefhkAc\",\"v\":1}",
+    "commitBytes": "corkboard-e2ee/v1 pair-commit\n{\"approver\":\"DcOpU-TVipBgeiqH93tvQnYfc8NZYJjTo7Gh-uFsDzQ\"}",
+    "commitment": "cUILyPBvmbwbaUstKaVbycXy3Yt7Q9phALEjq0d2UbA",
+    "sas": "283190",
+    "more": [
+      {
+        "t": {
+          "v": 1,
+          "code": "0000000000",
+          "approver": "DcOpU-TVipBgeiqH93tvQnYfc8NZYJjTo7Gh-uFsDzQ",
+          "box": "C-vP41BSUabSEjHdzrFWqKCnHM-epIzbOR04MClUfWY",
+          "device": "sT7ug2yNb4iHSpPfGkC1H3QYpz9FdOGtHyQqbefhkAc"
+        },
+        "sas": "961034"
+      },
+      {
+        "t": {
+          "v": 1,
+          "code": "ZZZZZZZZZZ",
+          "approver": "DcOpU-TVipBgeiqH93tvQnYfc8NZYJjTo7Gh-uFsDzQ",
+          "box": "C-vP41BSUabSEjHdzrFWqKCnHM-epIzbOR04MClUfWY",
+          "device": "sT7ug2yNb4iHSpPfGkC1H3QYpz9FdOGtHyQqbefhkAc"
+        },
+        "sas": "161712"
+      },
+      {
+        "t": {
+          "v": 1,
+          "code": "ABCDE12345",
+          "approver": "DcOpU-TVipBgeiqH93tvQnYfc8NZYJjTo7Gh-uFsDzQ",
+          "box": "C-vP41BSUabSEjHdzrFWqKCnHM-epIzbOR04MClUfWY",
+          "device": "sT7ug2yNb4iHSpPfGkC1H3QYpz9FdOGtHyQqbefhkAc"
+        },
+        "sas": "283190"
+      }
+    ],
+    "delivery": {
+      "nonce": "8EczrnhpiMcCQnwhhLlnC0xWpQakpuha",
+      "ciphertext": "MbojWr4fiQFA1UzKpjH3c5u57uVwOVL92bBe4GiCMvftqtQLP9US3aK1IQu57PojOVcxrqWnFBEXdQtkW1lwiqBj5J6o46s-C2aWe9tdTNuVprq6BIN57eJo35fxrOYQjvbXyo7wHsiVQd8qlZltkM2ZP3Bq3zDiB4_2J2AUs1d-T-odien0e48D2VOuL6nJ5Qq9F7AyGOChdWncM4H1nbLBQrht2NvHvFjIyoxsKqTpR_jCoOGRR3H3B4wXFpbVJzGoLra6wW2PuBCsaNIPq17n_hrNz3XQiLnzMxd8r2M8FKth4gVT3vuxUpAnxKRYHnokgSUztFI8JjGnhpt-u3jiUHQu8QJK7Tg3mAVp154VKpd47IvxRCyuy-dKSfc_4JTo-YsLD5JEEVMhlRLlxNBtSw126KAslhGxxYETHEmIepmdWnIoEmzU0uPK9N7z9xpSMVpyTEqmDGsNCk14QNo1-PKfjTVK3y_iWoCIK9BO7rfuEaBM6jOxPf57XWDjmASWGU45"
+    },
+    "qr": "corkboard-pair:1:ABCDE12345:C-vP41BSUabSEjHdzrFWqKCnHM-epIzbOR04MClUfWY"
+  },
+  "codes": [
+    {
+      "in": "abcde-12345",
+      "out": "ABCDE12345"
+    },
+    {
+      "in": " ABCDE 12345 ",
+      "out": "ABCDE12345"
+    },
+    {
+      "in": "oiloi-loilo",
+      "out": "0110110110"
+    },
+    {
+      "in": "ABCDE1234",
+      "out": null
+    },
+    {
+      "in": "ABCDU12345",
+      "out": null
+    },
+    {
+      "in": "abcde-123456",
+      "out": null
+    }
+  ],
+  "record": {
+    "key": "54d62b3a9671ab9ba0216afcc3d4e73bb6eca8f1cbb743156d2bfea90c703c48",
+    "object": "vNwwyh1btmMdbpgJZv8Wpw",
+    "op": "op-id-0123456789ab",
+    "body": "{\"v\":1,\"clock\":3,\"device\":\"sT7ug2yNb4iHSpPfGkC1H3QYpz9FdOGtHyQqbefhkAc\",\"change\":{\"t\":\"card\",\"card\":\"x\",\"set\":{\"title\":\"héllo ✓\"}}}",
+    "nonce": "tH61Hgm5NQzwAdLTCuaJPAO215qiEV6E",
+    "ciphertext": "t0h9piLNTo9RwDlPYOVHTpUxKD5M7P1Q0jgSteg4icArU9Ij8M06N0Ba-3RHCdmn-5vSgE5SjpmnXj8crTEEwjM9CqQwU-uei6N-ZDywFY1Wq8oueTcsfaEHJEQzuTyf74PS3YN7Vfe9F3UBmzZu1gj-6SBfVUWqWAH_VUzgxc6L6j3rWWK5QWkR0lyAbrUVQBVoGA6X",
+    "aad": "corkboard-e2ee/v1 record\u0000vNwwyh1btmMdbpgJZv8Wpw\u0000op-id-0123456789ab"
+  },
+  "blob": {
+    "key": "58b83e5c38e47796107ffc48b5a8ee3528880638c962cdc5a6d26f28a86269b5",
+    "id": "blob-id-0123456789ab",
+    "bytes": "616e206174746163686d656e7427732062797465732c20616e206174746163686d656e7427732062797465732c20616e206174746163686d656e7427732062797465732c20616e206174746163686d656e7427732062797465732c20616e206174746163686d656e7427732062797465732c20616e206174746163686d656e7427732062797465732c20616e206174746163686d656e7427732062797465732c20616e206174746163686d656e7427732062797465732c20616e206174746163686d656e7427732062797465732c20616e206174746163686d656e7427732062797465732c20",
+    "sealed": "96a12bf680aed1ad118909a9d3320de8b657a0e0aa4ecdcad0d1af912641fc17a59d7f62927439af62b7573b77d53b79b2096e82f08b3f8a6076fee53b893cbcce0273c4a13cd00f6e2bf8e11bb8176b2d2640992709e44ec230d67dfc66942067b8ae7ef3c4e2fd3a3ba085cd965321fc51a09128ac47f211677ba71e3ac15d0730e8dd696ce695c2af129b87dd362b590b13c1b3c0bef80cc5bd64a8d73cd560e205d1bdca421756771222bae83ebf4e6036892a6540d1eda7b9d9727bc3295bf90605fddf9d3e521f21aafc9e6c6d73ae5f85d5ffe55f4d6b9b2819eddb843f88bcc4c8156dcfcea202fe66de220eea5492edd149c18815b569ef8fc01751f575b65fad3251d617c065c91df3"
+  },
+  "box": {
+    "secret": "b459209a21b37a4278204b38aa0b4950381b7e0bd6b2aba9058918e1c9ecbe61",
+    "public": "663381f703e0e1eb7b01974843febb1b559e294235230dede4de51746dad6f6d",
+    "message": "a board key, wrapped",
+    "sealed": "6e8c041356ecf5a9655a9bb18db057e9040894be62b2d7692e117f95078eee2d8118cf92f1211cc4b6dbbedf8d85923d8ba775faf23e902b0855550fd4617bc45f552173"
+  },
+  "libsodiumBox": {
+    "pk": "020380a533840954745c5d850e98456db8192edbd866d2df3b0aef5e083c5a19",
+    "sk": "9ba6694f505f9da3e742caa7857f33164fd0f4e97ba1bc4a20f9858cc2702b09",
+    "c": "30380907de9146600cd038a806e5cdb84e6e62521c3b8730cc5f003368f59d0aa5c0c708c8589412616796a408a2b893307abda135021afea2a9d9794c573ea6b9c863ce762449bb7c26fd",
+    "message": "corkboard sealed box vector"
+  },
+  "phrase": [
+    {
+      "root": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "phrase": "abandon amount liar amount expire adjust cage candy arch gather drum bullet absurd math era live bid rhythm alien crouch range attend journey unaware"
+    },
+    {
+      "root": "1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100",
+      "phrase": "business valley either curtain pave metal fox section beef obtain lounge cactus valley alley coral genuine animal dizzy screen anxiety dizzy library advice artwork"
+    },
+    {
+      "root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "phrase": "primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary foster"
+    },
+    {
+      "root": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "phrase": "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote"
+    }
+  ],
+  "merge": [
+    {
+      "ops": [
+        {
+          "id": "op-0000-429014",
+          "op": {
+            "v": 1,
+            "clock": 1,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "title": "a",
+                "body": "one"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0001-662559",
+          "op": {
+            "v": 1,
+            "clock": 2,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "2": "z",
+                "status": "done",
+                "priority": null,
+                "body": "two\nlines\ttab\u0001"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0002-757754",
+          "op": {
+            "v": 1,
+            "clock": 3,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "2": false,
+                "10": 2.5,
+                "title": "a",
+                "labels": [
+                  "x",
+                  "y"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0003-436480",
+          "op": {
+            "v": 1,
+            "clock": 2,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-1",
+              "entry": {
+                "at": "t3",
+                "who": "dB",
+                "note": "note 3"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0004-838356",
+          "op": {
+            "v": 1,
+            "clock": 4,
+            "device": "dA",
+            "change": {
+              "t": "log",
+              "card": "task-3",
+              "entry": {
+                "at": "t4",
+                "who": "dA",
+                "note": "note 4"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0005-371566",
+          "op": {
+            "v": 1,
+            "clock": 5,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "title": "a",
+                "status": "done",
+                "labels": [
+                  "x",
+                  "y"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0006-834305",
+          "op": {
+            "v": 1,
+            "clock": 1,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "2": {
+                  "a": 1
+                },
+                "10": 1,
+                "title": "b",
+                "status": "doing",
+                "priority": "low",
+                "labels": [
+                  "x"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0007-338715",
+          "op": {
+            "v": 1,
+            "clock": 6,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "2": false,
+                "10": 1,
+                "status": "backlog",
+                "labels": [
+                  "x",
+                  "y"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0008-270710",
+          "op": {
+            "v": 1,
+            "clock": 7,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "2": "z",
+                "priority": "high"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0009-458572",
+          "op": {
+            "v": 1,
+            "clock": 2,
+            "device": "dC",
+            "change": {
+              "t": "log",
+              "card": "task-1",
+              "entry": {
+                "at": "t9",
+                "who": "dC",
+                "note": "note 9"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0010-156025",
+          "op": {
+            "v": 1,
+            "clock": 3,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "title": "c \"quoted\"",
+                "status": "done",
+                "labels": [],
+                "body": "two\nlines\ttab\u0001"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0011-20550",
+          "op": {
+            "v": 1,
+            "clock": 8,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "2": false,
+                "10": 1,
+                "title": "a",
+                "priority": "high",
+                "body": "one"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0012-199942",
+          "op": {
+            "v": 1,
+            "clock": 9,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "status": "backlog",
+                "labels": [
+                  "x"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0013-556607",
+          "op": {
+            "v": 1,
+            "clock": 10,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "2": false,
+                "10": 1,
+                "priority": "low",
+                "labels": [
+                  "x",
+                  "y"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0014-115359",
+          "op": {
+            "v": 1,
+            "clock": 11,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-1",
+              "entry": {
+                "at": "t14",
+                "who": "dB",
+                "note": "note 14"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0015-452266",
+          "op": {
+            "v": 1,
+            "clock": 12,
+            "device": "dC",
+            "change": {
+              "t": "log",
+              "card": "task-1",
+              "entry": {
+                "at": "t15",
+                "who": "dC",
+                "note": "note 15"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0016-114567",
+          "op": {
+            "v": 1,
+            "clock": 13,
+            "device": "dA",
+            "change": {
+              "t": "log",
+              "card": "task-3",
+              "entry": {
+                "at": "t16",
+                "who": "dA",
+                "note": "note 16"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0017-555445",
+          "op": {
+            "v": 1,
+            "clock": 14,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "labels": [],
+                "body": "one"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0018-38729",
+          "op": {
+            "v": 1,
+            "clock": 12,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "2": "z"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0019-241166",
+          "op": {
+            "v": 1,
+            "clock": 15,
+            "device": "dC",
+            "change": {
+              "t": "log",
+              "card": "task-2",
+              "entry": {
+                "at": "t19",
+                "who": "dC",
+                "note": "note 19"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0020-647237",
+          "op": {
+            "v": 1,
+            "clock": 16,
+            "device": "dC",
+            "change": {
+              "t": "mystery",
+              "card": "task-3"
+            }
+          }
+        },
+        {
+          "id": "op-0021-440330",
+          "op": {
+            "v": 1,
+            "clock": 17,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "10": 2.5,
+                "title": "a",
+                "labels": [
+                  "x"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0022-954517",
+          "op": {
+            "v": 1,
+            "clock": 18,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "status": "doing",
+                "priority": "low",
+                "labels": [
+                  "x",
+                  "y"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0023-130587",
+          "op": {
+            "v": 1,
+            "clock": 17,
+            "device": "dC",
+            "change": {
+              "t": "mystery",
+              "card": "task-2"
+            }
+          }
+        },
+        {
+          "id": "op-0024-446292",
+          "op": {
+            "v": 1,
+            "clock": 18,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {}
+            }
+          }
+        },
+        {
+          "id": "op-0025-561758",
+          "op": {
+            "v": 1,
+            "clock": 14,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "10": 2.5,
+                "body": "one"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0026-109526",
+          "op": {
+            "v": 1,
+            "clock": 19,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "2": "z",
+                "10": 1
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0027-522429",
+          "op": {
+            "v": 1,
+            "clock": 20,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "10": 1,
+                "labels": [
+                  "x",
+                  "y"
+                ],
+                "body": "two\nlines\ttab\u0001",
+                "id": "ignored"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0028-623615",
+          "op": {
+            "v": 1,
+            "clock": 15,
+            "device": "dA",
+            "change": {
+              "t": "log",
+              "card": "task-2",
+              "entry": {
+                "at": "t28",
+                "who": "dA",
+                "note": "note 28"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0029-206853",
+          "op": {
+            "v": 1,
+            "clock": 19,
+            "device": "dC",
+            "change": {
+              "t": "log",
+              "card": "task-4",
+              "entry": {
+                "at": "t29",
+                "who": "dC",
+                "note": "note 29"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0030-930972",
+          "op": {
+            "v": 1,
+            "clock": 20,
+            "device": "dC",
+            "change": {
+              "t": "log",
+              "card": "task-3",
+              "entry": {
+                "at": "t30",
+                "who": "dC",
+                "note": "note 30"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0031-694045",
+          "op": {
+            "v": 1,
+            "clock": 21,
+            "device": "dA",
+            "change": {
+              "t": "log",
+              "card": "task-4",
+              "entry": {
+                "at": "t31",
+                "who": "dA",
+                "note": "note 31"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0032-288973",
+          "op": {
+            "v": 1,
+            "clock": 22,
+            "device": "dA",
+            "change": {
+              "t": "log",
+              "card": "task-1",
+              "entry": {
+                "at": "t32",
+                "who": "dA",
+                "note": "note 32"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0033-504876",
+          "op": {
+            "v": 1,
+            "clock": 21,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "10": 2.5,
+                "status": "doing",
+                "priority": "low",
+                "labels": [
+                  "x"
+                ],
+                "id": "ignored"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0034-363291",
+          "op": {
+            "v": 1,
+            "clock": 23,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "10": 1,
+                "body": "one"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0035-74528",
+          "op": {
+            "v": 1,
+            "clock": 24,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "10": 1,
+                "title": "b",
+                "body": ""
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0036-474963",
+          "op": {
+            "v": 1,
+            "clock": 22,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "10": 2.5,
+                "title": "b",
+                "status": "backlog",
+                "priority": "high"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0037-591762",
+          "op": {
+            "v": 1,
+            "clock": 25,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "status": "doing"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0038-518976",
+          "op": {
+            "v": 1,
+            "clock": 26,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "labels": [
+                  "x"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0039-540815",
+          "op": {
+            "v": 1,
+            "clock": 26,
+            "device": "dB",
+            "change": {
+              "t": "mystery",
+              "card": "task-3"
+            }
+          }
+        },
+        {
+          "id": "op-0040-509925",
+          "op": {
+            "v": 1,
+            "clock": 27,
+            "device": "dA",
+            "change": {
+              "t": "log",
+              "card": "task-4",
+              "entry": {
+                "at": "t40",
+                "who": "dA",
+                "note": "note 40"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0041-425258",
+          "op": {
+            "v": 1,
+            "clock": 28,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "status": "backlog",
+                "labels": [
+                  "x"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0042-772237",
+          "op": {
+            "v": 1,
+            "clock": 29,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "2": {
+                  "a": 1
+                },
+                "10": true,
+                "title": "a",
+                "body": "two\nlines\ttab\u0001"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0043-917953",
+          "op": {
+            "v": 1,
+            "clock": 30,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "status": "done",
+                "priority": "high",
+                "labels": [
+                  "x",
+                  "y"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0044-134915",
+          "op": {
+            "v": 1,
+            "clock": 31,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "2": "z",
+                "title": "a",
+                "status": "backlog",
+                "priority": null,
+                "body": "one"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0045-221648",
+          "op": {
+            "v": 1,
+            "clock": 28,
+            "device": "dA",
+            "change": {
+              "t": "log",
+              "card": "task-4",
+              "entry": {
+                "at": "t45",
+                "who": "dA",
+                "note": "note 45"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0046-613771",
+          "op": {
+            "v": 1,
+            "clock": 32,
+            "device": "dC",
+            "change": {
+              "t": "log",
+              "card": "task-2",
+              "entry": {
+                "at": "t46",
+                "who": "dC",
+                "note": "note 46"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0047-331905",
+          "op": {
+            "v": 1,
+            "clock": 33,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "2": "z",
+                "status": "doing",
+                "priority": null
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0048-970308",
+          "op": {
+            "v": 1,
+            "clock": 33,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "2": false,
+                "10": 1,
+                "body": ""
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0049-85396",
+          "op": {
+            "v": 1,
+            "clock": 34,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "10": 1,
+                "status": "doing"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0050-802080",
+          "op": {
+            "v": 1,
+            "clock": 35,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "2": {
+                  "a": 1
+                },
+                "10": 1
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0051-259727",
+          "op": {
+            "v": 1,
+            "clock": 36,
+            "device": "dA",
+            "change": {
+              "t": "mystery",
+              "card": "task-3"
+            }
+          }
+        },
+        {
+          "id": "op-0052-936166",
+          "op": {
+            "v": 1,
+            "clock": 36,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-1",
+              "entry": {
+                "at": "t52",
+                "who": "dB",
+                "note": "note 52"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0053-431255",
+          "op": {
+            "v": 1,
+            "clock": 37,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-4",
+              "entry": {
+                "at": "t53",
+                "who": "dB",
+                "note": "note 53"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0054-900776",
+          "op": {
+            "v": 1,
+            "clock": 38,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "body": "one"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0055-437192",
+          "op": {
+            "v": 1,
+            "clock": 39,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-1",
+              "entry": {
+                "at": "t55",
+                "who": "dB",
+                "note": "note 55"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0056-309055",
+          "op": {
+            "v": 1,
+            "clock": 40,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "10": 1,
+                "labels": [],
+                "body": "two\nlines\ttab\u0001"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0057-489121",
+          "op": {
+            "v": 1,
+            "clock": 41,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-3",
+              "entry": {
+                "at": "t57",
+                "who": "dB",
+                "note": "note 57"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0058-263518",
+          "op": {
+            "v": 1,
+            "clock": 35,
+            "device": "dC",
+            "change": {
+              "t": "mystery",
+              "card": "task-1"
+            }
+          }
+        },
+        {
+          "id": "op-0059-890724",
+          "op": {
+            "v": 1,
+            "clock": 36,
+            "device": "dC",
+            "change": {
+              "t": "log",
+              "card": "task-4",
+              "entry": {
+                "at": "t59",
+                "who": "dC",
+                "note": "note 59"
+              }
+            }
+          }
+        }
+      ],
+      "cards": "[{\"2\":\"z\",\"10\":1,\"id\":\"task-1\",\"log\":[{\"at\":\"t3\",\"who\":\"dB\",\"note\":\"note 3\"},{\"at\":\"t9\",\"who\":\"dC\",\"note\":\"note 9\"},{\"at\":\"t14\",\"who\":\"dB\",\"note\":\"note 14\"},{\"at\":\"t15\",\"who\":\"dC\",\"note\":\"note 15\"},{\"at\":\"t32\",\"who\":\"dA\",\"note\":\"note 32\"},{\"at\":\"t52\",\"who\":\"dB\",\"note\":\"note 52\"},{\"at\":\"t55\",\"who\":\"dB\",\"note\":\"note 55\"}],\"body\":\"two\\nlines\\ttab\\u0001\",\"labels\":[\"x\",\"y\"],\"priority\":\"high\"},{\"2\":\"z\",\"10\":2.5,\"id\":\"task-2\",\"log\":[{\"at\":\"t28\",\"who\":\"dA\",\"note\":\"note 28\"},{\"at\":\"t19\",\"who\":\"dC\",\"note\":\"note 19\"},{\"at\":\"t46\",\"who\":\"dC\",\"note\":\"note 46\"}],\"body\":\"one\",\"labels\":[\"x\",\"y\"],\"priority\":null,\"status\":\"doing\",\"title\":\"c \\\"quoted\\\"\"},{\"2\":{\"a\":1},\"10\":1,\"id\":\"task-3\",\"log\":[{\"at\":\"t4\",\"who\":\"dA\",\"note\":\"note 4\"},{\"at\":\"t16\",\"who\":\"dA\",\"note\":\"note 16\"},{\"at\":\"t30\",\"who\":\"dC\",\"note\":\"note 30\"},{\"at\":\"t57\",\"who\":\"dB\",\"note\":\"note 57\"}],\"body\":\"one\",\"labels\":[\"x\"],\"priority\":null,\"status\":\"doing\",\"title\":\"a\"},{\"2\":false,\"10\":1,\"id\":\"task-4\",\"log\":[{\"at\":\"t29\",\"who\":\"dC\",\"note\":\"note 29\"},{\"at\":\"t31\",\"who\":\"dA\",\"note\":\"note 31\"},{\"at\":\"t40\",\"who\":\"dA\",\"note\":\"note 40\"},{\"at\":\"t45\",\"who\":\"dA\",\"note\":\"note 45\"},{\"at\":\"t59\",\"who\":\"dC\",\"note\":\"note 59\"},{\"at\":\"t53\",\"who\":\"dB\",\"note\":\"note 53\"}],\"body\":\"two\\nlines\\ttab\\u0001\",\"labels\":[],\"priority\":\"high\",\"status\":\"backlog\",\"title\":\"a\"}]",
+      "clock": 41
+    },
+    {
+      "ops": [
+        {
+          "id": "op-0000-868329",
+          "op": {
+            "v": 1,
+            "clock": 1,
+            "device": "dC",
+            "change": {
+              "t": "log",
+              "card": "task-1",
+              "entry": {
+                "at": "t0",
+                "who": "dC",
+                "note": "note 0"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0001-914954",
+          "op": {
+            "v": 1,
+            "clock": 1,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-4",
+              "entry": {
+                "at": "t1",
+                "who": "dB",
+                "note": "note 1"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0002-726606",
+          "op": {
+            "v": 1,
+            "clock": 1,
+            "device": "dA",
+            "change": {
+              "t": "log",
+              "card": "task-2",
+              "entry": {
+                "at": "t2",
+                "who": "dA",
+                "note": "note 2"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0003-955554",
+          "op": {
+            "v": 1,
+            "clock": 2,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "status": "doing",
+                "body": "two\nlines\ttab\u0001"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0004-996530",
+          "op": {
+            "v": 1,
+            "clock": 2,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-3",
+              "entry": {
+                "at": "t4",
+                "who": "dB",
+                "note": "note 4"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0005-975143",
+          "op": {
+            "v": 1,
+            "clock": 3,
+            "device": "dB",
+            "change": {
+              "t": "mystery",
+              "card": "task-3"
+            }
+          }
+        },
+        {
+          "id": "op-0006-832414",
+          "op": {
+            "v": 1,
+            "clock": 4,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "2": {
+                  "a": 1
+                },
+                "priority": null,
+                "labels": [],
+                "id": "ignored"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0007-647646",
+          "op": {
+            "v": 1,
+            "clock": 5,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "status": "backlog",
+                "priority": "high",
+                "labels": [
+                  "x",
+                  "y"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0008-661785",
+          "op": {
+            "v": 1,
+            "clock": 6,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "10": true,
+                "status": "backlog",
+                "labels": []
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0009-919425",
+          "op": {
+            "v": 1,
+            "clock": 4,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "body": "two\nlines\ttab\u0001",
+                "id": "ignored"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0010-875222",
+          "op": {
+            "v": 1,
+            "clock": 7,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-2",
+              "entry": {
+                "at": "t10",
+                "who": "dB",
+                "note": "note 10"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0011-148386",
+          "op": {
+            "v": 1,
+            "clock": 8,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "2": "z",
+                "10": 1
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0012-850294",
+          "op": {
+            "v": 1,
+            "clock": 8,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "2": false,
+                "title": "a",
+                "priority": "high",
+                "labels": [
+                  "x"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0013-332735",
+          "op": {
+            "v": 1,
+            "clock": 9,
+            "device": "dC",
+            "change": {
+              "t": "log",
+              "card": "task-3",
+              "entry": {
+                "at": "t13",
+                "who": "dC",
+                "note": "note 13"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0014-93508",
+          "op": {
+            "v": 1,
+            "clock": 9,
+            "device": "dA",
+            "change": {
+              "t": "log",
+              "card": "task-4",
+              "entry": {
+                "at": "t14",
+                "who": "dA",
+                "note": "note 14"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0015-856903",
+          "op": {
+            "v": 1,
+            "clock": 10,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "title": "a",
+                "status": "backlog",
+                "body": "one"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0016-637779",
+          "op": {
+            "v": 1,
+            "clock": 11,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "2": "z",
+                "title": "a"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0017-451679",
+          "op": {
+            "v": 1,
+            "clock": 12,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "title": "c \"quoted\"",
+                "status": "done",
+                "labels": [
+                  "x",
+                  "y"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0018-815069",
+          "op": {
+            "v": 1,
+            "clock": 13,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "body": ""
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0019-898356",
+          "op": {
+            "v": 1,
+            "clock": 9,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-2",
+              "entry": {
+                "at": "t19",
+                "who": "dB",
+                "note": "note 19"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0020-244084",
+          "op": {
+            "v": 1,
+            "clock": 10,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-4",
+              "entry": {
+                "at": "t20",
+                "who": "dB",
+                "note": "note 20"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0021-625837",
+          "op": {
+            "v": 1,
+            "clock": 14,
+            "device": "dC",
+            "change": {
+              "t": "log",
+              "card": "task-3",
+              "entry": {
+                "at": "t21",
+                "who": "dC",
+                "note": "note 21"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0022-476445",
+          "op": {
+            "v": 1,
+            "clock": 15,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "title": "a"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0023-710762",
+          "op": {
+            "v": 1,
+            "clock": 16,
+            "device": "dA",
+            "change": {
+              "t": "log",
+              "card": "task-4",
+              "entry": {
+                "at": "t23",
+                "who": "dA",
+                "note": "note 23"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0024-909117",
+          "op": {
+            "v": 1,
+            "clock": 16,
+            "device": "dC",
+            "change": {
+              "t": "log",
+              "card": "task-1",
+              "entry": {
+                "at": "t24",
+                "who": "dC",
+                "note": "note 24"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0025-997534",
+          "op": {
+            "v": 1,
+            "clock": 17,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "2": "z",
+                "10": 1
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0026-665396",
+          "op": {
+            "v": 1,
+            "clock": 18,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "title": "b",
+                "status": "done",
+                "labels": [
+                  "x"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0027-322258",
+          "op": {
+            "v": 1,
+            "clock": 19,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "2": {
+                  "a": 1
+                },
+                "title": "a"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0028-666210",
+          "op": {
+            "v": 1,
+            "clock": 20,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "2": {
+                  "a": 1
+                },
+                "title": "a",
+                "status": "done",
+                "priority": null,
+                "body": ""
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0029-678571",
+          "op": {
+            "v": 1,
+            "clock": 21,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "title": "c \"quoted\"",
+                "status": "backlog"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0030-630100",
+          "op": {
+            "v": 1,
+            "clock": 22,
+            "device": "dC",
+            "change": {
+              "t": "log",
+              "card": "task-4",
+              "entry": {
+                "at": "t30",
+                "who": "dC",
+                "note": "note 30"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0031-240994",
+          "op": {
+            "v": 1,
+            "clock": 23,
+            "device": "dA",
+            "change": {
+              "t": "log",
+              "card": "task-2",
+              "entry": {
+                "at": "t31",
+                "who": "dA",
+                "note": "note 31"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0032-818303",
+          "op": {
+            "v": 1,
+            "clock": 24,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "2": {
+                  "a": 1
+                },
+                "labels": [
+                  "x"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0033-244963",
+          "op": {
+            "v": 1,
+            "clock": 25,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "status": "backlog",
+                "body": "two\nlines\ttab\u0001"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0034-996460",
+          "op": {
+            "v": 1,
+            "clock": 26,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {}
+            }
+          }
+        },
+        {
+          "id": "op-0035-746885",
+          "op": {
+            "v": 1,
+            "clock": 26,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "10": 1,
+                "priority": "low"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0036-962440",
+          "op": {
+            "v": 1,
+            "clock": 27,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "10": 2.5,
+                "priority": "high",
+                "labels": [
+                  "x",
+                  "y"
+                ],
+                "body": "one"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0037-392638",
+          "op": {
+            "v": 1,
+            "clock": 28,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "2": {
+                  "a": 1
+                },
+                "labels": [
+                  "x"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0038-377061",
+          "op": {
+            "v": 1,
+            "clock": 29,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "2": "z"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0039-250669",
+          "op": {
+            "v": 1,
+            "clock": 30,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "10": 1,
+                "priority": "high",
+                "labels": []
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0040-805783",
+          "op": {
+            "v": 1,
+            "clock": 31,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "2": "z",
+                "10": 1,
+                "title": "c \"quoted\"",
+                "priority": "low",
+                "labels": []
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0041-247833",
+          "op": {
+            "v": 1,
+            "clock": 32,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "10": 1,
+                "priority": null,
+                "labels": [
+                  "x"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0042-903902",
+          "op": {
+            "v": 1,
+            "clock": 27,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "status": "backlog",
+                "body": "one"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0043-984192",
+          "op": {
+            "v": 1,
+            "clock": 33,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-2",
+              "entry": {
+                "at": "t43",
+                "who": "dB",
+                "note": "note 43"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0044-214836",
+          "op": {
+            "v": 1,
+            "clock": 34,
+            "device": "dA",
+            "change": {
+              "t": "log",
+              "card": "task-2",
+              "entry": {
+                "at": "t44",
+                "who": "dA",
+                "note": "note 44"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0045-552730",
+          "op": {
+            "v": 1,
+            "clock": 34,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "10": 2.5,
+                "status": "done",
+                "body": ""
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0046-37989",
+          "op": {
+            "v": 1,
+            "clock": 35,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {}
+            }
+          }
+        },
+        {
+          "id": "op-0047-188889",
+          "op": {
+            "v": 1,
+            "clock": 28,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "2": false,
+                "labels": [
+                  "x",
+                  "y"
+                ],
+                "body": ""
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0048-772538",
+          "op": {
+            "v": 1,
+            "clock": 36,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "10": 2.5,
+                "status": "backlog",
+                "priority": "high",
+                "labels": [
+                  "x"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0049-892798",
+          "op": {
+            "v": 1,
+            "clock": 37,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {}
+            }
+          }
+        },
+        {
+          "id": "op-0050-57968",
+          "op": {
+            "v": 1,
+            "clock": 38,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "2": {
+                  "a": 1
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0051-847881",
+          "op": {
+            "v": 1,
+            "clock": 38,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-1",
+              "entry": {
+                "at": "t51",
+                "who": "dB",
+                "note": "note 51"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0052-943198",
+          "op": {
+            "v": 1,
+            "clock": 39,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-3",
+              "entry": {
+                "at": "t52",
+                "who": "dB",
+                "note": "note 52"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0053-20277",
+          "op": {
+            "v": 1,
+            "clock": 35,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "10": 2.5,
+                "title": "c \"quoted\"",
+                "status": "doing",
+                "priority": "high",
+                "labels": []
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0054-998482",
+          "op": {
+            "v": 1,
+            "clock": 39,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "2": {
+                  "a": 1
+                },
+                "10": 2.5,
+                "title": "c \"quoted\"",
+                "priority": "high",
+                "body": "two\nlines\ttab\u0001"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0055-877304",
+          "op": {
+            "v": 1,
+            "clock": 40,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "10": 1,
+                "title": "b"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0056-656627",
+          "op": {
+            "v": 1,
+            "clock": 36,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "2": {
+                  "a": 1
+                },
+                "title": "b",
+                "labels": [
+                  "x",
+                  "y"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0057-801123",
+          "op": {
+            "v": 1,
+            "clock": 40,
+            "device": "dC",
+            "change": {
+              "t": "log",
+              "card": "task-1",
+              "entry": {
+                "at": "t57",
+                "who": "dC",
+                "note": "note 57"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0058-650801",
+          "op": {
+            "v": 1,
+            "clock": 41,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "10": 1
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0059-483545",
+          "op": {
+            "v": 1,
+            "clock": 42,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "10": 2.5,
+                "priority": null,
+                "body": "one"
+              }
+            }
+          }
+        }
+      ],
+      "cards": "[{\"2\":{\"a\":1},\"10\":2.5,\"id\":\"task-1\",\"log\":[{\"at\":\"t0\",\"who\":\"dC\",\"note\":\"note 0\"},{\"at\":\"t24\",\"who\":\"dC\",\"note\":\"note 24\"},{\"at\":\"t51\",\"who\":\"dB\",\"note\":\"note 51\"},{\"at\":\"t57\",\"who\":\"dC\",\"note\":\"note 57\"}],\"body\":\"one\",\"labels\":[],\"priority\":null,\"status\":\"done\",\"title\":\"c \\\"quoted\\\"\"},{\"2\":{\"a\":1},\"10\":1,\"id\":\"task-2\",\"log\":[{\"at\":\"t2\",\"who\":\"dA\",\"note\":\"note 2\"},{\"at\":\"t10\",\"who\":\"dB\",\"note\":\"note 10\"},{\"at\":\"t19\",\"who\":\"dB\",\"note\":\"note 19\"},{\"at\":\"t31\",\"who\":\"dA\",\"note\":\"note 31\"},{\"at\":\"t43\",\"who\":\"dB\",\"note\":\"note 43\"},{\"at\":\"t44\",\"who\":\"dA\",\"note\":\"note 44\"}],\"labels\":[\"x\"],\"priority\":null,\"status\":\"backlog\",\"title\":\"c \\\"quoted\\\"\"},{\"2\":{\"a\":1},\"10\":1,\"id\":\"task-3\",\"log\":[{\"at\":\"t4\",\"who\":\"dB\",\"note\":\"note 4\"},{\"at\":\"t13\",\"who\":\"dC\",\"note\":\"note 13\"},{\"at\":\"t21\",\"who\":\"dC\",\"note\":\"note 21\"},{\"at\":\"t52\",\"who\":\"dB\",\"note\":\"note 52\"}],\"body\":\"two\\nlines\\ttab\\u0001\",\"labels\":[\"x\"],\"priority\":\"high\",\"status\":\"backlog\",\"title\":\"b\"},{\"2\":{\"a\":1},\"10\":2.5,\"id\":\"task-4\",\"log\":[{\"at\":\"t1\",\"who\":\"dB\",\"note\":\"note 1\"},{\"at\":\"t14\",\"who\":\"dA\",\"note\":\"note 14\"},{\"at\":\"t20\",\"who\":\"dB\",\"note\":\"note 20\"},{\"at\":\"t23\",\"who\":\"dA\",\"note\":\"note 23\"},{\"at\":\"t30\",\"who\":\"dC\",\"note\":\"note 30\"}],\"body\":\"two\\nlines\\ttab\\u0001\",\"labels\":[\"x\",\"y\"],\"priority\":\"high\",\"status\":\"doing\",\"title\":\"c \\\"quoted\\\"\"}]",
+      "clock": 42
+    },
+    {
+      "ops": [
+        {
+          "id": "op-0000-468375",
+          "op": {
+            "v": 1,
+            "clock": 1,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "priority": null,
+                "body": "one"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0001-9118",
+          "op": {
+            "v": 1,
+            "clock": 2,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "2": false,
+                "status": "doing",
+                "labels": [
+                  "x"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0002-703037",
+          "op": {
+            "v": 1,
+            "clock": 1,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "2": false,
+                "10": true,
+                "labels": [
+                  "x"
+                ],
+                "body": "two\nlines\ttab\u0001"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0003-273051",
+          "op": {
+            "v": 1,
+            "clock": 3,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "2": "z",
+                "10": 2.5,
+                "labels": [
+                  "x",
+                  "y"
+                ],
+                "body": "one"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0004-448398",
+          "op": {
+            "v": 1,
+            "clock": 3,
+            "device": "dA",
+            "change": {
+              "t": "log",
+              "card": "task-1",
+              "entry": {
+                "at": "t4",
+                "who": "dA",
+                "note": "note 4"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0005-717440",
+          "op": {
+            "v": 1,
+            "clock": 4,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-1",
+              "entry": {
+                "at": "t5",
+                "who": "dB",
+                "note": "note 5"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0006-604048",
+          "op": {
+            "v": 1,
+            "clock": 5,
+            "device": "dA",
+            "change": {
+              "t": "log",
+              "card": "task-2",
+              "entry": {
+                "at": "t6",
+                "who": "dA",
+                "note": "note 6"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0007-410827",
+          "op": {
+            "v": 1,
+            "clock": 2,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "2": false,
+                "10": 1,
+                "labels": []
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0008-319728",
+          "op": {
+            "v": 1,
+            "clock": 6,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "10": true,
+                "title": "b",
+                "body": "two\nlines\ttab\u0001"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0009-226596",
+          "op": {
+            "v": 1,
+            "clock": 5,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-4",
+              "entry": {
+                "at": "t9",
+                "who": "dB",
+                "note": "note 9"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0010-308133",
+          "op": {
+            "v": 1,
+            "clock": 7,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "10": true,
+                "priority": "high",
+                "labels": [
+                  "x",
+                  "y"
+                ],
+                "body": ""
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0011-827643",
+          "op": {
+            "v": 1,
+            "clock": 8,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "10": 1,
+                "title": "b",
+                "labels": [
+                  "x"
+                ],
+                "body": ""
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0012-415343",
+          "op": {
+            "v": 1,
+            "clock": 8,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "labels": [
+                  "x"
+                ],
+                "body": "two\nlines\ttab\u0001"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0013-63024",
+          "op": {
+            "v": 1,
+            "clock": 9,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "2": {
+                  "a": 1
+                },
+                "10": 2.5,
+                "title": "a",
+                "labels": [
+                  "x"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0014-832495",
+          "op": {
+            "v": 1,
+            "clock": 10,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "2": false,
+                "status": "backlog",
+                "labels": [
+                  "x"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0015-76199",
+          "op": {
+            "v": 1,
+            "clock": 11,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-1",
+              "entry": {
+                "at": "t15",
+                "who": "dB",
+                "note": "note 15"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0016-397731",
+          "op": {
+            "v": 1,
+            "clock": 12,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "2": false,
+                "10": 2.5,
+                "title": "c \"quoted\"",
+                "labels": [
+                  "x",
+                  "y"
+                ],
+                "body": "one"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0017-967720",
+          "op": {
+            "v": 1,
+            "clock": 13,
+            "device": "dA",
+            "change": {
+              "t": "log",
+              "card": "task-1",
+              "entry": {
+                "at": "t17",
+                "who": "dA",
+                "note": "note 17"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0018-950683",
+          "op": {
+            "v": 1,
+            "clock": 12,
+            "device": "dB",
+            "change": {
+              "t": "mystery",
+              "card": "task-2"
+            }
+          }
+        },
+        {
+          "id": "op-0019-541061",
+          "op": {
+            "v": 1,
+            "clock": 14,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "2": false,
+                "status": "done",
+                "priority": "low"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0020-906066",
+          "op": {
+            "v": 1,
+            "clock": 15,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "10": true,
+                "priority": "high"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0021-114100",
+          "op": {
+            "v": 1,
+            "clock": 13,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "10": true,
+                "status": "doing"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0022-182960",
+          "op": {
+            "v": 1,
+            "clock": 14,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-4",
+              "entry": {
+                "at": "t22",
+                "who": "dB",
+                "note": "note 22"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0023-949673",
+          "op": {
+            "v": 1,
+            "clock": 16,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "title": "c \"quoted\"",
+                "status": "done",
+                "priority": "low",
+                "body": "one"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0024-55991",
+          "op": {
+            "v": 1,
+            "clock": 15,
+            "device": "dB",
+            "change": {
+              "t": "mystery",
+              "card": "task-3"
+            }
+          }
+        },
+        {
+          "id": "op-0025-943770",
+          "op": {
+            "v": 1,
+            "clock": 17,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "priority": null,
+                "body": "two\nlines\ttab\u0001"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0026-892600",
+          "op": {
+            "v": 1,
+            "clock": 18,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "2": {
+                  "a": 1
+                },
+                "10": 1
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0027-425022",
+          "op": {
+            "v": 1,
+            "clock": 19,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "2": {
+                  "a": 1
+                },
+                "status": "backlog",
+                "priority": null
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0028-139657",
+          "op": {
+            "v": 1,
+            "clock": 18,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "2": false,
+                "10": 2.5,
+                "title": "a",
+                "priority": "low",
+                "id": "ignored"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0029-645686",
+          "op": {
+            "v": 1,
+            "clock": 19,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "10": 1,
+                "body": "one"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0030-760432",
+          "op": {
+            "v": 1,
+            "clock": 20,
+            "device": "dC",
+            "change": {
+              "t": "log",
+              "card": "task-3",
+              "entry": {
+                "at": "t30",
+                "who": "dC",
+                "note": "note 30"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0031-371249",
+          "op": {
+            "v": 1,
+            "clock": 21,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "title": "b",
+                "labels": [
+                  "x"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0032-667636",
+          "op": {
+            "v": 1,
+            "clock": 22,
+            "device": "dC",
+            "change": {
+              "t": "log",
+              "card": "task-2",
+              "entry": {
+                "at": "t32",
+                "who": "dC",
+                "note": "note 32"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0033-979809",
+          "op": {
+            "v": 1,
+            "clock": 23,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-2",
+              "entry": {
+                "at": "t33",
+                "who": "dB",
+                "note": "note 33"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0034-461443",
+          "op": {
+            "v": 1,
+            "clock": 23,
+            "device": "dC",
+            "change": {
+              "t": "log",
+              "card": "task-4",
+              "entry": {
+                "at": "t34",
+                "who": "dC",
+                "note": "note 34"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0035-574773",
+          "op": {
+            "v": 1,
+            "clock": 20,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "title": "c \"quoted\"",
+                "priority": null
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0036-741599",
+          "op": {
+            "v": 1,
+            "clock": 24,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "10": true,
+                "status": "done",
+                "priority": null
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0037-10654",
+          "op": {
+            "v": 1,
+            "clock": 25,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "2": {
+                  "a": 1
+                },
+                "priority": null,
+                "body": "two\nlines\ttab\u0001"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0038-652446",
+          "op": {
+            "v": 1,
+            "clock": 26,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "10": 2.5,
+                "title": "b",
+                "status": "done",
+                "priority": null,
+                "labels": []
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0039-223570",
+          "op": {
+            "v": 1,
+            "clock": 27,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-1",
+              "entry": {
+                "at": "t39",
+                "who": "dB",
+                "note": "note 39"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0040-307717",
+          "op": {
+            "v": 1,
+            "clock": 28,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "10": 2.5,
+                "priority": null,
+                "body": "two\nlines\ttab\u0001"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0041-336832",
+          "op": {
+            "v": 1,
+            "clock": 27,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "2": {
+                  "a": 1
+                },
+                "title": "b",
+                "labels": [
+                  "x"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0042-781841",
+          "op": {
+            "v": 1,
+            "clock": 26,
+            "device": "dA",
+            "change": {
+              "t": "log",
+              "card": "task-4",
+              "entry": {
+                "at": "t42",
+                "who": "dA",
+                "note": "note 42"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0043-404266",
+          "op": {
+            "v": 1,
+            "clock": 28,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {}
+            }
+          }
+        },
+        {
+          "id": "op-0044-42783",
+          "op": {
+            "v": 1,
+            "clock": 29,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "10": 1
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0045-147962",
+          "op": {
+            "v": 1,
+            "clock": 30,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "2": false,
+                "10": 2.5,
+                "status": "doing",
+                "labels": [
+                  "x",
+                  "y"
+                ],
+                "body": "two\nlines\ttab\u0001"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0046-574821",
+          "op": {
+            "v": 1,
+            "clock": 29,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "2": {
+                  "a": 1
+                },
+                "10": 1,
+                "priority": "low",
+                "labels": [
+                  "x",
+                  "y"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0047-750062",
+          "op": {
+            "v": 1,
+            "clock": 27,
+            "device": "dA",
+            "change": {
+              "t": "log",
+              "card": "task-4",
+              "entry": {
+                "at": "t47",
+                "who": "dA",
+                "note": "note 47"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0048-869821",
+          "op": {
+            "v": 1,
+            "clock": 31,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "title": "a",
+                "labels": [
+                  "x"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0049-837319",
+          "op": {
+            "v": 1,
+            "clock": 30,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "title": "a",
+                "labels": [
+                  "x",
+                  "y"
+                ],
+                "body": "two\nlines\ttab\u0001"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0050-558351",
+          "op": {
+            "v": 1,
+            "clock": 32,
+            "device": "dB",
+            "change": {
+              "t": "log",
+              "card": "task-3",
+              "entry": {
+                "at": "t50",
+                "who": "dB",
+                "note": "note 50"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0051-705122",
+          "op": {
+            "v": 1,
+            "clock": 31,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "status": "done",
+                "labels": [],
+                "body": "two\nlines\ttab\u0001"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0052-300571",
+          "op": {
+            "v": 1,
+            "clock": 33,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "10": true,
+                "status": "doing",
+                "labels": [
+                  "x",
+                  "y"
+                ],
+                "body": "two\nlines\ttab\u0001"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0053-372785",
+          "op": {
+            "v": 1,
+            "clock": 34,
+            "device": "dA",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "2": "z",
+                "body": "one"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0054-507197",
+          "op": {
+            "v": 1,
+            "clock": 35,
+            "device": "dA",
+            "change": {
+              "t": "log",
+              "card": "task-3",
+              "entry": {
+                "at": "t54",
+                "who": "dA",
+                "note": "note 54"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0055-288947",
+          "op": {
+            "v": 1,
+            "clock": 34,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-2",
+              "set": {
+                "2": "z",
+                "10": 2.5,
+                "priority": "high",
+                "labels": [
+                  "x"
+                ],
+                "body": ""
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0056-723945",
+          "op": {
+            "v": 1,
+            "clock": 36,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-1",
+              "set": {
+                "priority": null,
+                "body": ""
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0057-438646",
+          "op": {
+            "v": 1,
+            "clock": 37,
+            "device": "dB",
+            "change": {
+              "t": "card",
+              "card": "task-4",
+              "set": {
+                "status": "backlog",
+                "id": "ignored"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0058-504860",
+          "op": {
+            "v": 1,
+            "clock": 38,
+            "device": "dC",
+            "change": {
+              "t": "card",
+              "card": "task-3",
+              "set": {
+                "title": "a"
+              }
+            }
+          }
+        },
+        {
+          "id": "op-0059-48182",
+          "op": {
+            "v": 1,
+            "clock": 39,
+            "device": "dA",
+            "change": {
+              "t": "log",
+              "card": "task-1",
+              "entry": {
+                "at": "t59",
+                "who": "dA",
+                "note": "note 59"
+              }
+            }
+          }
+        }
+      ],
+      "cards": "[{\"2\":false,\"10\":2.5,\"id\":\"task-1\",\"log\":[{\"at\":\"t4\",\"who\":\"dA\",\"note\":\"note 4\"},{\"at\":\"t5\",\"who\":\"dB\",\"note\":\"note 5\"},{\"at\":\"t15\",\"who\":\"dB\",\"note\":\"note 15\"},{\"at\":\"t17\",\"who\":\"dA\",\"note\":\"note 17\"},{\"at\":\"t39\",\"who\":\"dB\",\"note\":\"note 39\"},{\"at\":\"t59\",\"who\":\"dA\",\"note\":\"note 59\"}],\"body\":\"\",\"labels\":[\"x\",\"y\"],\"priority\":null,\"status\":\"doing\",\"title\":\"b\"},{\"2\":\"z\",\"10\":2.5,\"id\":\"task-2\",\"log\":[{\"at\":\"t6\",\"who\":\"dA\",\"note\":\"note 6\"},{\"at\":\"t32\",\"who\":\"dC\",\"note\":\"note 32\"},{\"at\":\"t33\",\"who\":\"dB\",\"note\":\"note 33\"}],\"body\":\"\",\"labels\":[\"x\"],\"priority\":\"high\",\"status\":\"doing\",\"title\":\"c \\\"quoted\\\"\"},{\"2\":{\"a\":1},\"10\":2.5,\"id\":\"task-3\",\"log\":[{\"at\":\"t30\",\"who\":\"dC\",\"note\":\"note 30\"},{\"at\":\"t50\",\"who\":\"dB\",\"note\":\"note 50\"},{\"at\":\"t54\",\"who\":\"dA\",\"note\":\"note 54\"}],\"body\":\"two\\nlines\\ttab\\u0001\",\"labels\":[\"x\",\"y\"],\"priority\":null,\"status\":\"backlog\",\"title\":\"a\"},{\"2\":\"z\",\"10\":2.5,\"id\":\"task-4\",\"log\":[{\"at\":\"t9\",\"who\":\"dB\",\"note\":\"note 9\"},{\"at\":\"t22\",\"who\":\"dB\",\"note\":\"note 22\"},{\"at\":\"t34\",\"who\":\"dC\",\"note\":\"note 34\"},{\"at\":\"t42\",\"who\":\"dA\",\"note\":\"note 42\"},{\"at\":\"t47\",\"who\":\"dA\",\"note\":\"note 47\"}],\"body\":\"one\",\"labels\":[\"x\"],\"priority\":null,\"status\":\"backlog\",\"title\":\"a\"}]",
+      "clock": 39
+    }
+  ],
+  "replica": {
+    "key": "54d62b3a9671ab9ba0216afcc3d4e73bb6eca8f1cbb743156d2bfea90c703c48",
+    "object": "vNwwyh1btmMdbpgJZv8Wpw",
+    "device": "sT7ug2yNb4iHSpPfGkC1H3QYpz9FdOGtHyQqbefhkAc",
+    "ops": [
+      {
+        "id": "Ic-NQRCyb9aSTfRs0ErnzA",
+        "seq": 1,
+        "nonce": "ujBFg0mVW0tp-J2gBulvpT9sKswOYpIv",
+        "ciphertext": "AbuWoCW0E05JQBHNRjNkDPhKxZ0z58-vmW_aztOTcucJV1n6iiJyiHBU6V1zcFukK7-2NCNGe9J_Sng20Kpaah8_KGHwS4fppdBGsZTBn6Oym0FAkmEGDEBJC-KMucxYU71LbcMtg9dttmatv-gsiiuC-jBJa1uk-L7I43zfDeet1U2anb9Zh0096SdIPZiO3FPjryMpDTezWXIWRg5418eUvEKEEJGNRns8sIL4Ij6kXBp8_DyNtFSl20b1Cg",
+        "device": "sT7ug2yNb4iHSpPfGkC1H3QYpz9FdOGtHyQqbefhkAc",
+        "pos": 1,
+        "ts": "2026-11-02T00:00:00.000Z"
+      },
+      {
+        "id": "PmHZWg2Hzir2C69iWVuixQ",
+        "seq": 2,
+        "nonce": "6JD3Ga1akvt9NkbckQg1dD-l7Wl8CdWF",
+        "ciphertext": "0B922EIEg4yPaxbEqho8aRBXKo44StOmK3KiofwMLHyruMJrWnezhZeajf6xy7vnUDIj7Y3SVhjt3eKK7pYh0701RC2ICILJUiYseruWsIDdeUB97yr8ApIIGeeYO5SccYAoOpU93MEcxeDhhOwPx_7xDrG9pHSYmZwef6mFTzclYTKyMnKtONXvrg8_zRlH_pCusJrfgZDWJz-7aM4NTFAoI4W09YroOA",
+        "device": "sT7ug2yNb4iHSpPfGkC1H3QYpz9FdOGtHyQqbefhkAc",
+        "pos": 2,
+        "ts": "2026-11-02T00:00:00.000Z"
+      },
+      {
+        "id": "D02AxAUGYvcmfxmkZcztrQ",
+        "seq": 3,
+        "nonce": "DoY9wVzzBtMkbNIB7ypnIWt1oy9YO5LW",
+        "ciphertext": "uU6ictmE73_2aww4jQtbzga7ViJ4wA6NM1ChfTcecwVwx-lDQoYO7trFAytb1uZXW7AVE4sp51cOKGtLFfp_Z8s_hdkA98aSLzRynjhseuv67ROcdqgrXSAPOOdKUoQOl_5sP3s8PJ_EXYBsrt-dudlncxpbNFjZdCRyLUU8aSkv3PWRxxaSu46Qk6W3tDYdhs3IoCApZd0BTbNN7w4pZp3dENGwxGrf3CrTayrKHLhJ1RT65wyazCGbBdnZOQ6-B0M",
+        "device": "sT7ug2yNb4iHSpPfGkC1H3QYpz9FdOGtHyQqbefhkAc",
+        "pos": 3,
+        "ts": "2026-11-02T00:00:00.000Z"
+      },
+      {
+        "id": "SlWLwaAjh-4VrZrd16bVCw",
+        "seq": 4,
+        "nonce": "rTLOzHkVfKIiGRJkVjGxIeG6ZRdA8vMi",
+        "ciphertext": "REtVMmOlZ_dw54WIyl8zxOYKLXE0JKdh2h7noFpWVX7GrHSJZuZH59vloHBwy8xH2YFcEbQCThB30tcRSqRN9i_jAJ3oc7L8AX2RRj5HNomsQWgQYGJ6L42PazSVNa6F_sAMQZDhWk-aC3f2HhIDlREFbRq97wHQzq3gQUu1nzeWN7aXnFSfDCJNM3dBbFVUPT5N4V7W",
+        "device": "sT7ug2yNb4iHSpPfGkC1H3QYpz9FdOGtHyQqbefhkAc",
+        "pos": 4,
+        "ts": "2026-11-02T00:00:00.000Z"
+      },
+      {
+        "id": "tampered-op-aaaaaaaa",
+        "seq": 2,
+        "nonce": "6JD3Ga1akvt9NkbckQg1dD-l7Wl8CdWF",
+        "ciphertext": "0B922EIEg4yPaxbEqho8aRBXKo44StOmK3KiofwMLHyruMJrWnezhZeajf6xy7vnUDIj7Y3SVhjt3eKK7pYh0701RC2ICILJUiYseruWsIDdeUB97yr8ApIIGeeYO5SccYAoOpU93MEcxeDhhOwPx_7xDrG9pHSYmZwef6mFTzclYTKyMnKtONXvrg8_zRlH_pCusJrfgZDWJz-7aM4NTFAoI4W09YroOA",
+        "device": "sT7ug2yNb4iHSpPfGkC1H3QYpz9FdOGtHyQqbefhkAc",
+        "pos": 5,
+        "ts": "2026-11-02T00:00:00.000Z"
+      },
+      {
+        "id": "Ic-NQRCyb9aSTfRs0ErnzA",
+        "seq": 1,
+        "nonce": "ujBFg0mVW0tp-J2gBulvpT9sKswOYpIv",
+        "ciphertext": "AbuWoCW0E05JQBHNRjNkDPhKxZ0z58-vmW_aztOTcucJV1n6iiJyiHBU6V1zcFukK7-2NCNGe9J_Sng20Kpaah8_KGHwS4fppdBGsZTBn6Oym0FAkmEGDEBJC-KMucxYU71LbcMtg9dttmatv-gsiiuC-jBJa1uk-L7I43zfDeet1U2anb9Zh0096SdIPZiO3FPjryMpDTezWXIWRg5418eUvEKEEJGNRns8sIL4Ij6kXBp8_DyNtFSl20b1Cg",
+        "device": "4ErMM9oRgghjbsrWtA2RJwx3DO7DOXTZvIXyfzLjZmc",
+        "pos": 6,
+        "ts": "2026-11-02T00:00:00.000Z"
+      }
+    ],
+    "cards": "[{\"id\":\"task-1\",\"log\":[{\"at\":\"2026-11-02T10:00:00Z\",\"who\":\"matthew\",\"note\":\"asked\"}],\"priority\":\"high\",\"status\":\"done\",\"title\":\"Buy milk\"},{\"id\":\"task-2\",\"log\":[],\"status\":\"doing\",\"title\":\"Ship it\"}]",
+    "rejected": [
+      "tampered-op-aaaaaaaa",
+      "Ic-NQRCyb9aSTfRs0ErnzA"
+    ]
+  },
+  "snapshot": {
+    "upTo": 6,
+    "epoch": 0,
+    "nonce": "tntHg1CKPc4ZpexDfUHO9WgEtDZOQ2G7",
+    "ciphertext": "vd6WCE4JFqIsgh1H_xvSNC9YGm5DbppK5y4byApvMu2g9vWZuI8pbRr0DQqBO_M87NpH3GPKTxNQDUBMhBT1Y5nr8NglGJWVfHO4Blm8Kq9-zYiFyoNapWYgUl1c_CfBNTgRfGRO_zHcyi0sp5SZZnkGeTgvOQ8j1CeyXjTnURh3XKggKC7rqRSM8lV69bd-VcJSn8lwzx2weve2EgcLKyQ_v5mIR0d8Ui8ZE5CY3hS6OHOgpyCSmIAfT2qU0EkTIqn58DF0guV3b2OdOz9J8psxOMyKaMhT6cWaoy_546gnJtqtAtVdPjhg8ceHCcof5-Vwo8UpRhFqTiyPRs4ZWFY_-IkssTB2wHbqMWkV8WG5R3sfg0vI39uXkGM9iZyF2BgVZRYKU6jmpcKk2_jdOOhdCvMm9eJ9QjfMe6u4U1EpZLhmjtZRAQoQ1HHVboS4vJRWDYhu1B9DEUzeebGofRvGR8PoLGh6ssfVZIKpnEd8XFLdEW6Kpk6YT65EMRRCZbYxMu8LFLEkVTIRE5MjCQQEqmEBcT_RBSV6Jnext55yOop_jRdGJUtV8rqypt_mBIHmbgleJOJWwx66y-Mro7wfup0-EjaJ5dhJ0GJRYVtfIL_GjIkIRIlOOqNdG6vSazjiCSmCl1L2aU3g-FNWjVaI7jMeVGZcxK_VXV72s-JbfAsPKKDjbN7zcTkCfgB4dNWDCRyNEZrMLzuJpZUQFaRdAk0bcoW2eAL1PC8mCmlOlwYVdki4jRyUce0OqtbC9TGD6Ld4VJsVzhoUBVRHMEFp6wmovXtT6T6e4ylxBFX8wV9N0gtqXwmG-jYWodQDcSQaRif7eqwbmzmXA_mYOS2ftnDBXgCvnrdHYyV1_IjZ0ZVPa-uLe7mS9IczRt_KWUdtb1tM_Jl_25x9vJykM5AMTgBfk8lryT6OacMPzW5UPues0epT2HuB1NfIx17KFdhLR3Jq3Qn5yCpeuGndyl88vwXtwaJvIXA_PLv5kZj8McahYvG6xHzP-h1ZAz682Z84K_WPdawLMOsV-foTXEkqrgX_43hBpXQ-ZJFVJ3ad9RMEjin9GK6sd2fd9IXGtiHg88Px1LE_IS_U6oPQWwaCi7DccuJMKKC4r_eO-zMxzmZZPlYIi-ZS9PiNY0xDwt3G_yR6a1UQQVIyiBXwgxH9oe0elxfROSrEk7T8E53UmRFeUfRz2wSryjec6vUsEZW15CNkVtNfWr9bXNvzbPbOX3lbVqlGBeft05CLbfHQutJkG1f6T7esDqDkFDtjeBM",
+    "cards": "[{\"id\":\"task-1\",\"log\":[{\"at\":\"2026-11-02T10:00:00Z\",\"who\":\"matthew\",\"note\":\"asked\"}],\"priority\":\"high\",\"status\":\"done\",\"title\":\"Buy milk\"},{\"id\":\"task-2\",\"log\":[],\"status\":\"doing\",\"title\":\"Ship it\"}]"
+  },
+  "sharing": {
+    "memberRoot": "1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100",
+    "member": {
+      "id": "COHFGpR6EHSS-rl7g9sgtMqSGoQ_hkMc_cLXIj5mNuc",
+      "box": "GnRxyYZUxMyXEL4RTLCBkK-I9OjxWfDgSKqtrH9jxy0"
+    },
+    "sharedKey": {
+      "v": 1,
+      "owner": "sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ",
+      "object": "WTTOPFz8mPLic3YHW5Ih0w",
+      "kind": "brain",
+      "name": "pepper",
+      "epoch": 1,
+      "key": "W94-Q1-XGCKkL37X9r1-73fetABmybVFxK06-6HtBVc"
+    },
+    "sealedKey": "CI6bZjihSZMcbkBceMDd3Cl2Zt9HB4aDnmm7RkzYvEHKZbzca8n-W6Zs2GFcJlM8Or3UoiFs2whUP3zkXUzH4y9_IGuAwlBHpGUlTcVXyWoM_aVi2n_zZ3cC4U9qPwRUu40_48ZPf5B-zNnrEnKUGDgChY4jlnPKsRvPN7CKZ73fl3zqf5GycqJJeGS48p1vEX3hcQFl-tT_iSIJ9sBuRXEUgcEUq53k3K1suS_pe4EEgkzvMTML7D2Aum-EazWPpCXiKd98p-9XjiITnRw8Lxd5-tUMz_nun2rG-Q2dUqmk6LewsIKnKlNcVa0",
+    "grant": {
+      "body": {
+        "v": 1,
+        "owner": "sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ",
+        "object": "WTTOPFz8mPLic3YHW5Ih0w",
+        "member": "COHFGpR6EHSS-rl7g9sgtMqSGoQ_hkMc_cLXIj5mNuc",
+        "role": "read",
+        "epoch": 1,
+        "wrapped": "PqHIksReSNQO27La2NHEm_UQbLQXWgQqV_tFjltkJhw",
+        "at": 1762077600002
+      },
+      "bytes": "corkboard-e2ee/v1 grant\n{\"at\":1762077600002,\"epoch\":1,\"member\":\"COHFGpR6EHSS-rl7g9sgtMqSGoQ_hkMc_cLXIj5mNuc\",\"object\":\"WTTOPFz8mPLic3YHW5Ih0w\",\"owner\":\"sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ\",\"role\":\"read\",\"v\":1,\"wrapped\":\"PqHIksReSNQO27La2NHEm_UQbLQXWgQqV_tFjltkJhw\"}",
+      "sig": "1klVSAGDT1D1BNi7PXMuKis6NRlqYapBGqjMNjQr8oL1unloOSe5Z2HLbZLtgzmqzdzLtOJqDjCrbWvskHn-Bw"
+    },
+    "ungrant": {
+      "body": {
+        "v": 1,
+        "owner": "sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ",
+        "object": "WTTOPFz8mPLic3YHW5Ih0w",
+        "member": "COHFGpR6EHSS-rl7g9sgtMqSGoQ_hkMc_cLXIj5mNuc",
+        "at": 1762077600003
+      },
+      "bytes": "corkboard-e2ee/v1 ungrant\n{\"at\":1762077600003,\"member\":\"COHFGpR6EHSS-rl7g9sgtMqSGoQ_hkMc_cLXIj5mNuc\",\"object\":\"WTTOPFz8mPLic3YHW5Ih0w\",\"owner\":\"sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ\",\"v\":1}",
+      "sig": "KbsraEkEJOWBdkPROZAv8maEbiTasyC77UyLAKA73sB_i9drxxY2G5PisXxtP2cjQUc2pgwzi2VgZ90SD_IJBw"
+    },
+    "brain": {
+      "object": "WTTOPFz8mPLic3YHW5Ih0w",
+      "key": "5bde3e435f971822a42f7ed7f6bd7eef77deb40066c9b545c4ad3afba1ed0557",
+      "epoch": 1,
+      "ops": [
+        {
+          "id": "qH0d7Ijih4_qAUCwuJqssA",
+          "seq": 1,
+          "nonce": "qHQxUobLOHmnyWF7X3jxed8tMNkH_yVQ",
+          "ciphertext": "Leh4pzKfbRzzCPlMiqAUDUeTfJkoUyy_twWscVRfuivb1D0ghqtGNbh38873kmPTedVXfGL0jNyiB0k4CQZ83Jcju2VRHxBFMTnwOlzl4bqqDgH0DQ640Wqspuv9ar54a7wbe3mwpw8nhKXqINmNAnOAdlGfp2vk1EfFQFFaAkUFUGWDaC6CdjNsYDE84XeV5S0c3BU3rQB4N37S2qaluIJVPFbl-243GIp-LqSnDzCpd0-IJ9U",
+          "epoch": 1,
+          "device": "4ErMM9oRgghjbsrWtA2RJwx3DO7DOXTZvIXyfzLjZmc",
+          "pos": 1,
+          "ts": "2026-11-02T00:00:00.000Z"
+        },
+        {
+          "id": "PJf6uWXSD_AibKmc7pue1A",
+          "seq": 2,
+          "nonce": "c3ooVvnRPSsjuOjrw4lU_u5T_ZmvkYwU",
+          "ciphertext": "sv20a_qR3D0ARCvqwoC80j-uz33G7ebK0xELVNtxTrvdyO5f8VhEduSI_o8Xd7hu-CFZMqY2nBPTMMCN0Ym7I8TU8nbBEiStJqIvtJC9hQ2qNmJVFm1geqoz8UD9459QfVApoTw1SkWegYTAKRF0F8AqLJ3GZ9o2juhFp3XgSfxgUIwbB-JJykh6YvHE3TKBlGP3IeBazB8dbGyU1HQ6PazC3QDssrSGPBu6ajLbEbdPxdNShPBaB6QZKk60l_MkgzHKag",
+          "epoch": 1,
+          "device": "4ErMM9oRgghjbsrWtA2RJwx3DO7DOXTZvIXyfzLjZmc",
+          "pos": 2,
+          "ts": "2026-11-02T00:00:00.000Z"
+        },
+        {
+          "id": "mlQtVsFRwXw0QdWHWC5Z-A",
+          "seq": 3,
+          "nonce": "anvi_Khj_JEiSyvE2Zolq8K0cjfLdifW",
+          "ciphertext": "PVnUQnMsFTde5bydA_TKjzBWMWEHhnV1hSK05269ieXbCWErjFyNzajuA6Mlj3neOC0n37W-aUqwQRopXIl9AxkpshpTd_GBq4vB79_vGdlTAK3hvWv_n_MYvBcc7Ef7EqZUWvGCOlWa_RpCYfzZPhDfH2NQNbxkgrx4hvQjF4oZBilbfLx-meSALpRyJ70ES6VB4lfHYEx4XbxgHjFzCUrOtFo5YpMeblfLFAuT5m8V-zln_nzxm7QOFQJx75_E5J4RnGq28HDujMVD0mfOQ2PuKpsf6WolKugl7-Ej",
+          "epoch": 1,
+          "device": "4ErMM9oRgghjbsrWtA2RJwx3DO7DOXTZvIXyfzLjZmc",
+          "pos": 3,
+          "ts": "2026-11-02T00:00:00.000Z"
+        }
+      ]
+    }
+  },
+  "rotation": {
+    "newRoot": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "body": {
+      "v": 1,
+      "account": "sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ",
+      "from": "sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ",
+      "to": "4j6qAhbR4WD7rKqpbZXaFJ_i4JSjXMZtn-f4_ZE3E44",
+      "box": "81PAs7kSS_d_rw5K9zN7D6kzqOau8ecKWAQUK2n1XRU",
+      "at": 1762077600004
+    },
+    "bytes": "corkboard-e2ee/v1 rotation\n{\"account\":\"sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ\",\"at\":1762077600004,\"box\":\"81PAs7kSS_d_rw5K9zN7D6kzqOau8ecKWAQUK2n1XRU\",\"from\":\"sh-iNom3w4wEgDDgYqbbmk1UHMISzjHVGlsXdOafqTQ\",\"to\":\"4j6qAhbR4WD7rKqpbZXaFJ_i4JSjXMZtn-f4_ZE3E44\",\"v\":1}",
+    "sig": "-aZjCUlBp2Lo-Z7iy6QdT9YTn4SinheB1-s0yQ2JTH9uSSC2HITRVAw0eoTluxHJJnN_oJcfiPoBRjPtSJ7HDQ",
+    "sealedRoot": "_Wb_VPPA1O8Az6f0MQTNyBHL6NSiCGnZd-bYgqBGECqwFjwGdxm-LnlFpMFzOLyBWgByRlffi1MVOpNsjvNmIXO6b5Hcsocx_4TsU8dK-MM",
+    "cert": {
+      "body": {
+        "v": 1,
+        "account": "4j6qAhbR4WD7rKqpbZXaFJ_i4JSjXMZtn-f4_ZE3E44",
+        "device": "sT7ug2yNb4iHSpPfGkC1H3QYpz9FdOGtHyQqbefhkAc",
+        "box": "C-vP41BSUabSEjHdzrFWqKCnHM-epIzbOR04MClUfWY",
+        "name": "phone",
+        "issued": 1762077600005
+      },
+      "sig": "c5ycmPsbh54uj1jt7dLDaDHOar5kjXSlpj17daPRfEUSj5OfRFoNACf-5kb5XWU-YNyhkvhcnelSB23RZwW6Dg"
+    }
+  },
+  "snapshotLabel": "snapshot:2:41"
+}
