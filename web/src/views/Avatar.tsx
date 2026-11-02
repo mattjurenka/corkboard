@@ -5,7 +5,7 @@
 // was said before the panel opened isn't said again. It's the session's
 // brain's persona (avatar/personas.ts): its model, voice and lines. A .vrm
 // file dropped on it is that persona's model from then on, in this
-// browser. The models: tsundere.vrm (a blonde in a school uniform, made in
+// browser. The models: tsundere.vrm (a blonde in a frilly black dress, made in
 // VRoid Studio for corkboard), bikini.vrm, businesswoman.vrm (in a
 // suit, also made in VRoid Studio), nerd.vrm, businessman.vrm and
 // shirtless.vrm. three.js comes with the first panel, not the page.
