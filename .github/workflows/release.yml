@@ -55,7 +55,15 @@ jobs:
         working-directory: app
       - name: package and publish
         working-directory: app
-        run: bunx electron-builder --config electron-builder.config.js --${{ matrix.platform }} --publish always
+        shell: bash
+        # A secret that isn't set comes through empty, and electron-builder
+        # takes an empty CSC_LINK for a path, the directory it's run in.
+        run: |
+          for v in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID WIN_CSC_LINK WIN_CSC_KEY_PASSWORD \
+                   AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_SIGN_ENDPOINT AZURE_SIGN_ACCOUNT AZURE_SIGN_PROFILE AZURE_SIGN_PUBLISHER; do
+            [ -n "${!v}" ] || unset "$v"
+          done
+          bunx electron-builder --config electron-builder.config.js --${{ matrix.platform }} --publish always
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' }}
