@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=corkboard
+Comment=Neovim with Claude Code agents beside it
+Exec=/usr/bin/corkboard %U
+Icon=corkboard
+Terminal=false
+Type=Application
+Categories=Development;
+Keywords=neovim;vim;claude;agents;kanban;
+StartupWMClass=corkboard
