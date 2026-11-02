@@ -2,6 +2,8 @@
 //
 //   bun bridge/cloud.ts login    sign in (opens the browser); once per machine
 //   bun bridge/cloud.ts token    print a current access token, for curl
+//   bun bridge/cloud.ts server [<url>]
+//                                the server this machine uses, or set it
 //   bun bridge/cloud.ts machine <environment>
 //                                mint a machine token, signed in as the owner,
 //                                and print the auth.json that signs a server in
@@ -14,7 +16,8 @@
 // corkboard's state directory (dirs.ts), as auth.json, readable only by this user, and
 // token() refreshes it as it expires.
 //
-// CORKBOARD_CLOUD: the Worker's origin.
+// The server, the Worker's origin: CORKBOARD_CLOUD, else the one set with
+// `server <url>` (server.json in the state directory), else corkboard.fyi's.
 
 import { createHash, randomBytes } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -22,8 +25,27 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { STATE_DIR } from "./dirs";
 
-export const CLOUD = (process.env.CORKBOARD_CLOUD ?? "https://portal.corkboard.fyi").replace(/\/$/, "");
 const AUTH = join(STATE_DIR, "auth.json");
+const SERVER = join(STATE_DIR, "server.json");
+const DEFAULT_CLOUD = "https://portal.corkboard.fyi";
+
+function kept(): string | undefined {
+  try {
+    return (JSON.parse(readFileSync(SERVER, "utf8")) as { url?: string }).url;
+  } catch {}
+}
+
+export const CLOUD = (process.env.CORKBOARD_CLOUD ?? kept() ?? DEFAULT_CLOUD).replace(/\/$/, "");
+
+// Sets the server for the bridges started after this; "" goes back to the
+// default. A sign-in is the server's, so one elsewhere needs `login` again.
+export function setServer(url: string) {
+  if (!url) return rmSync(SERVER, { force: true });
+  const u = new URL(url);
+  if (u.protocol !== "https:" && u.hostname !== "localhost" && u.hostname !== "127.0.0.1") throw new Error(`corkboard: ${url} isn't https`);
+  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
+  writeFileSync(SERVER, JSON.stringify({ url: u.origin }) + "\n");
+}
 
 type OAuth = { cloud: string; client_id: string; access_token: string; refresh_token: string; expires_at: number };
 // A machine's has only its token, which lasts until it's revoked.
@@ -197,7 +219,7 @@ const browse = (url: string) =>
   : process.platform === "win32" ? ["cmd", "/c", "start", '""', url.replaceAll("&", "^&")]
   : ["xdg-open", url];
 
-// login, token, machine: `bun bridge/cloud.ts ...`, or the compiled
+// login, token, server, machine: `bun bridge/cloud.ts ...`, or the compiled
 // bridge's subcommands of the same names (main.ts).
 export async function cli(args: string[]) {
   const command = args[0];
@@ -207,6 +229,13 @@ export async function cli(args: string[]) {
       process.exit(0); // the paste reader would otherwise hold stdin open
     }
     else if (command === "token") console.log(await token());
+    else if (command === "server") {
+      if (args[1] === undefined) console.log(CLOUD);
+      else {
+        setServer(args[1] === "default" ? "" : args[1]);
+        if (process.env.CORKBOARD_CLOUD) console.error("corkboard: CORKBOARD_CLOUD is set, and wins over this");
+      }
+    }
     else if (command === "machine" && args[1]) {
       const res = await fetch(`${CLOUD}/api/tokens/machine`, {
         method: "POST",
@@ -217,7 +246,7 @@ export async function cli(args: string[]) {
       if (!res.ok || !json.token) throw new Error(`corkboard: ${json.error ?? `HTTP ${res.status}`}`);
       console.log(JSON.stringify({ cloud: CLOUD, token: json.token }, null, 2));
     } else {
-      console.error("usage: bun bridge/cloud.ts login|token|machine <environment>");
+      console.error("usage: bun bridge/cloud.ts login|token|server [<url>|default]|machine <environment>");
       process.exit(2);
     }
   } catch (e) {
