@@ -10,10 +10,7 @@ pkgdesc="Neovim with Claude Code agents beside it"
 arch=('x86_64' 'aarch64')
 url="https://corkboard.fyi"
 license=('LicenseRef-corkboard')
-depends=('git' 'gtk3' 'nss' 'alsa-lib' 'libxss' 'libxtst' 'libsecret' 'xdg-utils')
-optdepends=('claude-code: the agents corkboard runs'
-            'ripgrep: faster search'
-            'fd: faster file pickers')
+depends=('git' 'claude-code' 'ripgrep' 'fd' 'gtk3' 'nss' 'alsa-lib' 'libxss' 'libxtst' 'libsecret' 'xdg-utils')
 provides=('corkboard')
 conflicts=('corkboard')
 options=('!strip' '!debug')
