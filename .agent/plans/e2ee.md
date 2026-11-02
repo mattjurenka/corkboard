@@ -169,7 +169,7 @@ encrypted side yet but `corkboard-bridge e2ee`.
   through the library against the Worker in vitest, not as a CLI against a running Worker.
 - Attachments: the blob routes and `sealBlob` exist; no op type names one yet.
 
-## Next: compaction, sharing, rotation (2026-11-02, being built)
+## Next: compaction, sharing, rotation (2026-11-02)
 
 The wire additions, which every client (bridge, page, Android) speaks. All of
 it is still ciphertext to the relay; what it learns new is who shares an
@@ -283,6 +283,39 @@ of its own. Rotation ends that.
   one no longer works.
 - A device that had changes queued when the rotation came opens them under
   the old key and queues them again on the new object.
+
+### Built (2026-11-02)
+
+lib/e2ee (`sharing.ts`, the replica's snapshots and epochs, the relay client's routes), the
+Worker (`cloud/src/e2ee.ts`, `log.ts`, `registry.ts`), Android's `Sharing.kt`, the node's use of
+the index, and the CLI: `corkboard-bridge e2ee share|unshare|shared|compact|rotate|rotated`.
+lib is tested against the Worker under miniflare (`cloud/test/e2ee.test.ts`), including a
+rotation with a shared object. What the relay settled that clients rely on:
+
+- `/e2ee/token` answers `{ token, expires, account }`, account being the id. A cert signed by a
+  key the account had before gets 401, pointing at `POST /e2ee/rotated`. Clients take the
+  account id from the token, never from a cert.
+- `GET /e2ee/accounts/:id` wants a token. A revocation must be signed by the current key.
+- A snapshot may repeat the last one's `upTo` if it raises the epoch (rekeying right after a
+  share or a rotation would otherwise be refused forever).
+- `DELETE /e2ee/log/:object` drops the object's grants too; an ungrant closes the member's
+  sockets. There's no ungrant statement: the owner's token is enough.
+- A rotation's grants are signed by the new key, so they're posted after `/e2ee/rotate`.
+
+Still to do, or known gaps:
+
+- An account made before creations were kept is served with `creation: null`, so its keys don't
+  chain and nothing can be shared with it until it proves them again; nothing does that yet.
+- When a member rotates, the grants it holds stay sealed to its old box key: its owners have to
+  grant again, and no client notices that it should.
+- No route lists an account's devices, so the CLI's rotate keeps only the machine it runs on;
+  the others pair again. A crash mid-rotation leaves `rotating.json`, which nothing resumes from.
+- A device left out of a rotation keeps the sockets it has open on shared logs.
+- A 16 MiB snapshot is about a 21 MB WebSocket message; nobody has checked that against
+  Cloudflare's limit.
+- Members' writes aren't signed per device.
+- Everything has run only under miniflare; none of it is deployed, and the CLI's new commands
+  haven't run against a relay.
 
 ## Settled: claude.ai and the node
 
@@ -483,11 +516,8 @@ directly, with no node. The rest of the app goes on talking to the plaintext API
 
 Still to do:
 
-- Run against a real relay: everything has been tested against vectors and fakes, not the Worker.
-- The relay's new routes (snapshots, `?owner=`, grants, `/e2ee/shared`, accounts, rotate) are as
-  the plan words them; the shapes of `/e2ee/shared` and `/e2ee/rotate`'s `roots` are guesses.
-- An account id for a device paired after a rotation: its cert names the current key, not the
-  id, and the phone takes the cert's.
+- Run against a real relay or phone: the library is checked against lib/e2ee's vectors, and lib
+  against the Worker under miniflare, but the phone has never talked to the Worker.
 - lazysodium-android 5.1's libsodium is 4 KB-aligned, so it won't load on a 16 KB-page phone.
 - Recovering from the phrase, approving another device, revoking, sharing and rotating from the
   phone: the library has them, the screens don't. No QR yet.

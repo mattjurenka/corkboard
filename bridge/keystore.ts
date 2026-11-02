@@ -3,6 +3,7 @@
 //
 //   device.json   this device's own signing and box keys, its certificate, the relay
 //   root.json     the account root, encrypted (XChaCha20-Poly1305) under a key-encrypting key
+//   rotating.json a rotation's new root, the same way, kept until the relay has it
 //   token.json    the relay's current token
 //   replicas/     each object's replica (lib/e2ee/sync.ts): cursor, merged state, queue
 //
@@ -77,7 +78,7 @@ export class Keystore {
     return readJson<RootFile>(join(this.dir, "root.json"))?.kek === "scrypt";
   }
 
-  async saveRoot(root: Uint8Array, passphrase?: string) {
+  async saveRoot(root: Uint8Array, passphrase?: string, file = "root.json") {
     this.ensure();
     let kek: Uint8Array;
     let f: Omit<RootFile, "nonce" | "ciphertext">;
@@ -91,11 +92,11 @@ export class Keystore {
       f = { v: 1, kek: "keychain", keychain: this.keychain.name };
     }
     const s = seal(kek, root, ROOT_AAD);
-    write(join(this.dir, "root.json"), JSON.stringify({ ...f, nonce: b64url(s.nonce), ciphertext: b64url(s.ciphertext) }, null, 2) + "\n");
+    write(join(this.dir, file), JSON.stringify({ ...f, nonce: b64url(s.nonce), ciphertext: b64url(s.ciphertext) }, null, 2) + "\n");
   }
 
-  async root(passphrase?: string): Promise<Uint8Array> {
-    const f = readJson<RootFile>(join(this.dir, "root.json"));
+  async root(passphrase?: string, file = "root.json"): Promise<Uint8Array> {
+    const f = readJson<RootFile>(join(this.dir, file));
     if (!f) throw new Error(`no account on this machine (${this.dir}); corkboard-bridge e2ee init, recover or pair`);
     let kek: Uint8Array | undefined;
     if (f.kek === "scrypt") {
