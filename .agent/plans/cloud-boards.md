@@ -51,7 +51,11 @@ Single user, but keyed by user id everywhere so collaborators later are a permis
 a data migration.
 
 - Upstream identity: **Google sign-in**, allow-listed to `matthewjurenka@gmail.com` (a Worker
-  secret). Anyone else gets a 403 after login.
+  secret). Anyone else gets a 403 after login. **Since 2026-11-02, invited users:** a `Registry`
+  object (`cloud/src/registry.ts`) records everyone who signs in; `ADMIN_EMAILS` always get in,
+  anyone else with an admin's invite (`/authorize?invite=`) or onto a waitlist, and a disabled
+  account's tokens stop on their next use. Each user's zone, name and calendar are settings in
+  their `UserDO`. See `cloud/DEPLOY-NOTES.md`.
 - The OAuth provider is the corkboard's own: it issues the session for the UI and the bearer tokens
   for MCP clients. claude.ai and Claude Code both do the OAuth dance themselves (DCR).
 - The bridge stores a refresh token in `~/.local/state/corkboard/auth.json` (0600) after a one-time

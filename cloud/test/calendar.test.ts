@@ -115,6 +115,26 @@ describe("the calendar", () => {
     expect(html).toMatch(/calendar connected/);
   });
 
+  it("is asked for only when connecting, added to what signing in granted", async () => {
+    fakeGoogle();
+    const { to } = await connect();
+    expect(to.searchParams.get("include_granted_scopes")).toBe("true");
+    expect(to.searchParams.has("login_hint")).toBe(false);
+  });
+
+  it("is made for a user who has none, in their zone, and is theirs to write", async () => {
+    const you = await invitedToken(owner);
+    const google = fakeGoogle({ email: "you@example.com" });
+    const { html } = await connect();
+    expect(html).toMatch(/calendar connected/);
+    expect(google.calls).toEqual(["POST calendars"]);
+    const made = google.events[0] as unknown as { id: string; summary: string; timeZone: string };
+    expect(made).toMatchObject({ summary: "Claude", timeZone: "UTC" });
+    expect((await (await call(you, "GET", "/api/me")).json<any>()).settings.calendar).toBe(made.id);
+    // The first admin's stays the one CALENDAR_ID names.
+    expect((await (await call(owner, "GET", "/api/me")).json<any>()).settings.calendar).toBe("claude@group.calendar.google.com");
+  });
+
   it("isn't connected for another Google account, or from a state that isn't ours", async () => {
     fakeGoogle({ email: "someone@else.com" });
     expect((await connect()).back.status).toBe(403);

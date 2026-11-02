@@ -1,9 +1,10 @@
-// The user's repositories on Forgejo (git.corkboard.fyi), for the portal's
-// file browser (../portal). The Worker reads them with FORGEJO_TOKEN, a
-// Forgejo access token of the user's with read:repository and read:user
-// only, kept as a secret: the page asks with its own corkboard token and
-// never sees Forgejo's. This Worker lets one Google account in
-// (ALLOWED_EMAIL), so one token is enough.
+// The first admin's repositories on Forgejo (git.corkboard.fyi), for the
+// portal's file browser (../portal). The Worker reads them with
+// FORGEJO_TOKEN, a Forgejo access token of theirs with read:repository and
+// read:user only, kept as a secret: the page asks with its own corkboard
+// token and never sees Forgejo's. One token is one Forgejo account's, so
+// these routes are the admins' only (api.ts); other users get a 403, and
+// /api/me's features.git says which.
 //
 //   GET  /api/git                                { origin }
 //   GET  /api/git/repos                          the user's repositories
