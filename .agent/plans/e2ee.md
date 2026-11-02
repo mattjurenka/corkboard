@@ -89,7 +89,7 @@ laptop app ─┐                         ┌─ phone app ──https──┐
 
 1. *(Done, see below.)* Keys: account root, passkey and keychain wrapping, recovery phrase, device pairing. A
    signed-challenge sign-in to the Worker alongside Google.
-2. *(Done but Android, see below.)* Encrypted op log in the DOs alongside the current API; a client library (bridge, web, Android)
+2. *(Done, see below; Android under its own heading.)* Encrypted op log in the DOs alongside the current API; a client library (bridge, web, Android)
    that encrypts, syncs and merges.
 3. `bridge serve` as the node: replicas, `/mcp` with its own OAuth, the phone API, memory,
    calendar. Move Claude Code onto the local MCP.
@@ -167,6 +167,47 @@ encrypted side yet but `corkboard-bridge e2ee`.
 - The bridge CLI has been run compiled up to the relay call; its whole flows have been tested only
   through the library against the Worker in vitest, not as a CLI against a running Worker.
 - Attachments: the blob routes and `sealBlob` exist; no op type names one yet.
+
+## Android (2026-11-02)
+
+The phone is a device of its own: it pairs, keeps the root, and reads and writes the relay
+directly, with no node. The rest of the app goes on talking to the plaintext API.
+
+- **`app.corkboard.e2ee`** (android/app/src/main/java/app/corkboard/e2ee/) is lib/e2ee in Kotlin, on
+  libsodium through lazysodium-android 5.1 (5.2 is built for Java 21, which the JVM tests don't
+  have): `Wire.kt` has every signed layout, the JSON types and the limits, and is where the
+  newer wire changes if it shifts; `Crypto.kt` the primitives (HKDF and SHA-256 are the JDK's);
+  `Keys.kt` keys, certs, records, blobs, sealed boxes and the phrase (the BIP39 list is
+  `assets/bip39-english.txt`); `Pairing.kt`, `Merge.kt` (JS's key order and all, so `cards()` is
+  the same JSON), `Sync.kt` (the replica, with snapshots, epochs, compaction and rekeying),
+  `Relay.kt` (okhttp; the socket reconnects from its cursor), `Sharing.kt` (the index, grants
+  both ways, `currentKey` checking an account's proof, rotation and catching up on one).
+- **Byte for byte**: `bun android/e2ee-vectors.ts` has lib/e2ee make keys, ids, signed bytes,
+  signatures, short codes, a delivery, records, blobs, boxes, phrases, merges, a TS replica's log
+  and snapshot, and a brain's ops at epoch 1 from a seeded random, into
+  `app/src/test/resources/e2ee-vectors.json`; `E2eeVectorsTest` checks the Kotlin against it
+  and `E2eeFlowsTest` pairs Kotlin with Kotlin and compacts and rekeys under a member
+  (`gradle -p android test`). Grants, ungrants and rotations use the labels lib/e2ee is getting
+  (`grant`, `ungrant`, `rotation`); the script takes lib/e2ee's own once it exports them.
+- **The keystore**: an AES-GCM key in the Android Keystore (StrongBox where there is one, no
+  user auth yet) seals each file under `files/e2ee/`: the root, the device's keys and cert, the
+  token, the typed board keys, and every replica.
+- **The screens**: brains → encrypted (and a row in setup): pair this phone (the code, then the
+  six digits, yes or no), the account and device, the boards (the index's, or a key typed in,
+  written to the index once it has cards), a board's cards by status, a card's title and status
+  to change and its log to add to, and what's shared with this account (brains open to their
+  notes and entries; a shared board as a board, read-only unless the grant says write).
+
+Still to do:
+
+- Run against a real relay: everything has been tested against vectors and fakes, not the Worker.
+- The relay's new routes (snapshots, `?owner=`, grants, `/e2ee/shared`, accounts, rotate) are as
+  the plan words them; the shapes of `/e2ee/shared` and `/e2ee/rotate`'s `roots` are guesses.
+- An account id for a device paired after a rotation: its cert names the current key, not the
+  id, and the phone takes the cert's.
+- lazysodium-android 5.1's libsodium is 4 KB-aligned, so it won't load on a 16 KB-page phone.
+- Recovering from the phrase, approving another device, revoking, sharing and rotating from the
+  phone: the library has them, the screens don't. No QR yet.
 
 ## Open questions
 
