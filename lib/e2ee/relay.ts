@@ -159,13 +159,13 @@ export class Relay implements PairTransport, LogTransport {
       if (!t) return void setTimeout(connect, 5000);
       const url = `${this.origin.replace(/^http/, "ws")}/e2ee/log/${object}/live?since=${cursor}`;
       ws = make(url, ["corkboard", `corkboard.bearer.${b64url(utf8(t))}`]);
-      ws.onmessage = (e) => {
+      ws.addEventListener("message", (e: MessageEvent) => {
         const m = JSON.parse(String(e.data)) as { ops?: WireOp[] };
         if (!m.ops?.length) return;
         cursor = Math.max(cursor, ...m.ops.map((o) => o.pos));
         on(m.ops);
-      };
-      ws.onclose = () => void (stopped || setTimeout(connect, 2000));
+      });
+      ws.addEventListener("close", () => void (stopped || setTimeout(connect, 2000)));
     };
     void connect();
     return () => {

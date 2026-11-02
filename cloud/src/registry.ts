@@ -14,6 +14,8 @@
 //   GET    /api/admin/invites            every invite, newest first
 //   POST   /api/admin/invites            { label?, uses? (default 1, null: any number), expires_in? (seconds) }
 //   DELETE /api/admin/invites/:code      revoke it; who it let in stays in
+//   GET    /api/admin/e2ee               every end-to-end encrypted account (e2ee.ts)
+//   PATCH  /api/admin/e2ee/:id           { status }: disabling one ends its devices' tokens
 //
 // Admins only, and not with a machine token (api.ts).
 
@@ -341,10 +343,19 @@ export async function adminRoutes(request: Request, env: Env, me: Account, body:
   const url = new URL(request.url);
   const method = request.method;
   const r = registry(env);
-  const m = url.pathname.match(/^\/api\/admin\/(users|invites)(?:\/([^/]+))?$/);
+  const m = url.pathname.match(/^\/api\/admin\/(users|invites|e2ee)(?:\/([^/]+))?$/);
   if (!m) return json({ error: "not found" }, 404);
   const [, what, raw] = m;
   const id = raw && decodeURIComponent(raw);
+  if (what === "e2ee") {
+    if (!id) return method === "GET" ? json(await r.e2eeAccounts()) : json({ error: "method not allowed" }, 405);
+    if (method !== "PATCH") return json({ error: "method not allowed" }, 405);
+    const { status, ...rest } = await body();
+    if (Object.keys(rest).length) throw new Invalid(`unknown field ${Object.keys(rest)[0]}`);
+    if (!STATUSES.includes(status as Status)) throw new Invalid(`status must be one of ${STATUSES.join(", ")}`);
+    const changed = (await r.setE2eeStatus(id, status as Status)) as Result<E2eeAccount>;
+    return changed.ok ? json(changed.value) : json({ error: changed.error }, changed.status);
+  }
   if (what === "users") {
     if (!id) return method === "GET" ? json(await r.accounts()) : json({ error: "method not allowed" }, 405);
     if (method !== "PATCH") return json({ error: "method not allowed" }, 405);

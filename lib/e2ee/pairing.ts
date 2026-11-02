@@ -39,6 +39,7 @@ import {
   commitBytes,
   fromB64url,
   fromUtf8,
+  normalizeCode,
   transcriptBytes,
   utf8,
 } from "./wire";
@@ -153,6 +154,8 @@ export async function approve(
   ui: { confirm(sas: string, join: { name: string; device: string }): Promise<boolean> },
   w: Wait & { box?: string } = {},
 ): Promise<Signed<DeviceCert>> {
+  // As typed: the transcript has the code as the relay made it.
+  code = normalizeCode(code) ?? code;
   const me = boxPair(random(32));
   const approver = b64url(me.public);
   try {

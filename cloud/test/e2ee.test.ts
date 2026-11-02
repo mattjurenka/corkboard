@@ -89,6 +89,17 @@ describe("accounts", () => {
     await expect(account(null, { bearer: you })).rejects.toThrow(/for admins/);
   });
 
+  it("are listed for admins, and one disabled stops signing in", async () => {
+    const a = await account();
+    const t = await a.relay.token();
+    const call = (method: string, path: string, body?: unknown) =>
+      worker(path, { method, headers: { Authorization: `Bearer ${admin}`, "Content-Type": "application/json" }, body: body && JSON.stringify(body) });
+    expect(await (await call("GET", "/api/admin/e2ee")).json()).toEqual([expect.objectContaining({ id: a.keys.id, status: "active" })]);
+    expect((await call("PATCH", `/api/admin/e2ee/${a.keys.id}`, { status: "disabled" })).status).toBe(200);
+    expect((await worker("/e2ee/revoked", { headers: { Authorization: `Bearer ${t}` } })).status).toBe(401);
+    await expect(a.relay.token(true)).rejects.toThrow(/disabled/);
+  });
+
   it("need the account key's own signature, for this relay", async () => {
     const keys = accountKeys(newRoot());
     const device = newDevice();
