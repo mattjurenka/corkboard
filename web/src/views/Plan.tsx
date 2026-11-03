@@ -30,6 +30,8 @@ type PlanState = {
   focus: string;
   fixed: number;
   proposal?: boolean;
+  // When the meeting being recorded started (bridge/record.ts), if one is.
+  recording?: string;
 };
 
 // The goals, as the Worker reads them out of Pepper's goal notes (goals.ts).
@@ -138,6 +140,7 @@ const PLAN_KEYS = [
   ["replan", "r", "Re-plan"],
   ["edit", "e", "Edit"],
   ["pin", "p", "Pin"],
+  ["record", "m", "Record"],
   ["open", "⏎", "Open card"],
   ["claude", "c", "Pepper"],
 ];
@@ -161,6 +164,7 @@ export function Plan({ state, win, focused, nvim }: ViewProps<PlanState>) {
     <div className="@container/plan text-large flex h-full flex-col px-2ch pt-half">
       <header className="flex flex-wrap justify-between gap-x-2ch pb-half">
         <span className="text-muted-foreground">{state.focus} planned</span>
+        {state.recording && <span className="text-blocked">● recording since {state.recording}</span>}
         {state.proposal ? (
           <span className="text-review">● re-plan waiting</span>
         ) : state.problem ? (
@@ -201,7 +205,7 @@ export function Plan({ state, win, focused, nvim }: ViewProps<PlanState>) {
           )}
         </div>
       </div>
-      <Keys keys={PLAN_KEYS} onKey={action} />
+      <Keys keys={state.recording ? PLAN_KEYS.map((k) => (k[0] === "record" ? ["record", "m", "Stop"] : k)) : PLAN_KEYS} onKey={action} />
     </div>
   );
 }
