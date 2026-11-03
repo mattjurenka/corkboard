@@ -1,7 +1,6 @@
 // What a client does of .agent/plans/e2ee.md's "Next": the account's index,
 // sharing an object with another account, and the account key's rotation.
-// The relay's side is cloud/src/e2ee.ts; the byte layouts are wire.ts's.
-// android/.../e2ee/Sharing.kt is the same, in Kotlin.
+// The relay's side is relay/src/routes.ts; the byte layouts are wire.ts's.
 
 import { sha256 } from "@noble/hashes/sha2.js";
 import { openSealed, sealTo } from "./box";

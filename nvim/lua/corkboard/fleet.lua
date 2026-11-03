@@ -31,6 +31,14 @@ local function cloud() return require("corkboard.cards.cloud") end
 
 local function gib(mib) return mib and string.format("%.1f GiB", mib / 1024) or "—" end
 
+-- Bytes a second, in the unit that reads best: "1.2 MB/s".
+local function per_sec(n)
+  local units = { "B", "kB", "MB", "GB" }
+  local i = 1
+  while n >= 1000 and i < #units do n, i = n / 1000, i + 1 end
+  return string.format(i == 1 and "%d %s/s" or "%.1f %s/s", n, units[i])
+end
+
 -- Seconds since an ISO time.
 local function age(iso)
   if type(iso) ~= "string" then return nil end
@@ -168,6 +176,98 @@ local function host_summary(h)
   return #parts > 0 and table.concat(parts, " · ") or nil
 end
 
+-- Each machine's last looks by machine_key, oldest first: what of it was in
+-- use and the rates through it, for the resources panel's history. A look
+-- is kept when it differs from the one before.
+local HISTORY = 40
+local history = {}
+local monitor = false -- m: each machine's resources, under its heading
+
+-- A machine's look: cpu a fraction busy, memory and its disks together in
+-- use (MiB), the rest bytes a second. Nil before its first look's rates.
+local function sample(h)
+  local r = nil_if_null(h.rates)
+  if not r then return nil end
+  local size, used = 0, 0
+  for _, d in ipairs(type(h.disks) == "table" and h.disks or {}) do size, used = size + d.size, used + d.used end
+  return {
+    cpu = r.cpu, used = nil_if_null(h.memory) and nil_if_null(h.available) and (h.memory - h.available) or nil,
+    disk = size > 0 and used or nil, mem = nil_if_null(r.mem), read = r.read, write = r.write, rx = r.rx, tx = r.tx,
+  }
+end
+
+local function remember(key, h)
+  local s = sample(h)
+  if not s then return end
+  history[key] = history[key] or {}
+  local seen = history[key]
+  local last = seen[#seen] and vim.deepcopy(seen[#seen])
+  if last then last.at = nil end
+  if vim.deep_equal(last, s) then return end
+  s.at = os.time()
+  table.insert(seen, s)
+  if #seen > HISTORY then table.remove(seen, 1) end
+end
+
+-- A fraction as a row of cells.
+local function cells(frac, n)
+  local filled = math.max(0, math.min(n, math.floor(frac * n + 0.5)))
+  return string.rep("█", filled) .. string.rep("░", n - filled)
+end
+
+-- Fractions as a row of cells, each as tall as its own; the newest at the
+-- right.
+local SPARK = { "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" }
+local function spark(fracs, n)
+  local marks = {}
+  for i = math.max(1, #fracs - n + 1), #fracs do
+    table.insert(marks, SPARK[math.floor(math.max(0, math.min(1, fracs[i])) * 7 + 0.5) + 1])
+  end
+  return string.rep("░", n - #marks) .. table.concat(marks)
+end
+
+-- A machine's resources, each as now and as of late, scaled to the most it
+-- could be: cpu and memory in use, the memory's traffic, its disks together
+-- and what's read and written, and its network. A rate the machine gives no
+-- limit for is scaled to the most it's done (peak).
+local function panel(key, h)
+  local now = sample(h)
+  if not now then return nil end
+  local seen = history[key] or { now }
+  local limits = nil_if_null(h.limits) or {}
+  local peak = {}
+  for _, k in ipairs(type(h.peak) == "table" and h.peak or {}) do peak[k] = true end
+  local rows = {}
+  local function add(label, field, max, text, max_text)
+    if now[field] == nil or not max then return end
+    local function frac(v) return max > 0 and math.min(1, (v or 0) / max) or 0 end
+    table.insert(rows, {
+      label = label, value = text(now[field]), max = max_text, frac = frac(now[field]),
+      history = vim.tbl_map(function(s)
+        return { frac = frac(s[field]), value = text(s[field] or 0), at = s.at and os.date("%H:%M:%S", s.at) }
+      end, seen),
+    })
+  end
+  local function rate(label, field, k)
+    local max, most = nil_if_null(limits[k]) or 0, not nil_if_null(limits[k]) or peak[k]
+    if most then
+      for _, s in ipairs(seen) do max = math.max(max, s[field] or 0) end
+    end
+    add(label, field, max, per_sec, per_sec(max) .. (most and " peak" or ""))
+  end
+  add("cpu", "cpu", 1, function(f) return string.format("%d%%", f * 100 + 0.5) end, "100%")
+  add("memory", "used", nil_if_null(h.memory), gib, gib(nil_if_null(h.memory)))
+  rate("ram bw", "mem", "mem")
+  local size = 0
+  for _, d in ipairs(type(h.disks) == "table" and h.disks or {}) do size = size + d.size end
+  add("disk", "disk", size > 0 and size or nil, gib, gib(size))
+  rate("disk read", "read", "io")
+  rate("disk write", "write", "io")
+  rate("net down", "rx", "net")
+  rate("net up", "tx", "net")
+  return { name = h.name, environment = nil_if_null(h.environment), rows = rows }
+end
+
 -- Every VM fleetd told of, by machine_key: its name, what it runs, and its
 -- config; and each machine they run on, as its fleetd describes it, or the
 -- bridge for its own.
@@ -210,7 +310,16 @@ local function describe_host(h)
   if nil_if_null(h.memory) then
     add("memory", nil_if_null(h.available) and (gib(h.available) .. " free of " .. gib(h.memory)) or gib(h.memory))
   end
+  local r = nil_if_null(h.rates)
+  if r and nil_if_null(r.mem) then add("mem traffic", per_sec(r.mem)) end
+  if r then add("cpu busy", string.format("%d%%", r.cpu * 100 + 0.5)) end
   if type(h.load) == "table" then add("load", table.concat(vim.tbl_map(function(n) return string.format("%.2f", n) end, h.load), " ")) end
+  local disks = type(h.disks) == "table" and h.disks or {}
+  for _, d in ipairs(disks) do add("disk " .. d.mount, gib(d.used) .. " of " .. gib(d.size)) end
+  if r then
+    add("disk io", per_sec(r.read) .. " read · " .. per_sec(r.write) .. " written")
+    add("network", per_sec(r.rx) .. " down · " .. per_sec(r.tx) .. " up")
+  end
   if nil_if_null(h.uptime) then add("up", duration(h.uptime)) end
   add("environment", h.environment)
   local here, vms = 0, 0
@@ -431,6 +540,19 @@ local function state()
   local spawns = fleet and fleet.spawns or {}
   local shown = {}
   local groups = (by == "project" and by_project or by_machine)(machine, spawns, shown)
+  -- With m, each machine's resources: under its environment's heading,
+  -- above the cards; grouped by project, all of them first.
+  if monitor then
+    local panels = {}
+    for key, m in pairs(machines()) do
+      local p = m.host and panel(key, m.host)
+      if p then table.insert(panels, p) end
+    end
+    table.sort(panels, function(a, b) return (a.environment or "") .. "/" .. a.name < (b.environment or "") .. "/" .. b.name end)
+    for _, g in ipairs(groups) do
+      g.monitor = vim.tbl_filter(function(p) return not g.name or p.environment == g.name end, panels)
+    end
+  end
   -- The queue: what's waiting or over, and a running spawn no card shows.
   local queue = {}
   for _, s in ipairs(spawns) do
@@ -446,7 +568,7 @@ local function state()
     end
   end
   return {
-    by = by, queue = queue, asking = asking, groups = groups, selected = selected, detail = at and describe(machines()[at]) or nil,
+    by = by, monitor = monitor, queue = queue, asking = asking, groups = groups, selected = selected, detail = at and describe(machines()[at]) or nil,
     problem = problem, loading = (not fleet and not problem) or nil,
   }
 end
@@ -459,7 +581,7 @@ local function render_text()
   if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
   local s = state()
   local short = require("corkboard.usage.transcript").short
-  local lines, map, spans = { "Fleet      j/k · h/l card · a approve · x stop · <CR> open · g by " .. (by == "machine" and "project" or "machine") .. " · R refresh", "" }, {}, {}
+  local lines, map, spans = { "Fleet      j/k · h/l card · a approve · x stop · <CR> open · g by " .. (by == "machine" and "project" or "machine") .. " · m resources · R refresh", "" }, {}, {}
   if s.problem then table.insert(lines, "  " .. s.problem) end
   if s.asking then table.insert(lines, "  stop " .. short(s.asking.task, 50) .. "?  y yes · n no") end
   if s.loading then table.insert(lines, "  asking the Worker…") end
@@ -472,6 +594,12 @@ local function render_text()
       table.insert(lines, table.concat(head, "  · "))
     end
     if g.silent then table.insert(lines, "  (its fleetd hasn't said what runs there)") end
+    for _, p in ipairs(g.monitor or {}) do
+      table.insert(lines, "  " .. p.name .. "  resources")
+      for _, row in ipairs(p.rows) do
+        table.insert(lines, string.format("    %-10s %s %10s / %-16s %s", row.label, cells(row.frac, 20), row.value, row.max, spark(vim.tbl_map(function(s) return s.frac end, row.history), HISTORY)))
+      end
+    end
     if g.name and #g.cards == 0 and not g.silent then table.insert(lines, "  nothing running") end
     for _, card in ipairs(g.cards) do
       table.insert(lines, "  " .. card.name .. (card.label and ("  " .. card.label) or "") .. (card.memory and ("  " .. card.memory) or ""))
@@ -524,26 +652,37 @@ local function redraw()
   push_state()
 end
 
--- What the Worker has now; on the user's socket from the first.
+-- What the Worker has now; on the user's socket from the first. Not waited
+-- for: the Worker can take seconds, and entering the tab is what asks. Only
+-- the latest load's answer is kept.
+local loads = 0
 function M.load()
   if not cloud().enabled() then
     problem = "the fleet view needs corkboard's bridge and the cloud"
     return redraw()
   end
-  local ok, res = pcall(function()
-    if not following then
-      cloud().call("fleet_subscribe")
-      following = true
-    end
-    return cloud().call("fleet_get")
-  end)
-  if ok then
-    fleet, problem = res, nil
-    sessions = res.sessions or {}
-  else
-    problem = tostring(res)
+  loads = loads + 1
+  local n = loads
+  local function get()
+    cloud().call_async("fleet_get", function(err, res)
+      if n ~= loads then return end
+      if err then
+        problem = tostring(err)
+      else
+        fleet, problem = res, nil
+        sessions = res.sessions or {}
+        for key, m in pairs(machines()) do
+          if m.host then remember(key, m.host) end
+        end
+      end
+      redraw()
+    end)
   end
-  redraw()
+  if following then return get() end
+  cloud().call_async("fleet_subscribe", function(err)
+    if not err then following = true end
+    get()
+  end)
 end
 
 -- Changes come in bursts (a spawn's claim, its state, the slot's): one
@@ -599,9 +738,10 @@ end
 local function act(op, verb)
   local s = selected_spawn()
   if not s then return end
-  local ok, err = pcall(cloud().call, op, s.id)
-  if not ok then vim.notify("corkboard: " .. verb .. " " .. s.id .. ": " .. tostring(err), vim.log.levels.WARN) end
-  reload()
+  cloud().call_async(op, function(err)
+    if err then vim.notify("corkboard: " .. verb .. " " .. s.id .. ": " .. tostring(err), vim.log.levels.WARN) end
+    reload()
+  end, s.id)
 end
 
 function M.approve() act("fleet_approve", "approving") end
@@ -623,13 +763,14 @@ function M.answer(yes)
   local ui = require("corkboard")
   local id, name = "stop-" .. a.id, require("corkboard.usage.transcript").short(a.task, 40)
   ui.toast(id, "pending", "stopping " .. name)
-  local ok, err = pcall(cloud().call, "fleet_stop", a.id)
-  if ok then
-    ui.toast(id, "done", "stopped " .. name)
-  else
-    ui.toast(id, "error", "couldn't stop " .. name .. ": " .. tostring(err))
-  end
-  reload()
+  cloud().call_async("fleet_stop", function(err)
+    if err then
+      ui.toast(id, "error", "couldn't stop " .. name .. ": " .. tostring(err))
+    else
+      ui.toast(id, "done", "stopped " .. name)
+    end
+    reload()
+  end, a.id)
 end
 
 -- While x's question is up, these answer it; otherwise, what they did.
@@ -669,13 +810,14 @@ local function open_slot(m)
     local ui = require("corkboard")
     local id = "session-" .. m.environment
     ui.toast(id, "pending", "starting a " .. template .. " session in " .. m.environment)
-    local ok, err = pcall(cloud().call, "fleet_session", m.environment, template)
-    if ok then
-      ui.toast(id, "done", template .. " session queued in " .. m.environment)
-    else
-      ui.toast(id, "error", "couldn't start a session in " .. m.environment .. ": " .. tostring(err))
-    end
-    reload()
+    cloud().call_async("fleet_session", function(err)
+      if err then
+        ui.toast(id, "error", "couldn't start a session in " .. m.environment .. ": " .. tostring(err))
+      else
+        ui.toast(id, "done", template .. " session queued in " .. m.environment)
+      end
+      reload()
+    end, m.environment, template)
   end
   if #names == 1 then return go(names[1]) end
   vim.ui.select(names, { prompt = "Template" }, go)
@@ -795,6 +937,11 @@ function M.group()
   redraw()
 end
 
+function M.monitor()
+  monitor = not monitor
+  redraw()
+end
+
 -- A click on a spawn or a session in the browser.
 function M.select(id, win)
   if win and vim.api.nvim_win_is_valid(win) then vim.api.nvim_set_current_win(win) end
@@ -821,6 +968,7 @@ local function buffer()
     a = { M.approve, "approve the spawn" },
     x = { M.stop, "stop the spawn" },
     g = { M.group, "group by machine or project" },
+    m = { M.monitor, "show or hide each machine's resources" },
     R = { M.load, "refresh" },
     h = { pinned.nav("left", items, function() card_step(-1) end), "left" },
     l = { pinned.nav("right", items, function() card_step(1) end), "right" },
@@ -840,10 +988,12 @@ local function buffer()
   vim.api.nvim_create_autocmd("BufWinEnter", {
     buffer = buf,
     callback = function()
+      -- Loaded again while shown: each machine's busyness is fresh to
+      -- fleetd's last word on it (queue.ts's TELL_EVERY).
       if not timer:is_active() then
-        timer:start(30000, 30000, vim.schedule_wrap(function()
+        timer:start(15000, 15000, vim.schedule_wrap(function()
           if #vim.fn.win_findbuf(buf) == 0 then return timer:stop() end
-          redraw()
+          M.load()
         end))
       end
     end,

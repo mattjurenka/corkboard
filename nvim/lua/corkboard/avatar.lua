@@ -7,9 +7,12 @@
 -- opened is only shown.
 --
 --   m   mute or unmute
---   s   stop what it's saying
+--   s   stop what it's saying (and showing off)
+--   d   show it off: its intro, a pat, two pokes and a treat
 --
--- :Avatar opens it beside this tab's session, or closes it.
+-- :Avatar opens it beside this tab's session, or closes it; :Avatar demo
+-- shows it off, and :Avatar demo {persona}... (or all) shows them off in
+-- turn, opening it if it isn't.
 
 local M = {}
 
@@ -19,7 +22,7 @@ local TAIL = 256 * 1024
 local SAY = "mcp__corkboard-ui__say"
 local EMOTE = "mcp__corkboard-ui__emote"
 
-local panels = {} -- session buffer -> { buf, timer, path, offset, rest, said, muted, skip }
+local panels = {} -- session buffer -> { buf, timer, path, offset, rest, said, muted, skip, demos, demo }
 
 local function session_in_tab()
   local cur = vim.api.nvim_get_current_buf()
@@ -58,10 +61,16 @@ local function persona(src)
   return require("corkboard.personas").id(ok and id or nil)
 end
 
--- Its skin colour, if its brain gives one.
+-- Skins for the default, one picked at random for each session.
+local SKINS = { "#f6d7c3", "#eac0a2", "#d9a77f", "#c68c62", "#a86f4a", "#8a5537", "#6b3f28", "#4e2c1c" }
+
+-- Its skin colour, if its brain gives one; with no persona, the default's
+-- random one.
 local function skin(src)
-  local ok, _, colour = pcall(require("corkboard.brains").persona_of, vim.b[src].corkboard_brain)
-  return ok and colour or nil
+  local ok, id, colour = pcall(require("corkboard.brains").persona_of, vim.b[src].corkboard_brain)
+  if ok and (id or colour) then return colour end
+  vim.b[src].corkboard_skin = vim.b[src].corkboard_skin or SKINS[math.random(#SKINS)]
+  return vim.b[src].corkboard_skin
 end
 
 local function push(src)
@@ -73,8 +82,20 @@ local function push(src)
     muted = a.muted,
     skip = a.skip,
     persona = persona(src),
-    skin = skin(src),
+    -- null, not left out: the page keeps what a state leaves out.
+    skin = skin(src) or vim.NIL,
+    -- Sent once, so a panel come back to doesn't show off again.
+    demo = a.demo or vim.NIL,
   })
+  a.demo = nil
+end
+
+-- The page shows off the personas of, or its own.
+local function demo(src, of)
+  local a = panels[src]
+  a.demos = a.demos + 1
+  a.demo = { n = a.demos, of = #of > 0 and of or vim.NIL }
+  push(src)
 end
 
 -- The log's new whole lines since the last read. A new log (a /clear)
@@ -138,7 +159,7 @@ local function panel_buf(src)
   vim.bo[p].filetype = "corkboard"
   vim.b[p].corkboard_view = "avatar"
   vim.b[p].corkboard_source = src
-  a = { buf = p, said = {}, muted = false, skip = 0 }
+  a = { buf = p, said = {}, muted = false, skip = 0, demos = 0 }
   panels[src] = a
   vim.keymap.set("n", "m", function()
     a.muted = not a.muted
@@ -148,6 +169,7 @@ local function panel_buf(src)
     a.skip = a.skip + 1
     push(src)
   end, { buffer = p, nowait = true, desc = "avatar: stop talking" })
+  vim.keymap.set("n", "d", function() demo(src, {}) end, { buffer = p, nowait = true, desc = "avatar: show it off" })
   a.timer = vim.uv.new_timer()
   a.timer:start(0, 400, vim.schedule_wrap(function() read(src) end))
   for _, b in ipairs({ src, p }) do
@@ -211,6 +233,30 @@ end
 
 M.open = open
 
+-- :Avatar demo: this tab's session's face shows off the personas ids
+-- ("all", each one), or its own; opened first if it isn't, with a moment
+-- for its page to be there to see it.
+function M.demo(ids)
+  local src, swin = session_in_tab()
+  if not src then return vim.notify("corkboard: no Claude Code session in this tab") end
+  local personas = require("corkboard.personas")
+  local of = {}
+  for _, id in ipairs(ids) do
+    if id == "all" then
+      of = vim.list_extend({}, personas.IDS)
+      break
+    end
+    if not vim.tbl_contains(personas.IDS, id) then return vim.notify("corkboard: no persona " .. id) end
+    table.insert(of, id)
+  end
+  local a = panels[src]
+  if a and vim.api.nvim_buf_is_valid(a.buf) and #vim.fn.win_findbuf(a.buf) > 0 then return demo(src, of) end
+  open(src, swin)
+  vim.defer_fn(function()
+    if panels[src] then demo(src, of) end
+  end, 1500)
+end
+
 -- How a session's panel is, if it's open in tab, for corkboard.restore to
 -- keep.
 function M.kept(src, tab)
@@ -243,7 +289,17 @@ function M.heard(src)
 end
 
 function M.setup()
-  vim.api.nvim_create_user_command("Avatar", M.toggle, { desc = "corkboard: a face for this tab's Claude Code session" })
+  vim.api.nvim_create_user_command("Avatar", function(o)
+    if o.fargs[1] == "demo" then return M.demo(vim.list_slice(o.fargs, 2)) end
+    M.toggle()
+  end, {
+    nargs = "*",
+    complete = function(_, line)
+      if not line:match("^%S+%s+demo%s") then return { "demo" } end
+      return vim.list_extend({ "all" }, require("corkboard.personas").IDS)
+    end,
+    desc = "corkboard: a face for this tab's Claude Code session",
+  })
 end
 
 return M

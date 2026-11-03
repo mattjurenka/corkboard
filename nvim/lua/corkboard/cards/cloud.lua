@@ -59,7 +59,30 @@ function M.make(k, name, root) return request("make", k, name, root) end
 
 -- The bridge's answer: { id, error?, result? }.
 function M.answer(a)
-  if waiting[a.id] then answers[a.id] = a end
+  local w = waiting[a.id]
+  if type(w) == "function" then
+    waiting[a.id] = nil
+    vim.schedule(function() w(a.error, a.result) end)
+  elseif w then
+    answers[a.id] = a
+  end
+end
+
+-- A request whose answer comes to done(err, result) later, from the main
+-- loop, so the keys typed meanwhile run: for what a tab loads on entering
+-- it, which shouldn't hold up the next one.
+local function request_async(op, done, ...)
+  local chan = channel()
+  if not chan then return vim.schedule(function() done("corkboard: cloud boards need the bridge") end) end
+  last_id = last_id + 1
+  local id = last_id
+  waiting[id] = done
+  vim.rpcnotify(chan, "corkboard.cloud", id, op, ...)
+  vim.defer_fn(function()
+    if waiting[id] ~= done then return end
+    waiting[id] = nil
+    done("corkboard: the cloud didn't answer " .. op .. " in 30s")
+  end, 30000)
 end
 
 -- The board's key. A project's board is found by its first commit, so every
@@ -334,6 +357,8 @@ M.delete = remove("delete")
 
 -- Any of the bridge's operations, for corkboard.plan's plan_* ones.
 M.call = request
+-- call_async(op, done, args...): done(err, result) once it's answered.
+M.call_async = request_async
 
 -- The same without waiting, nor hearing how it went: for what goes often
 -- and in order, like a mirrored terminal's keys. Id 0 is never waited on.
@@ -346,7 +371,7 @@ end
 -- It can read the board and work on that card only.
 function M.agent_token(id, agent) return request("token", key(), id:upper(), agent) end
 
-function M.revoke(token) request("revoke", key(), token) end
+function M.revoke(token) M.send("revoke", key(), token) end
 
 -- A token for Pepper's MCP session, the only one that sees the goals:
 -- { token, url, expires_at }.
@@ -356,7 +381,7 @@ function M.pepper_token() return request("pepper_token") end
 function M.brain_token(brain) return request("brain_token", brain) end
 
 -- Tell the Worker card id's agent is still running, so its claim doesn't
--- lapse (cloud/src/board.ts's leases). Not waited for: a heartbeat that
+-- lapse (the hosted Worker's board.ts leases). Not waited for: a heartbeat that
 -- doesn't arrive is made up by the next one.
 function M.touch(id, agent)
   local chan = channel()

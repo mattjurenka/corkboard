@@ -8,7 +8,7 @@
 //   here and written to PEPPER_TOKEN_FILE, which the session's corkboard MCP
 //   server and memory hooks read. Replaced each day, the old one revoked.
 //
-// - The phone's chat (cloud/src/user.ts): each new message of the user's is
+// - The phone's chat (the hosted Worker's user.ts): each new message of the user's is
 //   pasted into the session as a line starting "[phone]", and Pepper answers
 //   it with chat_send. One session, whichever side is talking.
 
@@ -50,6 +50,8 @@ async function api(method: string, path: string, body?: unknown) {
     method,
     headers: { Authorization: `Bearer ${await token()}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
     body: body === undefined ? undefined : JSON.stringify(body),
+    // One that never answers would hold up every tick after it.
+    signal: AbortSignal.timeout(30_000),
   });
   const json = (await res.json().catch(() => ({}))) as any;
   if (!res.ok) throw new Error(`pepperd: ${method} ${path}: ${json.error ?? res.status}`);
@@ -66,7 +68,7 @@ const tmux = (args: string[], stdin?: string) => spawn([...TMUX, ...args], stdin
 
 // Its token ---------------------------------------------------------------------------
 
-// Tokens last 7 days (cloud/src/api.ts); a new one each day leaves room for
+// Tokens last 7 days (the hosted Worker's api.ts); a new one each day leaves room for
 // days this isn't running. The file is written in place: it's the session's
 // to read, not to replace.
 async function renew(state: State) {

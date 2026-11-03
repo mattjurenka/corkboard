@@ -1,5 +1,5 @@
 // The replicas as the Worker's API had them: a board's records as cards
-// (cloud/src/cards.ts's Card, with its log), a brain's as its settings,
+// (lib/model/cards.ts's Card, with its log), a brain's as its settings,
 // notes and log entries (memory.ts's). Reads merge from the replica each
 // time; writes are changes to it, which replicas.ts pushes.
 //
@@ -8,8 +8,8 @@
 // conflicts. A note still has a version, counted up by each write, for
 // note_write's check, which only holds on this node.
 
-import { type AgentState, type Card, type Fields, type LogEntry, type Priority, type Status, Invalid, fields as checkFields } from "../../cloud/src/cards";
-import { type Note, type NoteInput, today } from "../../cloud/src/plans";
+import { type AgentState, type Card, type Fields, type LogEntry, type Priority, type Status, Invalid, fields as checkFields } from "../../lib/model/cards";
+import { type Note, type NoteInput, today } from "../../lib/model/plans";
 import type { MergedCard } from "../../lib/e2ee/merge";
 import { b64url } from "../../lib/e2ee/wire";
 import { random } from "../../lib/e2ee/keys";

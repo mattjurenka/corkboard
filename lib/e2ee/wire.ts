@@ -1,5 +1,5 @@
 // What the relay and its clients agree on, byte for byte, with no crypto
-// library in it: the Worker (cloud/src/e2ee.ts) imports this alone and
+// library in it: the Worker (relay/src/routes.ts) imports this alone and
 // checks signatures with WebCrypto, so it carries none of @noble.
 //
 // Everything signed is a domain-separated line and the canonical JSON of a
@@ -143,7 +143,7 @@ export type AccountView = { id: string; key: string; box: string; proof: { creat
 // account's rotations, its new cert, and the new root sealed to its box key.
 export type Rotated = { rotations: Signed<Rotation>[]; cert: Signed<DeviceCert>; root: string };
 
-// Limits the relay holds clients to (cloud/src/log.ts).
+// Limits the relay holds clients to (relay/src/log.ts).
 export const LIMITS = {
   // One op's ciphertext.
   op: 64 * 1024,

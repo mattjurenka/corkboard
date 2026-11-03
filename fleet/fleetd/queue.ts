@@ -1,4 +1,4 @@
-// fleetd's side of the Worker's queue (cloud/src/fleet.ts): it tells the
+// fleetd's side of the Worker's queue (its fleet.ts): it tells the
 // Worker what this environment can run, claims the spawns queued for it,
 // and says how each one went. Signed in as the bridge is (bridge/cloud.ts,
 // the owner's token); not signed in, fleetd runs the CLI's spawns alone.
@@ -19,6 +19,9 @@ import { accountFor, answer, egressOf, manifest, occupancy, OVERHEAD, read, SPAW
 // This machine's name, unless told otherwise.
 export const ENVIRONMENT = process.env.CORKBOARD_FLEET_ENVIRONMENT ?? hostname();
 const LOOK_EVERY = 60_000;
+// How often the machine's busyness goes up when nothing else has changed:
+// the fleet view's resources are no staler than this.
+const TELL_EVERY = 15_000;
 
 const now = () => new Date().toISOString();
 
@@ -109,7 +112,7 @@ export class Queue {
       if (active) this.running = { ...occupancy(manifest(), spawns(), active), host: host() };
       if (this.running && told(this.running) !== this.told) this.dirty = true;
       await this.report();
-      if (this.dirty || Date.now() - this.lastLook > LOOK_EVERY) {
+      if (this.dirty || Date.now() - this.lastLook > TELL_EVERY) {
         this.dirty = false;
         this.lastLook = Date.now();
         await this.look();

@@ -1,4 +1,4 @@
--- What brains hold (cloud/src/holds.ts): each hold, what it's for, whether
+-- What brains hold (the hosted Worker's holds.ts): each hold, what it's for, whether
 -- its secret is kept here (and handed to a spawn holding it) or where it is
 -- kept, and the brains and templates holding it; above them, the spawns an
 -- agent asked for that wait on you because of one.
@@ -144,18 +144,24 @@ local function redraw()
   push_state()
 end
 
+local loads = 0
 function M.load()
   if not cloud().enabled() then
     problem = "holds need corkboard's bridge and the cloud"
     return redraw()
   end
-  local ok, res = pcall(cloud().call, "brains_holds")
-  if ok then
-    holds, waiting, problem = list(res.holds), list(res.waiting), nil
-  else
-    problem = tostring(res)
-  end
-  redraw()
+  -- Not waited for, as the fleet's (fleet.lua): only the latest is kept.
+  loads = loads + 1
+  local n = loads
+  cloud().call_async("brains_holds", function(err, res)
+    if n ~= loads then return end
+    if err then
+      problem = tostring(err)
+    else
+      holds, waiting, problem = list(res.holds), list(res.waiting), nil
+    end
+    redraw()
+  end)
 end
 
 local pending = false

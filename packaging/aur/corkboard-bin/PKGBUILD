@@ -2,33 +2,35 @@
 #
 # The release's Linux tarball (electron-builder's tar.gz: Electron, the
 # compiled bridge and Neovim), in /opt/corkboard. It doesn't update itself;
-# a new release is a new pkgver (packaging/aur/update.sh).
+# a new release is a new pkgver (packaging/aur/update.sh). _version is the
+# release's, which can have a -rc that pkgver can't.
 pkgname=corkboard-bin
-pkgver=0.1.0
+_version=0.1.0-rc6
+pkgver=${_version//-/}
 pkgrel=1
 pkgdesc="Neovim with Claude Code agents beside it"
 arch=('x86_64' 'aarch64')
 url="https://corkboard.fyi"
-license=('LicenseRef-corkboard')
+license=('AGPL-3.0-only')
 depends=('git' 'claude-code' 'ripgrep' 'fd' 'gtk3' 'nss' 'alsa-lib' 'libxss' 'libxtst' 'libsecret' 'xdg-utils')
 provides=('corkboard')
 conflicts=('corkboard')
 options=('!strip' '!debug')
-_release="https://github.com/mattjurenka/corkboard/releases/download/v${pkgver}"
+_release="https://github.com/mattjurenka/corkboard/releases/download/v${_version}"
 source=("corkboard.desktop"
-        "corkboard-${pkgver}.png::https://raw.githubusercontent.com/mattjurenka/corkboard/v${pkgver}/app/build/icons/512x512.png")
-source_x86_64=("${_release}/corkboard-${pkgver}-linux-x64.tar.gz")
-source_aarch64=("${_release}/corkboard-${pkgver}-linux-arm64.tar.gz")
-sha256sums=('SKIP'
-            'SKIP')
-sha256sums_x86_64=('SKIP')
-sha256sums_aarch64=('SKIP')
+        "corkboard-${pkgver}.png::https://raw.githubusercontent.com/mattjurenka/corkboard/v${_version}/app/build/icons/512x512.png")
+source_x86_64=("${_release}/corkboard-${_version}-linux-x64.tar.gz")
+source_aarch64=("${_release}/corkboard-${_version}-linux-arm64.tar.gz")
+sha256sums=('72b13912c59995b96356ab8790dd8cc834c7369cd3bd1b66ccb8a0b09e65bb1f'
+            '6256d201100e18a24b5ecaa0036cd75697ac7ce158d3fb1ab88224145ac208c1')
+sha256sums_x86_64=('e07e85865765f0df556386631867d64206ad0523ceb66c2045d2bb8b4b0c2230')
+sha256sums_aarch64=('40b5a42278703ebcaefb835fb20b0f317277255c4d4c00b5c9aba4c374fd37b9')
 
 package() {
   local _arch=x64
   [ "$CARCH" = aarch64 ] && _arch=arm64
   install -d "$pkgdir/opt/corkboard" "$pkgdir/usr/bin"
-  cp -a "corkboard-${pkgver}-linux-${_arch}/." "$pkgdir/opt/corkboard/"
+  cp -a "corkboard-${_version}-linux-${_arch}/." "$pkgdir/opt/corkboard/"
   chmod 4755 "$pkgdir/opt/corkboard/chrome-sandbox"
   ln -s /opt/corkboard/corkboard "$pkgdir/usr/bin/corkboard"
   install -Dm644 corkboard.desktop "$pkgdir/usr/share/applications/corkboard.desktop"

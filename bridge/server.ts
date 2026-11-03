@@ -232,7 +232,7 @@ function resolveCwd(raw: string | null): { cwd: string; error?: string } {
   return { cwd, error: `no such directory: ${cwd}` };
 }
 
-// The portal's way in (cloud/src/portal.ts): a ticket the Worker made for
+// The portal's way in (the hosted Worker's portal.ts): a ticket the Worker made for
 // one board on this bridge, redeemed there as this bridge, for where the
 // board's clone is here, or else the remotes to clone it from into ~/src.
 // Then the page, with this bridge's token, at that project.
@@ -595,7 +595,7 @@ function wasmPlugins(req: Request, url: URL): Response {
 
 // /api/git/: the Worker's, with this bridge's sign-in, for a page with no
 // machine that this bridge serves. The Worker serving the page itself does
-// the same on its own origin (cloud/src/git.ts); the page asks either alike.
+// the same on its own origin (the hosted Worker's git.ts); the page asks either alike.
 async function gitProxy(req: Request, url: URL): Promise<Response> {
   const why = refuseFetch(req);
   if (why || (req.method !== "GET" && req.method !== "POST")) return new Response(why ?? "GET or POST", { status: 403 });

@@ -28,6 +28,15 @@ Downloads are on the [releases page](https://github.com/mattjurenka/corkboard/re
 The macOS, Windows and AppImage builds update themselves. On Intel Macs the
 avatar has no voice.
 
+## Self-host
+
+Everything here runs without corkboard.fyi: the app, the bridge, the node
+(`corkboard-bridge serve`) and the relay its encrypted accounts sync through.
+To run your own relay, see [relay/README.md](relay/README.md); then
+`corkboard-bridge server <url>` points a machine at it. The hosted
+corkboard.fyi (sign-in, spawns, the portal, the phone app) is a separate,
+closed service.
+
 ## Build from source
 
 With [bun](https://bun.sh) 1.4:
@@ -63,3 +72,9 @@ and `.#app` (the window).
 
 Signing uses the secrets named in `release.yml`; without them the builds are
 unsigned (macOS will want right-click, Open; Windows SmartScreen will warn).
+
+## License
+
+AGPL-3.0 ([LICENSE](LICENSE)), except `lib/`, which is MIT
+([lib/LICENSE](lib/LICENSE)) so other clients can use the encryption and
+the card model.

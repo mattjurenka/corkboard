@@ -10,11 +10,11 @@
 -- against the current plan, in hunks like a review: accepted whole, or
 -- with hunks undone first.
 --
--- The plan is today's on corkboard's Worker (cloud/src/plans.ts), read
+-- The plan is today's on corkboard's Worker (lib/model/plans.ts), read
 -- through the bridge and followed live: the assistant proposes (MCP
 -- plan_propose), the proposal shows here as a diff against the day, and
 -- accepting it tells the Worker, which writes the Claude calendar
--- (cloud/src/calendar.ts). A first plan of the day is a
+-- (the hosted Worker's calendar.ts). A first plan of the day is a
 -- proposal against an empty day. It lives in the day plan's window
 -- (corkboard.window == "plan").
 
@@ -480,33 +480,46 @@ end
 local following = false
 
 -- The goals, read again. They change only when Pepper rewrites a goal note,
--- which nothing tells of: read with the plan, and on opening them.
+-- which nothing tells of: read with the plan, and on opening them. Shown
+-- once they come.
 local function load_goals()
-  local ok, res = pcall(cloud().call, "goals")
-  if ok and type(res) == "table" then goals = res end
+  cloud().call_async("goals", function(err, res)
+    if err or type(res) ~= "table" then return end
+    goals = res
+    redraw()
+  end)
 end
 
+-- Not waited for, like the fleet view's (fleet.lua): the window opens with
+-- it, and the keys typed meanwhile should run. Only the latest load's
+-- answer is kept.
+local loads = 0
 function M.load()
   if not cloud().enabled() then
     problem = "the day plan needs corkboard's bridge and the cloud"
     return redraw()
   end
   load_goals()
-  local ok, res = pcall(function()
-    if not following then
-      cloud().call("plan_subscribe")
-      following = true
-    end
-    return cloud().call("plan_get", today())
-  end)
-  if not ok then
-    problem = tostring(res)
-    return redraw()
+  loads = loads + 1
+  local n = loads
+  local function get()
+    cloud().call_async("plan_get", function(err, res)
+      if n ~= loads then return end
+      if err then
+        problem = tostring(err)
+        return redraw()
+      end
+      -- Read again on purpose (R): the proposal as the Worker has it, without
+      -- the hunks undone here.
+      proposal = nil
+      M.apply(res)
+    end, today())
   end
-  -- Read again on purpose (R): the proposal as the Worker has it, without
-  -- the hunks undone here.
-  proposal = nil
-  M.apply(res)
+  if following then return get() end
+  cloud().call_async("plan_subscribe", function(err)
+    if not err then following = true end
+    get()
+  end)
 end
 
 -- The accept whose calendar trouble was said, so it's said once.
@@ -580,10 +593,7 @@ local PLAN_ACTIONS = {
 local GOAL_ACTIONS = {
   back = function() M.show() end,
   claude = PLAN_ACTIONS.claude,
-  reset = function()
-    load_goals()
-    redraw()
-  end,
+  reset = load_goals,
 }
 
 local function selected_ranked() return day.ranked[selected_rank] or {} end

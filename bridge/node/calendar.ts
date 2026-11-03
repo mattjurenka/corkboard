@@ -1,4 +1,4 @@
-// The Claude calendar, written by the node: cloud/src/calendar.ts's plan
+// The Claude calendar, written by the node: the hosted Worker's calendar.ts plan
 // write, with the Google refresh token on this machine instead of in the
 // Worker's User object. An accepted day goes on the calendar as the Worker
 // wrote it: clear the rest of the day, write the blocks that aren't fixed,
@@ -14,7 +14,7 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
-import { DAY_STARTS_HOUR, type Plan, today } from "../../cloud/src/plans";
+import { DAY_STARTS_HOUR, type Plan, today } from "../../lib/model/plans";
 import { random } from "../../lib/e2ee/keys";
 import { b64url } from "../../lib/e2ee/wire";
 
@@ -76,7 +76,7 @@ function minutesNow(timeZone: string, date: string): number {
   return h * 60 + m + (new Intl.DateTimeFormat("en-CA", { timeZone }).format(at) === date ? 0 : 24 * 60);
 }
 
-// cloud/src/calendar.ts's: what's still ahead (all of another day's) and
+// the hosted Worker's calendar.ts: what's still ahead (all of another day's) and
 // isn't fixed. Copied, since that file brings the Worker's types with it.
 function calendarBlocks(blocks: Plan["day"]["blocks"], from: number) {
   return blocks.filter((b) => b.kind !== "fixed" && b.stop > from).map((b) => ({ title: b.title, desc: b.desc ?? "", start: Math.max(b.start, from), stop: b.stop }));

@@ -44,8 +44,13 @@
       nixosModules.fleetHost = { pkgs, lib, ... }: {
         # Once, however many modules here import it.
         key = "corkboard/fleetHost";
-        imports = [ ./fleet/host/host.nix ];
+        imports = [ ./fleet/host/host.nix self.nixosModules.counters ];
         my.agentVms.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.fleet;
+      };
+      # What the fleet view's resources need root for (fleet/host/counters.nix).
+      nixosModules.counters = {
+        key = "corkboard/counters";
+        imports = [ ./fleet/host/counters.nix ];
       };
       # The whole fleet on a host: `services.corkboard.fleet` (fleet/host/corkboard.nix).
       nixosModules.fleet = {
@@ -71,45 +76,11 @@
       } // (wasmOn pkgs.stdenv.hostPlatform.system).checks);
 
       devShells = forAll (pkgs:
-        let
-          # The phone app (android/): `nix develop .#android`, then
-          # `gradle -p android assembleDebug`. The SDK is unfree and needs
-          # its license accepted. `.#android-emulator` adds an emulator and
-          # an Android 15 image, to run it without a phone.
-          pkgs' = import nixpkgs {
-            system = pkgs.stdenv.hostPlatform.system;
-            config = { allowUnfree = true; android_sdk.accept_license = true; };
-          };
-          androidShell = emulator:
-            let
-              sdk = (pkgs'.androidenv.composeAndroidPackages ({
-                platformVersions = [ "35" ];
-                buildToolsVersions = [ "35.0.0" ];
-                includeNDK = false;
-                includeEmulator = emulator;
-              } // pkgs.lib.optionalAttrs emulator {
-                includeSystemImages = true;
-                systemImageTypes = [ "google_apis" ];
-                abiVersions = [ "x86_64" ];
-              })).androidsdk;
-              home = "${sdk}/libexec/android-sdk";
-            in
-            pkgs'.mkShell {
-              packages = [ sdk pkgs'.jdk17 pkgs'.gradle ];
-              ANDROID_HOME = home;
-              ANDROID_SDK_ROOT = home;
-              JAVA_HOME = pkgs'.jdk17.home;
-              # Gradle's own aapt2 from Maven is linked for other distros.
-              GRADLE_OPTS = "-Dorg.gradle.project.android.aapt2FromMavenOverride=${home}/build-tools/35.0.0/aapt2";
-            };
-        in
         {
           default = pkgs.mkShell {
             packages = [ pkgs.neovim pkgs.bun pkgs.ripgrep pkgs.fd pkgs.electron ];
             CORKBOARD_PLUGINS = pluginPath pkgs;
           };
-          android = androidShell false;
-          android-emulator = androidShell true;
         } // pkgs.lib.optionalAttrs ((wasmOn pkgs.stdenv.hostPlatform.system).shell != null) {
           wasm = (wasmOn pkgs.stdenv.hostPlatform.system).shell;
         });
@@ -229,7 +200,7 @@
             makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-memory-sync \
               --add-flags $share/bridge/memory-sync.ts
           '';
-          meta.mainProgram = "corkboard-bridge";
+          meta = { mainProgram = "corkboard-bridge"; license = pkgs.lib.licenses.agpl3Only; };
         };
 
         # The pinned Claude Code, for a profile outside NixOS (the droplet's
@@ -259,7 +230,7 @@
             makeWrapper ${pkgs.lib.getExe pkgs.electron} $out/bin/corkboard-app \
               --add-flags $out/share/corkboard-app
           '';
-          meta.mainProgram = "corkboard-app";
+          meta = { mainProgram = "corkboard-app"; license = pkgs.lib.licenses.agpl3Only; };
         };
 
         # fleetd and corkboard-fleet (fleet/fleetd), run by bun, laid out as
@@ -286,7 +257,7 @@
             makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-pepperd \
               --add-flags $share/fleet/pepper/pepperd.ts
           '';
-          meta.mainProgram = "corkboard-fleet";
+          meta = { mainProgram = "corkboard-fleet"; license = pkgs.lib.licenses.agpl3Only; };
         };
 
         # Pepper's VM on the droplet (fleet/pepper/guest.nix), and the
@@ -309,7 +280,7 @@
         '';
 
         # The page the Worker serves at /edit/, with no machine behind it
-        # (wasm/edit-page.ts), built into cloud/.edit by cloud/deploy.sh.
+        # (wasm/edit-page.ts), which the hosted Worker's deploy builds.
         # Its plugins are a bridge's: corkboard, then $CORKBOARD_PLUGINS when
         # built with --impure (the deploying machine's, for its theme), then
         # snacks.nvim unless those had it.

@@ -1,4 +1,4 @@
-// The node's /mcp: the Worker's MCP tools (cloud/src/mcp.ts) for cards,
+// The node's /mcp: the Worker's MCP tools (its mcp.ts) for cards,
 // notes and memory, over the node's replicas instead of its Durable Objects.
 // Same names, descriptions and rules, so a client moved from the Worker to
 // the node sees the same tools, less those with nothing on the node yet:
@@ -12,9 +12,9 @@
 // (owner or assistant, oauth.ts). An assistant can't write the soul, and
 // neither sees the brains' goals, as on the Worker.
 
-import { AGENT_STATES, type Card, PRIORITIES, STATUSES, waitingOn } from "../../cloud/src/cards";
-import { BRAIN_ONLY_KINDS, NOTE_KINDS, OWNER_ONLY_NOTES, date, note, noteId, slug } from "../../cloud/src/plans";
-import { range } from "../../cloud/src/dates";
+import { AGENT_STATES, type Card, PRIORITIES, STATUSES, waitingOn } from "../../lib/model/cards";
+import { BRAIN_ONLY_KINDS, NOTE_KINDS, OWNER_ONLY_NOTES, date, note, noteId, slug } from "../../lib/model/plans";
+import { range } from "../../lib/model/dates";
 import { type Data, type FullCard, Invalid } from "./data";
 import type { Search } from "./search";
 

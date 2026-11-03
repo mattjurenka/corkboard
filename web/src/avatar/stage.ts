@@ -395,20 +395,41 @@ export class Stage {
   // Whether at is at its mouth: within a few centimetres of it, as it's
   // seen.
   mouthAt(at: { x: number; y: number }): boolean {
-    const vrm = this.vrm;
-    const head = vrm?.humanoid.getRawBoneNode("head");
-    if (!vrm || !head) return false;
-    const left = vrm.humanoid.getRawBoneNode("leftEye");
-    const right = vrm.humanoid.getRawBoneNode("rightEye");
-    const p =
-      left && right
-        ? left.getWorldPosition(new THREE.Vector3()).add(right.getWorldPosition(new THREE.Vector3())).multiplyScalar(0.5).add(new THREE.Vector3(0, -0.06, 0.02))
-        : head.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.01, 0.07));
+    const p = this.vrm && this.mouthPoint(this.vrm);
+    if (!p) return false;
     const { w, h } = this.size;
     const c = p.clone().project(this.camera);
     const r = p.clone().add(new THREE.Vector3(0.06, 0, 0)).project(this.camera);
     const reach = Math.hypot(((r.x - c.x) * w) / 2, ((r.y - c.y) * h) / 2);
     return Math.hypot(((at.x - c.x) * w) / 2, ((at.y - c.y) * h) / 2) < reach;
+  }
+
+  private mouthPoint(vrm: VRM): THREE.Vector3 | undefined {
+    const head = vrm.humanoid.getRawBoneNode("head");
+    if (!head) return undefined;
+    const left = vrm.humanoid.getRawBoneNode("leftEye");
+    const right = vrm.humanoid.getRawBoneNode("rightEye");
+    return left && right
+      ? left.getWorldPosition(new THREE.Vector3()).add(right.getWorldPosition(new THREE.Vector3())).multiplyScalar(0.5).add(new THREE.Vector3(0, -0.06, 0.02))
+      : head.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.01, 0.07));
+  }
+
+  // Where on it something is, in the camera's -1 to 1, for her to be
+  // touched there without a pointer (Avatar.tsx's demo): the top of her
+  // head, her mouth, or her chest.
+  spot(where: "head" | "mouth" | "body"): { x: number; y: number } | null {
+    const vrm = this.vrm;
+    if (!vrm) return null;
+    const bone = (name: "head" | "upperChest" | "chest" | "spine") => vrm.humanoid.getRawBoneNode(name)?.getWorldPosition(new THREE.Vector3());
+    const p =
+      where === "mouth"
+        ? this.mouthPoint(vrm)
+        : where === "head"
+          ? bone("head")?.add(new THREE.Vector3(0, 0.15, 0.02))
+          : (bone("upperChest") ?? bone("chest") ?? bone("spine"))?.add(new THREE.Vector3(0, 0, 0.1));
+    if (!p) return null;
+    p.project(this.camera);
+    return { x: p.x, y: p.y };
   }
 
   // What's under the pointer at: its head (or hair), the rest of it, or

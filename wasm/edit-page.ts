@@ -1,4 +1,4 @@
-// The page the Worker serves at /edit/ (cloud/wrangler.jsonc's assets): a
+// The page the Worker serves at /edit/ (its assets): a
 // page with no machine. The web build, Neovim compiled to wasm and the
 // plugins' files, laid out as a bridge serves them (bridge/server.ts's
 // /wasm/), with a manifest saying the page's own origin is the Worker, and

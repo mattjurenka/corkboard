@@ -1,4 +1,4 @@
--- The brains (.agent/plans/brains.md, cloud/src/brains.ts): who agents work
+-- The brains (.agent/plans/brains.md, the hosted Worker's brains.ts): who agents work
 -- for, each with its memory's counts, its account, what it holds, its
 -- abilities and its avatar's persona (corkboard.personas) and skin. The default
 -- one is what your own sessions remember in.
@@ -141,20 +141,26 @@ local function redraw()
   push_state()
 end
 
+local loads = 0
 function M.load()
   if not cloud().enabled() then
     problem = "brains need corkboard's bridge and the cloud"
     return redraw()
   end
-  local ok, res = pcall(cloud().call, "brains_get")
-  if ok then
-    brains, problem = res, nil
-  else
-    problem = tostring(res)
-  end
-  if not selected and brains and brains[1] then selected = brains[1].name end
-  redraw()
-  require("corkboard.avatar").personas_changed()
+  -- Not waited for, as the fleet's (fleet.lua): only the latest is kept.
+  loads = loads + 1
+  local n = loads
+  cloud().call_async("brains_get", function(err, res)
+    if n ~= loads then return end
+    if err then
+      problem = tostring(err)
+    else
+      brains, problem = res, nil
+    end
+    if not selected and brains and brains[1] then selected = brains[1].name end
+    redraw()
+    require("corkboard.avatar").personas_changed()
+  end)
 end
 
 -- A brain's persona and skin, or the default brain's for nil
@@ -505,18 +511,28 @@ local function call(op, ...)
   vim.notify("corkboard: " .. tostring(res), vim.log.levels.WARN)
 end
 
+-- All three at once, not waited for; drawn when the last answers, unless a
+-- later load or the buffer's wipeout came first.
 local function load_memory(b)
   local m = mem[b]
   if not m then return end
-  local ok, res = pcall(function()
-    return { notes = cloud().call("brains_notes", m.name), days = cloud().call("brains_days", m.name), episodes = cloud().call("brains_episodes", m.name) }
-  end)
-  if ok then
-    m.notes, m.days, m.episodes, m.problem = res.notes, res.days, res.episodes, nil
-  else
-    m.problem = tostring(res)
+  m.loads = (m.loads or 0) + 1
+  local n, got, left, problem = m.loads, {}, 3, nil
+  for _, what in ipairs({ "notes", "days", "episodes" }) do
+    cloud().call_async("brains_" .. what, function(err, res)
+      if mem[b] ~= m or m.loads ~= n then return end
+      if err then problem = problem or tostring(err) end
+      got[what] = res
+      left = left - 1
+      if left > 0 then return end
+      if problem then
+        m.problem = problem
+      else
+        m.notes, m.days, m.episodes, m.problem = got.notes, got.days, got.episodes, nil
+      end
+      redraw_memory(b)
+    end, m.name)
   end
-  redraw_memory(b)
 end
 
 -- A read-only scratch buffer below, q to close it.

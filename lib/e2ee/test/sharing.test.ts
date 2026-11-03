@@ -8,7 +8,7 @@ import { type LogTransport, Replica } from "../sync";
 import { type AccountView, type Rotation, type Signed, type WireOp, b64url } from "../wire";
 
 // The parts of sharing.ts that need no relay; the rest runs against the
-// Worker in cloud/test/e2ee.test.ts.
+// Worker in relay/test/relay.test.ts.
 
 const ORIGIN = "https://relay.test";
 

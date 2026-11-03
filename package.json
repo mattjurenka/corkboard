@@ -1,6 +1,7 @@
 {
   "name": "corkboard",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
     "dev": "bun bridge/server.ts --dev",
@@ -15,8 +16,6 @@
     "mcp": "bun mcp/board.ts",
     "latency": "bun bridge/latency.ts",
     "login": "bun bridge/cloud.ts login",
-    "test:cloud": "bun test/cloud-boards.ts",
-    "test:plan": "bun test/day-plan.ts",
     "test:fleet": "bun test --isolate fleet/fleetd",
     "test:e2ee": "bun test lib/e2ee bridge/keystore bridge/node"
   },

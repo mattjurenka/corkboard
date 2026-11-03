@@ -4,7 +4,7 @@ import { accountKeys, newRoot } from "../keys";
 import { type MailboxView, type PairTransport, approve, pairNew, parseQr } from "../pairing";
 import { CODE_ALPHABET, b64url } from "../wire";
 
-// A mailbox as the relay keeps one (cloud/src/mailbox.ts), in memory, with
+// A mailbox as the relay keeps one (relay/src/mailbox.ts), in memory, with
 // its order enforced; code: to make two that share one, for a relay in the middle.
 function mailbox(code = Array.from({ length: 10 }, () => CODE_ALPHABET[Math.floor(Math.random() * 32)]).join("")): PairTransport & { box: MailboxView } {
   const secret = "s3cret";

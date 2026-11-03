@@ -6,15 +6,20 @@
 // brain's persona (avatar/personas.ts): its model, voice and lines. A .vrm
 // file dropped on it is that persona's model from then on, in this
 // browser. A treat from the menu at its top left, dragged to her mouth, is
-// eaten. The models: tsundere.vrm (a blonde in a frilly black dress, made in
+// eaten. Asked to show off (:Avatar demo, or d in it), each persona asked
+// for in turn says its intro, has its head patted, is poked twice and is
+// fed. The models: tsundere.vrm (a blonde in a frilly black dress, made in
 // VRoid Studio for corkboard), bikini.vrm, businesswoman.vrm (in a
-// suit, also made in VRoid Studio), nerd.vrm, businessman.vrm and
-// shirtless.vrm. three.js comes with the first panel, not the page.
+// suit, also made in VRoid Studio), nerd.vrm, businessman.vrm,
+// shirtless.vrm, alien-2.vrm, diva-3.vrm and valkyrie.vrm (Terry borrows
+// the nerd's for now); all but the
+// businesswoman and businessman are fetched from corkboard.fyi the first
+// time they're on (modelAt). three.js comes with the first panel, not the page.
 
 import { useEffect, useRef, useState } from "react";
 import { Spinner } from "@/components/Spinner";
 import { cn } from "@/lib/utils";
-import { persona as personaOf, POKED, line as quip, upcoming, type Poked } from "@/avatar/personas";
+import { modelAt, persona as personaOf, POKED, line as quip, upcoming, type Poked } from "@/avatar/personas";
 import { ACTS, type ActName } from "@/avatar/acts";
 import type { Mood, Stage } from "@/avatar/stage";
 import { type Bridge, isMood, Voice } from "@/avatar/voice";
@@ -26,7 +31,9 @@ type Said = { id: string; text?: string; mood?: string; emote?: string };
 type Treat = "cheesecake" | "cookie" | "muffin";
 const TREATS: Treat[] = ["cheesecake", "cookie", "muffin"];
 
-type AvatarState = { said?: Said[]; state?: string; muted?: boolean; skip?: number; persona?: string; skin?: string };
+// A demo asked for: its count, and the personas to show, else its own.
+type Demo = { n: number; of?: string[] | null };
+type AvatarState = { said?: Said[]; state?: string; muted?: boolean; skip?: number; persona?: string; skin?: string | null; demo?: Demo | null };
 
 const mood = (state?: string): Mood =>
   state === "working" || state === "starting" || state === "background" ? "thinking" : state === "asking" || state === "permission" ? "asking" : "idle";
@@ -45,6 +52,8 @@ type Kept = {
   model?: string;
   loads: Promise<void>;
   shown: boolean;
+  // The last demo run, by its count.
+  demo?: number;
 };
 const kept = new Map<number, Kept>();
 const KEPT = 4;
@@ -92,7 +101,11 @@ export function Avatar({ state, buf }: ViewProps<AvatarState>) {
   // The treats out, and the one being carried to her, where it is in the panel.
   const [treats, setTreats] = useState(false);
   const [held, setHeld] = useState<{ treat: Treat; x: number; y: number } | null>(null);
-  const persona = personaOf(state.persona);
+  // The persona being shown off by a demo, if not its own; and the demo
+  // going on, by when it started (a new one, or s, ends it).
+  const [showing, setShowing] = useState<string | null>(null);
+  const run = useRef(0);
+  const persona = personaOf(showing ?? state.persona);
 
   // The stage, kept or made.
   useEffect(() => {
@@ -118,6 +131,7 @@ export function Avatar({ state, buf }: ViewProps<AvatarState>) {
       sizes.disconnect();
       v.onChange = undefined;
       v.stop();
+      run.current++;
       k.stage?.pause();
       k.shown = false;
       forget();
@@ -130,10 +144,13 @@ export function Avatar({ state, buf }: ViewProps<AvatarState>) {
     if (!ready || !s) return;
     const key = `vrm:${persona.title}`;
     voice.current.voice = persona.voice;
+    voice.current.effect = persona.effect;
     s.idle = persona.idle;
     for (const p of POKED) voice.current.warm(upcoming(persona, p), persona.poked[p].tone);
+    for (const l of persona.intro) voice.current.warm(l.text, l.tone);
+    const skin = persona.ownSkin || (showing && showing !== state.persona) ? undefined : (state.skin ?? undefined);
     // Already on it, or on its way: a tab come back to.
-    const model = `${key}:${state.skin ?? ""}`;
+    const model = `${key}:${skin ?? ""}`;
     if (k.model === model) {
       k.loads.then(() => setLoading(false));
       return;
@@ -144,7 +161,8 @@ export function Avatar({ state, buf }: ViewProps<AvatarState>) {
     k.loads = k.loads.then(async () => {
       try {
         const own = await saved(key);
-        await (own ? s.load(own, false, state.skin) : s.load(new URL(persona.model, location.href).href, persona.recolor, state.skin));
+        const url = new URL(modelAt(persona), location.href).href;
+        await (own ? s.load(own, false, skin) : s.load(persona.hosted ? await fetched(url) : url, persona.recolor, skin));
       } catch (e) {
         setError(String((e as Error).message ?? e));
       }
@@ -178,8 +196,19 @@ export function Avatar({ state, buf }: ViewProps<AvatarState>) {
     voice.current!.muted = !!state.muted;
   }, [state.muted]);
   useEffect(() => {
-    if (state.skip) voice.current!.stop();
+    if (!state.skip) return;
+    voice.current!.stop();
+    run.current++;
+    setShowing(null);
   }, [state.skip]);
+
+  // A demo asked for: each persona's model on in turn, if it's not its own.
+  useEffect(() => {
+    const d = state.demo;
+    if (!ready || !d || d.n === k.demo) return;
+    k.demo = d.n;
+    demo(Array.isArray(d.of) && d.of.length ? d.of : [state.persona ?? ""]);
+  }, [ready, state.demo]);
 
   // The words typed out as they're said, a frame at a time.
   useEffect(() => {
@@ -284,6 +313,77 @@ export function Avatar({ state, buf }: ViewProps<AvatarState>) {
     say("fed", performance.now());
   };
 
+  // Showing off: for each persona, its intro said, its head patted, a poke
+  // to the chest and one to the head, and a treat carried from the menu to
+  // its mouth; each after the last line is done. Over when it's done,
+  // another starts, s is pressed or the panel goes.
+  const demo = async (ids: string[]) => {
+    const me = ++run.current;
+    const v = voice.current;
+    const live = () => run.current === me;
+    const pause = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
+    const quiet = async () => {
+      await pause(300);
+      while (live() && v.speaking) await pause(100);
+      await pause(600);
+    };
+    const px = (at: { x: number; y: number }) => ({ x: ((at.x + 1) / 2) * box.current!.clientWidth, y: ((1 - at.y) / 2) * box.current!.clientHeight });
+    v.stop();
+    for (const id of ids) {
+      const p = personaOf(id);
+      setShowing(id === state.persona ? null : id);
+      // Its model asked for (the persona effect), then on.
+      while (live() && !k.model?.startsWith(`vrm:${p.title}:`)) await pause(50);
+      await k.loads;
+      await pause(800);
+      const s = stage.current;
+      if (!live() || !s) break;
+      for (const [i, l] of p.intro.entries()) {
+        if (!live()) break;
+        v.say(l.text, `demo:${me}:${id}:${i}`, l.tone);
+        await quiet();
+      }
+      const touched = async (kind: "pat" | "poke", poked: Poked, where: "head" | "body") => {
+        const at = s.spot(where);
+        if (!live() || !at) return;
+        s.point(at);
+        s.touch(kind, at);
+        s.play(...p.poked[poked].acts);
+        v.say(quip(p, poked), `demo:${me}:${id}:${poked}`, p.poked[poked].tone);
+        await quiet();
+      };
+      await touched("pat", "pat", "head");
+      await touched("poke", "body", "body");
+      await touched("poke", "head", "head");
+      // A treat carried to its mouth, its eyes on it and its mouth opening.
+      const mouth = s.spot("mouth");
+      if (!live() || !mouth) break;
+      const treat = TREATS[Math.floor(Math.random() * TREATS.length)];
+      const from = { x: 16, y: 16 };
+      const to = px(mouth);
+      const t0 = performance.now();
+      for (let t = 0; t < 1 && live(); t = (performance.now() - t0) / 1400) {
+        const e = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+        const x = from.x + (to.x - from.x) * e;
+        const y = from.y + (to.y - from.y) * e;
+        setHeld({ treat, x, y });
+        const at = { x: (x / box.current!.clientWidth) * 2 - 1, y: 1 - (y / box.current!.clientHeight) * 2 };
+        s.point(at);
+        s.hungry = s.mouthAt(at);
+        await new Promise(requestAnimationFrame);
+      }
+      await pause(400);
+      s.hungry = false;
+      setHeld(null);
+      if (!live()) break;
+      s.play(...p.poked.fed.acts);
+      v.say(quip(p, "fed"), `demo:${me}:${id}:fed`, p.poked.fed.tone);
+      await quiet();
+    }
+    stage.current?.point(null);
+    if (live()) setShowing(null);
+  };
+
   const voiceError = voice.current.error;
   const shown = line.text.slice(0, Math.ceil(line.at));
   return (
@@ -381,7 +481,8 @@ function TreatIcon({ treat }: { treat: Treat }) {
   );
 }
 
-// The model dropped on a panel for a persona, kept in this browser.
+// The model dropped on a panel for a persona, and the hosted ones fetched
+// (by their URL), kept in this browser.
 const DB = "corkboard-avatar";
 function db(): Promise<IDBDatabase> {
   return new Promise((ok, fail) => {
@@ -408,4 +509,14 @@ async function save(key: string, data: ArrayBuffer) {
     const d = await db();
     d.transaction("model", "readwrite").objectStore("model").put(data, key);
   } catch {}
+}
+
+async function fetched(url: string): Promise<ArrayBuffer> {
+  const had = await saved(url);
+  if (had) return had;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url}: ${r.status}`);
+  const data = await r.arrayBuffer();
+  await save(url, data.slice(0));
+  return data;
 }

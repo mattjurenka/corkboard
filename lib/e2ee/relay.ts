@@ -1,4 +1,4 @@
-// The relay's API, as a client calls it (cloud/src/e2ee.ts serves it):
+// The relay's API, as a client calls it (relay/src/routes.ts serves it):
 //
 //   POST /e2ee/accounts           { creation, cert }: a new account, with an invite
 //                                 (or /api/e2ee/accounts, an admin's Google token, without)
