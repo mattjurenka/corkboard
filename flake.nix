@@ -44,8 +44,13 @@
       nixosModules.fleetHost = { pkgs, lib, ... }: {
         # Once, however many modules here import it.
         key = "corkboard/fleetHost";
-        imports = [ ./fleet/host/host.nix ];
+        imports = [ ./fleet/host/host.nix self.nixosModules.counters ];
         my.agentVms.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.fleet;
+      };
+      # What the fleet view's resources need root for (fleet/host/counters.nix).
+      nixosModules.counters = {
+        key = "corkboard/counters";
+        imports = [ ./fleet/host/counters.nix ];
       };
       # The whole fleet on a host: `services.corkboard.fleet` (fleet/host/corkboard.nix).
       nixosModules.fleet = {

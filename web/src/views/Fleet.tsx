@@ -6,7 +6,7 @@
 // Worker and the bridge, groups it and owns the selection (corkboard.fleet);
 // a click on a row or a machine calls back into it.
 
-import { useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Spinner } from "@/components/Spinner";
 import { cn } from "@/lib/utils";
 import type { ViewProps } from "./index";
@@ -73,9 +73,14 @@ type Vm = {
 // A machine's, or a VM's.
 type Detail = { name: string; host?: Host; vm?: Vm };
 // budget: the agents' memory budget, or with ram, the machine's memory.
-type Group = { name?: string; ago?: string; stale?: boolean; budget?: number; used?: number; ram?: boolean; idle?: string[]; silent?: boolean; cards: Card[] };
+// monitor: with m, its machines' resources, each row now and as of late as
+// fractions of the most it could be.
+type Group = { name?: string; ago?: string; stale?: boolean; budget?: number; used?: number; ram?: boolean; idle?: string[]; silent?: boolean; monitor?: Panel[]; cards: Card[] };
+type Panel = { name: string; rows: { label: string; value: string; max: string; frac: number; history: Sample[] }[] };
+// at: the time of day it was taken.
+type Sample = { frac: number; value: string; at?: string };
 // asking: x's "stop it?", until y or n.
-type FleetState = { by: "machine" | "project"; queue: Spawn[]; asking?: { id: string; task: string }; groups: Group[]; selected?: string; detail?: Detail; problem?: string; loading?: boolean };
+type FleetState = { by: "machine" | "project"; monitor?: boolean; queue: Spawn[]; asking?: { id: string; task: string }; groups: Group[]; selected?: string; detail?: Detail; problem?: string; loading?: boolean };
 
 const gib = (mib: number | null | undefined) => (mib == null ? "—" : `${(mib / 1024).toFixed(1)} GiB`);
 
@@ -107,9 +112,18 @@ export function Fleet({ state, win, focused, nvim }: ViewProps<FleetState>) {
     <div className="relative h-full">
       <div ref={root} className="@container/fleet flex h-full flex-col gap-row overflow-y-auto px-2ch pt-row pb-row">
         <header className="flex justify-between gap-2ch text-muted-foreground">
-          <span className="font-bold text-foreground">Fleet</span>
+          <span className="flex gap-2ch">
+            <span className="font-bold text-foreground">Fleet</span>
+            <button
+              type="button"
+              onClick={() => nvim.lua("require('corkboard.fleet').monitor()")}
+              className={cn("cursor-pointer px-half", state.monitor ? "bg-selection text-foreground" : "hover:bg-accent")}
+            >
+              [resources]
+            </button>
+          </span>
           <span className="flex-none @max-[70ch]/fleet:hidden">
-            hjkl · a approve · x stop · ⏎ open · g by {state.by === "project" ? "machine" : "project"} · R refresh
+            hjkl · a approve · x stop · ⏎ open · g by {state.by === "project" ? "machine" : "project"} · m resources · R refresh
           </span>
         </header>
         {state.problem && <p className="px-ch text-destructive">{state.problem}</p>}
@@ -125,6 +139,7 @@ export function Fleet({ state, win, focused, nvim }: ViewProps<FleetState>) {
                 </span>
               </h2>
             )}
+            {g.monitor?.map((p) => <Monitor key={p.name} panel={p} />)}
             {g.silent && <p className="text-muted-foreground">its fleetd hasn't said what runs there</p>}
             {g.name && !g.silent && g.cards.length === 0 && <p className="text-muted-foreground">nothing running</p>}
             {g.cards.length > 0 && (
@@ -389,6 +404,31 @@ function Tags({ items, className }: { items: string[]; className?: string }) {
 
 const kilo = (n: number) => `${Math.round(n / 1000)}k`;
 
+// A machine's resources, boxed with its name on the border: each now, as a
+// bar of the most it could be, and as of late, on the same scale.
+function Monitor({ panel }: { panel: Panel }) {
+  return (
+    <section className="border px-ch pb-row">
+      <h3 className="-mt-half mb-half flex">
+        <span className="truncate bg-background px-half font-bold">{panel.name}</span>
+      </h3>
+      <div className="grid grid-cols-[10ch_auto_auto_minmax(16ch,1fr)] items-center gap-x-2ch gap-y-half tabular-nums">
+        {panel.rows.map((r) => (
+          <Fragment key={r.label}>
+            <span className="text-muted-foreground">{r.label}</span>
+            <Bar frac={r.frac} cells={30} />
+            <span className="whitespace-nowrap">
+              <span className="inline-block min-w-[10ch] text-right">{r.value}</span>
+              <span className="text-muted-foreground"> / {r.max}</span>
+            </span>
+            <Chart samples={r.history} />
+          </Fragment>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 // A fraction as a row of cells, amber past nine tenths.
 function Bar({ frac, cells }: { frac: number; cells: number }) {
   const filled = Math.max(0, Math.min(cells, Math.round(frac * cells)));
@@ -397,6 +437,42 @@ function Bar({ frac, cells }: { frac: number; cells: number }) {
       {"█".repeat(filled)}
       <span className="text-muted-foreground">{"░".repeat(cells - filled)}</span>
     </span>
+  );
+}
+
+// Samples as columns of cells like Bar's, filled to each one's fraction,
+// the newest at the right and each as wide as the rest, however few there
+// are yet; hovered, its value and when.
+const SLOTS = 40;
+function Chart({ samples }: { samples: Sample[] }) {
+  const [at, setAt] = useState<number>();
+  const shown = samples.slice(-SLOTS);
+  const slots = [...Array(SLOTS - shown.length).fill(undefined), ...shown] as (Sample | undefined)[];
+  const hover = at != null ? slots[at] : undefined;
+  return (
+    <div className="relative flex h-(--cell-h) gap-px" onMouseLeave={() => setAt(undefined)}>
+      {slots.map((s, i) => (
+        <div
+          key={i}
+          onMouseEnter={() => setAt(s ? i : undefined)}
+          className={cn(
+            "flex flex-1 flex-col justify-end bg-[radial-gradient(var(--muted-foreground)_0.6px,transparent_0.8px)] bg-size-[3px_3px]",
+            i === at && "bg-accent",
+          )}
+        >
+          {s && <div className={s.frac > 0.9 ? "bg-review" : "bg-working"} style={{ height: `${Math.max(0, Math.min(1, s.frac)) * 100}%` }} />}
+        </div>
+      ))}
+      {hover && (
+        <span
+          className="pointer-events-none absolute bottom-full z-1 whitespace-nowrap border bg-background px-half"
+          style={{ left: `${((at! + 0.5) / SLOTS) * 100}%`, transform: `translateX(-${((at! + 0.5) / SLOTS) * 100}%)` }}
+        >
+          {hover.value}
+          {hover.at && <span className="text-muted-foreground"> · {hover.at}</span>}
+        </span>
+      )}
+    </div>
   );
 }
 
