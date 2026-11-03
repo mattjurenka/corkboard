@@ -50,6 +50,8 @@ async function api(method: string, path: string, body?: unknown) {
     method,
     headers: { Authorization: `Bearer ${await token()}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
     body: body === undefined ? undefined : JSON.stringify(body),
+    // One that never answers would hold up every tick after it.
+    signal: AbortSignal.timeout(30_000),
   });
   const json = (await res.json().catch(() => ({}))) as any;
   if (!res.ok) throw new Error(`pepperd: ${method} ${path}: ${json.error ?? res.status}`);
