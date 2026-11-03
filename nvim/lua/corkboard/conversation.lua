@@ -83,11 +83,11 @@ end
 
 local function follow(c)
   c.ended = nil
-  local ok, err = pcall(cloud().call, "fleet_follow", c.bridge, c.key)
-  if not ok then
+  cloud().call_async("fleet_follow", function(err)
+    if not err or not vim.api.nvim_buf_is_valid(c.buf) then return end
     c.ended = tostring(err)
     draw(c)
-  end
+  end, c.bridge, c.key)
 end
 
 -- Open a session's conversation in a tab, or go to it if it's open. vm:
@@ -126,7 +126,7 @@ function M.open(bridge, key, name, vm)
     once = true,
     callback = function()
       open[id] = nil
-      pcall(cloud().call, "fleet_unfollow", bridge, key)
+      cloud().send("fleet_unfollow", bridge, key)
     end,
   })
   draw(c)

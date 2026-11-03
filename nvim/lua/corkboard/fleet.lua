@@ -524,26 +524,34 @@ local function redraw()
   push_state()
 end
 
--- What the Worker has now; on the user's socket from the first.
+-- What the Worker has now; on the user's socket from the first. Not waited
+-- for: the Worker can take seconds, and entering the tab is what asks. Only
+-- the latest load's answer is kept.
+local loads = 0
 function M.load()
   if not cloud().enabled() then
     problem = "the fleet view needs corkboard's bridge and the cloud"
     return redraw()
   end
-  local ok, res = pcall(function()
-    if not following then
-      cloud().call("fleet_subscribe")
-      following = true
-    end
-    return cloud().call("fleet_get")
-  end)
-  if ok then
-    fleet, problem = res, nil
-    sessions = res.sessions or {}
-  else
-    problem = tostring(res)
+  loads = loads + 1
+  local n = loads
+  local function get()
+    cloud().call_async("fleet_get", function(err, res)
+      if n ~= loads then return end
+      if err then
+        problem = tostring(err)
+      else
+        fleet, problem = res, nil
+        sessions = res.sessions or {}
+      end
+      redraw()
+    end)
   end
-  redraw()
+  if following then return get() end
+  cloud().call_async("fleet_subscribe", function(err)
+    if not err then following = true end
+    get()
+  end)
 end
 
 -- Changes come in bursts (a spawn's claim, its state, the slot's): one
@@ -599,9 +607,10 @@ end
 local function act(op, verb)
   local s = selected_spawn()
   if not s then return end
-  local ok, err = pcall(cloud().call, op, s.id)
-  if not ok then vim.notify("corkboard: " .. verb .. " " .. s.id .. ": " .. tostring(err), vim.log.levels.WARN) end
-  reload()
+  cloud().call_async(op, function(err)
+    if err then vim.notify("corkboard: " .. verb .. " " .. s.id .. ": " .. tostring(err), vim.log.levels.WARN) end
+    reload()
+  end, s.id)
 end
 
 function M.approve() act("fleet_approve", "approving") end
@@ -623,13 +632,14 @@ function M.answer(yes)
   local ui = require("corkboard")
   local id, name = "stop-" .. a.id, require("corkboard.usage.transcript").short(a.task, 40)
   ui.toast(id, "pending", "stopping " .. name)
-  local ok, err = pcall(cloud().call, "fleet_stop", a.id)
-  if ok then
-    ui.toast(id, "done", "stopped " .. name)
-  else
-    ui.toast(id, "error", "couldn't stop " .. name .. ": " .. tostring(err))
-  end
-  reload()
+  cloud().call_async("fleet_stop", function(err)
+    if err then
+      ui.toast(id, "error", "couldn't stop " .. name .. ": " .. tostring(err))
+    else
+      ui.toast(id, "done", "stopped " .. name)
+    end
+    reload()
+  end, a.id)
 end
 
 -- While x's question is up, these answer it; otherwise, what they did.
@@ -669,13 +679,14 @@ local function open_slot(m)
     local ui = require("corkboard")
     local id = "session-" .. m.environment
     ui.toast(id, "pending", "starting a " .. template .. " session in " .. m.environment)
-    local ok, err = pcall(cloud().call, "fleet_session", m.environment, template)
-    if ok then
-      ui.toast(id, "done", template .. " session queued in " .. m.environment)
-    else
-      ui.toast(id, "error", "couldn't start a session in " .. m.environment .. ": " .. tostring(err))
-    end
-    reload()
+    cloud().call_async("fleet_session", function(err)
+      if err then
+        ui.toast(id, "error", "couldn't start a session in " .. m.environment .. ": " .. tostring(err))
+      else
+        ui.toast(id, "done", template .. " session queued in " .. m.environment)
+      end
+      reload()
+    end, m.environment, template)
   end
   if #names == 1 then return go(names[1]) end
   vim.ui.select(names, { prompt = "Template" }, go)

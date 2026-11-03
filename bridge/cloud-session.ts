@@ -86,15 +86,21 @@ class Live {
   ) {}
 
   // Resolves once the socket is open, so a copy fetched after it misses
-  // nothing.
+  // nothing. One that hasn't opened in 10s is given up on: the follow fails,
+  // and the next one tries again, instead of waiting on it for ever.
   async open(): Promise<void> {
     const path = this.key === USER ? "/api/live" : `/api/boards/${encodeURIComponent(this.key)}/live`;
     const ws = this.cloud.link.socket(`${this.cloud.link.cloud.replace(/^http/, "ws")}${path}`, await this.cloud.link.token());
     this.ws = ws;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     await new Promise<void>((resolve, reject) => {
       ws.onopen = () => resolve();
       ws.onerror = () => reject(new Error(`corkboard cloud: can't follow board ${this.key}`));
-    });
+      timer = setTimeout(() => {
+        reject(new Error(`corkboard cloud: board ${this.key}'s socket didn't open in 10s`));
+        ws.close();
+      }, 10_000);
+    }).finally(() => clearTimeout(timer));
     this.retry = 1000;
     // Hibernation answers these without waking the board; they keep idle
     // proxies from dropping the socket.
