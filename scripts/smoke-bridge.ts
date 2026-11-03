@@ -1,13 +1,15 @@
 // A compiled bridge (scripts/build-bridge.ts), tried: started on a spare
 // port with state of its own, its page fetched, a socket opened as the page
 // opens one, its Neovim asked whether the plugin loaded, and its MCP server
-// asked for its tools. For CI, on each OS.
+// asked for its tools; and its git, as the app runs it for a machine with
+// none, made to commit and to reach GitHub. For CI, on each OS.
 //
 //   bun scripts/smoke-bridge.ts [<os>-<arch>]     this machine's by default
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { bundledGit } from "../app/bridge.js";
 
 const OS = { linux: "linux", darwin: "mac", win32: "win" } as Record<string, string>;
 const target = process.argv[2] ?? `${OS[process.platform]}-${process.arch}`;
@@ -78,6 +80,24 @@ proc.stdin.end();
 const out = await new Response(proc.stdout).text();
 if (!out.includes('"list_cards"')) fail(`no tools from the MCP server: ${out.slice(0, 200)}`);
 console.log("mcp ok");
+
+// With no git on the PATH it's given, the app takes its own.
+const git = existsSync(join(dir, "git")) && bundledGit(dir, "");
+if (git) {
+  const genv = { ...env, ...git, PATH: [git.PATH, process.env.PATH].join("") };
+  const gitExe = Bun.which("git", { PATH: genv.PATH });
+  if (!gitExe?.startsWith(dir)) fail(`git is ${gitExe}, not the bundled one`);
+  const run = (...args: string[]) => {
+    const got = Bun.spawnSync([gitExe!, ...args], { cwd: home, env: genv });
+    if (!got.success) fail(`git ${args.join(" ")}: ${got.stderr.toString().trim()}`);
+    return got.stdout.toString().trim();
+  };
+  console.log(run("--version"));
+  run("init", "-q", "repo");
+  run("-C", "repo", "-c", "user.name=smoke", "-c", "user.email=smoke@corkboard", "commit", "-q", "--allow-empty", "-m", "smoke");
+  if (!run("ls-remote", "https://github.com/desktop/dugite-native", "HEAD")) fail("git reached nothing over https");
+  console.log("git ok");
+}
 
 bridge.kill();
 await bridge.exited;

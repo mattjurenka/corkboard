@@ -1,7 +1,7 @@
 // The bridge as one executable, with what it serves and runs beside it,
 // for the desktop app (app/electron-builder.yml) to carry:
 //
-//   bun scripts/build-bridge.ts [--target linux-x64,...|linux|mac|win|os|all] [--no-nvim] [--no-speech]
+//   bun scripts/build-bridge.ts [--target linux-x64,...|linux|mac|win|os|all] [--no-nvim] [--no-git] [--no-speech]
 //
 // Into dist/bridge/<os>-<arch>/, named as electron-builder names them
 // (linux, mac, win; x64, arm64), for each target (this machine's by default):
@@ -13,6 +13,9 @@
 //                            binaries for that system only)
 //   nvim/                    Neovim's own release for that system, at the
 //                            version the flake builds (neovim-src)
+//   git/                     dugite-native's portable git (GitHub Desktop's),
+//                            for a machine with no git of its own, or only
+//                            macOS's stand-in for one (app/bridge.js)
 //
 // The page is built first if web/dist isn't there (`bun run build`).
 
@@ -26,14 +29,18 @@ const OUT = join(ROOT, "dist", "bridge");
 // flake's are the same.
 const NVIM_VERSION = readFileSync(join(ROOT, "flake.nix"), "utf8").match(/github:neovim\/neovim\/(v[\d.]+)/)![1];
 
-type Target = { bun: string; os: "linux" | "mac" | "win"; arch: "x64" | "arm64"; nvim: string; ort?: string };
+// dugite-native's release, and its assets' names, which carry the commit.
+const GIT_RELEASE = "v2.56.0-2";
+const GIT_ASSET = "dugite-native-v2.56.0-a44aeca";
+
+type Target = { bun: string; os: "linux" | "mac" | "win"; arch: "x64" | "arm64"; nvim: string; git: string; ort?: string };
 const TARGETS: Record<string, Target> = {
-  "linux-x64": { bun: "bun-linux-x64", os: "linux", arch: "x64", nvim: "nvim-linux-x86_64.tar.gz", ort: "linux/x64" },
-  "linux-arm64": { bun: "bun-linux-arm64", os: "linux", arch: "arm64", nvim: "nvim-linux-arm64.tar.gz", ort: "linux/arm64" },
+  "linux-x64": { bun: "bun-linux-x64", os: "linux", arch: "x64", nvim: "nvim-linux-x86_64.tar.gz", git: "ubuntu-x64", ort: "linux/x64" },
+  "linux-arm64": { bun: "bun-linux-arm64", os: "linux", arch: "arm64", nvim: "nvim-linux-arm64.tar.gz", git: "ubuntu-arm64", ort: "linux/arm64" },
   // onnxruntime-node has no Intel Mac binaries: no voice there.
-  "mac-x64": { bun: "bun-darwin-x64", os: "mac", arch: "x64", nvim: "nvim-macos-x86_64.tar.gz" },
-  "mac-arm64": { bun: "bun-darwin-arm64", os: "mac", arch: "arm64", nvim: "nvim-macos-arm64.tar.gz", ort: "darwin/arm64" },
-  "win-x64": { bun: "bun-windows-x64", os: "win", arch: "x64", nvim: "nvim-win64.zip", ort: "win32/x64" },
+  "mac-x64": { bun: "bun-darwin-x64", os: "mac", arch: "x64", nvim: "nvim-macos-x86_64.tar.gz", git: "macOS-x64" },
+  "mac-arm64": { bun: "bun-darwin-arm64", os: "mac", arch: "arm64", nvim: "nvim-macos-arm64.tar.gz", git: "macOS-arm64", ort: "darwin/arm64" },
+  "win-x64": { bun: "bun-windows-x64", os: "win", arch: "x64", nvim: "nvim-win64.zip", git: "windows-x64", ort: "win32/x64" },
 };
 const OS = { linux: "linux", darwin: "mac", win32: "win" } as Record<string, string>;
 const HERE = `${OS[process.platform]}-${process.arch}`;
@@ -69,12 +76,11 @@ const version = JSON.parse(readFileSync(join(ROOT, "app", "package.json"), "utf8
 
 if (!existsSync(join(ROOT, "web", "dist", "index.html"))) run(["bun", "run", "build"]);
 
-// The same Neovim for every target that wants it, downloaded once.
+// The same Neovim and git for every target that wants them, downloaded once.
 const CACHE = join(ROOT, "dist", "cache");
-async function download(name: string): Promise<string> {
-  const file = join(CACHE, `${NVIM_VERSION}-${name}`);
+async function download(url: string, name: string): Promise<string> {
+  const file = join(CACHE, name);
   if (existsSync(file)) return file;
-  const url = `https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/${name}`;
   console.log(`fetching ${url}`);
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
@@ -85,7 +91,8 @@ async function download(name: string): Promise<string> {
 }
 
 // The archive's one top-level directory (nvim-linux-x86_64/, nvim-win64/)
-// becomes dest itself.
+// becomes dest itself, or the archive's top level when it has more than
+// that (dugite-native's bin/, libexec/, ...).
 function unpack(archive: string, dest: string) {
   const tmp = `${dest}.unpack`;
   rmSync(tmp, { recursive: true, force: true });
@@ -94,10 +101,23 @@ function unpack(archive: string, dest: string) {
   const tar = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe") : "tar";
   if (archive.endsWith(".zip") && process.platform !== "win32") run(["unzip", "-q", archive, "-d", tmp]);
   else run([tar, "-xf", archive, "-C", tmp]);
-  const [top] = readdirSync(tmp);
+  const tops = readdirSync(tmp);
   rmSync(dest, { recursive: true, force: true });
-  cpSync(join(tmp, top), dest, { recursive: true, verbatimSymlinks: true });
+  cpSync(tops.length === 1 ? join(tmp, tops[0]) : tmp, dest, { recursive: true, verbatimSymlinks: true });
   rmSync(tmp, { recursive: true, force: true });
+}
+
+// dugite-native's git, less what it carries for GitHub Desktop that this
+// one doesn't use: Git Credential Manager (a .NET app, most of its size,
+// which its gitconfig turns on only on Windows), git-lfs and scalar. Its
+// dashed built-ins are relative symlinks to git, which electron-builder
+// copies and codesign passes over as they are; it has no hard links.
+function pruneGit(dir: string) {
+  const core = join(dir, "libexec", "git-core");
+  for (const f of readdirSync(core)) {
+    if ((!/^git(-|$)/.test(f) && f !== "mergetools") || /^git-(credential-manager|lfs)/.test(f)) rmSync(join(core, f), { recursive: true });
+  }
+  rmSync(join(dir, "bin", "scalar"), { force: true });
 }
 
 for (const name of names) {
@@ -138,5 +158,13 @@ for (const name of names) {
     writeFileSync(join(res, "node_modules", "sharp", "index.js"), 'module.exports = () => { throw new Error("no sharp"); };\n');
   }
 
-  if (!flag("--no-nvim")) unpack(await download(t.nvim), join(dir, "nvim"));
+  if (!flag("--no-nvim")) {
+    unpack(await download(`https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/${t.nvim}`, `${NVIM_VERSION}-${t.nvim}`), join(dir, "nvim"));
+  }
+  if (!flag("--no-git")) {
+    const asset = `${GIT_ASSET}-${t.git}.tar.gz`;
+    unpack(await download(`https://github.com/desktop/dugite-native/releases/download/${GIT_RELEASE}/${asset}`, asset), join(dir, "git"));
+    // Windows' is MinGit's layout, whose gitconfig has the credential manager on.
+    if (t.os !== "win") pruneGit(join(dir, "git"));
+  }
 }

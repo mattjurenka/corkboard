@@ -26,7 +26,8 @@
 // bar the .deb and the tarball, which their package managers update.
 
 import { app, BrowserWindow, Menu, net, session, shell } from "electron";
-import { loginPath, startBridge, which } from "./bridge.js";
+import { join } from "node:path";
+import { bundledGit, loginPath, startBridge, which } from "./bridge.js";
 
 function parse(argv) {
   const args = { name: "corkboard", title: undefined, url: undefined, one: false };
@@ -179,13 +180,15 @@ const errorPage = (desc, url) =>
 ${escape(desc)}  ${escape(url)}</pre>`);
 
 // Claude Code and git, which corkboard can't do without, and ripgrep, which
-// its pickers are slow without: looked for on the PATH the bridge has.
+// its pickers are slow without: looked for on the PATH the bridge has, which
+// has the app's own git in front when the machine has no git (bundledGit).
 const TOOLS = [
   { name: "claude", need: true, url: "https://claude.com/claude-code" },
   { name: "git", need: true, url: "https://git-scm.com/downloads" },
   { name: "rg", need: false, url: "https://github.com/BurntSushi/ripgrep#installation" },
 ];
 let path = process.env.PATH ?? "";
+let git;
 const missing = () => TOOLS.filter((t) => !which(t.name, path));
 
 const toolsPage = (gone) =>
@@ -237,6 +240,7 @@ async function own(tries = 3) {
     resources: process.resourcesPath,
     profile: app.getPath("userData"),
     path,
+    git,
     onExit: (code) => {
       console.error(`bridge exited (${code})`);
       if (tries > 1 && !quitting) own(tries - 1).catch((err) => console.error(err));
@@ -265,6 +269,8 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionCheckHandler((_wc, permission, origin) => PERMITTED.has(permission) && sameOrigin(origin));
   if (OWN) {
     path = loginPath();
+    git = bundledGit(join(process.resourcesPath, "bridge"), path);
+    if (git) path = git.PATH;
     try {
       await own();
     } catch (err) {

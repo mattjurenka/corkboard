@@ -1,7 +1,7 @@
 // The packaged app's own bridge: the compiled one electron-builder put in
-// resources/bridge (scripts/build-bridge.ts), with the Neovim beside it, on
-// a loopback port of this app's and a token of this run's. It goes when the
-// app does.
+// resources/bridge (scripts/build-bridge.ts), with the Neovim and git
+// beside it, on a loopback port of this app's and a token of this run's. It
+// goes when the app does.
 //
 // The port is kept (bridge.json in the profile) so the page's origin, and
 // with it what the page keeps in its storage, is the same from one run to
@@ -43,6 +43,41 @@ export function which(name, path) {
   }
 }
 
+// The git beside the bridge (dugite-native's, scripts/build-bridge.ts), for
+// a machine with none of its own, or a Mac with only /usr/bin/git, which
+// without the Command Line Tools is a stand-in that asks to install them.
+// The environment the bridge, and all it runs, then has (path in it, with
+// that git's bin in front), as dugite sets it (its lib/git-environment.ts):
+// built with no runtime prefix, it finds its helpers, templates and
+// certificates only where these say. Not dugite's PREFIX, which this git
+// doesn't read and builds the bridge runs would.
+//
+// Its own gitconfig includes /etc/gitconfig, and ~/.gitconfig is read as
+// ever; but it has no osxkeychain, so a credential.helper of that name only
+// warns, and git asks instead.
+export function bundledGit(bridge, path) {
+  const dir = join(bridge, "git");
+  const bin = join(dir, WIN ? "cmd" : "bin");
+  if (!existsSync(join(bin, exe("git")))) return;
+  const own = which("git", path);
+  if (own && !(process.platform === "darwin" && own === "/usr/bin/git" && !commandLineTools())) return;
+  if (WIN) return { PATH: [bin, path].join(delimiter), GIT_EXEC_PATH: join(dir, "ucrt64", "libexec", "git-core") };
+  return {
+    PATH: [bin, path].join(delimiter),
+    GIT_EXEC_PATH: join(dir, "libexec", "git-core"),
+    GIT_TEMPLATE_DIR: join(dir, "share", "git-core", "templates"),
+    GIT_CONFIG_SYSTEM: process.env.GIT_CONFIG_SYSTEM ?? join(dir, "etc", "gitconfig"),
+    ...(process.platform === "linux" ? { GIT_SSL_CAINFO: process.env.GIT_SSL_CAINFO ?? join(dir, "ssl", "cacert.pem") } : {}),
+  };
+}
+
+// Whether xcode-select points at an Xcode or the Command Line Tools that's
+// there, and so /usr/bin/git is a git.
+function commandLineTools() {
+  const got = spawnSync("/usr/bin/xcode-select", ["-p"], { encoding: "utf8", timeout: 5000 });
+  return got.status === 0 && existsSync(got.stdout.trim());
+}
+
 const free = (port) =>
   new Promise((done) => {
     const s = createServer();
@@ -64,8 +99,8 @@ async function pickPort(file) {
 }
 
 // Starts it and resolves to its page's URL once it answers. onExit(code)
-// if it stops on its own.
-export async function startBridge({ resources, profile, path, onExit }) {
+// if it stops on its own. git is bundledGit's, if that's the git.
+export async function startBridge({ resources, profile, path, git, onExit }) {
   const dir = join(resources, "bridge");
   mkdirSync(profile, { recursive: true });
   const port = await pickPort(join(profile, "bridge.json"));
@@ -75,6 +110,7 @@ export async function startBridge({ resources, profile, path, onExit }) {
     cwd: homedir(),
     env: {
       ...process.env,
+      ...git,
       PATH: path,
       CORKBOARD_HOST: "127.0.0.1",
       CORKBOARD_PORT: String(port),
