@@ -23,8 +23,9 @@ export type Env = RelayEnv & {
 };
 
 export class Accounts extends RelayAccounts {
-  protected admit(invite: string) {
+  protected admit(invite: string | null) {
     const want = (this.env as Env).RELAY_INVITE;
+    if (!invite) return "missing" as const;
     if (!want) return "unknown" as const;
     const [a, b] = [new TextEncoder().encode(invite), new TextEncoder().encode(want)];
     return a.length === b.length && crypto.subtle.timingSafeEqual(a, b) ? { code: "RELAY_INVITE" } : ("unknown" as const);

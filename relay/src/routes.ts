@@ -7,7 +7,7 @@
 // routes as a client calls them.
 //
 // Accounts (accounts.ts) are let in by whoever serves the routes: with an
-// invite, or made by an admin (createAccount with by).
+// invite, by anyone, or made by an admin (createAccount with by).
 //
 // An account is known by its id (its first key: logs, blobs and grants are
 // under it, and tokens name it) and by its current key, which certs must

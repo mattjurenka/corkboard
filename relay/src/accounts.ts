@@ -5,17 +5,18 @@
 //
 // A Durable Object of its own in a relay you run (index.ts's Accounts);
 // the hosted Worker's registry extends it, beside its other sign-ins. Each
-// says how an account is let in (admit): an invite, checked its own way.
+// says who may make an account (admit): with an invite, checked its own
+// way, or anyone.
 
 import { DurableObject } from "cloudflare:workers";
 import type { Result } from "./result";
 import type { Creation, Grant, DeviceCert, Rotation, Signed } from "../../lib/e2ee/wire";
 
-export type AccountStatus = "active" | "waitlisted" | "disabled";
-export const ACCOUNT_STATUSES: AccountStatus[] = ["active", "waitlisted", "disabled"];
+export type AccountStatus = "active" | "disabled";
+export const ACCOUNT_STATUSES: AccountStatus[] = ["active", "disabled"];
 
-// Why an invite didn't let someone in.
-export type InviteProblem = "unknown" | "used" | "expired" | "revoked";
+// Why an account wasn't let in: no invite, or not a good one.
+export type InviteProblem = "missing" | "unknown" | "used" | "expired" | "revoked";
 
 export type E2eeAccount = {
   // The account's first signing key, base64url: its id for good.
@@ -44,8 +45,9 @@ export abstract class RelayAccounts extends DurableObject {
     this.sql = ctx.storage.sql;
   }
 
-  // One use of an invite, if it lets anyone in: what to record it as.
-  protected abstract admit(invite: string): { code: string } | InviteProblem;
+  // Whether a creation with this invite (or none) may make an account, and
+  // what to record it as.
+  protected abstract admit(invite: string | null): { code: string | null } | InviteProblem;
 
   private e2eeSchema = false;
   private e2ee() {
@@ -76,14 +78,14 @@ export abstract class RelayAccounts extends DurableObject {
       .sort((a, b) => b.created.localeCompare(a.created));
   }
 
-  // by: the admin who made it, when one did; otherwise the invite pays.
+  // by: the admin who made it, when one did; otherwise admit says.
   createE2ee(f: { id: string; box: string; invite: string | null; by: string | null; creation: Signed<Creation> }): Result<E2eeAccount> & { problem?: InviteProblem } {
     this.e2ee();
     if (this.e2eeAccountByKey(f.id)) return { ok: false, status: 409, error: "that account already exists" };
     let invite: string | null = null;
     if (!f.by) {
-      if (!f.invite) return { ok: false, status: 403, error: "an invite is needed to make an account" };
       const r = this.admit(f.invite);
+      if (r === "missing") return { ok: false, status: 403, error: "an invite is needed to make an account", problem: r };
       if (typeof r === "string") return { ok: false, status: 403, error: `that invite is ${r === "unknown" ? "not one of ours" : r}`, problem: r };
       invite = r.code;
     }
