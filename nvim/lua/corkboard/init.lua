@@ -458,6 +458,16 @@ local function open_in_preview(path)
   M.push_preview()
 end
 
+-- From the bridge, once the page's sign in has finished: what couldn't be
+-- read signed out (the board, the fleet, brains and holds, the plan), read.
+function M.signed_in()
+  vim.schedule(function()
+    if M.window == "plan" then return require("corkboard.plan").cloud_event({ type = "reconnected" }) end
+    require("corkboard.board").push()
+    require("corkboard.fleet").cloud_event({ type = "reconnected" })
+  end)
+end
+
 -- A click on a file in the browser. With tab (the file explorer), it opens
 -- in the explorer's preview tab (above), or a tab of its own at the end, or
 -- goes to the window already showing it. Otherwise it opens in the current

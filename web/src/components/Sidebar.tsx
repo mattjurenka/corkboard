@@ -43,9 +43,12 @@ export function Sidebar() {
       <div className="flex min-w-0 flex-col px-2ch py-row">
         <div className="flex min-w-0 items-center justify-between gap-ch">
           <span className="truncate font-bold">{context ? context.cwd.split("/").at(-1) || "/" : ""}</span>
-          <HeaderButton title="Day plan, in its own window (<leader>p)" onClick={() => openPlan()}>
-            plan ↗
-          </HeaderButton>
+          <div className="flex shrink-0 items-center">
+            <SignIn />
+            <HeaderButton title="Day plan, in its own window (<leader>p)" onClick={() => openPlan()}>
+              plan ↗
+            </HeaderButton>
+          </div>
         </div>
         <span className="truncate text-muted-foreground">{context ? (host ? `${host}:` : "") + home(context.cwd) : ""}</span>
       </div>
@@ -317,6 +320,47 @@ export function SectionHeader({ title, action }: { title: string; action?: React
       {title}
       {action}
     </header>
+  );
+}
+
+// The bridge's sign-in to the Worker, while it has none (bridge/server.ts's
+// /auth): the Worker's sign-in, in the browser, and gone once that's done.
+// A page with no bridge to ask never shows it.
+type Auth = { server: string; signedIn: boolean; pending: boolean };
+function SignIn() {
+  const nvim = useNvim();
+  const [auth, setAuth] = useState<Auth>();
+  const [error, setError] = useState<string>();
+  const check = () =>
+    nvim
+      .bridge("auth")
+      .then((r) => (r.ok ? (r.json() as Promise<Auth>) : undefined))
+      .then(setAuth, () => {});
+  useEffect(() => void check(), []);
+  // While a sign-in is under way, until the bridge has one or gives up.
+  useEffect(() => {
+    if (!auth?.pending) return;
+    const timer = setInterval(check, 2000);
+    return () => clearInterval(timer);
+  }, [auth?.pending]);
+  if (!auth || auth.signedIn) return null;
+  const start = async () => {
+    setError(undefined);
+    setAuth({ ...auth, pending: true });
+    try {
+      const r = await nvim.bridge("auth", { method: "POST" });
+      if (!r.ok) throw new Error((await r.text()).trim() || `${r.status}`);
+      const { url } = (await r.json()) as { url: string };
+      if (url) window.open(url, "_blank", "noopener");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+    check();
+  };
+  return (
+    <HeaderButton title={error ?? auth.server} disabled={auth.pending} className={cn("text-muted-foreground", error && "text-destructive")} onClick={start}>
+      {auth.pending ? "signing in…" : "sign in ↗"}
+    </HeaderButton>
   );
 }
 

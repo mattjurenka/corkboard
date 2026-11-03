@@ -21,7 +21,7 @@ import * as boards from "./boards";
 import * as remote from "./remote";
 import { speech } from "./speech";
 import * as wasm from "./wasm";
-import { CLOUD, token } from "./cloud";
+import { CLOUD, login, signedIn, token } from "./cloud";
 import { COMPILED, RESOURCES, STATE_DIR, dirsEnv } from "./dirs";
 
 const HOST = process.env.CORKBOARD_HOST ?? "127.0.0.1";
@@ -686,6 +686,35 @@ async function media(req: Request, url: URL): Promise<Response> {
   return new Response(res.body, { status: res.status, headers });
 }
 
+// /auth: whether this bridge is signed in to the Worker, for the page's
+// sign in (Sidebar.tsx). POST starts a sign-in, or joins the one under way,
+// and answers with the address for the page to open; once it's done, every
+// page's Neovim reads what it couldn't before.
+let signingIn: Promise<string> | undefined;
+async function auth(req: Request, url: URL): Promise<Response> {
+  if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
+  if (!TOKEN && !isLoopback(url.hostname)) return new Response(`wrong host: ${url.host}`, { status: 403 });
+  if (req.method === "GET") return Response.json({ server: CLOUD, signedIn: signedIn(), pending: !!signingIn });
+  if (req.method !== "POST") return new Response("GET or POST", { status: 405 });
+  if (!signingIn) {
+    let shown!: (url: string) => void;
+    const address = new Promise<string>((r) => (shown = r));
+    const run = login((u) => shown(u));
+    run.then(
+      () => {
+        for (const ws of pages) ws.data.page?.exec("require('corkboard').signed_in()");
+      },
+      (err) => console.error((err as Error).message),
+    ).finally(() => (signingIn = undefined));
+    signingIn = Promise.race([address, run.then(() => "")]);
+  }
+  try {
+    return Response.json({ url: await signingIn });
+  } catch (err) {
+    return new Response((err as Error).message, { status: 502 });
+  }
+}
+
 Bun.serve<Session, {}>({
   hostname: HOST,
   port: PORT,
@@ -733,6 +762,7 @@ Bun.serve<Session, {}>({
     if (url.pathname.startsWith("/wasm/plugins/")) return wasmPlugins(req, url);
     if (url.pathname.startsWith("/api/git/")) return gitProxy(req, url);
     if (url.pathname.startsWith("/media/")) return media(req, url);
+    if (url.pathname === "/auth") return auth(req, url);
     if (url.pathname === "/speech") {
       if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
       if (!TOKEN && !isLoopback(url.hostname)) return new Response(`wrong host: ${url.host}`, { status: 403 });
