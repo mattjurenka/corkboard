@@ -9,9 +9,12 @@
 
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 
+// A question AskUserQuestion asks, whole, for the phone to answer it there.
+export type Question = { question: string; header: string; multiSelect: boolean; options: { label: string; description: string }[] };
+
 export type Item =
   | { id: string; at: string; kind: "you" | "claude"; text: string }
-  | { id: string; at: string; kind: "tool"; tool: string; call: string; detail: string; options?: string[][] }
+  | { id: string; at: string; kind: "tool"; tool: string; call: string; detail: string; options?: string[][]; questions?: Question[] }
   | { id: string; at: string; kind: "result"; call: string; text: string; error: boolean };
 
 const TEXT = 6000;
@@ -56,12 +59,19 @@ export function items(r: any): Item[] {
     }
     if (b?.type === "tool_use") {
       const input = (b.input ?? {}) as Record<string, unknown>;
-      // A question's options, each question's labels in order, for buttons.
-      const options =
+      // A question's questions, whole, and (for older phones) each one's
+      // labels in order.
+      const questions: Question[] | undefined =
         b.name === "AskUserQuestion" && Array.isArray(input.questions)
-          ? input.questions.map((q: any) => (Array.isArray(q?.options) ? q.options.map((o: any) => String(o?.label ?? "")) : []))
+          ? input.questions.map((q: any) => ({
+              question: cut(String(q?.question ?? ""), TEXT),
+              header: String(q?.header ?? ""),
+              multiSelect: q?.multiSelect === true,
+              options: Array.isArray(q?.options) ? q.options.map((o: any) => ({ label: String(o?.label ?? ""), description: String(o?.description ?? "") })) : [],
+            }))
           : undefined;
-      return [{ id, at, kind: "tool", tool: String(b.name), call: String(b.id), detail: cut(detail(String(b.name), input), 300), ...(options && { options }) }];
+      const options = questions?.map((q) => q.options.map((o) => o.label));
+      return [{ id, at, kind: "tool", tool: String(b.name), call: String(b.id), detail: cut(detail(String(b.name), input), 300), ...(questions && { options, questions }) }];
     }
     if (b?.type === "tool_result") {
       return [{ id, at, kind: "result", call: String(b.tool_use_id), text: cut(resultText(b.content).trim(), RESULT), error: b.is_error === true }];
