@@ -86,6 +86,12 @@ const PITCHED: Record<string, { voice: string; speed: number; pitch: number }> =
   anime: { voice: "af_anime", speed: 1, pitch: 1 },
 };
 
+// What a persona's voice is put through, as it's played. ring: pitched up,
+// as quick as it was, and multiplied by a low hum, with some of it as it was
+// under that.
+export type Effect = "ring";
+const RING = { pitch: 1.35, hz: 45, dry: 0.4, gain: 2 / 1.4 };
+
 type Synth = { samples?: Float32Array; rate?: number; error?: string } & Partial<Timing>;
 export type Bridge = (path: string, init?: RequestInit) => Promise<Response>;
 // The mouth from a time in a line's audio (seconds) until the next: its
@@ -275,9 +281,38 @@ async function made(a: Ask, bridge: Bridge | undefined, only: boolean): Promise<
   return synth(a.text, a.voice, a.speed, a.mood, bridge);
 }
 
+// Samples made by times longer, their pitch kept (WSOLA): windows half
+// overlapping, each taken from about where it falls, nudged to where it best
+// goes on from the one before.
+function stretch(x: Float32Array, by: number, rate: number): Float32Array {
+  const n = Math.round(rate * 0.015) * 2;
+  const hop = n / 2;
+  const near = Math.round(rate * 0.006);
+  const win = Float32Array.from({ length: n }, (_, i) => 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / n));
+  const out = new Float32Array(Math.round(x.length * by));
+  let prev = 0;
+  for (let o = 0; o < out.length; o += hop) {
+    let at = Math.min(Math.round(o / by), Math.max(0, x.length - n));
+    if (o > 0) {
+      const next = prev + hop;
+      let top = -Infinity;
+      for (let p = Math.max(0, at - near); p <= Math.min(x.length - n, at + near); p++) {
+        let c = 0;
+        for (let i = 0; i < hop && next + i < x.length; i += 2) c += x[next + i] * x[p + i];
+        if (c > top) [top, at] = [c, p];
+      }
+    }
+    for (let i = 0; i < n && o + i < out.length && at + i < x.length; i++) out[o + i] += x[at + i] * win[i];
+    prev = at;
+  }
+  return out;
+}
+
 // A line's audio; with only, from what was said ahead of time, or none.
-async function clip(text: string, voice: string, mood: Mood | undefined, bridge: Bridge | undefined, failed: (why: string) => void, only = false): Promise<Clip | null> {
+async function clip(text: string, voice: string, effect: Effect | undefined, mood: Mood | undefined, bridge: Bridge | undefined, failed: (why: string) => void, only = false): Promise<Clip | null> {
   const p = PITCHED[voice];
+  // Pitched up by the effect too, each sentence made as much longer first.
+  const by = effect === "ring" ? RING.pitch : 1;
   const m = mood && MOODS[mood];
   // Its sentences, each made, then a pause after each, a little more or less
   // each time.
@@ -295,10 +330,11 @@ async function clip(text: string, voice: string, mood: Mood | undefined, bridge:
     return null;
   }
   const at = said[0].rate!;
+  if (by !== 1) for (const r of said) r.samples = stretch(r.samples!, by, at);
   const gaps = parts.map((s) => Math.round(pause(s) * (m?.pause ?? 1) * (0.75 + Math.random() * 0.5) * at));
   const samples = new Float32Array(said.reduce((n, r, i) => n + r.samples!.length + gaps[i], 0));
   // Pitched by playing its samples faster.
-  const rate = at * (p?.pitch ?? 1);
+  const rate = at * (p?.pitch ?? 1) * by;
   const marks: Mark[] = [];
   const spans: Span[] = [];
   let o = 0;
@@ -321,7 +357,7 @@ async function clip(text: string, voice: string, mood: Mood | undefined, bridge:
         const [shape, open] = sound(c);
         if (open >= 0) marks.push({ t: t / rate, shape, open });
         if (!SILENT.includes(c) && c !== " " && t < to) times.push(t);
-        t += r.frames![j] * FRAME;
+        t += r.frames![j] * FRAME * by;
       });
     } else {
       for (let c = first; c < last; c++) marks.push({ t: (from + ((c - first) / (last - first)) * (to - from)) / rate, ...letter(text[c]) });
@@ -396,11 +432,14 @@ export class Voice {
   private length = 0;
   private source?: AudioBufferSourceNode;
   private gain?: GainNode;
+  // The effect's nodes between the source and gain, the hum first.
+  private between: AudioNode[] = [];
   private timer?: ReturnType<typeof setTimeout>;
   private _muted = false;
-  // Lines made ready (warm), by voice, mood and text.
+  // Lines made ready (warm), by voice, effect, mood and text.
   private warmed = new Map<string, Promise<Clip | null>>();
   voice = VOICES[0];
+  effect?: Effect;
   error = "";
   onChange?: () => void;
 
@@ -421,7 +460,10 @@ export class Voice {
   }
   set muted(on: boolean) {
     this._muted = on;
-    if (this.gain) this.gain.gain.value = on ? 0 : 1;
+    if (this.gain) this.gain.gain.value = this.level();
+  }
+  private level() {
+    return this._muted ? 0 : this.effect === "ring" ? RING.gain : 1;
   }
 
   // The newest item's sentences after what's left; anything older than the
@@ -431,10 +473,10 @@ export class Voice {
     if (items.length > 1) this.queue = this.queue.filter((l) => l.from === items[items.length - 1]);
     this.queue.push(
       ...sentences(text).map((t) => {
-        const k = [this.voice, mood, t].join("\n");
+        const k = [this.voice, this.effect, mood, t].join("\n");
         const ready = this.warmed.get(k);
         this.warmed.delete(k);
-        return { text: t, from, mood, clip: ready?.then((c) => c ?? clip(t, this.voice, mood, this.bridge, (why) => (this.error = why))) };
+        return { text: t, from, mood, clip: ready?.then((c) => c ?? clip(t, this.voice, this.effect, mood, this.bridge, (why) => (this.error = why))) };
       }),
     );
     this.ahead();
@@ -445,8 +487,8 @@ export class Voice {
   // it's heard at once.
   warm(text: string, mood?: Mood) {
     for (const t of sentences(text)) {
-      const k = [this.voice, mood, t].join("\n");
-      if (!this.warmed.has(k)) this.warmed.set(k, clip(t, this.voice, mood, undefined, () => {}, true));
+      const k = [this.voice, this.effect, mood, t].join("\n");
+      if (!this.warmed.has(k)) this.warmed.set(k, clip(t, this.voice, this.effect, mood, undefined, () => {}, true));
     }
   }
 
@@ -506,7 +548,7 @@ export class Voice {
   private ahead() {
     if (this._muted) return;
     for (const l of this.queue.slice(0, AHEAD)) {
-      l.clip ??= clip(l.text, this.voice, l.mood, this.bridge, (why) => {
+      l.clip ??= clip(l.text, this.voice, this.effect, l.mood, this.bridge, (why) => {
         this.error = why;
         this.onChange?.();
       });
@@ -518,7 +560,7 @@ export class Voice {
     this.start = this.playing = undefined;
     this.onChange?.();
     if (!line) return;
-    if (!this._muted) line.clip ??= clip(line.text, this.voice, line.mood, this.bridge, (why) => (this.error = why));
+    if (!this._muted) line.clip ??= clip(line.text, this.voice, this.effect, line.mood, this.bridge, (why) => (this.error = why));
     this.ahead();
     const c = line.clip ? await line.clip : null;
     if (this.line !== line) return;
@@ -526,11 +568,27 @@ export class Voice {
       this.error = "";
       const ctx = audio();
       this.gain = ctx.createGain();
-      this.gain.gain.value = this._muted ? 0 : 1;
+      this.gain.gain.value = this.level();
       this.gain.connect(ctx.destination);
       this.source = ctx.createBufferSource();
       this.source.buffer = c.buffer;
-      this.source.connect(this.gain);
+      if (this.effect === "ring") {
+        // Ring modulated: through a gain the hum swings from 1 to -1, and
+        // some of it dry.
+        const hum = ctx.createOscillator();
+        hum.frequency.value = RING.hz;
+        const ring = ctx.createGain();
+        ring.gain.value = 0;
+        hum.connect(ring.gain);
+        const dry = ctx.createGain();
+        dry.gain.value = RING.dry;
+        for (const g of [ring, dry]) {
+          this.source.connect(g);
+          g.connect(this.gain);
+        }
+        hum.start();
+        this.between = [hum, ring, dry];
+      } else this.source.connect(this.gain);
       this.source.onended = () => this.line === line && this.end();
       this.playing = c;
       this.length = c.buffer.duration;
@@ -553,8 +611,11 @@ export class Voice {
         this.source.stop();
       } catch {}
       this.source.disconnect();
+      (this.between[0] as OscillatorNode | undefined)?.stop();
+      for (const n of this.between) n.disconnect();
       this.gain?.disconnect();
       this.source = this.gain = undefined;
+      this.between = [];
     }
     this.line = undefined;
     this.next();

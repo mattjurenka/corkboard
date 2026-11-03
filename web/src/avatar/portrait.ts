@@ -1,7 +1,7 @@
 // portrait.html: ?persona=<id>'s model on a stage, at rest, posted back as
 // a PNG to portraits.ts once its hair has settled.
 
-import { persona } from "./personas";
+import { modelAt, persona } from "./personas";
 import { Stage } from "./stage";
 import { Voice } from "./voice";
 
@@ -11,7 +11,7 @@ const stage = new Stage(canvas, new Voice());
 stage.idle = [];
 stage.resize(480, 600);
 const p = persona(id);
-await stage.load(new URL(p.model, location.href).href, p.recolor);
+await stage.load(new URL(modelAt(p), location.href).href, p.recolor);
 await new Promise((r) => setTimeout(r, 2000));
 // Drawn and read in one go: the canvas is cleared once it's shown.
 const s = stage as unknown as { renderer: { render(a: unknown, b: unknown): void }; scene: unknown; camera: unknown };

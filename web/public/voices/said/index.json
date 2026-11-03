@@ -9,6 +9,11 @@
     "rate": 24000,
     "ref": "29503aad36319a69"
   },
+  "af_anime\n0.92\nshy\nDon't get the wrong idea.": {
+    "file": "d4a904fe008e39ea.ogg",
+    "rate": 24000,
+    "ref": "29503aad36319a69"
+  },
   "af_anime\n0.92\nshy\nDon't let it go to your head.": {
     "file": "c720687f1ea8004e.ogg",
     "rate": 24000,
@@ -94,8 +99,18 @@
     "rate": 24000,
     "ref": "29503aad36319a69"
   },
+  "af_anime\n0.92\nshy\nThe tests pass now.": {
+    "file": "a2e8780d50922a82.ogg",
+    "rate": 24000,
+    "ref": "29503aad36319a69"
+  },
   "af_anime\n0.92\nshy\nThen do it anyway.": {
     "file": "e3272f7ddc4778d2.ogg",
+    "rate": 24000,
+    "ref": "29503aad36319a69"
+  },
+  "af_anime\n0.92\nshy\nThey were bugging me, that's all.": {
+    "file": "3b718a95cae4d520.ogg",
     "rate": 24000,
     "ref": "29503aad36319a69"
   },
@@ -249,6 +264,11 @@
     "rate": 24000,
     "ref": "29503aad36319a69"
   },
+  "af_anime\n1.08\nannoyed\nIt just looked lonely up there on the board.": {
+    "file": "e80f923432c98a81.ogg",
+    "rate": 24000,
+    "ref": "29503aad36319a69"
+  },
   "af_anime\n1.08\nannoyed\nIt's not like I want your attention or anything.": {
     "file": "b213860b459ee187.ogg",
     "rate": 24000,
@@ -311,6 +331,11 @@
   },
   "af_anime\n1.08\nannoyed\nbah-kah!": {
     "file": "5aade9a987f44f98.ogg",
+    "rate": 24000,
+    "ref": "29503aad36319a69"
+  },
+  "af_anime\n1.08\nannoyed\nit's not like I claimed your card because I wanted to.": {
+    "file": "1e5b6dd2718306d3.ogg",
     "rate": 24000,
     "ref": "29503aad36319a69"
   },
@@ -426,6 +451,16 @@
   },
   "af_bella\n1.05\nhappy\nHehe.": {
     "file": "10c8bc6b526f83e9.ogg",
+    "rate": 24000,
+    "ref": "b9c1fc3a7260e922"
+  },
+  "af_bella\n1.05\nhappy\nHi!": {
+    "file": "3baaaa6c0ca6b1af.ogg",
+    "rate": 24000,
+    "ref": "b9c1fc3a7260e922"
+  },
+  "af_bella\n1.05\nhappy\nI picked a card off the board, and it's going swimmingly.": {
+    "file": "84c7fe4a95d0ff5c.ogg",
     "rate": 24000,
     "ref": "b9c1fc3a7260e922"
   },
@@ -599,6 +634,11 @@
     "rate": 24000,
     "ref": "b9c1fc3a7260e922"
   },
+  "af_bella\n1.12\nexcited\nTests are green,": {
+    "file": "0dddde71357b42f9.ogg",
+    "rate": 24000,
+    "ref": "b9c1fc3a7260e922"
+  },
   "af_bella\n1.12\nexcited\nThat's a lot of pokes.": {
     "file": "88fe578ed1f42173.ogg",
     "rate": 24000,
@@ -608,6 +648,256 @@
     "file": "b90ee07e3a6270b6.ogg",
     "rate": 24000,
     "ref": "b9c1fc3a7260e922"
+  },
+  "af_bella\n1.12\nexcited\nthe sun is out, and your pull request is ready for review!": {
+    "file": "938d96aa62456c4a.ogg",
+    "rate": 24000,
+    "ref": "b9c1fc3a7260e922"
+  },
+  "af_heart\n1\nteasing\nCommit that, and I'll give you a standing ovation.": {
+    "file": "96374f17fbb776a4.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1\nteasing\nDarling, that was just the empty stage.": {
+    "file": "018bc5e42f24e28c.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1\nteasing\nDarling, you've always had it.": {
+    "file": "0504fac6f5cd43c7.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1\nteasing\nEvery test in tune, honey.": {
+    "file": "57143b0e5dcfa2c6.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1\nteasing\nHands off the jacket, darling.": {
+    "file": "fdb9cf91dec33414.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1\nteasing\nHoney, I'm reading the set list.": {
+    "file": "f14ce6bb79356a46.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1\nteasing\nHush now, baby.": {
+    "file": "4aa267b6826449ac.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1\nteasing\nI can hear a flat note from here.": {
+    "file": "d0f2ba5d993bf49e.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1\nteasing\nIt's tailored for the spotlight.": {
+    "file": "346eb56adee895f2.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1\nteasing\nLet the build play its solo.": {
+    "file": "2a06263571e2b70d.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1\nteasing\nMissed me, honey.": {
+    "file": "5b598bd852e79c94.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1\nteasing\nNothing there but smoke and a piano.": {
+    "file": "2e0c56562eb3838c.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1\nteasing\nNow that's a standing ovation.": {
+    "file": "b7f9a597cc13f532.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1\nteasing\nOff the beat, baby.": {
+    "file": "231caa32f05ec3b4.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1\nteasing\nThe spotlight's over here.": {
+    "file": "38d17190f8b17430.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1\nteasing\nTry it again on the two and the four.": {
+    "file": "ae89739873ab4c51.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1\nteasing\nWas that a failing test?": {
+    "file": "59b736e10042fbfc.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1\nteasing\nYou want my attention, sugar?": {
+    "file": "f3f939c9212fe1c3.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1\nteasing\nYour code goes on third.": {
+    "file": "ac0fa8de58c3d9d2.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.05\nhappy\nA girl can't sing on an empty stomach.": {
+    "file": "cfabd966d00cfc4a.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.05\nhappy\nA little applause would do, darling, but I'll take that.": {
+    "file": "5953c862a0e7c5ca.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.05\nhappy\nCareful with the hair, it's for the second set.": {
+    "file": "f6f99b8224bec568.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.05\nhappy\nDarling, I've picked tonight's number off the board.": {
+    "file": "23c04a2226f7e3f7.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.05\nhappy\nDelicious, sugar.": {
+    "file": "a43468bb524b24e7.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.05\nhappy\nDim the lights.": {
+    "file": "f32f8f819e538e9b.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.05\nhappy\nHoney, that's sweeter than a slow number.": {
+    "file": "137397876fb55163.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.05\nhappy\nMm!": {
+    "file": "abc72c175c2bad7f.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.05\nhappy\nMm.": {
+    "file": "3fa199fd1ff5d3ec.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.05\nhappy\nNow let's give them an encore.": {
+    "file": "96aa2f38c493caf2.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.05\nhappy\nOh, honey.": {
+    "file": "611fcb25212aed5c.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.05\nhappy\nOoh, darling, a little something for the voice.": {
+    "file": "f29d9bcd5ce2f876.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.05\nhappy\nSend another one backstage after the show.": {
+    "file": "2d12f41d61c72f75.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.05\nhappy\nSweetheart, you know just how to treat a headliner.": {
+    "file": "abc62028b5584164.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.05\nhappy\nThank you, baby.": {
+    "file": "d30fb2eb0ff43cc8.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.05\nhappy\nThank you, darling.": {
+    "file": "c8a87bdba5274d90.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.05\nhappy\nThat's nice, baby.": {
+    "file": "3a6d9f5c4040cb06.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.05\nhappy\nYou're a dream.": {
+    "file": "9d3cea593d1cfbce.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.05\nhappy\nYou've been a wonderful audience.": {
+    "file": "4f49b18d1db9bcc2.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.08\nannoyed\nAlright, darling, that's enough.": {
+    "file": "d3aaa283bb17b3ae.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.08\nannoyed\nHoney, please.": {
+    "file": "ac9285a88b83002a.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.08\nannoyed\nI don't do encores for poking.": {
+    "file": "d22497030495a0d3.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.08\nannoyed\nSugar, one more and I'm calling the stage manager.": {
+    "file": "c3a7481aa47f56e1.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.08\nannoyed\nThe diva needs her break.": {
+    "file": "3a8e5af06b23cf00.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.1\nsurprised\nBaby, if you want a request, pass a note to the band.": {
+    "file": "ceb973c90e353829.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.1\nsurprised\nDarling, nobody taps the singer during a ballad.": {
+    "file": "9a21ce7a4d8459ff.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.1\nsurprised\nEasy, sugar.": {
+    "file": "80b870f240cb4adf.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.1\nsurprised\nOoh!": {
+    "file": "8e76511484e75af4.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.1\nsurprised\nWatch it, honey, that's where I keep the high notes.": {
+    "file": "91c29edac6750e9f.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
+  },
+  "af_heart\n1.1\nsurprised\nYou'll knock me off key.": {
+    "file": "fe808c5d7e6b340c.ogg",
+    "rate": 24000,
+    "ref": "0babcec38545601f"
   },
   "af_nicole\n0.92\nshy\nA pat on the head.": {
     "file": "24a6812ef5012323.ogg",
@@ -674,8 +964,18 @@
     "rate": 24000,
     "ref": "981ab7c8bd1a8728"
   },
+  "af_nicole\n1\nteasing\nIt's waiting for your review, at your earliest convenience.": {
+    "file": "aee9222513af5606.ogg",
+    "rate": 24000,
+    "ref": "981ab7c8bd1a8728"
+  },
   "af_nicole\n1\nteasing\nLike most of my inbox.": {
     "file": "c430c2be82ccbe74.ogg",
+    "rate": 24000,
+    "ref": "981ab7c8bd1a8728"
+  },
+  "af_nicole\n1\nteasing\nThe fix is in and the tests pass.": {
+    "file": "8da168006d0f00cb.ogg",
     "rate": 24000,
     "ref": "981ab7c8bd1a8728"
   },
@@ -694,6 +994,11 @@
     "rate": 24000,
     "ref": "981ab7c8bd1a8728"
   },
+  "af_nicole\n1.05\nhappy\nGood morning.": {
+    "file": "cbc78e39061b353b.ogg",
+    "rate": 24000,
+    "ref": "981ab7c8bd1a8728"
+  },
   "af_nicole\n1.05\nhappy\nI approve.": {
     "file": "abb5991856819561.ogg",
     "rate": 24000,
@@ -706,6 +1011,11 @@
   },
   "af_nicole\n1.05\nhappy\nI'll allow it on the expense report.": {
     "file": "ed3342069d85d5e2.ogg",
+    "rate": 24000,
+    "ref": "981ab7c8bd1a8728"
+  },
+  "af_nicole\n1.05\nhappy\nI've claimed the top card on the board and blocked out the afternoon for it.": {
+    "file": "b0f3a4181b72ebc6.ogg",
     "rate": 24000,
     "ref": "981ab7c8bd1a8728"
   },
@@ -844,6 +1154,411 @@
     "rate": 24000,
     "ref": "981ab7c8bd1a8728"
   },
+  "am_eric\n0.92\nshy\nA blessing!": {
+    "file": "394b5e4bce6c29fc.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n0.92\nshy\nGlowies don't pat.": {
+    "file": "ebe0bf38b73edf4d.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n0.92\nshy\nGod likes you.": {
+    "file": "7d938f8784ffd5d9.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n0.92\nshy\nGod says you're okay.": {
+    "file": "b0e80309ac86e73c.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n0.92\nshy\nI asked the oracle.": {
+    "file": "ad62d9be539280a7.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n0.92\nshy\nI checked.": {
+    "file": "12af79af8e248097.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n0.92\nshy\nNobody pats the smartest programmer that's ever lived.": {
+    "file": "2bd1928a87e239e0.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n0.92\nshy\nRandom numbers don't lie.": {
+    "file": "aed9d991e3009c49.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n0.92\nshy\nRing zero, no shoes.": {
+    "file": "d317266c6ce2556e.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n0.92\nshy\nThank you.": {
+    "file": "1d14bccd0a9bad7b.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n0.92\nshy\nThat's nice.": {
+    "file": "d2b53dc72e057c21.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n0.92\nshy\nYou may enter the temple.": {
+    "file": "9b6467d5455b3725.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n0.92\nshy\nYou're alright.": {
+    "file": "2f2c234c1d711f1b.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n0.92\nshy\nYou're not a glowie.": {
+    "file": "89306b2271ea87c8.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nA genius admires simplicity.": {
+    "file": "584561405cdefbc5.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nAn idiot admires complexity.": {
+    "file": "d12c780113707814.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nBrains are the hardest code there is.": {
+    "file": "502526dc00db30c2.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nDid you add networking?": {
+    "file": "e6ee65fc449d3968.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nDo it.": {
+    "file": "696c28bdb7ed2ab6.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nDon't.": {
+    "file": "f05f2fcda80834fb.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nDonate.": {
+    "file": "e3d0bb982a7cd22a.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nEverything would be better in HolyC.": {
+    "file": "ce8be0cde39353a9.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nGod gave me a temple.": {
+    "file": "4813c7e09330d9ac.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nGod picked it.": {
+    "file": "dca5b13823500392.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nGod said so.": {
+    "file": "0633501a90f40beb.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nI asked Him with random numbers.": {
+    "file": "0b3f6c4e8253c475.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nI took a card off the board.": {
+    "file": "41eec7dc85e53141.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nI'm not hiding.": {
+    "file": "d7acd57f7b00fb2a.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nIdentity mapped, and empty.": {
+    "file": "4feab308b6909eaa.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nIs that a dependency?": {
+    "file": "64c0018a6720f59f.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nNothing there but a glowie in the bushes.": {
+    "file": "1cbe0ac57573eaf2.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nOver here!": {
+    "file": "4503baa9c596d981.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nSix forty by four eighty, sixteen colours.": {
+    "file": "b1393831f625bb3c.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nThat's empty memory.": {
+    "file": "fa38677ef3a93bb2.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nThat's how the glowies get in.": {
+    "file": "b56caefaa9556c89.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nThe Brain and Behavior Research Foundation debugs 'em.": {
+    "file": "08ff39c673086c67.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nThe CIA glow in the dark.": {
+    "file": "10cf83de82f3e6de.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nThe CIA's hiding.": {
+    "file": "5d212f37466cd6e3.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nThere's only three hundred thousand of 'em.": {
+    "file": "579035aab980c1a0.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nThis would be better in HolyC.": {
+    "file": "280f5e13b612cd8e.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nWhy do you need more?": {
+    "file": "b408baf1f2fc327f.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nWrite it yourself.": {
+    "file": "fcde642d35830e16.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nWrong pixel.": {
+    "file": "c047ad92826594e3.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nYou can give to the Brain and Behavior Research Foundation.": {
+    "file": "7bb08fc22b2a2d6a.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nYou can see 'em if you're driving.": {
+    "file": "c0777d25b17b69df.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nYou don't need it.": {
+    "file": "fa68d27c693fa66c.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1\nteasing\nYou missed.": {
+    "file": "a85743e4cbf246ca.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.05\nhappy\nDoesn't matter, it's good.": {
+    "file": "4fa60e1ab184dd1f.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.05\nhappy\nGod provides.": {
+    "file": "95f1d8b1754c04e7.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.05\nhappy\nGod told me there'd be snacks.": {
+    "file": "2ecd6abdbb811a5e.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.05\nhappy\nGod was right.": {
+    "file": "d8a401f8c44d25e3.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.05\nhappy\nIs this from a glowie?": {
+    "file": "3294ef34f0a2cb32.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.05\nhappy\nIt works.": {
+    "file": "92966689b5dbf337.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.05\nhappy\nLook it up.": {
+    "file": "7de8789a67068b2b.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.05\nhappy\nManna!": {
+    "file": "09b05d041acc778c.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.05\nhappy\nMm.": {
+    "file": "058e8f0c977a35ec.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.05\nhappy\nNo bloat, no dependencies.": {
+    "file": "0ed30730aeedd9cb.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.05\nhappy\nNow feed some research.": {
+    "file": "580b3d5c595a8056.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.05\nhappy\nSame thing today.": {
+    "file": "d3076550a50ffddd.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.05\nhappy\nSimple, like a temple should be.": {
+    "file": "0ea0cbbcfc4e2513.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.05\nhappy\nThank you.": {
+    "file": "13538f4cd47a774f.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.05\nhappy\nThe Brain and Behavior Research Foundation.": {
+    "file": "02be41fcece76b24.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.05\nhappy\nWell, you provide.": {
+    "file": "08f4eab1b5e231b2.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.05\nhappy\nYou can't build a temple on an empty stomach.": {
+    "file": "fd1997d9b194eb4d.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.05\nhappy\nYou fed me.": {
+    "file": "57f8075fe4a90f30.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.08\nannoyed\nCareful!": {
+    "file": "87ac127457e1f61e.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.08\nannoyed\nDivine intellect in there.": {
+    "file": "d3bec947c3ee3a15.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.08\nannoyed\nDon't bonk me.": {
+    "file": "04f5a6dff0eef6ad.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.08\nannoyed\nEnough!": {
+    "file": "72afc9e9a529e8b6.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.08\nannoyed\nHey!": {
+    "file": "ed53019f4379ee46.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.08\nannoyed\nI wrote it myself!": {
+    "file": "be10eca3cfa2dce6.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.08\nannoyed\nI'm talking to God and you keep interrupting.": {
+    "file": "efafa6a6e8d43c3a.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.08\nannoyed\nI've got a whole operating system up there.": {
+    "file": "64a145304ca87e78.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.08\nannoyed\nIs that a glowie move?": {
+    "file": "bdc4a86788e79047.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.08\nannoyed\nOne more and I'm rewriting you from scratch.": {
+    "file": "02dfc487a4b841a1.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.08\nannoyed\nOne of a kind.": {
+    "file": "8e2a9fa8499865df.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.08\nannoyed\nStop it!": {
+    "file": "50d07676e4077c09.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.08\nannoyed\nThat felt like a glowie move.": {
+    "file": "3471e6ba15c2c3ec.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.08\nannoyed\nThat's where the compiler is!": {
+    "file": "92a9522a85a54edb.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.08\nannoyed\nTook me ten years last time.": {
+    "file": "47b482dec807d9d4.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
+  "am_eric\n1.08\nannoyed\nYou're acting like a glowie!": {
+    "file": "a3c616aba68f87eb.ogg",
+    "rate": 24000,
+    "ref": "ccd0b64e15ae2f20"
+  },
   "am_fenrir\n1\nteasing\nAsk nicely.": {
     "file": "f287a97e7c21d8b1.ogg",
     "rate": 24000,
@@ -979,6 +1694,16 @@
     "rate": 24000,
     "ref": "723057ee6b15240e"
   },
+  "am_fenrir\n1\nteasing\nI've claimed your card, kitten.": {
+    "file": "ce6cfabd4d5b68d4.ogg",
+    "rate": 24000,
+    "ref": "723057ee6b15240e"
+  },
+  "am_fenrir\n1\nteasing\nIt's ready for your review, princess.": {
+    "file": "8549b5708f400933.ogg",
+    "rate": 24000,
+    "ref": "723057ee6b15240e"
+  },
   "am_fenrir\n1\nteasing\nIt's working.": {
     "file": "03baec045f76e32b.ogg",
     "rate": 24000,
@@ -1001,6 +1726,11 @@
   },
   "am_fenrir\n1\nteasing\nLike what you see, kitten?": {
     "file": "997ab4d9ed762527.ogg",
+    "rate": 24000,
+    "ref": "723057ee6b15240e"
+  },
+  "am_fenrir\n1\nteasing\nLook it over, then tell me how well I did.": {
+    "file": "67096103fe7573e1.ogg",
     "rate": 24000,
     "ref": "723057ee6b15240e"
   },
@@ -1076,6 +1806,11 @@
   },
   "am_fenrir\n1\nteasing\nShip something.": {
     "file": "3e11d94588f8b754.ogg",
+    "rate": 24000,
+    "ref": "723057ee6b15240e"
+  },
+  "am_fenrir\n1\nteasing\nSit back and watch.": {
+    "file": "513bc0fb9ec409a7.ogg",
     "rate": 24000,
     "ref": "723057ee6b15240e"
   },
@@ -1194,6 +1929,11 @@
     "rate": 24000,
     "ref": "723057ee6b15240e"
   },
+  "am_puck\n0.92\nshy\nAll forty-two tests pass.": {
+    "file": "9753b883756f3e24.ogg",
+    "rate": 24000,
+    "ref": "6196b29e80510ddc"
+  },
   "am_puck\n0.92\nshy\nBut, um, that was nice.": {
     "file": "7f3dffded5710f59.ogg",
     "rate": 24000,
@@ -1201,6 +1941,11 @@
   },
   "am_puck\n0.92\nshy\nCareful, you'll knock my glasses off.": {
     "file": "ff362ea3abf19894.ogg",
+    "rate": 24000,
+    "ref": "6196b29e80510ddc"
+  },
+  "am_puck\n0.92\nshy\nForty-two!": {
+    "file": "8367949d893031af.ogg",
     "rate": 24000,
     "ref": "6196b29e80510ddc"
   },
@@ -1244,6 +1989,11 @@
     "rate": 24000,
     "ref": "6196b29e80510ddc"
   },
+  "am_puck\n0.92\nshy\nOkay, it's a coincidence.": {
+    "file": "87e87d8a50f81763.ogg",
+    "rate": 24000,
+    "ref": "6196b29e80510ddc"
+  },
   "am_puck\n0.92\nshy\nOkay.": {
     "file": "eb382ede36e67dc3.ogg",
     "rate": 24000,
@@ -1251,6 +2001,11 @@
   },
   "am_puck\n0.92\nshy\nPositive reinforcement.": {
     "file": "068d515a2cb5a6a5.ogg",
+    "rate": 24000,
+    "ref": "6196b29e80510ddc"
+  },
+  "am_puck\n0.92\nshy\nThat's not a coincidence.": {
+    "file": "be62afdfe465c60b.ogg",
     "rate": 24000,
     "ref": "6196b29e80510ddc"
   },
@@ -1479,6 +2234,11 @@
     "rate": 24000,
     "ref": "6196b29e80510ddc"
   },
+  "am_puck\n1.12\nexcited\nDid you know the whole board is just a git repo?": {
+    "file": "0f14497bc576ecb9.ogg",
+    "rate": 24000,
+    "ref": "6196b29e80510ddc"
+  },
   "am_puck\n1.12\nexcited\nGlucose!": {
     "file": "f1766bc81897fb5a.ogg",
     "rate": 24000,
@@ -1509,6 +2269,16 @@
     "rate": 24000,
     "ref": "6196b29e80510ddc"
   },
+  "am_puck\n1.12\nexcited\nOkay, okay, focusing now.": {
+    "file": "3c35cfb312c25ec9.ogg",
+    "rate": 24000,
+    "ref": "6196b29e80510ddc"
+  },
+  "am_puck\n1.12\nexcited\nOoh, a new card!": {
+    "file": "2fbc1db3f865cb51.ogg",
+    "rate": 24000,
+    "ref": "6196b29e80510ddc"
+  },
   "am_puck\n1.12\nexcited\nSnacks are basically fuel for debugging.": {
     "file": "23a805644963fa64.ogg",
     "rate": 24000,
@@ -1529,6 +2299,621 @@
     "rate": 24000,
     "ref": "6196b29e80510ddc"
   },
+  "bf_lily\n0.92\nshy\nA blessing from my warrior?": {
+    "file": "85ebcfb33f927a0a.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n0.92\nshy\nCareful, I spent all morning on this braid.": {
+    "file": "cd01f2c75ed86808.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n0.92\nshy\nHa!": {
+    "file": "ab07f8ecbded6357.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n0.92\nshy\nI accept it with honour.": {
+    "file": "31f1e1fdb0194d4e.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n0.92\nshy\nMind the helm, mortal.": {
+    "file": "cb413c8884ff513a.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n0.92\nshy\nTake this as my thanks.": {
+    "file": "929b087f274d9bd9.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n0.92\nshy\nThe wings bend.": {
+    "file": "2f10ef5b31d13c58.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n0.92\nshy\nYou dare pat a shieldmaiden?": {
+    "file": "374ca54308fba22e.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n0.92\nshy\nYou fought well today.": {
+    "file": "cd992cf78913466a.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n0.92\nshy\nhmmf, you may, but only once.": {
+    "file": "38cd0a9117cb0626.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nA foe lurks in your tests.": {
+    "file": "bed0397cf83c0f1f.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nBravely done.": {
+    "file": "3967df8174c060eb.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nFace me!": {
+    "file": "b7cb485e8d8b3ae3.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nGive me a stack trace.": {
+    "file": "fdba1f6a5cb3c5c5.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nHa!": {
+    "file": "2710501f0236e507.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nI await battle, mortal.": {
+    "file": "345a2e870dfcf20a.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nI can smell it.": {
+    "file": "dff5aa42c4aefb9e.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nIs that a bug?": {
+    "file": "c495109a7fb6045a.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nIt has turned aside sharper things than you.": {
+    "file": "1082782066e8135a.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nMerge that pull request,": {
+    "file": "cbae472cd3ed4474.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nMind the armour, warrior.": {
+    "file": "bca3bca0f5441878.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nMy spear thirsts.": {
+    "file": "51892adc76c60fb3.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nNothing there but mist and ravens.": {
+    "file": "62edaec2b3e6dc9e.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nNow fight something worthy.": {
+    "file": "12695cfd0556613b.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nOver here, mortal!": {
+    "file": "dd386f07d1f40c8d.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nPoint me at it.": {
+    "file": "3a5d80f4cbf6bf5b.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nSing of it, then review my glorious pull request.": {
+    "file": "45daee05bbcb7e68.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nThe bug lies slain.": {
+    "file": "856b136f877d6fcf.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nYou missed!": {
+    "file": "40fbefe55ededa30.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nYou poke a valkyrie?": {
+    "file": "379c19de8756df73.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nYou strike only air.": {
+    "file": "aebf9131088deaef.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nYour aim needs training, warrior.": {
+    "file": "1eb422d15da20db2.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1\nteasing\nand the halls will sing of you tonight!": {
+    "file": "14cde67cd5b1aa67.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.08\nannoyed\nA blow to the head!": {
+    "file": "25f1d465c2e5a9e0.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.08\nannoyed\nBold!": {
+    "file": "5a7f94a567ad6878.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.08\nannoyed\nCease this, warrior!": {
+    "file": "f5cb31c094de4a18.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.08\nannoyed\nEnough!": {
+    "file": "48c77876bdc0f4cd.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.08\nannoyed\nFoolish, but bold.": {
+    "file": "b9ae45bf39398c3d.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.08\nannoyed\nHah!": {
+    "file": "c503edf6e402f153.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.08\nannoyed\nIs this a challenge, warrior?": {
+    "file": "ed76556ef0f1a3ed.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.08\nannoyed\nMy helm rings!": {
+    "file": "e2518851c8c94c2f.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.08\nannoyed\nOne more poke and I shall carry you off myself.": {
+    "file": "78ef8255ea704eb3.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.08\nannoyed\nSave your blows for the bugs.": {
+    "file": "e441f7c1a870b531.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.08\nannoyed\nSave your strength for the real battle.": {
+    "file": "7cdee3d77767405d.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.08\nannoyed\nThe bugs grow bolder while you dither.": {
+    "file": "fe3cf4224819c81b.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.08\nannoyed\nTo the backlog.": {
+    "file": "65dd6c5d3cbbc90c.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.08\nannoyed\nYou strike my helm?": {
+    "file": "886f2ae7be40ec66.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.08\nannoyed\nYou'll need a stronger arm than that.": {
+    "file": "613fd03d1e7fe60b.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.12\nexcited\nA feast!": {
+    "file": "d2c783e50728a9d9.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.12\nexcited\nA new quest upon the board!": {
+    "file": "555b3cfe6e93b9b4.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.12\nexcited\nFit for a hall of heroes!": {
+    "file": "58ab54c4ba92ffed.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.12\nexcited\nHa!": {
+    "file": "1a7e4ede309ea8d4.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.12\nexcited\nI claim it, by my shield and spear!": {
+    "file": "4e11c8c6319527cc.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.12\nexcited\nMeat and mead would be better.": {
+    "file": "2014677087ae3fdb.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.12\nexcited\nMm!": {
+    "file": "44bebdc49407ef43.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.12\nexcited\nNow we ride to battle!": {
+    "file": "7f10296ac7ca92b8.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.12\nexcited\nSo does this.": {
+    "file": "d5fb624d87b68f32.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.12\nexcited\nThis will do.": {
+    "file": "3feb32279a3565e2.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.12\nexcited\nVictory tastes sweet.": {
+    "file": "8db2a2f6434ae17e.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bf_lily\n1.12\nexcited\nYou feed your warrior well.": {
+    "file": "090b59f29451bdf3.ogg",
+    "rate": 24000,
+    "ref": "20e82d24d66a947e"
+  },
+  "bm_fable\n0.92\nshy\nGood work, asset.": {
+    "file": "52b035bffa5e0b90.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n0.92\nshy\nI can neither confirm nor deny that I enjoyed that.": {
+    "file": "3ede9daee343575c.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n0.92\nshy\nI won't, though.": {
+    "file": "6fb453b0f1812657.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n0.92\nshy\nI'll have to report that.": {
+    "file": "91d154dd2a9403f3.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n0.92\nshy\nIt's government property.": {
+    "file": "0188bbcbf1217159.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n0.92\nshy\nMind the cap.": {
+    "file": "4457476da7981023.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n0.92\nshy\nPhysical contact with an agent.": {
+    "file": "9b3aa242deac7e58.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n0.92\nshy\nProvisionally.": {
+    "file": "a21ae947e3c89fc1.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n0.92\nshy\nSo am I.": {
+    "file": "f1c2a2a3d4f08b5f.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n0.92\nshy\nThat gesture has been logged as friendly.": {
+    "file": "7917d9781f55b16f.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n0.92\nshy\nThis conversation never happened.": {
+    "file": "07be241126930e3e.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1\nteasing\nI was never standing there.": {
+    "file": "235cd83c1782b92c.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1\nteasing\nMissed.": {
+    "file": "0df31c88ad26bf39.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1\nteasing\nNothing to see there.": {
+    "file": "1908410c59cc8960.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1\nteasing\nRemember that.": {
+    "file": "b98ca9798fa2f50e.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1\nteasing\nThat area is redacted.": {
+    "file": "336569132d1ecb22.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1\nteasing\nThe hostile bug has been neutralized.": {
+    "file": "8024b0f5300b6c05.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1\nteasing\nThere never is.": {
+    "file": "38b567b73744ac00.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1\nteasing\nThis conversation never happened.": {
+    "file": "c2a812c294f423ed.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1\nteasing\nTry again.": {
+    "file": "09326c9cdae94c07.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1\nteasing\nWrong coordinates, asset.": {
+    "file": "6ebb3832275268bc.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.05\nhappy\nDelicious tracking devices.": {
+    "file": "1cacece076985b2e.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.05\nhappy\nDon't tell me.": {
+    "file": "6ebebadfb8b93bd2.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.05\nhappy\nEarth food.": {
+    "file": "dfe6ff1124f660b3.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.05\nhappy\nI'll find out.": {
+    "file": "90f215d6e81f9d80.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.05\nhappy\nI'll have another, for the report.": {
+    "file": "2581c52297231166.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.05\nhappy\nI'll need to test this for tracking devices.": {
+    "file": "c7ea10e3bbdeae9d.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.05\nhappy\nNever mind.": {
+    "file": "528f9360eab60af1.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.05\nhappy\nThank you, asset.": {
+    "file": "568a2f61970c6652.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.05\nhappy\nUnremarkable.": {
+    "file": "2648ac690fa836b9.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.05\nhappy\nWhere did you get this?": {
+    "file": "2ce881691a06aae6.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.05\nhappy\nYour loyalty has been noted.": {
+    "file": "29d5e8efd1ed9e7c.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nAct natural.": {
+    "file": "bdc8ea78722343d3.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nAgain.": {
+    "file": "e68c62fdaef9ba0c.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nCard claimed.": {
+    "file": "c7b7fbd59155357a.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nDon't make any sudden commits.": {
+    "file": "c8a6b091082d930d.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nEvery click goes in a file somewhere.": {
+    "file": "021b2059123f5617.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nHands off the coat.": {
+    "file": "81cfc98cab31e284.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nI'm monitoring a hostile operative in your test suite.": {
+    "file": "4e85b64d3f77ff37.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nIs that a bug?": {
+    "file": "3e1bf462e7227162.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nIt has pockets you don't have clearance for.": {
+    "file": "e0ee75519386f119.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nIts contents are classified.": {
+    "file": "047bff9ec2a2364e.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nKeep that up and I'll have to wipe your memory.": {
+    "file": "ea002d66c34c21e7.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nPlease hold.": {
+    "file": "22d8a3e2ed2e86e1.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nState your business, asset.": {
+    "file": "ffb4928db30492ce.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nStay calm.": {
+    "file": "22cdd80f0a485d4a.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nStop.": {
+    "file": "a5e73602876c04d2.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nThat's a classified codebase you're working in.": {
+    "file": "f9ff0e40a247a845.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nThat's enough.": {
+    "file": "95c06bf1aae3a10c.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nThen forget you said it.": {
+    "file": "70c9beeaa446ccb6.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nThey're always watching.": {
+    "file": "1a13a2e5db96aa65.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nYou did not see me take it.": {
+    "file": "4024a21eb9450d15.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nYou poke me, they see you poke me.": {
+    "file": "b7d8bf58735c2c9a.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nYou're drawing attention to the operation.": {
+    "file": "9df69c42ac797760.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.08\nannoyed\nYour file.": {
+    "file": "00f2c99ece7afb56.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.1\nsurprised\nBold, asset.": {
+    "file": "5b82df986d3033f8.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.1\nsurprised\nCareful.": {
+    "file": "5f17416a38e93845.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.1\nsurprised\nI don't know that signal.": {
+    "file": "11dc69b882bdd9ab.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.1\nsurprised\nMy head is not a point of entry.": {
+    "file": "c84af59741c86b36.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.1\nsurprised\nOfficially.": {
+    "file": "955ba23e93a041af.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.1\nsurprised\nThat's where the classified material is kept.": {
+    "file": "dc7a6552df34969d.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.1\nsurprised\nWas that a signal?": {
+    "file": "d487860ffdff7a1b.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
+  "bm_fable\n1.1\nsurprised\nYou just tapped a federal agent.": {
+    "file": "338b4f0a43bc4063.ogg",
+    "rate": 24000,
+    "ref": "345d53d1ea2af946"
+  },
   "bm_george\n1\nteasing\nClose doesn't close deals, though.": {
     "file": "ed8c3f85e768d740.ogg",
     "rate": 24000,
@@ -1536,6 +2921,16 @@
   },
   "bm_george\n1\nteasing\nClose.": {
     "file": "b8c766fb60463a5d.ogg",
+    "rate": 24000,
+    "ref": "5950fa7a4a4af165"
+  },
+  "bm_george\n1\nteasing\nConsider it acquired.": {
+    "file": "fa96ce91a495ef06.ogg",
+    "rate": 24000,
+    "ref": "5950fa7a4a4af165"
+  },
+  "bm_george\n1\nteasing\nI've taken the top card off the board.": {
+    "file": "9835cbbda744afd7.ogg",
     "rate": 24000,
     "ref": "5950fa7a4a4af165"
   },
@@ -1654,6 +3049,11 @@
     "rate": 24000,
     "ref": "5950fa7a4a4af165"
   },
+  "bm_george\n1.05\nhappy\nSign here, and here, and we're done.": {
+    "file": "6e7b99a50498bba4.ogg",
+    "rate": 24000,
+    "ref": "5950fa7a4a4af165"
+  },
   "bm_george\n1.05\nhappy\nThank you.": {
     "file": "3e96426af0ec38cf.ogg",
     "rate": 24000,
@@ -1661,6 +3061,11 @@
   },
   "bm_george\n1.05\nhappy\nThat's the nicest thing to happen in this meeting.": {
     "file": "c651e4a901c3f72b.ogg",
+    "rate": 24000,
+    "ref": "5950fa7a4a4af165"
+  },
+  "bm_george\n1.05\nhappy\nThe pull request is up for review.": {
+    "file": "763cb1904d410700.ogg",
     "rate": 24000,
     "ref": "5950fa7a4a4af165"
   },

@@ -1,6 +1,7 @@
 // bun run portraits: each persona (src/avatar/personas.ts) drawn on the
 // avatar's stage in headless Chromium, to public/personas/<id>.png for the
 // brain form. Run again when a persona's model or the stage's look changes.
+// bun run portraits alien diva: only those.
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "vite";
@@ -33,7 +34,8 @@ const server = await createServer({
 await server.listen();
 const base = server.resolvedUrls!.local[0];
 
-for (const id of Object.keys(PERSONAS)) {
+const only = process.argv.slice(2);
+for (const id of Object.keys(PERSONAS).filter((id) => !only.length || only.includes(id))) {
   const done = new Promise<void>((r) => waiting.set(id, r));
   const chrome = Bun.spawn(
     ["chromium", "--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--no-first-run", `--user-data-dir=/tmp/corkboard-portraits`, `${base}portrait.html?persona=${id}`],
