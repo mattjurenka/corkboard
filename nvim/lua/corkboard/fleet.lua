@@ -827,6 +827,8 @@ local function buffer()
 
     ["<A-h>"] = { function() card_step(-1, "<A-h>") end, "previous card" },
     ["<A-l>"] = { function() card_step(1, "<A-l>") end, "next card" },
+    ["<D-A-h>"] = { function() card_step(-1, "<D-A-h>") end, "previous card" },
+    ["<D-A-l>"] = { function() card_step(1, "<D-A-l>") end, "next card" },
   }, items, function(id)
     if id == selected then return end
     selected = id

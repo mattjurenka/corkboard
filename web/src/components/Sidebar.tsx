@@ -13,7 +13,7 @@
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { keepFocus, type Nvim, useNvim } from "@/nvim/context";
-import { toNvimKey } from "@/nvim/input.js";
+import { toNvimKey, windowKey } from "@/nvim/input.js";
 import { store, type Tab, useStore } from "@/store";
 import { useEffect, useState } from "react";
 import { Activity } from "./Activity";
@@ -102,14 +102,15 @@ function Tabs() {
     // From the tab on its way, so pressing j twice goes two tabs down.
     const at = tabs.tabs.findIndex(({ tab }) => tab.id === (pending ?? tabs.current.id));
     const plain = !e.ctrlKey && !e.metaKey;
-    if (e.altKey && plain && ["j", "k"].includes(e.key.toLowerCase())) {
+    const win = windowKey(e.nativeEvent);
+    if (win === "j" || win === "k") {
       e.preventDefault();
-      const next = tabs.tabs[at + (e.key.toLowerCase() === "j" ? 1 : -1)];
+      const next = tabs.tabs[at + (win === "j" ? 1 : -1)];
       if (next) go(next.tab);
       else document.querySelector<HTMLElement>("#files")?.focus();
       return;
     }
-    if (e.altKey && plain && edgeWindow(e.key, nvim)) {
+    if (win && edgeWindow(win, nvim)) {
       e.preventDefault();
       return;
     }

@@ -7,12 +7,33 @@ const SPECIAL = {
 };
 for (let i = 1; i <= 12; i++) SPECIAL[`F${i}`] = `F${i}`;
 
+const MAC = /Mac/.test(navigator.platform);
+// On a Mac, the Cmd chords corkboard maps (init.lua): Neovim types out one
+// it doesn't map, so the rest are left to the browser.
+const CMD = new Set([
+  "<D-p>", "<D-S-p>", "<D-t>", "<D-w>", "<D-s>", "<D-S-[>", "<D-S-]>",
+  ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<D-${n}>`),
+  ...["h", "j", "k", "l", "Left", "Down", "Up", "Right"].map((k) => `<A-D-${k}>`),
+]);
+// And macOS's own editing keys, as readline and Vim have them: Option+arrow
+// a word, Option+Backspace the word before, Cmd+arrow the line's ends,
+// Cmd+Backspace the line before.
+const MAC_EDIT = {
+  "<A-Left>": "<M-b>", "<A-Right>": "<M-f>", "<A-BS>": "<C-w>",
+  "<D-Left>": "<Home>", "<D-Right>": "<End>", "<D-BS>": "<C-u>",
+};
+// The key a code is on, unshifted, for a Cmd chord: e.key there may be
+// the layout's, or Shift's ("{" for Cmd+Shift+[).
+const ON_CODE = { BracketLeft: "[", BracketRight: "]" };
+
 // KeyboardEvent to Neovim key notation, or null when the key is not ours
-// (a lone modifier, a dead key, composition).
+// (a lone modifier, a dead key, composition, a Cmd chord corkboard doesn't
+// map).
 export function toNvimKey(e) {
   if (e.isComposing || e.key === "Dead") return null;
+  if (MAC && (e.metaKey || e.altKey)) return macKey(e);
   // Alt+digit, which goes to a tab by number: e.key may be a symbol the
-  // layout puts on Alt+digit (macOS "¡" for 1), so read the key.
+  // layout puts on Alt+digit, so read the key.
   const digit = /^Digit(\d)$/.exec(e.code);
   if (digit && e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) return `<A-${digit[1]}>`;
   let key = SPECIAL[e.key];
@@ -42,6 +63,31 @@ export function toNvimKey(e) {
   return `<${[...mods, key].join("-")}>`;
 }
 
+// A Mac's Cmd or Option chord. Option alone types what the layout puts
+// there (@ and brackets, on many), bar macOS's editing keys; Cmd chords go
+// by the key pressed, and only those in CMD.
+function macKey(e) {
+  const special = SPECIAL[e.key];
+  if (!e.metaKey && !e.ctrlKey && !special) return [...e.key].length === 1 ? (e.key === "<" ? "<lt>" : e.key) : null;
+  const key = special ?? ON_CODE[e.code] ?? fromCode(e.code);
+  if (key == null) return null;
+  const mods = [e.ctrlKey && "C", e.altKey && "A", e.metaKey && "D", e.shiftKey && "S"].filter(Boolean);
+  const chord = `<${[...mods, key === " " ? "Space" : key].join("-")}>`;
+  if (MAC_EDIT[chord]) return MAC_EDIT[chord];
+  if (e.metaKey) return CMD.has(chord) ? chord : null;
+  // Ctrl+Option, or Option on a key that types nothing (an arrow): as
+  // anywhere else.
+  return chord;
+}
+
+// h, j, k or l, for the chord that moves between windows (init.lua):
+// Alt+h/j/k/l or Alt+arrow, Cmd+Option on a Mac. Null for any other key.
+export function windowKey(e) {
+  if (!e.altKey || e.ctrlKey || e.metaKey !== MAC) return null;
+  const key = { ArrowLeft: "h", ArrowDown: "j", ArrowUp: "k", ArrowRight: "l" }[e.key] ?? (MAC ? fromCode(e.code) : e.key.toLowerCase());
+  return key && /^[hjkl]$/.test(key) ? key : null;
+}
+
 // Under Wayland, Chromium reports a Ctrl chord whose character xkb maps to a
 // control code (Ctrl+Space and Ctrl+` are both NUL) as key "Unidentified";
 // the physical key still says what was pressed.
@@ -57,7 +103,6 @@ const TYPING = new Set(["insert", "replace", "cmdline_normal", "cmdline_insert",
 // And where there is a selection for Ctrl+C to copy.
 const VISUAL = /^(visual|select)/;
 // Cmd on its own, on a Mac, where it copies and pastes as Ctrl does elsewhere.
-const MAC = /Mac/.test(navigator.platform);
 const cmd = (e) => MAC && e.metaKey && !e.ctrlKey && !e.altKey;
 
 // keys: the textarea a touchscreen types into (App.tsx), which has the

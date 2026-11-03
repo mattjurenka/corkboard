@@ -4,8 +4,9 @@
 // For the keys. Chromium keeps some for itself even in an app window
 // (Ctrl+W closes it, and Ctrl+W is half of Vim's window commands); here
 // there is no menu and so no accelerators, and every key reaches the page,
-// bar F5 (reload) and F12 (devtools), as in Chromium, and on macOS Cmd+Q
-// and Cmd+V.
+// bar the window's own (KEYS): F5 (reload) and F12 (devtools), as in
+// Chromium, F11 (full screen) on Linux and Windows, and on macOS what its
+// app menu would have.
 //
 // The page is the bridge's own and gets nothing more than a browser would
 // give it: no Node, no preload, sandboxed. Everything else (the bridge, the
@@ -125,29 +126,31 @@ function setup(win) {
     else if (url === "corkboard:anyway") win.loadURL(home);
   });
 
+  // The window's keys, as each system has them. With no menu, macOS's do
+  // nothing unless here; Cmd+V fires the paste event the page pastes from
+  // (input.js), and Cmd+C is the page's, which yanks Neovim's selection.
+  const fullScreen = () => win.setFullScreen(!win.isFullScreen());
+  const KEYS = {
+    F5: () => wc.reload(),
+    F12: () => wc.toggleDevTools(),
+    ...(MAC
+      ? {
+          "Cmd+KeyQ": () => app.quit(),
+          "Cmd+KeyV": () => wc.paste(),
+          "Cmd+KeyH": () => app.hide(),
+          "Cmd+KeyM": () => win.minimize(),
+          "Cmd+KeyR": () => wc.reload(),
+          "Cmd+Ctrl+KeyF": fullScreen,
+          "Cmd+Alt+KeyI": () => wc.toggleDevTools(),
+        }
+      : { F11: fullScreen }),
+  };
   wc.on("before-input-event", (e, input) => {
-    if (input.type !== "keyDown" || input.control || input.alt) return;
-    // With no menu, macOS's Cmd+Q and Cmd+V do nothing: Cmd+Q quits, and
-    // Cmd+V fires the paste event the page pastes from (input.js). Cmd+C is
-    // the page's, which yanks Neovim's selection.
-    if (input.meta) {
-      if (!MAC || input.shift) return;
-      if (input.code === "KeyQ") {
-        e.preventDefault();
-        app.quit();
-      } else if (input.code === "KeyV") {
-        e.preventDefault();
-        wc.paste();
-      }
-      return;
-    }
-    if (input.key === "F5") {
-      e.preventDefault();
-      wc.reload();
-    } else if (input.key === "F12") {
-      e.preventDefault();
-      wc.toggleDevTools();
-    }
+    if (input.type !== "keyDown") return;
+    const chord = [input.meta && "Cmd", input.control && "Ctrl", input.alt && "Alt", input.shift && "Shift", input.code].filter(Boolean).join("+");
+    if (!KEYS[chord]) return;
+    e.preventDefault();
+    KEYS[chord]();
   });
 
   // The bridge may still be coming up (the launchers start its service just
