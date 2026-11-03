@@ -4,7 +4,8 @@
 // For the keys. Chromium keeps some for itself even in an app window
 // (Ctrl+W closes it, and Ctrl+W is half of Vim's window commands); here
 // there is no menu and so no accelerators, and every key reaches the page,
-// bar F5 (reload) and F12 (devtools), as in Chromium.
+// bar F5 (reload) and F12 (devtools), as in Chromium, and on macOS Cmd+Q
+// and Cmd+V.
 //
 // The page is the bridge's own and gets nothing more than a browser would
 // give it: no Node, no preload, sandboxed. Everything else (the bridge, the
@@ -124,7 +125,21 @@ function setup(win) {
   });
 
   wc.on("before-input-event", (e, input) => {
-    if (input.type !== "keyDown" || input.control || input.alt || input.meta) return;
+    if (input.type !== "keyDown" || input.control || input.alt) return;
+    // With no menu, macOS's Cmd+Q and Cmd+V do nothing: Cmd+Q quits, and
+    // Cmd+V fires the paste event the page pastes from (input.js). Cmd+C is
+    // the page's, which yanks Neovim's selection.
+    if (input.meta) {
+      if (!MAC || input.shift) return;
+      if (input.code === "KeyQ") {
+        e.preventDefault();
+        app.quit();
+      } else if (input.code === "KeyV") {
+        e.preventDefault();
+        wc.paste();
+      }
+      return;
+    }
     if (input.key === "F5") {
       e.preventDefault();
       wc.reload();

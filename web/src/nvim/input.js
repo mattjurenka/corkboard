@@ -56,6 +56,9 @@ function fromCode(code) {
 const TYPING = new Set(["insert", "replace", "cmdline_normal", "cmdline_insert", "cmdline_replace", "terminal"]);
 // And where there is a selection for Ctrl+C to copy.
 const VISUAL = /^(visual|select)/;
+// Cmd on its own, on a Mac, where it copies and pastes as Ctrl does elsewhere.
+const MAC = /Mac/.test(navigator.platform);
+const cmd = (e) => MAC && e.metaKey && !e.ctrlKey && !e.altKey;
 
 // keys: the textarea a touchscreen types into (App.tsx), which has the
 // on-screen keyboard while it has focus; a tap on the grid leaves it there.
@@ -64,13 +67,16 @@ export function attachInput(canvas, keys, grid, rpc) {
     // Paste is left to the browser so the paste event below fires with the
     // system clipboard. Ctrl+Shift+V always; Ctrl+V only where text is being
     // typed, since in normal and visual mode it is Vim's visual block.
+    // On macOS Cmd+V, which means nothing to Vim, pastes everywhere.
     if (e.ctrlKey && !e.altKey && e.code === "KeyV" && (e.shiftKey || TYPING.has(grid.modeName))) return;
-    // Copy: Ctrl+C (or Ctrl+Shift+C) with a selection yanks it to "+, which
-    // corkboard's clipboard provider hands to the page (corkboard.clipboard).
-    // Only in visual mode: everywhere else Ctrl+C stays Vim's, and in a
-    // terminal it is the interrupt Claude Code and shells need. A drag in a
-    // terminal selects in visual mode, so that copies too.
-    if (e.ctrlKey && !e.altKey && e.code === "KeyC" && VISUAL.test(grid.modeName ?? "")) {
+    if (cmd(e) && e.code === "KeyV") return;
+    // Copy: Ctrl+C (or Ctrl+Shift+C, or Cmd+C) with a selection yanks it to
+    // "+, which corkboard's clipboard provider hands to the page
+    // (corkboard.clipboard). Only in visual mode: everywhere else Ctrl+C
+    // stays Vim's, and in a terminal it is the interrupt Claude Code and
+    // shells need. A drag in a terminal selects in visual mode, so that
+    // copies too.
+    if (((e.ctrlKey && !e.altKey) || cmd(e)) && e.code === "KeyC" && VISUAL.test(grid.modeName ?? "")) {
       e.preventDefault();
       rpc.notify("nvim_input", '"+y');
       return;
