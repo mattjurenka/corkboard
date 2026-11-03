@@ -1,4 +1,5 @@
-// The tool picker (Ctrl+Space or Alt+Space, corkboard.picker.tools), as a
+// The tool picker (Ctrl+Space, Alt+Space or Ctrl+Shift+P; Cmd+Shift+P on
+// a Mac; corkboard.picker.tools), as a
 // window of the page's rather than a float on the grid: a title bar, a search
 // field and the tools under it, each with its key. The one chosen runs in
 // Neovim (corkboard.picker.run), in the window the picker was opened from.
@@ -8,10 +9,14 @@ import { useNvim } from "@/nvim/context";
 import { store, useStore } from "@/store";
 import { Palette, Row, Search, matches, step } from "./Palette";
 
-const NAMED: Record<string, string> = { C: "Ctrl", A: "Alt", M: "Alt", S: "Shift", D: "Cmd" };
+const MAC = /Mac/.test(navigator.platform);
+const NAMED: Record<string, string> = { C: "Ctrl", A: MAC ? "Option" : "Alt", M: MAC ? "Option" : "Alt", S: "Shift", D: "Cmd" };
+// A Mac's key where it has its own (init.lua, app/main.js).
+const ON_MAC: Record<string, string> = { "<C-f>": "<D-p>", F5: "<D-r>" };
 
 // "<C-f>" to Ctrl F, "<leader>c" to the leader then C, "F5" as it is.
 function keys(hint: string, leader: string): string[] {
+  if (MAC) hint = ON_MAC[hint] ?? hint;
   if (!hint.includes("<")) return [hint];
   const out: string[] = [];
   for (const [, special, plain] of hint.matchAll(/<([^>]+)>|(.)/g)) {
@@ -58,7 +63,7 @@ export function Tools() {
     else if (e.key === "Enter") {
       e.preventDefault();
       if (shown[at]) choose(shown[at].i);
-    } else if (e.key === "Escape" || ((e.ctrlKey || e.altKey) && e.key === " ")) {
+    } else if (e.key === "Escape" || ((e.ctrlKey || e.altKey) && e.key === " ") || ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === "KeyP")) {
       e.preventDefault();
       close();
     }

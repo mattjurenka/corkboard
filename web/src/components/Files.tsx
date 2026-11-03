@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useNvim } from "@/nvim/context";
-import { toNvimKey } from "@/nvim/input.js";
+import { toNvimKey, windowKey } from "@/nvim/input.js";
 import { useStore } from "@/store";
 import { edgeWindow, focusTab, HeaderButton, Section } from "./Sidebar";
 
@@ -129,6 +129,13 @@ export function Files() {
   // the folder or go up to the one it is in. Alt+k goes back up to the last tab, and Alt+j round to the first;
   // Alt+l to the leftmost window, Alt+h round to the rightmost; Esc to Neovim. Any other key goes back too, and on to Neovim.
   const onKeyDown = (e: React.KeyboardEvent) => {
+    const win = windowKey(e.nativeEvent);
+    if (win) {
+      e.preventDefault();
+      if (win === "k" || win === "j") focusTab(win === "j" ? "first" : "last", nvim);
+      else edgeWindow(win, nvim);
+      return;
+    }
     if (e.ctrlKey || e.metaKey) return;
     const key = e.key.toLowerCase();
     const row = shown[at];
@@ -138,11 +145,6 @@ export function Files() {
       if (!shown[to].entry.dir) nvim.openFile(shown[to].path, true);
     };
     e.preventDefault();
-    if (e.altKey) {
-      if (key === "k" || key === "j") focusTab(key === "j" ? "first" : "last", nvim);
-      else edgeWindow(key, nvim);
-      return;
-    }
     if (key === "j" || e.key === "ArrowDown") move(at + 1);
     else if (key === "k" || e.key === "ArrowUp") move(at - 1);
     else if (key === "l" || e.key === "ArrowRight" || e.key === "Enter") {

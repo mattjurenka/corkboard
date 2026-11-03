@@ -149,13 +149,16 @@ end
 -- The arrow for each of h/j/k/l.
 M.ARROWS = { h = "Left", j = "Down", k = "Up", l = "Right" }
 
--- keys, with each arrow doing what its h/j/k/l does and each Alt+arrow what
--- its Alt+h/j/k/l does, unless keys maps the arrow itself.
+-- keys, with each arrow doing what its h/j/k/l does and each Alt+arrow
+-- (Cmd+Option+arrow) what its Alt+h/j/k/l does, unless keys maps the arrow
+-- itself.
 function M.arrows(keys)
   local out = vim.tbl_extend("force", {}, keys)
   for key, arrow in pairs(M.ARROWS) do
     out["<" .. arrow .. ">"] = out["<" .. arrow .. ">"] or keys[key]
-    out["<A-" .. arrow .. ">"] = out["<A-" .. arrow .. ">"] or keys["<A-" .. key .. ">"]
+    for _, mod in ipairs({ "A", "D-A" }) do
+      out["<" .. mod .. "-" .. arrow .. ">"] = out["<" .. mod .. "-" .. arrow .. ">"] or keys["<" .. mod .. "-" .. key .. ">"]
+    end
   end
   return out
 end

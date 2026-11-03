@@ -738,6 +738,11 @@ function M.setup()
   require("corkboard.focus").setup()
   require("corkboard.away").setup()
 
+  -- Each shortcut has a Ctrl or Alt chord, for Linux and Windows, and most
+  -- have a Cmd one (<D-...>) for macOS, where Option types the layout's
+  -- characters (@ and brackets, on many) and Ctrl+Space switches the input
+  -- source. The page sends Cmd chords only on a Mac and only those in
+  -- input.js's CMD, since one Neovim doesn't map it types itself out.
   local picker = require("corkboard.picker")
   if picker.setup() then
     -- The tool picker, and editor-style shortcuts for some of its tools, from
@@ -746,7 +751,9 @@ function M.setup()
     vim.keymap.set({ "n", "i", "t" }, "<C-Space>", picker.tools, { desc = "corkboard: tools" })
     vim.keymap.set({ "n", "i", "t" }, "<M-Space>", picker.tools, { desc = "corkboard: tools" })
     vim.keymap.set({ "n", "i", "t" }, "<C-S-p>", picker.tools, { desc = "corkboard: tools" })
+    vim.keymap.set({ "n", "i", "t" }, "<D-S-p>", picker.tools, { desc = "corkboard: tools" })
     vim.keymap.set({ "n", "i", "t" }, "<C-f>", picker.files, { desc = "corkboard: find file" })
+    vim.keymap.set({ "n", "i", "t" }, "<D-p>", picker.files, { desc = "corkboard: find file" })
     vim.keymap.set({ "n", "i", "t" }, "<C-`>", require("corkboard.terminal").toggle, { desc = "corkboard: terminal" })
     vim.keymap.set({ "n", "i", "t" }, "<C-.>", require("corkboard.claude").open, { desc = "corkboard: Claude Code" })
     vim.keymap.set("n", "<leader>f", function() Snacks.picker.files() end, { desc = "find file" })
@@ -755,31 +762,45 @@ function M.setup()
     vim.keymap.set("n", "<leader>r", function() Snacks.picker.recent() end, { desc = "recent files" })
   end
 
-  -- Replaces <C-t>'s tag-stack pop.
+  -- Replaces <C-t>'s tag-stack pop. Cmd+T from any mode.
   vim.keymap.set("n", "<C-t>", "<Cmd>tabnew<CR>", { desc = "corkboard: new tab" })
-  -- Ctrl+Tab and Ctrl+Shift+Tab, or Ctrl+Shift+j and k, go down and up the
-  -- tabs from any mode, round from the last to the first; plain Tab stays the
-  -- program's (completion, Claude Code's mode cycling).
-  for lhs, step in pairs({ ["<C-Tab>"] = 1, ["<C-S-Tab>"] = -1, ["<C-S-j>"] = 1, ["<C-S-k>"] = -1 }) do
+  vim.keymap.set({ "n", "i", "t" }, "<D-t>", "<Cmd>tabnew<CR>", { desc = "corkboard: new tab" })
+  -- Cmd+S writes, where there's a file to.
+  vim.keymap.set({ "n", "i" }, "<D-s>", "<Cmd>update<CR>", { desc = "corkboard: write" })
+  -- Alt+b and f a word back and on, as readline has them (a Mac's
+  -- Option+arrows, input.js), which unmapped would leave insert mode.
+  vim.keymap.set({ "i", "c" }, "<M-b>", "<S-Left>", { desc = "corkboard: word back" })
+  vim.keymap.set({ "i", "c" }, "<M-f>", "<S-Right>", { desc = "corkboard: word on" })
+  -- Ctrl+Tab and Ctrl+Shift+Tab, or Ctrl+Shift+j and k (Cmd+Shift+] and [ on
+  -- a Mac), go down and up the tabs from any mode, round from the last to the
+  -- first; plain Tab stays the program's (completion, Claude Code's mode
+  -- cycling).
+  for lhs, step in pairs({
+    ["<C-Tab>"] = 1, ["<C-S-Tab>"] = -1, ["<C-S-j>"] = 1, ["<C-S-k>"] = -1, ["<D-S-]>"] = 1, ["<D-S-[>"] = -1,
+  }) do
     vim.keymap.set({ "n", "i", "t" }, lhs, function() tab_step(step) end, {
       desc = "corkboard: " .. (step > 0 and "next" or "previous") .. " tab",
     })
   end
 
-  -- Alt+1 to 9 go to that tab, as the sidebar numbers them: the
-  -- board, usage, the fleet, then the agents.
+  -- Alt+1 to 9 (Cmd+1 to 9) go to that tab, as the sidebar numbers them:
+  -- the board, usage, the fleet, then the agents.
   for i = 1, 9 do
-    vim.keymap.set({ "n", "i", "t" }, ("<A-%d>"):format(i), function()
-      if i <= vim.fn.tabpagenr("$") then vim.cmd.tabnext(i) end
-    end, { desc = "corkboard: tab " .. i })
+    for _, mod in ipairs({ "A", "D" }) do
+      vim.keymap.set({ "n", "i", "t" }, ("<%s-%d>"):format(mod, i), function()
+        if i <= vim.fn.tabpagenr("$") then vim.cmd.tabnext(i) end
+      end, { desc = "corkboard: tab " .. i })
+    end
   end
 
-  -- Alt+h/j/k/l moves between the tab's windows, from insert and terminal
-  -- mode too, leaving Ctrl+h/j/k/l to Vim and the terminal's programs.
-  -- Alt and the arrow that goes the same way does the same.
+  -- Alt+h/j/k/l (Cmd+Option+h/j/k/l) moves between the tab's windows, from
+  -- insert and terminal mode too, leaving Ctrl+h/j/k/l to Vim and the
+  -- terminal's programs. Those and the arrow that goes the same way do the
+  -- same.
   local function alt(dir, fn, opts)
     for _, key in ipairs({ dir, require("corkboard.pinned").ARROWS[dir] }) do
       vim.keymap.set({ "n", "i", "t" }, "<A-" .. key .. ">", fn, opts)
+      vim.keymap.set({ "n", "i", "t" }, "<D-A-" .. key .. ">", fn, opts)
     end
   end
   -- Left and right go round: the page's list of tabs sits left of the
@@ -812,7 +833,10 @@ function M.setup()
       M.notify("corkboard.focus_tabs")
     end
   end, { desc = "corkboard: window h, or the tabs" })
-  vim.keymap.set({ "n", "i", "t" }, "<A-q>", M.close, { desc = "corkboard: close window or tab" })
+  -- Alt+q, Ctrl+F4 as Windows closes a document, or Cmd+W.
+  for _, lhs in ipairs({ "<A-q>", "<C-F4>", "<D-w>" }) do
+    vim.keymap.set({ "n", "i", "t" }, lhs, M.close, { desc = "corkboard: close window or tab" })
+  end
 
   vim.api.nvim_set_decoration_provider(vim.api.nvim_create_namespace("corkboard.layout"), {
     on_end = M.push_layout,
