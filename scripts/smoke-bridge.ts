@@ -29,6 +29,8 @@ const env = {
   CORKBOARD_TOKEN: token,
   CORKBOARD_NVIM: nvim,
   CORKBOARD_REMOTE_SESSIONS: "0",
+  // Its own snacks.nvim, not a dev shell's.
+  CORKBOARD_PLUGINS: "",
 };
 
 const fail = (why: string): never => {
@@ -58,7 +60,7 @@ const answer = await new Promise<unknown>((done) => {
   ws.onopen = () => {
     ws.send(JSON.stringify([0, 0, "nvim_ui_attach", [80, 24, { ext_linegrid: true }]]));
     setTimeout(() => ws.send(JSON.stringify([0, 0, "nvim_input", ["<CR><CR>"]])), 2000);
-    setTimeout(() => ws.send(JSON.stringify([0, 1, "nvim_eval", ['[exists("g:loaded_corkboard"), $CORKBOARD_MCP_COMMAND]']])), 3000);
+    setTimeout(() => ws.send(JSON.stringify([0, 1, "nvim_eval", ['[exists("g:loaded_corkboard"), $CORKBOARD_MCP_COMMAND, nvim_get_runtime_file("lua/snacks/init.lua", 0)]']])), 3000);
   };
   ws.onmessage = (e) => {
     const msg = JSON.parse(String(e.data));
@@ -70,8 +72,10 @@ const answer = await new Promise<unknown>((done) => {
   };
   ws.onclose = (e) => fail(`socket closed: ${e.code} ${e.reason}`);
 });
-const [loaded, mcp] = answer as [number, string];
+const [loaded, mcp, snacks] = answer as [number, string, string[]];
 if (loaded !== 1) fail("the plugin didn't load");
+const slashed = (p: string) => p.replaceAll("\\", "/");
+if (!snacks[0] || !slashed(snacks[0]).startsWith(slashed(dir))) fail(`snacks.nvim is ${snacks[0] ?? "missing"}, not the bundled one`);
 console.log("nvim ok");
 
 const proc = Bun.spawn(JSON.parse(mcp), { cwd: home, env: { ...env, CORKBOARD_BOARD: join(home, "board") }, stdin: "pipe", stdout: "pipe" });

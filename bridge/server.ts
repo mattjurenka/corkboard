@@ -12,7 +12,7 @@
 import { decodeMultiStream, decode, encode, ExtensionCodec } from "@msgpack/msgpack";
 import type { Subprocess } from "bun";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,7 +67,20 @@ const SELF = COMPILED ? [process.execPath] : [process.execPath, join(import.meta
 // Third-party plugins (snacks.nvim) as a colon-separated list of plugin
 // directories; the flake's dev shell sets it from nixpkgs.
 // On Windows, where paths have ":" in them, it's ";"-separated.
-const PLUGINS = (process.env.CORKBOARD_PLUGINS ?? "").split(process.platform === "win32" ? ";" : ":").filter(Boolean);
+// Then the ones the app carries in resources/plugins/ (build-bridge.ts),
+// those not given already.
+const GIVEN = (process.env.CORKBOARD_PLUGINS ?? "").split(process.platform === "win32" ? ";" : ":").filter(Boolean);
+const CARRIED = (() => {
+  try {
+    return readdirSync(join(RESOURCES, "plugins"));
+  } catch {
+    return [];
+  }
+})();
+const PLUGINS = [
+  ...GIVEN,
+  ...CARRIED.filter((name) => !GIVEN.some((p) => p.includes(name.replace(/\.nvim$/, "")))).map((name) => join(RESOURCES, "plugins", name)),
+];
 // The plugin and those, first on Neovim's runtimepath. Windows' "\" as "/",
 // which Neovim takes there too and :set doesn't read as an escape.
 const RTP_CMD = `set rtp^=${[PLUGIN_ROOT, ...PLUGINS]
