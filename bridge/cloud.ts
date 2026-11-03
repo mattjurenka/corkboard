@@ -23,7 +23,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { STATE_DIR } from "./dirs";
+import { COMPILED, STATE_DIR } from "./dirs";
 
 const AUTH = join(STATE_DIR, "auth.json");
 const SERVER = join(STATE_DIR, "server.json");
@@ -80,7 +80,15 @@ async function tokens(body: Record<string, string>) {
   return json as { access_token: string; refresh_token: string; expires_in: number };
 }
 
-export async function login(): Promise<void> {
+// How to sign in from a terminal, for the errors that say to.
+const LOGIN = COMPILED ? "corkboard-bridge login" : "bun bridge/cloud.ts login";
+
+export const signedIn = () => load() !== undefined;
+
+// show: given the address to sign in at, and what takes the callback
+// address if it's brought back by hand. The terminal's opens the browser and
+// reads one pasted; the page's sign-in (server.ts) opens the address itself.
+export async function login(show: (url: string, answer: (callback: URL) => boolean) => void = terminal): Promise<void> {
   const verifier = b64url(randomBytes(32));
   const challenge = b64url(createHash("sha256").update(verifier).digest());
   const state = b64url(randomBytes(16));
@@ -105,7 +113,7 @@ export async function login(): Promise<void> {
     fetch(req) {
       const url = new URL(req.url);
       if (url.pathname !== "/callback") return new Response("not found", { status: 404 });
-      const text = answer(url) ? "Signed in. You can close this tab." : "Sign-in didn't complete; see the terminal.";
+      const text = answer(url) ? "Signed in. You can close this tab." : "Sign-in didn't complete.";
       return new Response(`<!doctype html><meta charset="utf-8"><title>corkboard</title><body style="font:15px ui-monospace,monospace;margin:4rem auto;max-width:34rem;padding:0 16px">${text}`, {
         headers: { "Content-Type": "text/html; charset=utf-8" },
       });
@@ -138,19 +146,7 @@ export async function login(): Promise<void> {
       code_challenge: challenge,
       code_challenge_method: "S256",
     }).toString();
-    console.log(`Opening the browser to sign in. If it doesn't open, go to:\n\n  ${url}\n`);
-    console.log("If the browser ends on a page that won't load, paste that page's address here.\n");
-    // A machine with no browser (a server) has no xdg-open: the address above is the way in.
-    try {
-      Bun.spawn(browse(url.toString()), { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
-    } catch {}
-    (async () => {
-      for await (const line of console) {
-        const pasted = URL.canParse(line.trim()) ? new URL(line.trim()) : undefined;
-        if (pasted?.pathname === "/callback") return answer(pasted);
-        if (line.trim()) console.log("That isn't the callback address; it starts with " + redirect);
-      }
-    })();
+    show(url.toString(), answer);
 
     const timeout = setTimeout(() => failed(new Error("corkboard: sign-in timed out after 5 minutes")), 5 * 60_000);
     const code = await got.finally(() => clearTimeout(timeout));
@@ -160,6 +156,23 @@ export async function login(): Promise<void> {
   } finally {
     server.stop(true);
   }
+}
+
+function terminal(url: string, answer: (callback: URL) => boolean) {
+  const redirect = new URL(url).searchParams.get("redirect_uri");
+  console.log(`Opening the browser to sign in. If it doesn't open, go to:\n\n  ${url}\n`);
+  console.log("If the browser ends on a page that won't load, paste that page's address here.\n");
+  // A machine with no browser (a server) has no xdg-open: the address above is the way in.
+  try {
+    Bun.spawn(browse(url), { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+  } catch {}
+  (async () => {
+    for await (const line of console) {
+      const pasted = URL.canParse(line.trim()) ? new URL(line.trim()) : undefined;
+      if (pasted?.pathname === "/callback") return answer(pasted);
+      if (line.trim()) console.log("That isn't the callback address; it starts with " + redirect);
+    }
+  })();
 }
 
 // One refresh at a time, across every process that shares auth.json (the
@@ -196,7 +209,7 @@ const fresh = (auth: OAuth) => auth.expires_at - 60_000 > Date.now();
 // Refresh tokens rotate, so each refresh is saved before it's used.
 export async function token(): Promise<string> {
   const auth = load();
-  if (!auth) throw new Error(`corkboard: not signed in to ${CLOUD}; run bun bridge/cloud.ts login`);
+  if (!auth) throw new Error(`corkboard: not signed in to ${CLOUD}; run ${LOGIN}`);
   if ("token" in auth) return auth.token;
   if (fresh(auth)) return auth.access_token;
   return refreshing(async () => {
@@ -205,7 +218,7 @@ export async function token(): Promise<string> {
     const now = loaded && !("token" in loaded) ? loaded : auth;
     if (fresh(now)) return now.access_token;
     const t = await tokens({ grant_type: "refresh_token", refresh_token: now.refresh_token, client_id: now.client_id }).catch((e) => {
-      throw new Error(`${e.message}; run bun bridge/cloud.ts login`);
+      throw new Error(`${e.message}; run ${LOGIN}`);
     });
     save({ ...now, access_token: t.access_token, refresh_token: t.refresh_token, expires_at: Date.now() + t.expires_in * 1000 });
     return t.access_token;
