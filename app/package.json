@@ -1,7 +1,7 @@
 {
   "name": "corkboard",
   "productName": "corkboard",
-  "version": "0.1.0-rc3",
+  "version": "0.1.0-rc4",
   "description": "Neovim with Claude Code agents beside it",
   "author": "Matt Jurenka <m@trystable.co>",
   "homepage": "https://corkboard.fyi",
