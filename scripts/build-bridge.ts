@@ -11,6 +11,8 @@
 //                            bridge/chatterbox-speech.py, rev, and the
 //                            speech's node_modules (onnxruntime-node's
 //                            binaries for that system only)
+//   resources/plugins/       snacks.nvim, which the flake has from nixpkgs
+//                            (the pickers); the bridge puts it on the rtp
 //   nvim/                    Neovim's own release for that system, at the
 //                            version the flake builds (neovim-src)
 //   git/                     dugite-native's portable git (GitHub Desktop's),
@@ -32,6 +34,9 @@ const NVIM_VERSION = readFileSync(join(ROOT, "flake.nix"), "utf8").match(/github
 // dugite-native's release, and its assets' names, which carry the commit.
 const GIT_RELEASE = "v2.56.0-2";
 const GIT_ASSET = "dugite-native-v2.56.0-a44aeca";
+
+// snacks.nvim's commit: the flake's nixpkgs' vimPlugins.snacks-nvim.
+const SNACKS = "882c996cf28183f4d63640de0b4c02ec886d01f2";
 
 type Target = { bun: string; os: "linux" | "mac" | "win"; arch: "x64" | "arm64"; nvim: string; git: string; ort?: string };
 const TARGETS: Record<string, Target> = {
@@ -120,6 +125,16 @@ function pruneGit(dir: string) {
   rmSync(join(dir, "bin", "scalar"), { force: true });
 }
 
+// snacks.nvim as Neovim loads it, without its 18 MB of tests: once, for
+// every target.
+const snacks = join(CACHE, `snacks.nvim-${SNACKS}`);
+if (!existsSync(snacks)) {
+  const tmp = `${snacks}.unpack`;
+  unpack(await download(`https://github.com/folke/snacks.nvim/archive/${SNACKS}.tar.gz`, `snacks.nvim-${SNACKS}.tar.gz`), tmp);
+  for (const keep of ["lua", "plugin", "queries", "doc", "LICENSE"]) cpSync(join(tmp, keep), join(snacks, keep), { recursive: true });
+  rmSync(tmp, { recursive: true, force: true });
+}
+
 for (const name of names) {
   const t = TARGETS[name];
   const dir = join(OUT, name);
@@ -140,6 +155,7 @@ for (const name of names) {
   cpSync(join(ROOT, "web", "dist"), join(res, "web", "dist"), { recursive: true });
   cpSync(join(ROOT, "nvim"), join(res, "nvim"), { recursive: true });
   cpSync(join(ROOT, "mcp"), join(res, "mcp"), { recursive: true });
+  cpSync(snacks, join(res, "plugins", "snacks.nvim"), { recursive: true });
   mkdirSync(join(res, "bridge"));
   cpSync(join(ROOT, "bridge", "chatterbox-speech.py"), join(res, "bridge", "chatterbox-speech.py"));
   writeFileSync(join(res, "rev"), `${version} ${rev}\n`);
