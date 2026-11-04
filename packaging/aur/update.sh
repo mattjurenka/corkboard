@@ -15,7 +15,7 @@ dir=$(cd "$(dirname "$0")/corkboard-bin" && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-release=https://github.com/mattjurenka/corkboard/releases/download/v$version
+release=https://corkboard.fyi/d
 sum() { curl -fsSL "$1" -o "$tmp/f" && sha256sum "$tmp/f" | cut -d' ' -f1; }
 digest() { gh api "repos/mattjurenka/corkboard/releases/tags/v$version" -q ".assets[] | select(.name == \"$1\") | .digest" | sed 's/^sha256://'; }
 desktop=$(sha256sum "$dir/corkboard.desktop" | cut -d' ' -f1)
@@ -61,9 +61,9 @@ pkgbase = corkboard-bin
 	source = corkboard-$pkgver.png::https://raw.githubusercontent.com/mattjurenka/corkboard/v$version/app/build/icons/512x512.png
 	sha256sums = $desktop
 	sha256sums = $icon
-	source_x86_64 = $release/corkboard-$version-linux-x64.tar.gz
+	source_x86_64 = corkboard-$version-linux-x64.tar.gz::$release/corkboard-$version-linux-x64.tar.gz?r=aur
 	sha256sums_x86_64 = $x64
-	source_aarch64 = $release/corkboard-$version-linux-arm64.tar.gz
+	source_aarch64 = corkboard-$version-linux-arm64.tar.gz::$release/corkboard-$version-linux-arm64.tar.gz?r=aur
 	sha256sums_aarch64 = $arm64
 
 pkgname = corkboard-bin

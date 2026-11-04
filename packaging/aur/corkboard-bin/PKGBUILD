@@ -16,11 +16,13 @@ depends=('git' 'claude-code' 'ripgrep' 'fd' 'gtk3' 'nss' 'alsa-lib' 'libxss' 'li
 provides=('corkboard')
 conflicts=('corkboard')
 options=('!strip' '!debug')
-_release="https://github.com/mattjurenka/corkboard/releases/download/v${_version}"
+# Through corkboard.fyi, which counts the download and sends it on to the
+# GitHub release.
+_release="https://corkboard.fyi/d"
 source=("corkboard.desktop"
         "corkboard-${pkgver}.png::https://raw.githubusercontent.com/mattjurenka/corkboard/v${_version}/app/build/icons/512x512.png")
-source_x86_64=("${_release}/corkboard-${_version}-linux-x64.tar.gz")
-source_aarch64=("${_release}/corkboard-${_version}-linux-arm64.tar.gz")
+source_x86_64=("corkboard-${_version}-linux-x64.tar.gz::${_release}/corkboard-${_version}-linux-x64.tar.gz?r=aur")
+source_aarch64=("corkboard-${_version}-linux-arm64.tar.gz::${_release}/corkboard-${_version}-linux-arm64.tar.gz?r=aur")
 sha256sums=('72b13912c59995b96356ab8790dd8cc834c7369cd3bd1b66ccb8a0b09e65bb1f'
             '6256d201100e18a24b5ecaa0036cd75697ac7ce158d3fb1ab88224145ac208c1')
 sha256sums_x86_64=('e07e85865765f0df556386631867d64206ad0523ceb66c2045d2bb8b4b0c2230')

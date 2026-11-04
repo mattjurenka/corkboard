@@ -25,9 +25,9 @@ pkgbase = corkboard-bin
 	source = corkboard-0.1.0rc6.png::https://raw.githubusercontent.com/mattjurenka/corkboard/v0.1.0-rc6/app/build/icons/512x512.png
 	sha256sums = 72b13912c59995b96356ab8790dd8cc834c7369cd3bd1b66ccb8a0b09e65bb1f
 	sha256sums = 6256d201100e18a24b5ecaa0036cd75697ac7ce158d3fb1ab88224145ac208c1
-	source_x86_64 = https://github.com/mattjurenka/corkboard/releases/download/v0.1.0-rc6/corkboard-0.1.0-rc6-linux-x64.tar.gz
+	source_x86_64 = corkboard-0.1.0-rc6-linux-x64.tar.gz::https://corkboard.fyi/d/corkboard-0.1.0-rc6-linux-x64.tar.gz?r=aur
 	sha256sums_x86_64 = e07e85865765f0df556386631867d64206ad0523ceb66c2045d2bb8b4b0c2230
-	source_aarch64 = https://github.com/mattjurenka/corkboard/releases/download/v0.1.0-rc6/corkboard-0.1.0-rc6-linux-arm64.tar.gz
+	source_aarch64 = corkboard-0.1.0-rc6-linux-arm64.tar.gz::https://corkboard.fyi/d/corkboard-0.1.0-rc6-linux-arm64.tar.gz?r=aur
 	sha256sums_aarch64 = 40b5a42278703ebcaefb835fb20b0f317277255c4d4c00b5c9aba4c374fd37b9
 
 pkgname = corkboard-bin
