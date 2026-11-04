@@ -101,6 +101,14 @@ cards, done by your client with your grant, the same rule that keeps Pepper from
 day plan. If that proves to be friction, a later setting can auto-accept proposals whose owner is
 you and whose quote is in your own voice (the `in` track).
 
+**Built so far** (local, not fleet): after the transcript goes to Pepper, `bridge/propose.ts` runs
+`claude -p` (sonnet, no tools, a JSON schema; `CORKBOARD_PROPOSE_MODEL` overrides) on the machine's
+own login with the transcript beside the boards and up to 60 open cards each, and stores the
+proposals (owner, board, title, quote, when) on the meeting. They're accepted in the Meetings tab's
+Action items column (yours start checked; title and board editable; ✕ drops, ↻ or `p` proposes
+again), which creates backlog cards quoting the line. CLI: `record propose|accept|drop`. Not yet:
+the meeting note, the meeting card, due dates, and updating a matching open card instead of a new one.
+
 ## Consent and retention
 
 - Arizona is one-party consent, but California, Washington, Illinois and others are all-party, and
