@@ -1,11 +1,20 @@
 @import "tailwindcss";
 
+/* Nerd Font icons (the file panel's, nvim-web-devicons') for machines
+   without a Nerd Font installed; only the Private Use Area is taken from it. */
+@font-face {
+  font-family: "Symbols Nerd Font Mono";
+  src: url("./fonts/SymbolsNerdFontMono-Regular.woff2") format("woff2");
+  unicode-range: U+E000-F8FF, U+F0000-FFFFD;
+  font-display: block;
+}
+
 /* Neovim's colors and cell size, which the page is drawn from. grid.js
    measures the cell and sets --nv-bg/--nv-fg from the default colors;
    corkboard.theme sets the rest from the colorscheme (push_theme in
    corkboard/init.lua). */
 :root {
-  --font: "JetBrainsMono Nerd Font", "JetBrains Mono", monospace;
+  --font: "JetBrainsMono Nerd Font", "JetBrains Mono", "Symbols Nerd Font Mono", monospace;
   --font-size: 14px;
   --cell-w: 9px;
   --cell-h: 19px;

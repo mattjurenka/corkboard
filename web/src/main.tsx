@@ -244,16 +244,18 @@ rpc.on("corkboard.open", ([{ cwd }]: any[]) => {
 // Colors (and optionally the font) from Neovim's colorscheme; see
 // push_theme in corkboard/init.lua. Background and text already come with
 // the grid's default colors.
+let pageFont: { family: string; px: number } | undefined;
 rpc.on("corkboard.theme", async ([theme]: any[]) => {
   const style = document.documentElement.style;
   for (const name of ["focus", "selection", "accent", "working", "blocked", "review", "special"]) {
     if (theme[name]) style.setProperty(`--nv-${name}`, theme[name]);
   }
+  // Either field alone changes that one; none, the page's own font again.
   const font = theme.font;
-  if (!font?.family) return;
-  const family = `"${font.family}", monospace`;
+  pageFont ??= { family: grid.fontFamily, px: grid.fontSize };
+  const family = font?.family ? `"${font.family}", "Symbols Nerd Font Mono", monospace` : pageFont.family;
   // Sizes come in points, as stylix and terminals give them.
-  const px = font.size ? Math.round((font.size * 4) / 3) : grid.fontSize;
+  const px = font?.size ? Math.round((font.size * 4) / 3) : pageFont.px;
   if (family === grid.fontFamily && px === grid.fontSize) return;
   style.setProperty("--font", family);
   style.setProperty("--font-size", `${px}px`);
@@ -286,6 +288,9 @@ rpc.on("close", (e: CloseEvent) => {
 });
 
 await rpc.ready;
+// The canvas doesn't redraw when a font arrives, and the icons' font only
+// loads once something asks for one of its glyphs.
+await document.fonts.load(`${grid.fontSize}px "Symbols Nerd Font Mono"`, "\uf15b");
 await document.fonts.ready;
 grid.measure();
 cell();
