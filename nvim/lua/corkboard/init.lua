@@ -79,6 +79,7 @@ function M.attach(chan)
   require("corkboard.fleet").push_all()
   require("corkboard.brains").push_all()
   require("corkboard.plan").push_all()
+  require("corkboard.settings").push_all()
   require("corkboard.meetings").push_all()
   require("corkboard.focus").push()
   M.push_layout()
@@ -293,8 +294,10 @@ end
 
 -- The panels' accent colours, from highlight groups every colorscheme sets
 -- (background and text come with the grid's default colours). Optionally a
--- font: vim.g.corkboard_font = { family = ..., size = ... }.
-function M.push_theme()
+-- font: vim.g.corkboard_font = { family = ..., size = ... }. Each color can be
+-- set instead: vim.g.corkboard_colors = { focus = "#rrggbb", ... } (the
+-- Settings tab's). colorscheme: the colorscheme's alone.
+function M.theme(colorscheme)
   local function fg(...)
     for _, group in ipairs({ ... }) do
       local c = vim.api.nvim_get_hl(0, { name = group, link = false }).fg
@@ -305,7 +308,7 @@ function M.push_theme()
     local c = vim.api.nvim_get_hl(0, { name = group, link = false }).bg
     return c and ("#%06x"):format(c) or nil
   end
-  M.notify("corkboard.theme", {
+  local theme = {
     -- Where you are: the focused window's outline, the current tab's, the
     -- pinned tabs. Type is the yellow in base16 (stylix's base0A) and most
     -- schemes; vim.g.corkboard_focus_hl names another group.
@@ -322,8 +325,13 @@ function M.push_theme()
       local c = fg("Keyword", "Statement")
       return c ~= fg("Normal") and c or nil
     end)(),
-    font = vim.g.corkboard_font,
-  })
+  }
+  if not colorscheme then theme = vim.tbl_extend("force", theme, vim.g.corkboard_colors or {}) end
+  return theme
+end
+
+function M.push_theme()
+  M.notify("corkboard.theme", vim.tbl_extend("force", M.theme(), { font = vim.g.corkboard_font }))
 end
 
 -- The cwd and the current window's file, for the sidebar, and the project
@@ -738,6 +746,7 @@ function M.setup()
   require("corkboard.restore").setup()
   require("corkboard.focus").setup()
   require("corkboard.away").setup()
+  require("corkboard.settings").setup()
   require("corkboard.meetings").setup()
 
   -- Each shortcut has a Ctrl or Alt chord, for Linux and Windows, and most
@@ -767,7 +776,8 @@ function M.setup()
   -- Replaces <C-t>'s tag-stack pop. Cmd+T from any mode.
   vim.keymap.set("n", "<C-t>", "<Cmd>tabnew<CR>", { desc = "corkboard: new tab" })
   vim.keymap.set({ "n", "i", "t" }, "<D-t>", "<Cmd>tabnew<CR>", { desc = "corkboard: new tab" })
-  -- Cmd+S writes, where there's a file to.
+  -- Ctrl+S or Cmd+S writes, where there's a file to, as other editors do.
+  vim.keymap.set({ "n", "i" }, "<C-s>", "<Cmd>update<CR>", { desc = "corkboard: write" })
   vim.keymap.set({ "n", "i" }, "<D-s>", "<Cmd>update<CR>", { desc = "corkboard: write" })
   -- Alt+b and f a word back and on, as readline has them (a Mac's
   -- Option+arrows, input.js), which unmapped would leave insert mode.
@@ -891,6 +901,7 @@ function M.setup()
     callback = function()
       status_highlights()
       M.push_theme()
+      require("corkboard.settings").push_all()
     end,
   })
   status_highlights()

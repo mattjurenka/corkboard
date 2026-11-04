@@ -222,6 +222,7 @@ export function focusTab(end: "first" | "last", nvim: Nvim) {
 const VIEW_TABS: Record<string, [string, string | null]> = {
   "agent://plan": ["Day plan", null],
   "agent://plan/proposal": ["Re-plan", "day plan"],
+  "agent://settings": ["Settings", null],
 };
 
 // A cell at the row's end for what the tab is: Claude Code, a shell, one of
@@ -298,7 +299,7 @@ function TabLabel({ name, label, preview }: { name: string; label?: Tab["label"]
   );
 }
 
-export function Section({ title, action, children, className, boxed = true }: { title: string; action?: React.ReactNode; children: React.ReactNode; className?: string; boxed?: boolean }) {
+export function Section({ title, action, children, className, boxed = true }: { title: React.ReactNode; action?: React.ReactNode; children: React.ReactNode; className?: string; boxed?: boolean }) {
   return (
     <section
       className={cn(
@@ -315,9 +316,11 @@ export function Section({ title, action, children, className, boxed = true }: { 
   );
 }
 
-export function SectionHeader({ title, action }: { title: string; action?: React.ReactNode }) {
+// A title that folds its section (Fold) starts a column in, as Activity's
+// and Notifications' do.
+export function SectionHeader({ title, action }: { title: React.ReactNode; action?: React.ReactNode }) {
   return (
-    <header className="flex items-center justify-between pr-ch pl-2ch text-muted-foreground lowercase">
+    <header className={cn("flex items-center justify-between pr-ch text-muted-foreground lowercase", typeof title === "string" ? "pl-2ch" : "pl-ch")}>
       {title}
       {action}
     </header>
@@ -367,4 +370,20 @@ function SignIn() {
 
 export function HeaderButton(props: React.ComponentProps<typeof Button>) {
   return <Button variant="ghost" size="cell" className="text-muted-foreground" {...props} />;
+}
+
+// A section's title that folds it to that one line, and opens it again.
+export function Fold({ title, open, onToggle, children }: { title: string; open: boolean; onToggle: () => void; children?: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      title={`${open ? "Hide" : "Show"} ${title.toLowerCase()}`}
+      className="flex min-w-0 cursor-pointer items-center gap-ch lowercase"
+    >
+      <span className="w-ch flex-none">{open ? "▾" : "▸"}</span>
+      {title}
+      {children}
+    </button>
+  );
 }

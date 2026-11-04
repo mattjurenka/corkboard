@@ -111,6 +111,9 @@ export type State = {
   cell: { w: number; h: number };
   // Bumped when files in the project come or go.
   filesVersion: number;
+  // Whether the sidebar shows the files (the View menu, or their header),
+  // kept for the next time the page opens.
+  filesOpen: boolean;
   status: string | null;
   // This page's notifications, newest first, and how many came since the
   // list was last opened.
@@ -159,6 +162,7 @@ let state: State = {
   bufs: {},
   cell: { w: 9, h: 19 },
   filesVersion: 0,
+  filesOpen: remembered("corkboard.files") !== "closed",
   status: null,
   notifications: [],
   unread: 0,
@@ -177,11 +181,25 @@ let state: State = {
   toasts: [],
 };
 
+// localStorage can be missing or refuse (a private window).
+function remembered(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
 const listeners = new Set<() => void>();
 
 export const store = {
   get: () => state,
   set(patch: Partial<State>) {
+    if ("filesOpen" in patch && patch.filesOpen !== state.filesOpen) {
+      try {
+        localStorage.setItem("corkboard.files", patch.filesOpen ? "open" : "closed");
+      } catch {}
+    }
     state = { ...state, ...patch };
     for (const fn of listeners) fn();
   },

@@ -186,9 +186,9 @@ function M.new_project(text)
   return go(path)
 end
 
--- On the page, its Open project window; in a bare Neovim, a snacks picker of
--- the projects here.
-local function projects()
+-- On the page, its Open project window (the File menu's too); in a bare
+-- Neovim, a snacks picker of the projects here.
+function M.projects()
   local corkboard = require("corkboard")
   if corkboard.attached() then
     corkboard.notify("corkboard.projects", { here = not no_project() })
@@ -213,7 +213,7 @@ local tools = {
     run = function(main) vim.cmd(on_panel(main) and "rightbelow vnew" or "enew") end,
   },
   { text = "Open file", hint = "<C-f>", run = M.files },
-  { text = "Open project", hint = "", run = projects },
+  { text = "Open project", hint = "", run = M.projects },
   {
     text = "Card from this line",
     hint = "<leader>c",

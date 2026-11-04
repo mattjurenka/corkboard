@@ -8,6 +8,7 @@ import { Holds } from "./Holds";
 import { Media } from "./Media";
 import { Meetings } from "./Meetings";
 import { Plan, PlanDiff, PlanGoals, PlanPriority } from "./Plan";
+import { Settings } from "./Settings";
 import { Usage } from "./Usage";
 import { ImageView, MarkdownView, PdfView } from "./Viewers";
 
@@ -20,6 +21,7 @@ export const VIEWS: Record<string, React.ComponentType<ViewProps>> = {
   media: Media,
   avatar: Avatar,
   usage: Usage,
+  settings: Settings,
   fleet: Fleet,
   brains: Brains,
   "brain-memory": BrainMemory,

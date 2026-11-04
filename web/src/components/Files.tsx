@@ -3,13 +3,14 @@
 // (corkboard.list_dir). A click on a file opens it in a Neovim tab of its
 // own (corkboard.open_file); keyboard focus stays with the canvas. Alt+j
 // from the sidebar's tabs brings the keys here to walk the tree.
+// Folded to its header (or from the View menu), the tabs have the room.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useNvim } from "@/nvim/context";
 import { toNvimKey, windowKey } from "@/nvim/input.js";
-import { useStore } from "@/store";
-import { edgeWindow, focusTab, HeaderButton, Section } from "./Sidebar";
+import { store, useStore } from "@/store";
+import { edgeWindow, Fold, focusTab, HeaderButton, Section, SectionHeader } from "./Sidebar";
 
 type Entry = { name: string; dir?: boolean; ignored?: boolean; git?: "modified" | "added" };
 
@@ -18,6 +19,7 @@ export function Files() {
   const root = useStore((s) => s.context?.cwd ?? null);
   const current = useStore((s) => s.context?.file ?? null);
   const version = useStore((s) => s.filesVersion);
+  const open = useStore((s) => s.filesOpen);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // dir -> its entries; what was read stays cached, so reopening is instant.
   const [children, setChildren] = useState<Map<string, Entry[]>>(new Map());
@@ -167,9 +169,16 @@ export function Files() {
     }
   };
 
+  const fold = <Fold title="Files" open={open} onToggle={() => store.set({ filesOpen: !open })} />;
+  if (!open)
+    return (
+      <section className="flex flex-col border-t">
+        <SectionHeader title={fold} />
+      </section>
+    );
   return (
     <Section
-      title="Files"
+      title={fold}
       className="border-t pt-row"
       action={<HeaderButton title="Collapse all folders" onClick={collapseAll}>⊟</HeaderButton>}
     >

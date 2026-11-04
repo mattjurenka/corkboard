@@ -7,11 +7,11 @@ const SPECIAL = {
 };
 for (let i = 1; i <= 12; i++) SPECIAL[`F${i}`] = `F${i}`;
 
-const MAC = /Mac/.test(navigator.platform);
+export const MAC = /Mac/.test(navigator.platform);
 // On a Mac, the Cmd chords corkboard maps (init.lua): Neovim types out one
 // it doesn't map, so the rest are left to the browser.
 const CMD = new Set([
-  "<D-p>", "<D-S-p>", "<D-t>", "<D-w>", "<D-s>", "<D-S-[>", "<D-S-]>",
+  "<D-p>", "<D-S-p>", "<D-t>", "<D-w>", "<D-s>", "<D-,>", "<D-S-[>", "<D-S-]>",
   ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<D-${n}>`),
   ...["h", "j", "k", "l", "Left", "Down", "Up", "Right"].map((k) => `<A-D-${k}>`),
 ]);

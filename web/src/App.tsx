@@ -10,6 +10,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { BrainForm } from "@/components/BrainForm";
 import { HoldForm } from "@/components/HoldForm";
 import { Away } from "@/components/Away";
+import { Menu } from "@/components/Menu";
 import { Panels } from "@/components/Panels";
 import { Projects } from "@/components/Projects";
 import { Scrollbars } from "@/components/Scrollbars";
@@ -52,14 +53,22 @@ export function App() {
         : "[--sidebar-width:min(calc(var(--cell-w)*32),max(calc(var(--cell-w)*18),30vw))]",
       )}
     >
-      {!bare && !narrow && <Sidebar />}
       {/* Installed as an app, the page draws where the title bar was
           (window-controls-overlay in the manifest), all but the window
-          buttons. The sidebar runs to the top; over the editor, the bar's
+          buttons. The menu bar takes the title bar's place, across the
+          sidebar and the editor, or a row of its own in a browser tab.
+          With no sidebar (the plan, focus mode), the title bar's
           height is left to drag the window by, with a 1px border below it
-          (outside the window buttons' strip, which would cover it). Zero
-          in a browser tab. */}
-      {!narrow && (
+          (outside the window buttons' strip, which would cover it). */}
+      {!bare && !narrow && (
+        <>
+          <Menu />
+          <div className="absolute top-[calc(max(env(titlebar-area-height,0px),var(--cell-h))+1px)] bottom-0 left-0 w-(--sidebar-width)">
+            <Sidebar />
+          </div>
+        </>
+      )}
+      {bare && !narrow && (
         <div className="absolute top-0 right-0 left-(--sidebar-width) box-content h-[env(titlebar-area-height,0px)] border-b-[length:min(1px,env(titlebar-area-height,0px))] [-webkit-app-region:drag] [app-region:drag]" />
       )}
       {narrow && <Bar menu={!bare} />}
@@ -67,7 +76,9 @@ export function App() {
         id="editor"
         className={cn(
           "absolute right-0 bottom-0",
-          narrow ? "top-[calc(2*var(--cell-h))] left-0" : "top-[calc(env(titlebar-area-height,0px)+min(1px,env(titlebar-area-height,0px)))] left-(--sidebar-width)",
+          narrow ? "top-[calc(2*var(--cell-h))] left-0"
+          : !bare ? "top-[calc(max(env(titlebar-area-height,0px),var(--cell-h))+1px)] left-(--sidebar-width)"
+          : "top-[calc(env(titlebar-area-height,0px)+min(1px,env(titlebar-area-height,0px)))] left-(--sidebar-width)",
         )}
         style={focus ? { left: gutter, right: gutter } : undefined}
       >
