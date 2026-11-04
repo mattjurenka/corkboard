@@ -227,6 +227,7 @@ local tools = {
   { text = "Avatar", hint = "", run = function() require("corkboard.avatar").toggle() end },
   { text = "Avatar demo", hint = "", run = function() require("corkboard.avatar").demo({ "all" }) end },
   { text = "Day plan", hint = "<leader>p", run = function() require("corkboard.plan").show() end },
+  { text = "Meetings", hint = "", run = function() require("corkboard.meetings").open() end },
   { text = "Claude Code", hint = "<C-.>", run = function() require("corkboard.claude").open() end },
   { text = "Away mode", hint = "<leader>a", run = function() require("corkboard.away").enter() end },
   { text = "Terminal", hint = "", run = function() require("corkboard.terminal").tab() end },

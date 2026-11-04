@@ -9,13 +9,17 @@ import type { ViewProps } from "./index";
 
 type Status = "recording" | "transcribing" | "sent" | "failed" | "interrupted";
 type Meeting = { id: string; when: string; minutes: number; status: Status; detail: string; said: number };
-type Line = { track: string; who: string; at: string; text: string };
+type Line = { track: string; speaker: number; who: string; at: string; text: string };
+// What's being said on a track, not yet a line.
+type Partial = { track: string; at: string; text: string };
 type MeetingsState = {
   available: boolean;
   recording?: { id: string; at: number; since: string };
+  pending?: "starting" | "stopping";
   selected?: string;
   meetings: Meeting[];
   transcript?: Line[];
+  partial?: Partial[];
 };
 
 const TONE: Record<Status, string> = {
@@ -27,6 +31,12 @@ const TONE: Record<Status, string> = {
 };
 
 const MARK: Record<Status, string> = { recording: "●", transcribing: "◐", sent: "✓", failed: "!", interrupted: "!" };
+
+// Each voice its own color: Me's is the primary, the others' by track.
+const THEM = ["text-special", "text-review", "text-focus", "text-blocked"];
+const ROOM = ["text-working", "text-review", "text-focus", "text-special"];
+const tone = (l: { track: string; speaker: number; who: string }) =>
+  l.who === "Me" ? "text-primary" : (l.track === "out" ? THEM : ROOM)[l.speaker % THEM.length];
 
 // 03:12, or 1:03:12.
 function elapsed(ms: number) {
@@ -57,17 +67,18 @@ export function Meetings({ state, win, focused, nvim }: ViewProps<MeetingsState>
   // Kept at the bottom while it's being said, as a terminal is.
   const live = state.recording && state.recording.id === state.selected;
   const lines = state.transcript ?? [];
+  const partial = state.partial ?? [];
   useEffect(() => {
     if (live && said.current) said.current.scrollTop = said.current.scrollHeight;
-  }, [live, lines.length]);
+  }, [live, lines.length, partial.map((p) => p.text).join()]);
 
   const selected = state.meetings.find((m) => m.id === state.selected);
   // Runs of the same speaker, under one name.
-  const runs: { who: string; track: string; lines: Line[] }[] = [];
+  const runs: { who: string; track: string; speaker: number; lines: Line[] }[] = [];
   for (const l of lines) {
     const last = runs[runs.length - 1];
-    if (last && last.track === l.track) last.lines.push(l);
-    else runs.push({ who: l.who, track: l.track, lines: [l] });
+    if (last && last.track === l.track && last.speaker === l.speaker) last.lines.push(l);
+    else runs.push({ who: l.who, track: l.track, speaker: l.speaker, lines: [l] });
   }
 
   return (
@@ -78,10 +89,18 @@ export function Meetings({ state, win, focused, nvim }: ViewProps<MeetingsState>
           <button
             type="button"
             title={state.recording ? "Stop (m)" : "Record (m)"}
+            disabled={!!state.pending}
             onClick={() => nvim.lua(meetings("toggle"))}
-            className={cn("cursor-pointer border px-ch hover:bg-accent", state.recording && "border-destructive text-destructive")}
+            className={cn(
+              "cursor-pointer border px-ch hover:bg-accent disabled:cursor-wait disabled:text-muted-foreground",
+              state.recording && "border-destructive text-destructive",
+            )}
           >
-            {state.recording ? `■ stop  ${elapsed(now - state.recording.at)}` : "● record"}
+            {state.pending
+              ? `◌ ${state.pending}…`
+              : state.recording
+                ? `■ stop  ${elapsed(now - state.recording.at)}`
+                : "● record"}
           </button>
         )}
       </header>
@@ -119,7 +138,7 @@ export function Meetings({ state, win, focused, nvim }: ViewProps<MeetingsState>
         <div ref={said} className="flex min-w-0 flex-1 flex-col gap-row overflow-y-auto">
           {runs.map((r, i) => (
             <div key={i} className="flex flex-col">
-              <span className={cn("font-bold", r.track === "in" ? "text-primary" : "text-special")}>
+              <span className={cn("font-bold", tone(r))}>
                 {r.who} <span className="font-normal text-muted-foreground tabular-nums">{r.lines[0].at}</span>
               </span>
               {r.lines.map((l, j) => (
@@ -129,7 +148,15 @@ export function Meetings({ state, win, focused, nvim }: ViewProps<MeetingsState>
               ))}
             </div>
           ))}
-          {selected && !runs.length && <p className="text-border">—</p>}
+          {partial.map((p) => (
+            <div key={p.track} className="flex flex-col text-muted-foreground">
+              {runs.at(-1)?.track !== p.track && <span>{p.track === "in" ? "Me" : "Them"}…</span>}
+              <p title={p.at} className="pl-2ch">
+                {p.text}…
+              </p>
+            </div>
+          ))}
+          {selected && !runs.length && !partial.length && <p className="text-border">—</p>}
         </div>
       </div>
     </div>

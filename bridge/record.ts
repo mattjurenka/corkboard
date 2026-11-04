@@ -4,7 +4,7 @@
 //   corkboard-bridge record stop     end it, its last chunks finished
 //   corkboard-bridge record status   what's recording, as JSON (null when nothing is)
 //   corkboard-bridge record finish DIR
-//                                    transcribe what's left of one and send it
+//                                    hear what's left of one and send it
 //                                    to Pepper, if its recorder didn't
 //
 // Two tracks, kept apart: out, what this machine plays (the default sink's
@@ -17,21 +17,27 @@
 // only an overlap of OVERLAP_MS. Recording follows the default devices:
 // headphones plugged in mid-call are the next chunk's.
 //
+// The mic is recorded through PipeWire's echo canceller, which takes what
+// the speakers play out of it: a pipewire of the recorder's own, so the
+// default mic stays as it is. Without it (an older PipeWire), the plain mic.
+//
 // The recorder is its own process (record run), so a bridge restarted mid-
 // meeting doesn't end it. STATE_DIR/recording.json says which one is running.
 //
-// Each chunk is transcribed once it's cut (transcribe.ts), into the meeting's
-// lines, so the transcript is there while the meeting goes on. Once it's
-// stopped and the last chunks are done, the recorder sends the transcript to
-// Pepper as a note, meeting-<id>, and exits. meeting.json's pid is the
-// process working on it until then.
+// Each track is also streamed, raw, to the meeting's hearing (listen.ts):
+// what's said is in the meeting's lines a moment after, and what's being
+// said in its partial. Once it's stopped and the last of it is heard, the
+// recorder sends the transcript to Pepper as a note, meeting-<id>, and
+// exits. meeting.json's pid is the process working on it until then. The
+// chunks are what `record finish` hears it again from.
 
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CLOUD, signedIn, token } from "./cloud";
 import { COMPILED, DATA_DIR, STATE_DIR } from "./dirs";
-import { transcribe } from "./transcribe";
+import { type Heard, hear } from "./listen";
+import { decode, RATE } from "./transcribe";
 
 const CHUNK_MS = 30_000;
 const OVERLAP_MS = 500;
@@ -45,17 +51,15 @@ const SELF = COMPILED ? [process.execPath] : [process.execPath, join(import.meta
 
 // started, and at: the same, in ms since the epoch.
 export type Recording = { pid: number; id: string; dir: string; started: string; at: number };
-export type Chunk = { track: Track; file: string; start: number; stop?: number; transcribed?: boolean };
-// Something said, on a track, in ms from the meeting's start.
-export type Line = { track: Track; start: number; stop: number; text: string };
+export type Chunk = { track: Track; file: string; start: number; stop?: number };
 // error: the recording failed; failed: transcribing or sending it did.
-export type Meeting = {
+// transcribed: when all of it was heard.
+export type Meeting = Heard & {
   id: string;
   brain: string;
   started: string;
   stopped?: string;
   chunks: Chunk[];
-  lines: Line[];
   pid?: number;
   transcribed?: string;
   sent?: string;
@@ -119,40 +123,117 @@ export async function stop(): Promise<Recording | null> {
   const r = current();
   if (!r) return null;
   process.kill(r.pid, "SIGTERM");
-  // Stopped once its last chunks are written; it stays to transcribe them.
+  // Stopped once its last chunks are written; it stays to hear the rest.
   for (let i = 0; i < 100 && current(); i++) await sleep(100);
   return r;
 }
 
+// The echo-cancelled mic, while the recorder's canceller is running.
+const AEC = "corkboard-aec-source";
+
+// The canceller: its reference is the default sink's monitor, and its source
+// is kept from being anyone's default mic.
+function canceller(dir: string) {
+  const conf = join(dir, "aec.conf");
+  writeFileSync(conf, `context.spa-libs = {
+  audio.convert.* = audioconvert/libspa-audioconvert
+  support.* = support/libspa-support
+}
+context.modules = [
+  { name = libpipewire-module-protocol-native }
+  { name = libpipewire-module-client-node }
+  { name = libpipewire-module-adapter }
+  { name = libpipewire-module-echo-cancel
+    args = {
+      library.name = aec/libspa-aec-webrtc
+      monitor.mode = true
+      audio.rate = ${RATE}
+      audio.channels = 1
+      capture.props = { node.name = corkboard-aec-capture node.passive = true }
+      sink.props = { node.name = corkboard-aec-reference node.passive = true }
+      source.props = { node.name = ${AEC} node.description = "corkboard: mic, echo cancelled" priority.session = 0 priority.driver = 0 }
+    }
+  }
+]
+`);
+  return Bun.spawn(["pipewire", "-c", conf], { stdin: "ignore", stdout: "ignore", stderr: "inherit" });
+}
+
+const has = (node: string) => (spawnSync("pw-link", ["-o"], { encoding: "utf8" }).stdout ?? "").includes(`${node}:`);
+
+const capture = (track: Track, target?: string) =>
+  track === "out" ? ["-P", "{ stream.capture.sink=true node.name=corkboard-out }"] : ["-P", "{ node.name=corkboard-in }", ...(target ? ["--target", target] : [])];
+
 // One track's pw-record, into file.
-function record(track: Track, file: string) {
-  const props = track === "out" ? "{ stream.capture.sink=true node.name=corkboard-out }" : "{ node.name=corkboard-in }";
-  return Bun.spawn(["pw-record", "--rate", "16000", "--channels", "1", "--format", "opus", "--container", "oga", "-P", props, file], {
+function record(track: Track, file: string, target?: string) {
+  return Bun.spawn(["pw-record", "--rate", String(RATE), "--channels", "1", "--format", "opus", "--container", "oga", ...capture(track, target), file], {
     stdin: "ignore",
     stdout: "ignore",
     stderr: "inherit",
   });
 }
 
+// One track's samples, as they're recorded, to push(), with when (in ms from
+// t0) the first of them was, and again after a gap: a sink with nothing to
+// play sends nothing, and a pw-record that stopped short is started again.
+// Until stop().
+const GAP_MS = 300;
+function stream(track: Track, t0: number, push: (samples: Float32Array, ms?: number) => Promise<void>, target?: string) {
+  let proc: ReturnType<typeof Bun.spawn> | undefined;
+  let stopped = false;
+  const done = (async () => {
+    while (!stopped) {
+      proc = Bun.spawn(["pw-record", "--raw", "--format", "f32", "--rate", String(RATE), "--channels", "1", ...capture(track, target), "-"], {
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "inherit",
+      });
+      let rest = new Uint8Array(0);
+      let at = -Infinity;
+      for await (const bytes of proc.stdout as ReadableStream<Uint8Array>) {
+        let all = bytes;
+        if (rest.length) {
+          all = new Uint8Array(rest.length + bytes.length);
+          all.set(rest);
+          all.set(bytes, rest.length);
+        }
+        const n = all.length >> 2;
+        const samples = new Float32Array(all.slice(0, n * 4).buffer);
+        rest = all.slice(n * 4);
+        if (!samples.length) continue;
+        const ms = Date.now() - t0 - (samples.length / RATE) * 1000;
+        const gap = ms > at + GAP_MS;
+        if (gap) at = ms;
+        at += (samples.length / RATE) * 1000;
+        void push(samples, gap ? ms : undefined);
+      }
+      await proc.exited;
+      if (!stopped) await sleep(1000);
+    }
+  })();
+  return {
+    async stop() {
+      stopped = true;
+      proc?.kill("SIGINT");
+      await done;
+    },
+    kill: () => proc?.kill("SIGINT"),
+  };
+}
+
 const saver = (dir: string, meeting: Meeting) => () => writeFileSync(join(dir, "meeting.json"), JSON.stringify(meeting, null, 2) + "\n");
 
-// The chunks that are written and not yet transcribed, into the meeting's
-// lines, in order of when they were said.
-async function transcribeChunks(dir: string, meeting: Meeting, save: () => void) {
-  for (const chunk of meeting.chunks) {
-    if (chunk.stop === undefined || chunk.transcribed) continue;
-    try {
-      const said = await transcribe(join(dir, chunk.file));
-      meeting.lines.push(...said.map((s) => ({ track: chunk.track, start: chunk.start + s.start, stop: chunk.start + s.stop, text: s.text })));
-      meeting.lines.sort((a, b) => a.start - b.start);
-      chunk.transcribed = true;
-      delete meeting.failed;
-    } catch (err) {
-      meeting.failed = `transcribing: ${(err as Error).message}`;
-    }
-    save();
-  }
-}
+// A meeting's hearing, into it.
+const hearing = (meeting: Meeting, save: () => void, partials = true) =>
+  hear(
+    meeting,
+    save,
+    (err) => {
+      meeting.failed = `transcribing: ${err.message}`;
+      save();
+    },
+    partials,
+  );
 
 const WHO: Record<Track, string> = { out: "Them", in: "Me" };
 
@@ -170,17 +251,17 @@ function note(meeting: Meeting) {
   const body = [
     `# Meeting, ${when}`,
     "",
-    `Recorded on this laptop for ${minutes} min. "Me" is its mic; "Them" is what it played (the others on a call).`,
+    `Recorded on this laptop for ${minutes} min. "Me" is whoever said the most into its mic, and "Room 1", "Room 2"... anyone else it heard; "Them" is what it played (the others on a call), "Them 1", "Them 2"... when there were more than one.`,
     "",
-    ...(meeting.lines.length ? meeting.lines.map((l) => `[${clock(l.start)}] ${WHO[l.track]}: ${l.text}`) : ["Nothing was said."]),
+    ...(meeting.lines.length
+      ? meeting.lines.map((l) => `[${clock(l.start)}] ${meeting.who?.[l.track]?.[l.speaker] || WHO[l.track]}: ${l.text}`)
+      : ["Nothing was said."]),
   ].join("\n");
   return { kind: "reference", title: `Meeting, ${when}`, body };
 }
 
-// Done with a stopped meeting: what's left transcribed, then sent to Pepper.
-async function conclude(dir: string, meeting: Meeting, save: () => void) {
-  await transcribeChunks(dir, meeting, save);
-  if (meeting.chunks.some((c) => !c.transcribed)) return;
+// Done with a stopped meeting, all of it heard: sent to Pepper.
+async function conclude(meeting: Meeting, save: () => void) {
   meeting.transcribed ??= new Date().toISOString();
   if (!meeting.sent) {
     try {
@@ -206,12 +287,27 @@ async function resume(dir: string) {
   const meeting = JSON.parse(readFileSync(join(dir, "meeting.json"), "utf8")) as Meeting;
   if (!meeting.stopped) throw new Error("it's still being recorded");
   if (meeting.pid && meeting.pid !== process.pid && alive(meeting.pid)) throw new Error("it's being transcribed");
-  meeting.lines ??= [];
   meeting.brain ??= "pepper";
   meeting.pid = process.pid;
+  // Heard before there was a hearing: again, from the start.
+  if (!meeting.heard) meeting.lines = [];
   const save = saver(dir, meeting);
   save();
-  await conclude(dir, meeting, save);
+  if (!meeting.transcribed) {
+    // Each track's chunks in order; the hearing skips their overlaps, and
+    // what it had heard already.
+    const h = hearing(meeting, save, false);
+    await Promise.all(
+      TRACKS.map(async (track) => {
+        for (const chunk of meeting.chunks.filter((c) => c.track === track)) {
+          const file = join(dir, chunk.file);
+          if (existsSync(file)) await h.ears[track].push(await decode(file), chunk.start);
+        }
+      }),
+    );
+    await h.done();
+  }
+  await conclude(meeting, save);
   delete meeting.pid;
   save();
 }
@@ -221,27 +317,41 @@ async function resume(dir: string) {
 async function run(dir: string) {
   const t0 = Date.now();
   // Pepper's for now; which brain a meeting is for is to come (meetings.md).
-  const meeting: Meeting = { id: dir.split("/").at(-1)!, brain: "pepper", started: new Date(t0).toISOString(), chunks: [], lines: [], pid: process.pid };
+  const meeting: Meeting = {
+    id: dir.split("/").at(-1)!,
+    brain: "pepper",
+    started: new Date(t0).toISOString(),
+    chunks: [],
+    lines: [],
+    voices: { out: [], in: [] },
+    who: { out: [], in: [] },
+    partial: {},
+    heard: { out: 0, in: 0 },
+    pid: process.pid,
+  };
   const save = saver(dir, meeting);
   const live = new Map<Track, { proc: ReturnType<typeof record>; chunk: Chunk }>();
   let n = 0;
-  // One transcription at a time, each after the chunks it's for.
-  let transcribing = Promise.resolve();
-  const later = () => (transcribing = transcribing.then(() => transcribeChunks(dir, meeting, save)));
+
+  const aec = canceller(dir);
+  for (let i = 0; i < 20 && !has(AEC) && aec.exitCode === null; i++) await sleep(100);
+  const target = has(AEC) ? AEC : undefined;
+  if (!target) aec.kill();
+  const h = hearing(meeting, save);
+  const streams = TRACKS.map((track) => stream(track, t0, (s, ms) => h.ears[track].push(s, ms), target));
 
   const cut = async () => {
     const old = new Map(live);
     for (const track of TRACKS) {
       const file = `${track}-${String(n).padStart(3, "0")}.oga`;
       const chunk: Chunk = { track, file, start: Date.now() - t0 };
-      live.set(track, { proc: record(track, join(dir, file)), chunk });
+      live.set(track, { proc: record(track, join(dir, file), target), chunk });
       meeting.chunks.push(chunk);
     }
     n++;
     save();
     if (old.size) await sleep(OVERLAP_MS);
     await finish(old);
-    if (old.size) later();
   };
   // SIGINT is what has pw-record write the file's end.
   const finish = async (chunks: typeof live) => {
@@ -253,9 +363,11 @@ async function run(dir: string) {
     save();
   };
 
-  // However this ends, its pw-records do too.
+  // However this ends, its pw-records and canceller do too.
   process.on("exit", () => {
     for (const { proc } of live.values()) proc.kill("SIGINT");
+    for (const s of streams) s.kill();
+    aec.kill();
   });
 
   await cut();
@@ -276,13 +388,13 @@ async function run(dir: string) {
     if (stopping) return;
     stopping = true;
     clearInterval(timer);
-    await finish(live);
+    await Promise.all([finish(live), ...streams.map((s) => s.stop())]);
+    aec.kill();
     meeting.stopped = new Date().toISOString();
     save();
     rmSync(RECORDING, { force: true });
-    later();
-    await transcribing;
-    await conclude(dir, meeting, save);
+    await h.done();
+    await conclude(meeting, save);
     delete meeting.pid;
     save();
     process.exit(0);

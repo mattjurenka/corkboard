@@ -15,10 +15,28 @@ local pinned = require("corkboard.pinned")
 
 local M = {}
 
-local POLL_MS = 1500
+local POLL_MS = 500
 local WHO = { out = "Them", ["in"] = "Me" }
 
 local function ui() return require("corkboard") end
+
+-- Who said a line: the name the recorder gave its voice, else its track's.
+local function who(m, l)
+  local names = m.who and m.who[l.track]
+  local name = names and names[(l.speaker or 0) + 1]
+  return name and name ~= "" and name or WHO[l.track] or l.track
+end
+
+-- What's being said, not yet a line, on each track: { track, start, text }.
+local function partials(m)
+  local list = {}
+  for _, track in ipairs({ "out", "in" }) do
+    local p = m.partial and m.partial[track]
+    if p and p.text and p.text ~= "" then table.insert(list, { track = track, start = p.start, text = p.text }) end
+  end
+  table.sort(list, function(a, b) return a.start < b.start end)
+  return list
+end
 
 -- How to run `corkboard-bridge record`, as a JSON list (the bridge's
 -- CORKBOARD_RECORD_COMMAND); nil when Neovim isn't the bridge's.
@@ -135,6 +153,7 @@ local line_id = {} -- line number -> meeting id
 local selected
 local list, recording = {}, nil
 local last -- what was pushed last, to push only what changed
+local pending -- "starting" or "stopping", until the recorder has
 
 local function find(id)
   for _, m in ipairs(list) do
@@ -147,14 +166,18 @@ local function state()
   return {
     available = record_command() ~= nil,
     recording = recording and { id = recording.id, at = recording.at, since = clock(math.floor(recording.at / 1000)) } or nil,
+    pending = pending,
     selected = selected,
     meetings = vim.tbl_map(function(x)
       local s = status(x, recording)
       return { id = x.id, when = when(x), minutes = minutes(x), status = s, detail = status_text(x, s), said = #(x.lines or {}) }
     end, list),
     transcript = m and vim.tbl_map(function(l)
-      return { track = l.track, who = WHO[l.track] or l.track, at = offset(l.start), text = l.text }
+      return { track = l.track, speaker = l.speaker or 0, who = who(m, l), at = offset(l.start), text = l.text }
     end, m.lines or {}) or nil,
+    partial = m and vim.tbl_map(function(p)
+      return { track = p.track, at = offset(p.start), text = p.text }
+    end, partials(m)) or nil,
   }
 end
 
@@ -165,10 +188,14 @@ local function render_text()
     map[#lines] = m.id
   end
   local m = find(selected)
-  if m and m.lines and #m.lines > 0 then
+  local said = m and partials(m) or {}
+  if m and ((m.lines and #m.lines > 0) or #said > 0) then
     table.insert(lines, "")
-    for _, l in ipairs(m.lines) do
-      table.insert(lines, ("  [%s] %s: %s"):format(offset(l.start), WHO[l.track] or l.track, l.text))
+    for _, l in ipairs(m.lines or {}) do
+      table.insert(lines, ("  [%s] %s: %s"):format(offset(l.start), who(m, l), l.text))
+    end
+    for _, p in ipairs(said) do
+      table.insert(lines, ("  [%s] %s… %s"):format(offset(p.start), WHO[p.track], p.text))
     end
   end
   pinned.set_lines(buf, lines)
@@ -206,8 +233,14 @@ local function poll()
 end
 
 -- Start recording a meeting, or stop the one that is. done(), once it has.
+-- The button says it's starting or stopping until then.
 function M.toggle(done)
-  record({ M.current() and "stop" or "start" }, function(ok, out)
+  if pending then return end
+  local op = M.current() and "stop" or "start"
+  pending = op == "stop" and "stopping" or "starting"
+  push()
+  record({ op }, function(ok, out)
+    pending = nil
     if not ok then vim.notify("corkboard: " .. out, vim.log.levels.ERROR) end
     push()
     if done then done() end
