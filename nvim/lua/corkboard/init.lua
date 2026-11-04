@@ -79,6 +79,7 @@ function M.attach(chan)
   require("corkboard.fleet").push_all()
   require("corkboard.brains").push_all()
   require("corkboard.plan").push_all()
+  require("corkboard.meetings").push_all()
   require("corkboard.focus").push()
   M.push_layout()
   -- Once the grid has its size, so the windows come back in proportion.
@@ -737,6 +738,7 @@ function M.setup()
   require("corkboard.restore").setup()
   require("corkboard.focus").setup()
   require("corkboard.away").setup()
+  require("corkboard.meetings").setup()
 
   -- Each shortcut has a Ctrl or Alt chord, for Linux and Windows, and most
   -- have a Cmd one (<D-...>) for macOS, where Option types the layout's

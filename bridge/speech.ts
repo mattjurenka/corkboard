@@ -128,8 +128,9 @@ async function cpuModel(cache: string): Promise<string> {
 
 // The compiled bridge has these beside it, in resources/node_modules, and
 // not in it: onnxruntime-node's binaries can't be bundled. A build without
-// them (or for a system onnxruntime has none for) has no voice, only that.
-const sidecar = <T>(name: string): Promise<T> => import(COMPILED ? Bun.resolveSync(name, join(RESOURCES, "speech.js")) : name);
+// them (or for a system onnxruntime has none for) has no voice, only that,
+// and no transcripts (transcribe.ts).
+export const sidecar = <T>(name: string): Promise<T> => import(COMPILED ? Bun.resolveSync(name, join(RESOURCES, "speech.js")) : name);
 
 async function load(): Promise<Tts> {
   const [{ env, AutoTokenizer, Tensor }, { KokoroTTS }, ort] = await Promise.all([

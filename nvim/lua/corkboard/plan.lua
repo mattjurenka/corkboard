@@ -494,44 +494,22 @@ local function load_goals()
   end)
 end
 
--- How to run `corkboard-bridge record`, as a JSON list (the bridge's
--- CORKBOARD_RECORD_COMMAND); nil when Neovim isn't the bridge's.
-local function record_command()
-  local ok, given = pcall(vim.json.decode, vim.env.CORKBOARD_RECORD_COMMAND or "")
-  return ok and type(given) == "table" and given or nil
-end
-
-local function record(op, done)
-  local cmd = record_command()
-  if not cmd then return done and done(false, "recording needs corkboard's bridge on this machine") end
-  vim.system(vim.list_extend(vim.deepcopy(cmd), { op }), { text = true }, vim.schedule_wrap(function(res)
-    if done then done(res.code == 0, vim.trim(res.code == 0 and res.stdout or res.stderr)) end
-  end))
-end
-
--- Whether a meeting is being recorded, started here or anywhere else.
+-- Whether a meeting is being recorded (meetings.lua), started here or
+-- anywhere else.
 local function read_recording()
-  record("status", function(ok, out)
-    local r = ok and vim.json.decode(out, { luanil = { object = true } }) or nil
-    local was = recording
-    if type(r) == "table" and r.at then
-      local t = os.date("*t", math.floor(r.at / 1000))
-      recording = clock(t.hour * 60 + t.min)
-    else
-      recording = nil
-    end
-    if recording ~= was then redraw() end
-  end)
+  local r = require("corkboard.meetings").current()
+  local was = recording
+  if r and r.at then
+    local t = os.date("*t", math.floor(r.at / 1000))
+    recording = clock(t.hour * 60 + t.min)
+  else
+    recording = nil
+  end
+  if recording ~= was then redraw() end
 end
 
 -- Start recording a meeting, or stop the one that is.
-function M.record()
-  record(recording and "stop" or "start", function(ok, out)
-    if not ok then vim.notify("corkboard: " .. out, vim.log.levels.ERROR) end
-    read_recording()
-  end)
-end
-
+function M.record() require("corkboard.meetings").toggle(read_recording) end
 
 -- Not waited for, like the fleet view's (fleet.lua): the window opens with
 -- it, and the keys typed meanwhile should run. Only the latest load's

@@ -3,6 +3,9 @@
 //   corkboard-bridge record start    begin one, in the background; prints its directory
 //   corkboard-bridge record stop     end it, its last chunks finished
 //   corkboard-bridge record status   what's recording, as JSON (null when nothing is)
+//   corkboard-bridge record finish DIR
+//                                    transcribe what's left of one and send it
+//                                    to Pepper, if its recorder didn't
 //
 // Two tracks, kept apart: out, what this machine plays (the default sink's
 // monitor: the other people on a call), and in, the mic (you, the room).
@@ -16,11 +19,19 @@
 //
 // The recorder is its own process (record run), so a bridge restarted mid-
 // meeting doesn't end it. STATE_DIR/recording.json says which one is running.
+//
+// Each chunk is transcribed once it's cut (transcribe.ts), into the meeting's
+// lines, so the transcript is there while the meeting goes on. Once it's
+// stopped and the last chunks are done, the recorder sends the transcript to
+// Pepper as a note, meeting-<id>, and exits. meeting.json's pid is the
+// process working on it until then.
 
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { CLOUD, signedIn, token } from "./cloud";
 import { COMPILED, DATA_DIR, STATE_DIR } from "./dirs";
+import { transcribe } from "./transcribe";
 
 const CHUNK_MS = 30_000;
 const OVERLAP_MS = 500;
@@ -34,8 +45,23 @@ const SELF = COMPILED ? [process.execPath] : [process.execPath, join(import.meta
 
 // started, and at: the same, in ms since the epoch.
 export type Recording = { pid: number; id: string; dir: string; started: string; at: number };
-export type Chunk = { track: Track; file: string; start: number; stop?: number };
-export type Meeting = { id: string; started: string; stopped?: string; chunks: Chunk[]; error?: string };
+export type Chunk = { track: Track; file: string; start: number; stop?: number; transcribed?: boolean };
+// Something said, on a track, in ms from the meeting's start.
+export type Line = { track: Track; start: number; stop: number; text: string };
+// error: the recording failed; failed: transcribing or sending it did.
+export type Meeting = {
+  id: string;
+  brain: string;
+  started: string;
+  stopped?: string;
+  chunks: Chunk[];
+  lines: Line[];
+  pid?: number;
+  transcribed?: string;
+  sent?: string;
+  error?: string;
+  failed?: string;
+};
 
 const alive = (pid: number) => {
   try {
@@ -93,7 +119,8 @@ export async function stop(): Promise<Recording | null> {
   const r = current();
   if (!r) return null;
   process.kill(r.pid, "SIGTERM");
-  for (let i = 0; i < 100 && alive(r.pid); i++) await sleep(100);
+  // Stopped once its last chunks are written; it stays to transcribe them.
+  for (let i = 0; i < 100 && current(); i++) await sleep(100);
   return r;
 }
 
@@ -107,13 +134,100 @@ function record(track: Track, file: string) {
   });
 }
 
-// record run DIR: the recorder itself, until SIGTERM.
+const saver = (dir: string, meeting: Meeting) => () => writeFileSync(join(dir, "meeting.json"), JSON.stringify(meeting, null, 2) + "\n");
+
+// The chunks that are written and not yet transcribed, into the meeting's
+// lines, in order of when they were said.
+async function transcribeChunks(dir: string, meeting: Meeting, save: () => void) {
+  for (const chunk of meeting.chunks) {
+    if (chunk.stop === undefined || chunk.transcribed) continue;
+    try {
+      const said = await transcribe(join(dir, chunk.file));
+      meeting.lines.push(...said.map((s) => ({ track: chunk.track, start: chunk.start + s.start, stop: chunk.start + s.stop, text: s.text })));
+      meeting.lines.sort((a, b) => a.start - b.start);
+      chunk.transcribed = true;
+      delete meeting.failed;
+    } catch (err) {
+      meeting.failed = `transcribing: ${(err as Error).message}`;
+    }
+    save();
+  }
+}
+
+const WHO: Record<Track, string> = { out: "Them", in: "Me" };
+
+const clock = (ms: number) => {
+  const s = Math.floor(ms / 1000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return s >= 3600 ? `${Math.floor(s / 3600)}:${p(Math.floor(s / 60) % 60)}:${p(s % 60)}` : `${p(Math.floor(s / 60))}:${p(s % 60)}`;
+};
+
+// The transcript as Pepper reads it: who said what, and when.
+function note(meeting: Meeting) {
+  const started = new Date(meeting.started);
+  const when = started.toLocaleString("en-US", { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+  const minutes = meeting.stopped ? Math.round((Date.parse(meeting.stopped) - started.getTime()) / 60_000) : 0;
+  const body = [
+    `# Meeting, ${when}`,
+    "",
+    `Recorded on this laptop for ${minutes} min. "Me" is its mic; "Them" is what it played (the others on a call).`,
+    "",
+    ...(meeting.lines.length ? meeting.lines.map((l) => `[${clock(l.start)}] ${WHO[l.track]}: ${l.text}`) : ["Nothing was said."]),
+  ].join("\n");
+  return { kind: "reference", title: `Meeting, ${when}`, body };
+}
+
+// Done with a stopped meeting: what's left transcribed, then sent to Pepper.
+async function conclude(dir: string, meeting: Meeting, save: () => void) {
+  await transcribeChunks(dir, meeting, save);
+  if (meeting.chunks.some((c) => !c.transcribed)) return;
+  meeting.transcribed ??= new Date().toISOString();
+  if (!meeting.sent) {
+    try {
+      if (!signedIn()) throw new Error("this machine isn't signed in to corkboard");
+      const res = await fetch(`${CLOUD}/api/notes/meeting-${meeting.id.toLowerCase()}`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${await token()}`, "Content-Type": "application/json" },
+        body: JSON.stringify(note(meeting)),
+      });
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+      meeting.sent = new Date().toISOString();
+      delete meeting.failed;
+    } catch (err) {
+      meeting.failed = `sending to ${meeting.brain}: ${(err as Error).message}`;
+    }
+  }
+  save();
+}
+
+// record finish DIR: a stopped meeting its recorder didn't get to the end of.
+async function resume(dir: string) {
+  const meeting = JSON.parse(readFileSync(join(dir, "meeting.json"), "utf8")) as Meeting;
+  if (!meeting.stopped) throw new Error("it's still being recorded");
+  if (meeting.pid && meeting.pid !== process.pid && alive(meeting.pid)) throw new Error("it's being transcribed");
+  meeting.lines ??= [];
+  meeting.brain ??= "pepper";
+  meeting.pid = process.pid;
+  const save = saver(dir, meeting);
+  save();
+  await conclude(dir, meeting, save);
+  delete meeting.pid;
+  save();
+}
+
+// record run DIR: the recorder itself, until SIGTERM, and then until what it
+// recorded is transcribed and sent.
 async function run(dir: string) {
   const t0 = Date.now();
-  const meeting: Meeting = { id: dir.split("/").at(-1)!, started: new Date(t0).toISOString(), chunks: [] };
-  const save = () => writeFileSync(join(dir, "meeting.json"), JSON.stringify(meeting, null, 2) + "\n");
+  // Pepper's for now; which brain a meeting is for is to come (meetings.md).
+  const meeting: Meeting = { id: dir.split("/").at(-1)!, brain: "pepper", started: new Date(t0).toISOString(), chunks: [], lines: [], pid: process.pid };
+  const save = saver(dir, meeting);
   const live = new Map<Track, { proc: ReturnType<typeof record>; chunk: Chunk }>();
   let n = 0;
+  // One transcription at a time, each after the chunks it's for.
+  let transcribing = Promise.resolve();
+  const later = () => (transcribing = transcribing.then(() => transcribeChunks(dir, meeting, save)));
 
   const cut = async () => {
     const old = new Map(live);
@@ -127,6 +241,7 @@ async function run(dir: string) {
     save();
     if (old.size) await sleep(OVERLAP_MS);
     await finish(old);
+    if (old.size) later();
   };
   // SIGINT is what has pw-record write the file's end.
   const finish = async (chunks: typeof live) => {
@@ -165,6 +280,11 @@ async function run(dir: string) {
     meeting.stopped = new Date().toISOString();
     save();
     rmSync(RECORDING, { force: true });
+    later();
+    await transcribing;
+    await conclude(dir, meeting, save);
+    delete meeting.pid;
+    save();
     process.exit(0);
   };
   process.on("SIGTERM", end);
@@ -184,8 +304,11 @@ export async function cli(args: string[]) {
       console.log(JSON.stringify(current()));
     } else if (op === "run" && arg) {
       await run(arg);
+    } else if (op === "finish" && arg) {
+      await resume(arg);
+      process.exit(0);
     } else {
-      console.error("usage: corkboard-bridge record start|stop|status");
+      console.error("usage: corkboard-bridge record start|stop|status|finish DIR");
       process.exit(2);
     }
   } catch (err) {

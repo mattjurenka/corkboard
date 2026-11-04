@@ -6,6 +6,7 @@ import { Cards } from "./Cards";
 import { Fleet } from "./Fleet";
 import { Holds } from "./Holds";
 import { Media } from "./Media";
+import { Meetings } from "./Meetings";
 import { Plan, PlanDiff, PlanGoals, PlanPriority } from "./Plan";
 import { Usage } from "./Usage";
 import { ImageView, MarkdownView, PdfView } from "./Viewers";
@@ -23,6 +24,7 @@ export const VIEWS: Record<string, React.ComponentType<ViewProps>> = {
   brains: Brains,
   "brain-memory": BrainMemory,
   holds: Holds,
+  meetings: Meetings,
   plan: Plan,
   "plan-diff": PlanDiff,
   "plan-goals": PlanGoals,
