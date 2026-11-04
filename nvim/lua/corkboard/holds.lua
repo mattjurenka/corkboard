@@ -440,8 +440,10 @@ local function buffer()
   return buf
 end
 
--- The holds, beside the brains view (or wherever it's open already).
+-- The holds, beside the brains view (or wherever it's open already), while
+-- the fleet is on (corkboard.features).
 function M.show()
+  if not require("corkboard.features").on("fleet") then return end
   local b = buffer()
   local win = vim.fn.win_findbuf(b)[1]
   if win then

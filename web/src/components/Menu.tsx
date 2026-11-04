@@ -11,8 +11,9 @@ import { cn } from "@/lib/utils";
 import { keepFocus, type Nvim, useNvim } from "@/nvim/context";
 import { MAC } from "@/nvim/input.js";
 import { openPlan } from "@/planWindow";
-import { store, useStore } from "@/store";
+import { type State, store, useStore } from "@/store";
 
+type Features = State["features"];
 type Item = { label: string; keys?: string; checked?: boolean; run: (nvim: Nvim) => void } | "-";
 
 // A chord as this machine writes it: ⌘ on a Mac, Ctrl elsewhere.
@@ -23,7 +24,9 @@ const cmd = (c: string) => (nvim: Nvim) => void nvim.lua("pcall(vim.cmd, ...) vi
 const typed = (keys: string) => (nvim: Nvim) => nvim.notify("nvim_input", `<C-\\><C-n>${keys}`);
 const tab = (n: number) => cmd(`silent! ${n}tabnext`);
 
-function menus(leader: string, files: boolean): [string, Item[]][] {
+function menus(leader: string, files: boolean, { fleet, assistant }: Features): [string, Item[]][] {
+  // Brains is third among the tabs without the fleet (corkboard.features).
+  const brains = fleet ? 4 : 3;
   return [
     [
       "File",
@@ -66,10 +69,14 @@ function menus(leader: string, files: boolean): [string, Item[]][] {
       [
         { label: "Board", keys: chord("⌘1", "Alt+1"), run: tab(1) },
         { label: "Usage", keys: chord("⌘2", "Alt+2"), run: tab(2) },
-        { label: "Fleet", keys: chord("⌘3", "Alt+3"), run: tab(3) },
-        { label: "Brains", keys: chord("⌘4", "Alt+4"), run: tab(4) },
-        { label: "Day plan", keys: `${leader} p`, run: () => openPlan() },
-        { label: "Meetings", run: lua("require('corkboard.meetings').open()") },
+        ...(fleet ? [{ label: "Fleet", keys: chord("⌘3", "Alt+3"), run: tab(3) }] : []),
+        { label: "Brains", keys: chord(`⌘${brains}`, `Alt+${brains}`), run: tab(brains) },
+        ...(assistant
+          ? [
+              { label: "Day plan", keys: `${leader} p`, run: () => openPlan() },
+              { label: "Meetings", run: lua("require('corkboard.meetings').open()") },
+            ]
+          : []),
         "-",
         { label: "Files", checked: files, run: () => store.set({ filesOpen: !files }) },
         { label: "Terminal", keys: "Ctrl+`", run: lua("require('corkboard.terminal').toggle()") },
@@ -86,6 +93,7 @@ function menus(leader: string, files: boolean): [string, Item[]][] {
 export function Menu() {
   const nvim = useNvim();
   const files = useStore((s) => s.filesOpen);
+  const features = useStore((s) => s.features);
   const [open, setOpen] = useState<string | null>(null);
   const [leader, setLeader] = useState("\\");
   useEffect(() => {
@@ -116,7 +124,7 @@ export function Menu() {
       onMouseDown={keepFocus}
       className="absolute inset-x-0 top-0 z-5 box-content flex pl-[env(titlebar-area-x,0px)] h-[max(env(titlebar-area-height,0px),var(--cell-h))] items-stretch border-b bg-background select-none [-webkit-app-region:drag] [app-region:drag]"
     >
-      {menus(leader, files).map(([name, items]) => (
+      {menus(leader, files, features).map(([name, items]) => (
         <div key={name} data-menu className="relative [-webkit-app-region:no-drag] [app-region:no-drag]">
           <button
             type="button"

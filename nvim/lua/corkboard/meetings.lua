@@ -358,8 +358,10 @@ local function buffer()
   return buf
 end
 
--- The tab, a new one after this, or where it's open.
+-- The tab, a new one after this, or where it's open; while the assistant's
+-- parts are on (corkboard.features).
 function M.open()
+  if not require("corkboard.features").on("assistant") then return end
   local b = buffer()
   local win = vim.fn.win_findbuf(b)[1]
   if win then

@@ -72,6 +72,7 @@ function M.attach(chan)
   last_context, last_layout, last_scroll, last_labels, shown_preview = nil, nil, nil, nil, false
   vim.schedule(M.push_preview)
   M.push_context()
+  require("corkboard.features").push()
   require("corkboard.board").push_all()
   require("corkboard.viewer").push_all()
   require("corkboard.claude.cards").push_all()
@@ -410,9 +411,11 @@ end
 
 -- <leader>p, :AgentPlan: the day plan, which has a window of its own. Here,
 -- that's the plan's tab; in a project's window, the page opens the plan's
--- window, or brings it forward if it's open.
+-- window, or brings it forward if it's open. Only while the assistant's
+-- parts are on (corkboard.features).
 function M.open_plan()
   if M.window == "plan" then return require("corkboard.plan").show() end
+  if not require("corkboard.features").on("assistant") then return end
   if not M.attached() then return vim.notify("corkboard: the day plan opens from the page") end
   M.notify("corkboard.open_plan")
 end
@@ -796,7 +799,7 @@ function M.setup()
   end
 
   -- Alt+1 to 9 (Cmd+1 to 9) go to that tab, as the sidebar numbers them:
-  -- the board, usage, the fleet, then the agents.
+  -- the board, usage, the fleet (while it's on), brains, then the agents.
   for i = 1, 9 do
     for _, mod in ipairs({ "A", "D" }) do
       vim.keymap.set({ "n", "i", "t" }, ("<%s-%d>"):format(mod, i), function()

@@ -731,14 +731,16 @@ local function buffer()
   return buf
 end
 
--- Keep the brains fourth among the tabs, after the fleet.
+-- Keep the brains after the fleet among the tabs, or after usage without it.
+local function index() return require("corkboard.features").on("fleet") and 4 or 3 end
+
 function M.ensure()
-  if pinned.ensure("corkboard_brains", 4, buffer()) then vim.schedule(M.load) end
+  if pinned.ensure("corkboard_brains", index(), buffer()) then vim.schedule(M.load) end
 end
 
 function M.show()
   M.ensure()
-  pinned.show("corkboard_brains", 4, buffer())
+  pinned.show("corkboard_brains", index(), buffer())
 end
 
 function M.push_all()

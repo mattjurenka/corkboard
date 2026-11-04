@@ -32,6 +32,7 @@ const uniq = (xs: (string | null | undefined)[]) => [...new Set(xs.filter((x): x
 
 export function BrainForm() {
   const open = useStore((s) => s.brainForm);
+  const { fleet, assistant } = useStore((s) => s.features);
   const nvim = useNvim();
   const [base, setBase] = useState<BrainFields | undefined>();
   const [d, setD] = useState<Draft>(BLANK);
@@ -170,34 +171,38 @@ export function BrainForm() {
               className="min-w-0 resize-none border bg-muted px-ch outline-none focus:border-primary"
             />
 
-            <span className="text-muted-foreground">runs as</span>
-            <div className="flex flex-wrap gap-ch">
-              {accounts.map((a) => (
-                <Tag key={a} on={d.account === a} mark={d.account === a ? "●" : "○"} onClick={() => set({ account: a })}>
-                  {a}
-                </Tag>
-              ))}
-              <Tag on={d.account === null} mark={d.account === null ? "●" : "○"} onClick={() => set({ account: null })}>
-                machine default
-              </Tag>
-              <Add what="account" onAdd={(a) => set({ account: a })} />
-            </div>
-
-            <span className="text-muted-foreground">holds</span>
-            <div className="flex flex-col">
-              <div className="flex flex-wrap gap-ch">
-                {labels.map((l) => {
-                  const on = d.credentials.includes(l);
-                  return (
-                    <Tag key={l} on={on} mark={on ? "✓" : "+"} onClick={() => set({ credentials: toggle(d.credentials, l) })}>
-                      {l}
+            {fleet && (
+              <>
+                <span className="text-muted-foreground">runs as</span>
+                <div className="flex flex-wrap gap-ch">
+                  {accounts.map((a) => (
+                    <Tag key={a} on={d.account === a} mark={d.account === a ? "●" : "○"} onClick={() => set({ account: a })}>
+                      {a}
                     </Tag>
-                  );
-                })}
-                <Add what="label" onAdd={(l) => set({ credentials: d.credentials.includes(l) ? d.credentials : [...d.credentials, l] })} />
-              </div>
-              {d.credentials.length > 0 && <span className="text-review">agents need your OK to spawn it</span>}
-            </div>
+                  ))}
+                  <Tag on={d.account === null} mark={d.account === null ? "●" : "○"} onClick={() => set({ account: null })}>
+                    machine default
+                  </Tag>
+                  <Add what="account" onAdd={(a) => set({ account: a })} />
+                </div>
+
+                <span className="text-muted-foreground">holds</span>
+                <div className="flex flex-col">
+                  <div className="flex flex-wrap gap-ch">
+                    {labels.map((l) => {
+                      const on = d.credentials.includes(l);
+                      return (
+                        <Tag key={l} on={on} mark={on ? "✓" : "+"} onClick={() => set({ credentials: toggle(d.credentials, l) })}>
+                          {l}
+                        </Tag>
+                      );
+                    })}
+                    <Add what="label" onAdd={(l) => set({ credentials: d.credentials.includes(l) ? d.credentials : [...d.credentials, l] })} />
+                  </div>
+                  {d.credentials.length > 0 && <span className="text-review">agents need your OK to spawn it</span>}
+                </div>
+              </>
+            )}
 
             <span className="text-muted-foreground">persona</span>
             <div className="flex flex-wrap items-end gap-ch">
@@ -223,7 +228,7 @@ export function BrainForm() {
 
             <span className="text-muted-foreground">can</span>
             <div className="flex flex-wrap gap-x-2ch">
-              {open.abilities.map((a) => (
+              {assistant && open.abilities.map((a) => (
                 <Check key={a} on={d.abilities.includes(a)} onClick={() => set({ abilities: toggle(d.abilities, a) })}>
                   {a}
                 </Check>

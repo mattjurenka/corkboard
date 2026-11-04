@@ -708,6 +708,7 @@ end
 -- other one (nil).
 function M.show_advice(on)
   if on == nil then on = not show_advice end
+  on = on and require("corkboard.features").on("assistant")
   show_advice = on
   if pane ~= "list" then pane = on and "advice" or "detail" end
   push_state()
@@ -881,7 +882,8 @@ end
 -- l: from the list into the session, then on to Pepper's advice; h back.
 local function across(dir)
   local panes = { "list", "detail", "advice" }
-  local i = math.max(1, math.min(3, ({ list = 1, detail = 2, advice = 3 })[pane] + dir))
+  local last = require("corkboard.features").on("assistant") and 3 or 2
+  local i = math.max(1, math.min(last, ({ list = 1, detail = 2, advice = 3 })[pane] + dir))
   if panes[i] == pane then return end
   pane = panes[i]
   if pane == "detail" then item = 0 end

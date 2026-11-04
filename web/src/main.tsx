@@ -190,6 +190,7 @@ rpc.on("corkboard.away_return", ([here]: any[]) => {
   canvas.focus();
 });
 rpc.on("corkboard.usage",([state]: any[]) => store.set({ views: { ...store.get().views, usage: state } }));
+rpc.on("corkboard.features", ([features]: any[]) => store.set({ features }));
 rpc.on("corkboard.fleet", ([state]: any[]) => store.set({ views: { ...store.get().views, fleet: state } }));
 rpc.on("corkboard.brains", ([state]: any[]) => store.set({ views: { ...store.get().views, brains: state } }));
 // h/j/k/l in a view's window, to the item drawn that way (lib/nav.ts).

@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
+import { useStore } from "@/store";
 import type { ViewProps } from "./index";
 
 type Tokens = { input: number; write: number; read: number; output: number; thinking: number };
@@ -66,12 +67,14 @@ export function Usage({ state, win, focused, nvim }: ViewProps<UsageState>) {
   const selected = state.sessions.find((s) => s.id === state.selected && s.categories);
   const n = state.sessions.length;
   const inList = focused && (state.pane ?? "list") === "list";
+  const assistant = useStore((s) => s.features.assistant);
+  const advice = assistant && state.show_advice;
 
   return (
     <div className="@container/usage flex h-full flex-col px-2ch pt-row">
       <header className="flex justify-between gap-2ch pb-row text-muted-foreground">
         <span className="min-w-0 truncate">{state.root ?? ""}</span>
-        <span className="flex-none @max-[80ch]/usage:hidden">j/k session · p period · s sort · a advice · R refresh</span>
+        <span className="flex-none @max-[80ch]/usage:hidden">j/k session · p period · s sort{assistant && " · a advice"} · R refresh</span>
       </header>
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(28ch,36ch)_1fr] gap-3ch @max-[80ch]/usage:grid-cols-1 @max-[80ch]/usage:grid-rows-[minmax(0,2fr)_minmax(0,3fr)] @max-[80ch]/usage:gap-y-row">
         <div className="flex min-h-0 flex-col gap-row">
@@ -123,12 +126,14 @@ export function Usage({ state, win, focused, nvim }: ViewProps<UsageState>) {
           {!!state.cards?.length && <ByCard cards={state.cards} labels={state.labels ?? []} />}
         </div>
         <div className="flex min-h-0 min-w-0 flex-col gap-row">
-          <Segmented
-            options={[["session", "Session"], ["advice", "Pepper's advice"]]}
-            value={state.show_advice ? "advice" : "session"}
-            onPick={(key) => nvim.lua("require('corkboard.usage').show_advice(...)", key === "advice")}
-          />
-          {state.show_advice ? (
+          {assistant && (
+            <Segmented
+              options={[["session", "Session"], ["advice", "Pepper's advice"]]}
+              value={state.show_advice ? "advice" : "session"}
+              onPick={(key) => nvim.lua("require('corkboard.usage').show_advice(...)", key === "advice")}
+            />
+          )}
+          {advice ? (
             <Advice advice={state.advice} board={state.board} line={focused ? state.line : undefined} />
           ) : selected ? (
             <Detail s={selected} item={focused ? state.item : undefined} />

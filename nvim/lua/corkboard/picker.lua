@@ -205,7 +205,8 @@ function M.projects()
   })
 end
 
--- The tool picker (<C-Space>, <M-Space>). Each runs in the window it was opened from.
+-- The tool picker (<C-Space>, <M-Space>). Each runs in the window it was opened
+-- from; one with a feature only while that's on (corkboard.features).
 local tools = {
   {
     text = "New buffer",
@@ -226,13 +227,15 @@ local tools = {
   { text = "Media", hint = "", run = function() require("corkboard.claude.cards").media() end },
   { text = "Avatar", hint = "", run = function() require("corkboard.avatar").toggle() end },
   { text = "Avatar demo", hint = "", run = function() require("corkboard.avatar").demo({ "all" }) end },
-  { text = "Day plan", hint = "<leader>p", run = function() require("corkboard.plan").show() end },
-  { text = "Meetings", hint = "", run = function() require("corkboard.meetings").open() end },
+  { text = "Day plan", hint = "<leader>p", feature = "assistant", run = function() require("corkboard.plan").show() end },
+  { text = "Meetings", hint = "", feature = "assistant", run = function() require("corkboard.meetings").open() end },
   { text = "Claude Code", hint = "<C-.>", run = function() require("corkboard.claude").open() end },
   { text = "Away mode", hint = "<leader>a", run = function() require("corkboard.away").enter() end },
   { text = "Terminal", hint = "", run = function() require("corkboard.terminal").tab() end },
   { text = "Reload window", hint = "F5", run = function() require("corkboard.restore").reload() end },
 }
+
+local shown = tools
 
 local function run(main, item)
   vim.schedule(function()
@@ -247,27 +250,29 @@ end
 local opened_from
 
 function M.run(i)
-  if tools[i] and opened_from then run(opened_from, tools[i]) end
+  if shown[i] and opened_from then run(opened_from, shown[i]) end
 end
 
 function M.tools()
   -- Not picker.main: snacks skips the board's scratch buffer when it picks a
   -- main window, and would choose a terminal instead.
   local main = vim.api.nvim_get_current_win()
+  local features = require("corkboard.features")
+  shown = vim.tbl_filter(function(t) return not t.feature or features.on(t.feature) end, tools)
   local corkboard = require("corkboard")
   if corkboard.attached() then
     opened_from = main
     local leader = vim.g.mapleader or "\\"
     corkboard.notify("corkboard.tools", {
       leader = leader == " " and "Space" or leader,
-      tools = vim.tbl_map(function(t) return { text = t.text, hint = t.hint } end, tools),
+      tools = vim.tbl_map(function(t) return { text = t.text, hint = t.hint } end, shown),
     })
     return
   end
   Snacks.picker.pick({
     source = "corkboard_tools",
     -- Copies: snacks keeps match state on the items.
-    items = vim.tbl_map(vim.deepcopy, tools),
+    items = vim.tbl_map(vim.deepcopy, shown),
     format = function(item)
       return { { item.text }, { item.hint ~= "" and "  " .. item.hint or "", "Comment" } }
     end,

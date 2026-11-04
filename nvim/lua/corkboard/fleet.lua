@@ -1002,13 +1002,15 @@ local function buffer()
   return buf
 end
 
--- Keep the fleet view third among the tabs, after usage. Leaves focus
--- where it was.
+-- Keep the fleet view third among the tabs, after usage, while the fleet
+-- is on (corkboard.features). Leaves focus where it was.
 function M.ensure()
+  if not require("corkboard.features").on("fleet") then return end
   if pinned.ensure("corkboard_fleet", 3, buffer()) then vim.schedule(M.load) end
 end
 
 function M.show()
+  if not require("corkboard.features").on("fleet") then return end
   M.ensure()
   pinned.show("corkboard_fleet", 3, buffer())
 end

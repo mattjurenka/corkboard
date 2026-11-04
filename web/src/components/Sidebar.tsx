@@ -2,8 +2,8 @@
 // the notifications folded at the foot (a third each when opened).
 //
 // Tabs are drawn from ext_tabline: Neovim stops drawing its own tabline and
-// sends tabline_update instead; gt/gT and :tab* still drive it. Tabs 1 to 4
-// are always the board, token usage, the fleet and brains (corkboard.board,
+// sends tabline_update instead; gt/gT and :tab* still drive it. The first tabs
+// are always the board, token usage, the fleet (while it's on) and brains (corkboard.board,
 // .usage, .fleet and .brains keep them there), so they are labelled so
 // whatever window is focused in them, and have no close button. The tabs
 // after them come under a gap. All are numbered as Neovim does, for Alt+<n>.
@@ -22,7 +22,8 @@ import { Notifications } from "./Notifications";
 import { Spinner } from "./Spinner";
 import { openPlan } from "@/planWindow";
 
-const PINNED = ["Board", "Usage", "Fleet", "Brains"];
+// The pinned tabs, by position: the fleet's only while it's on (corkboard.features).
+const pinnedTabs = (fleet: boolean) => (fleet ? ["Board", "Usage", "Fleet", "Brains"] : ["Board", "Usage", "Brains"]);
 
 // Each tab's ribbon down its left edge, by position, whatever the colorscheme;
 // neighbors far apart in hue.
@@ -33,6 +34,7 @@ const home = (p: string) => p.replace(/^\/home\/[^/]+(?=\/|$)/, "~");
 export function Sidebar() {
   const nvim = useNvim();
   const context = useStore((s) => s.context);
+  const assistant = useStore((s) => s.features.assistant);
   const host = useStore((s) => s.host);
   return (
     <nav
@@ -45,9 +47,11 @@ export function Sidebar() {
           <span className="truncate font-bold">{context ? context.cwd.split("/").at(-1) || "/" : ""}</span>
           <div className="flex shrink-0 items-center">
             <SignIn />
-            <HeaderButton title="Day plan, in its own window (<leader>p)" onClick={() => openPlan()}>
-              plan ↗
-            </HeaderButton>
+            {assistant && (
+              <HeaderButton title="Day plan, in its own window (<leader>p)" onClick={() => openPlan()}>
+                plan ↗
+              </HeaderButton>
+            )}
           </div>
         </div>
         <span className="truncate text-muted-foreground">{context ? (host ? `${host}:` : "") + home(context.cwd) : ""}</span>
@@ -90,6 +94,7 @@ function Tabs() {
   // on it meanwhile. Given up after a few seconds, as when Neovim was busy
   // and the tab went away.
   const pending = useStore((s) => s.switching);
+  const PINNED = pinnedTabs(useStore((s) => s.features.fleet));
   const go = (tab: Tab["tab"]) => goTab(tab, nvim);
   if (!tabs) return <ol id="tabs" tabIndex={-1} className="flex-1" />;
 
@@ -283,7 +288,7 @@ export function tabTitle(tabs: NonNullable<ReturnType<typeof store.get>["tabs"]>
   const i = tabs.tabs.findIndex(({ tab }) => tab.id === tabs.current.id);
   if (i < 0) return "";
   const { name, label } = tabs.tabs[i];
-  return PINNED[i] ?? (name ? tabParts(name, label)[0] : "[No Name]");
+  return pinnedTabs(store.get().features.fleet)[i] ?? (name ? tabParts(name, label)[0] : "[No Name]");
 }
 
 // preview: the file explorer's preview (untouched, replaced by the next file

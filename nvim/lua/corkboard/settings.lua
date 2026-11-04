@@ -59,6 +59,17 @@ local function option(name)
   }
 end
 
+-- One of corkboard.features, put in force as it changes.
+local function feature(name)
+  return {
+    get = function() return vim.g["corkboard_" .. name] == true end,
+    set = function(v)
+      vim.g["corkboard_" .. name] = v
+      require("corkboard.features").changed()
+    end,
+  }
+end
+
 -- type: text, number, bool, color, enum (options: values, or { value,
 -- label }s, or a function returning them) or list (of text). A setting
 -- is read from vim.g[g] unless it has its own get and set; default is what
@@ -125,6 +136,13 @@ M.SCHEMA = {
     section = "Projects",
     items = {
       { key = "project_dirs", label = "Project folders", type = "list", default = { "~" }, g = "corkboard_project_dirs" },
+    },
+  },
+  {
+    section = "Features",
+    items = {
+      vim.tbl_extend("error", { key = "fleet", label = "Fleet", type = "bool", default = false }, feature("fleet")),
+      vim.tbl_extend("error", { key = "assistant", label = "Day plan and meetings", type = "bool", default = false }, feature("assistant")),
     },
   },
 }

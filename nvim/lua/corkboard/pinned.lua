@@ -93,6 +93,16 @@ function M.show(key, index, buf)
   vim.api.nvim_set_current_win(find_win(tab, buf))
 end
 
+-- Close the tab marked t:<key>, for a pinned view that's been turned off.
+function M.drop(key)
+  local tab = find_tab(key)
+  if not tab then return end
+  vim.t[tab][key] = nil
+  if #vim.api.nvim_list_tabpages() > 1 then
+    pcall(vim.cmd.tabclose, vim.api.nvim_tabpage_get_number(tab))
+  end
+end
+
 -- Listings --------------------------------------------------------------------
 --
 -- lines maps line numbers to item ids; the rest of the lines are headers.

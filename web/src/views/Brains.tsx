@@ -8,6 +8,7 @@
 import { useEffect, useRef } from "react";
 import { Spinner } from "@/components/Spinner";
 import { cn } from "@/lib/utils";
+import { useStore } from "@/store";
 import type { ViewProps } from "./index";
 
 type Card = {
@@ -38,6 +39,7 @@ export function Brains({ state, win, focused, nvim }: ViewProps<BrainsState>) {
   const act = (name: string, what: Act) => nvim.lua("require('corkboard.brains').act(...)", name, what, win);
   const make = () => nvim.lua("require('corkboard.brains').new()");
   const holds = () => nvim.lua("require('corkboard.holds').show()");
+  const fleet = useStore((s) => s.features.fleet);
   const cards = state.cards ?? [];
   const live = cards.filter((c) => !c.archived);
   const archived = cards.filter((c) => c.archived);
@@ -55,9 +57,11 @@ export function Brains({ state, win, focused, nvim }: ViewProps<BrainsState>) {
         <header className="flex items-baseline justify-between gap-2ch">
           <span className="font-bold">Brains</span>
           <span className="flex gap-2ch">
-            <Button k="H" lit onClick={holds}>
-              holds
-            </Button>
+            {fleet && (
+              <Button k="H" lit onClick={holds}>
+                holds
+              </Button>
+            )}
             <Button k="a" lit onClick={make}>
               new brain
             </Button>
@@ -95,6 +99,7 @@ function BrainCard({
   onPick: (name: string) => void;
   onAct: (name: string, what: Act) => void;
 }) {
+  const { fleet, assistant } = useStore((s) => s.features);
   const m = c.memory;
   const empty = m.notes + m.entries + m.episodes === 0;
   const button = (k: string, what: Act, label: string, danger?: boolean) => (
@@ -134,14 +139,14 @@ function BrainCard({
           )}
         </Field>
         {m.last && <Field label="active">{m.last}</Field>}
-        <Field label="runs as">{c.account ?? <span className="text-muted-foreground">the machine's default account</span>}</Field>
-        {c.credentials.length > 0 && (
+        {fleet && <Field label="runs as">{c.account ?? <span className="text-muted-foreground">the machine's default account</span>}</Field>}
+        {fleet && c.credentials.length > 0 && (
           <Field label="holds">
             <Tags items={c.credentials} />
             <span className="text-review">agents need your OK to spawn it</span>
           </Field>
         )}
-        {c.abilities.length > 0 && (
+        {assistant && c.abilities.length > 0 && (
           <Field label="can">
             <Tags items={c.abilities} />
           </Field>

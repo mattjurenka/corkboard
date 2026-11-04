@@ -148,6 +148,8 @@ export type State = {
   // The projects with a window on this machine (the bridge's openWindow).
   windows: string[];
   toasts: Toast[];
+  // Which of corkboard's parts are on (corkboard.features): what's off isn't shown.
+  features: { fleet: boolean; assistant: boolean };
 };
 
 let state: State = {
@@ -179,6 +181,7 @@ let state: State = {
   projects: null,
   windows: [],
   toasts: [],
+  features: { fleet: false, assistant: false },
 };
 
 // localStorage can be missing or refuse (a private window).
