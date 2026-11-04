@@ -1,6 +1,6 @@
 // A meeting heard as it's recorded (record.ts), or afterwards from its
 // chunks. Each track's audio is cut into utterances where Silero hears
-// speech; each utterance is transcribed by Whisper into a line, and given a
+// speech; each utterance is transcribed by Parakeet into a line, and given a
 // speaker by its voice. The utterance still going on is transcribed too, now
 // and then, while nothing else is waiting: the meeting's partial line, so
 // what's being said shows as it's said.
@@ -14,7 +14,7 @@
 // echo in PipeWire, and what gets through is dropped here: a line on in that
 // says what a line on out said at the same time, or in one of out's voices.
 
-import { FRAME, RATE, Vad, voice, whisper } from "./transcribe";
+import { FRAME, RATE, Vad, voice, transcribe } from "./transcribe";
 
 export type Track = "out" | "in";
 // Something said, on a track, in ms from the meeting's start; speaker is
@@ -246,7 +246,7 @@ export function hear(heard: Heard, changed: () => void, failed: (err: Error) => 
     );
 
   const add = async (u: Utterance) => {
-    const text = await whisper(u.audio);
+    const text = await transcribe(u.audio);
     if (!text) return;
     const v = u.stop - u.start >= 1000 ? await voice(u.audio) : undefined;
     const line: Line = { track: u.track, start: u.start, stop: u.stop, text, speaker: 0 };
@@ -308,7 +308,7 @@ export function hear(heard: Heard, changed: () => void, failed: (err: Error) => 
         if (!track) break;
         const p = saying[track]!;
         delete saying[track];
-        const text = await whisper(p.audio).catch(() => "");
+        const text = await transcribe(p.audio).catch(() => "");
         // Not if it's been said since.
         if (said.some((u) => u.track === track && u.start === p.start) || heard.heard[track] > p.start) continue;
         heard.partial[track] = { start: p.start, text };

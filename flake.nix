@@ -112,7 +112,7 @@
           dontFixup = true;
           outputHashMode = "recursive";
           outputHash = {
-            x86_64-linux = "sha256-UjqiHJm7FiP92kmJEf0mloZggNova27qej2qCsbss3Y=";
+            x86_64-linux = "sha256-IW6GX0i4dEaHhLrRqZcJ8q5XksR9RkdzShmUeWhVUtQ=";
           }.${pkgs.stdenv.hostPlatform.system} or pkgs.lib.fakeHash;
         };
 
@@ -168,8 +168,10 @@
           # taken from webDeps, with onnxruntime's binaries for this system
           # only and linked to the libstdc++ here.
           speech = [ "kokoro-js" "phonemizer" "@huggingface/transformers" "onnxruntime-node" "onnxruntime-common" ];
-          # A meeting's Ogg Opus decoded for Whisper (bridge/transcribe.ts).
+          # A meeting's Ogg Opus decoded for transcribing (bridge/transcribe.ts).
           opus = [ "ogg-opus-decoder" "opus-decoder" "@wasm-audio-decoders/common" "@wasm-audio-decoders/opus-ml" "codec-parser" "@eshaz/web-worker" "simple-yenc" ];
+          # Parakeet, what transcribes it: sherpa-onnx and its binaries for this system.
+          asr = [ "sherpa-onnx-node" "sherpa-onnx-linux-${if pkgs.stdenv.hostPlatform.isAarch64 then "arm64" else "x64"}" ];
           nativeBuildInputs = [ pkgs.makeWrapper pkgs.autoPatchelfHook ];
           buildInputs = [ pkgs.stdenv.cc.cc.lib ];
           installPhase = ''
@@ -180,7 +182,7 @@
             echo ${rev} > $share/nvim/rev
             mkdir -p $share/web && cp -r ${web} $share/web/dist
             tar -xzf $msgpack -C $share/node_modules/@msgpack/msgpack --strip-components=1
-            for p in $speech $opus; do
+            for p in $speech $opus $asr; do
               mkdir -p $share/node_modules/$(dirname $p)
               cp -r ${webDeps}/$p $share/node_modules/$p
             done

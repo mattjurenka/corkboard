@@ -38,6 +38,7 @@
     "ogg-opus-decoder": "^1.7.5",
     "react": "19",
     "react-dom": "19",
+    "sherpa-onnx-node": "2.0.1",
     "tailwind-merge": "^3.7.0",
     "three": "0.180.0"
   },

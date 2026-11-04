@@ -23,6 +23,7 @@
         "ogg-opus-decoder": "^1.7.5",
         "react": "19",
         "react-dom": "19",
+        "sherpa-onnx-node": "2.0.1",
         "tailwind-merge": "^3.7.0",
         "three": "0.180.0",
       },
@@ -532,6 +533,22 @@
     "sha.js": ["sha.js@2.4.12", "", { "dependencies": { "inherits": "^2.0.4", "safe-buffer": "^5.2.1", "to-buffer": "^1.2.0" }, "bin": { "sha.js": "bin.js" } }, "sha512-8LzC5+bvI45BjpfXU8V5fdU2mfeKiQe1D1gIMn7XUlF3OTUrpdJpPPH4EMAnF0DsHHdSZqCdSss5qCmJKuiO3w=="],
 
     "sharp": ["sharp@0.35.5", "", { "dependencies": { "@img/colour": "^1.1.0", "detect-libc": "^2.1.2", "semver": "^7.8.5" }, "optionalDependencies": { "@img/sharp-darwin-arm64": "0.35.5", "@img/sharp-darwin-x64": "0.35.5", "@img/sharp-freebsd-wasm32": "0.35.5", "@img/sharp-libvips-darwin-arm64": "1.3.4", "@img/sharp-libvips-darwin-x64": "1.3.4", "@img/sharp-libvips-linux-arm": "1.3.4", "@img/sharp-libvips-linux-arm64": "1.3.4", "@img/sharp-libvips-linux-ppc64": "1.3.4", "@img/sharp-libvips-linux-riscv64": "1.3.4", "@img/sharp-libvips-linux-s390x": "1.3.4", "@img/sharp-libvips-linux-x64": "1.3.4", "@img/sharp-libvips-linuxmusl-arm64": "1.3.4", "@img/sharp-libvips-linuxmusl-x64": "1.3.4", "@img/sharp-linux-arm": "0.35.5", "@img/sharp-linux-arm64": "0.35.5", "@img/sharp-linux-ppc64": "0.35.5", "@img/sharp-linux-riscv64": "0.35.5", "@img/sharp-linux-s390x": "0.35.5", "@img/sharp-linux-x64": "0.35.5", "@img/sharp-linuxmusl-arm64": "0.35.5", "@img/sharp-linuxmusl-x64": "0.35.5", "@img/sharp-webcontainers-wasm32": "0.35.5", "@img/sharp-win32-arm64": "0.35.5", "@img/sharp-win32-ia32": "0.35.5", "@img/sharp-win32-x64": "0.35.5" }, "peerDependencies": { "@types/node": "*" }, "optionalPeers": ["@types/node"] }, "sha512-Ywn4OnzGukp7CDMrp08RQ50YKmuwG47brZgIVPTvBaaAfQlRlygrRqSrxdCiL9M+LlzLBiJ68IR1QqvzHyjC7g=="],
+
+    "sherpa-onnx-darwin-arm64": ["sherpa-onnx-darwin-arm64@2.0.1", "", { "os": "darwin", "cpu": "arm64" }, "sha512-agXmbbwiVPUSMViMhWhYAt59iG21ui7x6HxQFU35XzHOfQe9x6Pg9V160Pzak/66x0ePMjixsLUtMaaUrLfCwQ=="],
+
+    "sherpa-onnx-darwin-x64": ["sherpa-onnx-darwin-x64@2.0.1", "", { "os": "darwin", "cpu": "x64" }, "sha512-SBnHa3LDOSI/5/rpBHGxKQDFq+yIdxowYY0InLzfojTUx+yGgqu7cYBrRxjzvHOiOKi0O4rmlFVZboyhIqpDgA=="],
+
+    "sherpa-onnx-linux-arm64": ["sherpa-onnx-linux-arm64@2.0.1", "", { "os": "linux", "cpu": "arm64" }, "sha512-5CJvLjFYIg23oELCsT7l07fMLT3PdquZ3tqh7KZK3Pzi+c2YiPKRe1DDUxoNdtCaw3ZiS4aQSQPBblB9JStuDA=="],
+
+    "sherpa-onnx-linux-x64": ["sherpa-onnx-linux-x64@2.0.1", "", { "os": "linux", "cpu": "x64" }, "sha512-w5mRRrIvPvcNWac7rQ8AN/t/cwElPGoRpH+ceCRBV7XfjCIQ9Rcr3Ig/kXcJLNOxgK4bGmef+Y47lIWiesDODw=="],
+
+    "sherpa-onnx-node": ["sherpa-onnx-node@2.0.1", "", { "optionalDependencies": { "sherpa-onnx-darwin-arm64": "2.0.1", "sherpa-onnx-darwin-x64": "2.0.1", "sherpa-onnx-linux-arm64": "2.0.1", "sherpa-onnx-linux-x64": "2.0.1", "sherpa-onnx-win-arm64": "2.0.1", "sherpa-onnx-win-ia32": "2.0.1", "sherpa-onnx-win-x64": "2.0.1" } }, "sha512-1PSACfQgPXAD7ExwCv1QW09EXTjcNlpZKBqDY+jxSdIzlyOSq0M13SILBoUQUfeJqiTTXnqp6Ha9jjMUQ6efXg=="],
+
+    "sherpa-onnx-win-arm64": ["sherpa-onnx-win-arm64@2.0.1", "", { "os": "win32", "cpu": "arm64" }, "sha512-Mb9iqy2Zp7GC5a99dk5E8EQJsEBnapf+IcwHLVCgtIf5mxYHO9Q8YptnAoOHZOD0Zi+R+MblFyG9qv0Q6tin4Q=="],
+
+    "sherpa-onnx-win-ia32": ["sherpa-onnx-win-ia32@2.0.1", "", { "os": "win32", "cpu": "ia32" }, "sha512-q7qFCA3FK+tYc8pexC9Kzu9WGGoZ9X//UkpxVp6iT4E4W5tPhOEirPyvawS6zgfEW6K/GOISMcYe996Yc7d6iw=="],
+
+    "sherpa-onnx-win-x64": ["sherpa-onnx-win-x64@2.0.1", "", { "os": "win32", "cpu": "x64" }, "sha512-7vwdAw9PGEb0JLSpK7UFxAdp1vabBHK9Nhw2jFRBWSFgtslUPHIB0T6syJfRgiUGyCeNW9fJvcFAk2F2u7hBEw=="],
 
     "simple-concat": ["simple-concat@1.0.1", "", {}, "sha512-cSFtAPtRhljv69IK0hTVZQ+OfE9nePi/rtJmw5UjHeVyVroEqJXP1sFztKUy1qU+xvz3u/sfYJLa947b7nAN2Q=="],
 

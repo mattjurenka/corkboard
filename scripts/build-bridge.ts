@@ -51,7 +51,7 @@ const OS = { linux: "linux", darwin: "mac", win32: "win" } as Record<string, str
 const HERE = `${OS[process.platform]}-${process.arch}`;
 
 // The speech's packages, as the flake's default package takes them.
-const SPEECH = ["kokoro-js", "phonemizer", "@huggingface/transformers", "onnxruntime-node", "onnxruntime-common"];
+const SPEECH = ["kokoro-js", "phonemizer", "@huggingface/transformers", "onnxruntime-node", "onnxruntime-common", "sherpa-onnx-node"];
 
 const args = process.argv.slice(2);
 const flag = (name: string) => args.includes(name);
@@ -168,6 +168,11 @@ for (const name of names) {
     for (const os of readdirSync(ort)) {
       for (const arch of readdirSync(join(ort, os))) if (`${os}/${arch}` !== t.ort) rmSync(join(ort, os, arch), { recursive: true });
     }
+    // sherpa-onnx's binaries (transcribe.ts) are a package per system, and
+    // bun installs only this machine's: no transcripts in a build for another.
+    const sherpa = `sherpa-onnx-${t.ort.replace("win32", "win").replace("/", "-")}`;
+    if (existsSync(join(ROOT, "node_modules", sherpa))) cpSync(join(ROOT, "node_modules", sherpa), join(res, "node_modules", sherpa), { recursive: true });
+    else console.warn(`no ${sherpa} in node_modules: no meeting transcripts`);
     // transformers.js wants sharp, for images, to be there; speech never calls it.
     mkdirSync(join(res, "node_modules", "sharp"));
     writeFileSync(join(res, "node_modules", "sharp", "package.json"), '{"name":"sharp","main":"index.js"}\n');

@@ -1,10 +1,12 @@
 // The models a meeting is heard with (listen.ts), on onnxruntime-node as
-// speech.ts has Kokoro: Silero VAD for where there's speech, Whisper
-// (transformers.js) for what's said, and WeSpeaker for whose voice it is.
-// Each downloads the first time into the cache's models, as Kokoro's does.
+// speech.ts has Kokoro: Silero VAD for where there's speech, NVIDIA's
+// Parakeet (sherpa-onnx) for what's said, and WeSpeaker (transformers.js)
+// for whose voice it is. Each downloads the first time into the cache's
+// models, as Kokoro's does.
 //
-// CORKBOARD_TRANSCRIBE_MODEL names another Whisper on Hugging Face's ONNX
-// ones; small.en is about four times faster than the audio on a laptop's CPU.
+// Parakeet TDT 0.6B v2, int8, is about 25 times faster than the audio on a
+// laptop's CPU, three times Whisper small.en, and doesn't make up words in
+// a silence.
 
 import { availableParallelism } from "node:os";
 import { mkdirSync, renameSync } from "node:fs";
@@ -13,7 +15,8 @@ import { OggOpusDecoder } from "ogg-opus-decoder";
 import { CACHE_DIR } from "./dirs";
 import { sidecar } from "./speech";
 
-const WHISPER = process.env.CORKBOARD_TRANSCRIBE_MODEL || "onnx-community/whisper-small.en";
+const PARAKEET = "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8";
+const PARAKEET_REV = "1ab9323565ddb038682214b292f588070a538ce2";
 const WESPEAKER = "onnx-community/wespeaker-voxceleb-resnet34-LM";
 const SILERO = "onnx-community/silero-vad";
 export const RATE = 16_000;
@@ -42,17 +45,44 @@ function once<T>(load: () => Promise<T>): () => Promise<T> {
 // Past the physical cores it's no faster, only busier, and a call is on.
 const threads = { intraOpNumThreads: Math.max(1, availableParallelism() >> 1) };
 
-type Asr = (audio: Float32Array, options?: object) => Promise<{ text: string }>;
-const asr = once(async () => {
-  const { pipeline } = await transformers();
-  return (await pipeline("automatic-speech-recognition", WHISPER, { dtype: "q8", session_options: threads } as never)) as unknown as Asr;
+// A model's file, from Hugging Face the first time.
+async function model(repo: string, rev: string, name: string): Promise<string> {
+  const file = join(MODELS, repo, name);
+  if (!(await Bun.file(file).exists())) {
+    const res = await fetch(`https://huggingface.co/${repo}/resolve/${rev}/${name}`);
+    if (!res.ok) throw new Error(`downloading ${repo}: HTTP ${res.status}`);
+    mkdirSync(dirname(file), { recursive: true });
+    await Bun.write(file + ".part", res);
+    renameSync(file + ".part", file);
+  }
+  return file;
+}
+
+const parakeet = once(async () => {
+  const sherpa = await sidecar<any>("sherpa-onnx-node");
+  const [encoder, decoder, joiner, tokens] = await Promise.all(
+    ["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"].map((f) => model(PARAKEET, PARAKEET_REV, f)),
+  );
+  return sherpa.OfflineRecognizer.createAsync({
+    featConfig: { sampleRate: RATE, featureDim: 80 },
+    modelConfig: {
+      transducer: { encoder, decoder, joiner },
+      tokens,
+      numThreads: threads.intraOpNumThreads,
+      provider: "cpu",
+      modelType: "nemo_transducer",
+    },
+  });
 });
 
-// What's said in audio, an utterance: "" for nothing, or only a [noise].
-export async function whisper(audio: Float32Array): Promise<string> {
-  const { text } = await (await asr())(audio);
-  const t = text.trim();
-  return /^[[(].*[\])]$/.test(t) ? "" : t;
+// What's said in audio, an utterance: "" for nothing. Decoded off the
+// thread, so the tracks' pipes keep being read meanwhile.
+export async function transcribe(audio: Float32Array): Promise<string> {
+  const rec = await parakeet();
+  const s = rec.createStream();
+  s.acceptWaveform({ sampleRate: RATE, samples: audio });
+  await rec.decodeAsync(s);
+  return rec.getResult(s).text.trim();
 }
 
 const speaker = once(async () => {
@@ -76,14 +106,7 @@ export async function voice(audio: Float32Array): Promise<Float32Array> {
 
 const silero = once(async () => {
   const ort = await sidecar<Ort>("onnxruntime-node");
-  const file = join(MODELS, SILERO, "onnx/model.onnx");
-  if (!(await Bun.file(file).exists())) {
-    const res = await fetch(`https://huggingface.co/${SILERO}/resolve/main/onnx/model.onnx`);
-    if (!res.ok) throw new Error(`downloading ${SILERO}: HTTP ${res.status}`);
-    mkdirSync(dirname(file), { recursive: true });
-    await Bun.write(file + ".part", res);
-    renameSync(file + ".part", file);
-  }
+  const file = await model(SILERO, "main", "onnx/model.onnx");
   return { ort, session: await ort.InferenceSession.create(file, { intraOpNumThreads: 1 }) };
 });
 
