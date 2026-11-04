@@ -161,23 +161,25 @@ local function find(id)
   end
 end
 
+-- What's not there is null rather than left out: the page keeps a view's
+-- last state's fields that a new one doesn't have.
 local function state()
   local m = find(selected)
   return {
     available = record_command() ~= nil,
-    recording = recording and { id = recording.id, at = recording.at, since = clock(math.floor(recording.at / 1000)) } or nil,
-    pending = pending,
-    selected = selected,
+    recording = recording and { id = recording.id, at = recording.at, since = clock(math.floor(recording.at / 1000)) } or vim.NIL,
+    pending = pending or vim.NIL,
+    selected = selected or vim.NIL,
     meetings = vim.tbl_map(function(x)
       local s = status(x, recording)
       return { id = x.id, when = when(x), minutes = minutes(x), status = s, detail = status_text(x, s), said = #(x.lines or {}) }
     end, list),
     transcript = m and vim.tbl_map(function(l)
       return { track = l.track, speaker = l.speaker or 0, who = who(m, l), at = offset(l.start), text = l.text }
-    end, m.lines or {}) or nil,
+    end, m.lines or {}) or vim.NIL,
     partial = m and vim.tbl_map(function(p)
       return { track = p.track, at = offset(p.start), text = p.text }
-    end, partials(m)) or nil,
+    end, partials(m)) or vim.NIL,
   }
 end
 
