@@ -26,7 +26,7 @@
 // git can't be found, and keeps itself up to date from GitHub's releases,
 // bar the .deb and the tarball, which their package managers update.
 
-import { app, BrowserWindow, Menu, net, session, shell } from "electron";
+import { app, BrowserWindow, dialog, Menu, net, session, shell } from "electron";
 import { join } from "node:path";
 import { bundledGit, loginPath, startBridge, which } from "./bridge.js";
 
@@ -254,12 +254,27 @@ async function own(tries = 3) {
 }
 
 // AppImage, macOS and Windows; not the .deb or the tarball (AUR), which have
-// no APPIMAGE and are their package managers' to update.
+// no APPIMAGE and are their package managers' to update. Once one has
+// downloaded, it asks whether to restart into it now; if not, it's
+// installed when the app next quits.
 async function updates() {
   if (process.platform === "linux" && !process.env.APPIMAGE) return;
   try {
     const { autoUpdater } = (await import("electron-updater")).default;
-    await autoUpdater.checkForUpdatesAndNotify();
+    autoUpdater.on("update-downloaded", async ({ version }) => {
+      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+      const options = {
+        type: "info",
+        message: `corkboard ${version} is ready`,
+        detail: "Restart now to update?",
+        buttons: ["Restart", "Later"],
+        defaultId: 0,
+        cancelId: 1,
+      };
+      const { response } = await (win ? dialog.showMessageBox(win, options) : dialog.showMessageBox(options));
+      if (response === 0) autoUpdater.quitAndInstall();
+    });
+    await autoUpdater.checkForUpdates();
   } catch (err) {
     console.error("update check:", err);
   }
