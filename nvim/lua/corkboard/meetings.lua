@@ -1,11 +1,13 @@
 -- The Meetings tab (View > Meetings, or :AgentMeetings): the meetings
 -- recorded on the bridge's machine (bridge/record.ts), newest first, the
--- selected one's transcript, and starting and stopping the recorder. Each
--- meeting goes to Pepper once it's transcribed.
+-- selected one's transcript and proposed action items, and starting and
+-- stopping the recorder. Each meeting goes to Pepper once it's transcribed,
+-- and its action items become cards when they're accepted (propose.ts).
 --
 -- A plain listing, agent://meetings, with the browser's HTML drawn over it.
--- The cursor's line selects a meeting; m starts or stops recording, and r
--- finishes one whose transcript didn't reach Pepper.
+-- The cursor's line selects a meeting; m starts or stops recording, r
+-- finishes one whose transcript didn't reach Pepper, and p proposes its
+-- action items again.
 --
 -- What it shows is read from the files the recorder writes (meeting.json in
 -- each meeting's directory, recording.json while one is recording), every
@@ -154,11 +156,36 @@ local selected
 local list, recording = {}, nil
 local last -- what was pushed last, to push only what changed
 local pending -- "starting" or "stopping", until the recorder has
+local working = {} -- meeting id -> "proposing" or "accepting", while it is
+
+local proposals
 
 local function find(id)
   for _, m in ipairs(list) do
     if m.id == id then return m end
   end
+end
+
+-- A meeting's proposals that weren't turned down, each with its index.
+function proposals(m)
+  local list = {}
+  for i, p in ipairs(m.proposals) do
+    if not p.dropped then
+      local board, id = (p.card or ""):match("^(.-)/([^/]+)$")
+      table.insert(list, {
+        i = i - 1,
+        title = p.title,
+        description = p.description,
+        owner = p.owner,
+        board = p.board or vim.NIL,
+        at = offset(p.at),
+        quote = p.quote,
+        card = id or vim.NIL,
+        on = board or vim.NIL,
+      })
+    end
+  end
+  return list
 end
 
 -- What's not there is null rather than left out: the page keeps a view's
@@ -180,6 +207,10 @@ local function state()
     partial = m and vim.tbl_map(function(p)
       return { track = p.track, at = offset(p.start), text = p.text }
     end, partials(m)) or vim.NIL,
+    proposals = m and m.proposals and proposals(m) or vim.NIL,
+    boards = m and m.boards or vim.NIL,
+    working = m and (working[m.id] or (alive(m.pid) and m.sent and not m.proposed and "proposing")) or vim.NIL,
+    unproposed = m and m.unproposed or vim.NIL,
   }
 end
 
@@ -198,6 +229,15 @@ local function render_text()
     end
     for _, p in ipairs(said) do
       table.insert(lines, ("  [%s] %s… %s"):format(offset(p.start), WHO[p.track], p.text))
+    end
+  end
+  local items = m and m.proposals and proposals(m) or {}
+  if #items > 0 then
+    table.insert(lines, "")
+    table.insert(lines, "  Action items")
+    for _, p in ipairs(items) do
+      local where = p.card ~= vim.NIL and (p.card .. " on " .. p.on) or (p.board ~= vim.NIL and p.board or "")
+      table.insert(lines, ("  %s %s (%s) %s"):format(p.card ~= vim.NIL and "✓" or "·", p.title, p.owner, where))
     end
   end
   pinned.set_lines(buf, lines)
@@ -262,6 +302,37 @@ function M.finish(id)
   vim.defer_fn(push, 300)
 end
 
+-- An op on a meeting's proposals (record propose, accept or drop), saying
+-- what it's doing until it's done.
+local function act(m, what, args)
+  if working[m.id] then return end
+  working[m.id] = what
+  push()
+  record(vim.list_extend({ args[1], vim.env.CORKBOARD_DATA_DIR .. "/meetings/" .. m.id }, vim.list_slice(args, 2)), function(ok, out)
+    working[m.id] = nil
+    if not ok then vim.notify("corkboard: " .. out, vim.log.levels.ERROR) end
+    push()
+  end)
+end
+
+-- Propose a meeting's action items again.
+function M.propose(id)
+  local m = find(id or selected)
+  if m and m.transcribed and not alive(m.pid) then act(m, "proposing", { "propose" }) end
+end
+
+-- Make proposals cards: picks is a list of { i, board, title }.
+function M.accept(id, picks)
+  local m = find(id)
+  if m and #picks > 0 then act(m, "accepting", { "accept", vim.json.encode(picks) }) end
+end
+
+-- Turn proposal i down.
+function M.drop(id, i)
+  local m = find(id)
+  if m then act(m, "dropping", { "drop", tostring(i) }) end
+end
+
 -- A click on a meeting: the cursor to it, in the window clicked in.
 function M.select(id, win)
   selected = id
@@ -277,6 +348,7 @@ local function buffer()
     k = { function() pinned.step(line_id, -1) end, "previous meeting" },
     m = { function() M.toggle() end, "record a meeting, or stop" },
     r = { function() M.finish() end, "send it to Pepper again" },
+    p = { function() M.propose() end, "propose its action items again" },
   }, function() return line_id end, function(id)
     if id == selected then return end
     selected = id

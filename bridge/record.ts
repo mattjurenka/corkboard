@@ -6,6 +6,12 @@
 //   corkboard-bridge record finish DIR
 //                                    hear what's left of one and send it
 //                                    to Pepper, if its recorder didn't
+//   corkboard-bridge record propose DIR
+//                                    propose its action items again
+//   corkboard-bridge record accept DIR '[{"i":0,"board":"...","title":"..."}]'
+//                                    make proposals into cards
+//   corkboard-bridge record drop DIR I
+//                                    turn proposal I down
 //
 // Two tracks, kept apart: out, what this machine plays (the default sink's
 // monitor: the other people on a call), and in, the mic (you, the room).
@@ -27,8 +33,8 @@
 // Each track is also streamed, raw, to the meeting's hearing (listen.ts):
 // what's said is in the meeting's lines a moment after, and what's being
 // said in its partial. Once it's stopped and the last of it is heard, the
-// recorder sends the transcript to Pepper as a note, meeting-<id>, and
-// exits. meeting.json's pid is the process working on it until then. The
+// recorder sends the transcript to Pepper as a note, meeting-<id>, has
+// its action items proposed (propose.ts), and exits. meeting.json's pid is the process working on it until then. The
 // chunks are what `record finish` hears it again from.
 
 import { spawn, spawnSync } from "node:child_process";
@@ -37,6 +43,7 @@ import { join } from "node:path";
 import { CLOUD, signedIn, token } from "./cloud";
 import { COMPILED, DATA_DIR, STATE_DIR } from "./dirs";
 import { type Heard, hear } from "./listen";
+import { type Board, type Proposal, accept, propose } from "./propose";
 import { decode, RATE } from "./transcribe";
 
 const CHUNK_MS = 30_000;
@@ -53,7 +60,8 @@ const SELF = COMPILED ? [process.execPath] : [process.execPath, join(import.meta
 export type Recording = { pid: number; id: string; dir: string; started: string; at: number };
 export type Chunk = { track: Track; file: string; start: number; stop?: number };
 // error: the recording failed; failed: transcribing or sending it did.
-// transcribed: when all of it was heard.
+// transcribed: when all of it was heard. proposed: when its action items
+// were, and unproposed why they weren't.
 export type Meeting = Heard & {
   id: string;
   brain: string;
@@ -65,6 +73,10 @@ export type Meeting = Heard & {
   sent?: string;
   error?: string;
   failed?: string;
+  proposals?: Proposal[];
+  boards?: Board[];
+  proposed?: string;
+  unproposed?: string;
 };
 
 const alive = (pid: number) => {
@@ -243,10 +255,13 @@ const clock = (ms: number) => {
   return s >= 3600 ? `${Math.floor(s / 3600)}:${p(Math.floor(s / 60) % 60)}:${p(s % 60)}` : `${p(Math.floor(s / 60))}:${p(s % 60)}`;
 };
 
+const whenOf = (meeting: Meeting) =>
+  new Date(meeting.started).toLocaleString("en-US", { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+
 // The transcript as Pepper reads it: who said what, and when.
 function note(meeting: Meeting) {
   const started = new Date(meeting.started);
-  const when = started.toLocaleString("en-US", { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+  const when = whenOf(meeting);
   const minutes = meeting.stopped ? Math.round((Date.parse(meeting.stopped) - started.getTime()) / 60_000) : 0;
   const body = [
     `# Meeting, ${when}`,
@@ -260,7 +275,22 @@ function note(meeting: Meeting) {
   return { kind: "reference", title: `Meeting, ${when}`, body };
 }
 
-// Done with a stopped meeting, all of it heard: sent to Pepper.
+// Its action items, proposed again: those already made cards are kept.
+async function proposeFor(meeting: Meeting, save: () => void) {
+  try {
+    const { proposals, boards } = await propose(meeting, note(meeting).body);
+    meeting.proposals = [...(meeting.proposals ?? []).filter((p) => p.card), ...proposals];
+    meeting.boards = boards;
+    meeting.proposed = new Date().toISOString();
+    delete meeting.unproposed;
+  } catch (err) {
+    meeting.unproposed = (err as Error).message;
+  }
+  save();
+}
+
+// Done with a stopped meeting, all of it heard: sent to Pepper, and its
+// action items proposed.
 async function conclude(meeting: Meeting, save: () => void) {
   meeting.transcribed ??= new Date().toISOString();
   if (!meeting.sent) {
@@ -279,6 +309,52 @@ async function conclude(meeting: Meeting, save: () => void) {
       meeting.failed = `sending to ${meeting.brain}: ${(err as Error).message}`;
     }
   }
+  save();
+  if (!meeting.proposed && meeting.lines.length) await proposeFor(meeting, save);
+}
+
+// A meeting someone else isn't working on, for the ops below.
+function open(dir: string) {
+  const meeting = JSON.parse(readFileSync(join(dir, "meeting.json"), "utf8")) as Meeting;
+  if (meeting.pid && meeting.pid !== process.pid && alive(meeting.pid)) throw new Error("it's being transcribed");
+  return { meeting, save: saver(dir, meeting) };
+}
+
+// record propose DIR
+async function repropose(dir: string) {
+  const { meeting, save } = open(dir);
+  if (!meeting.transcribed) throw new Error("it isn't transcribed yet");
+  meeting.pid = process.pid;
+  save();
+  await proposeFor(meeting, save);
+  delete meeting.pid;
+  save();
+  if (meeting.unproposed) throw new Error(meeting.unproposed);
+}
+
+// record accept DIR PICKS: each proposal picked made a card, on the board
+// and with the title it was given.
+async function acceptAll(dir: string, picks: { i: number; board: string; title?: string }[]) {
+  const { meeting, save } = open(dir);
+  const errors: string[] = [];
+  for (const { i, board, title } of picks) {
+    const p = meeting.proposals?.[i];
+    if (!p || p.card) continue;
+    try {
+      await accept(meeting, p, board, title?.trim() || p.title, whenOf(meeting), clock(p.at));
+      save();
+    } catch (err) {
+      errors.push(`${p.title}: ${(err as Error).message}`);
+    }
+  }
+  if (errors.length) throw new Error(errors.join("; "));
+}
+
+// record drop DIR I
+function drop(dir: string, i: number) {
+  const { meeting, save } = open(dir);
+  const p = meeting.proposals?.[i];
+  if (p && !p.card) p.dropped = true;
   save();
 }
 
@@ -419,8 +495,14 @@ export async function cli(args: string[]) {
     } else if (op === "finish" && arg) {
       await resume(arg);
       process.exit(0);
+    } else if (op === "propose" && arg) {
+      await repropose(arg);
+    } else if (op === "accept" && arg && args[2]) {
+      await acceptAll(arg, JSON.parse(args[2]));
+    } else if (op === "drop" && arg && args[2]) {
+      drop(arg, Number(args[2]));
     } else {
-      console.error("usage: corkboard-bridge record start|stop|status|finish DIR");
+      console.error("usage: corkboard-bridge record start|stop|status|finish DIR|propose DIR|accept DIR PICKS|drop DIR I");
       process.exit(2);
     }
   } catch (err) {

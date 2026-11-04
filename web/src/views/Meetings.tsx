@@ -1,6 +1,7 @@
 // The Meetings tab (corkboard.meetings): the meetings recorded on the
 // bridge's machine, newest first, beside the selected one's transcript, and
-// the button that starts or stops the recorder. Drawn over agent://meetings,
+// the button that starts or stops the recorder, and its proposed action
+// items, checked to be made cards. Drawn over agent://meetings,
 // which owns the cursor and the keys; a click selects, a button acts.
 
 import { useEffect, useRef, useState } from "react";
@@ -12,6 +13,19 @@ type Meeting = { id: string; when: string; minutes: number; status: Status; deta
 type Line = { track: string; speaker: number; who: string; at: string; text: string };
 // What's being said on a track, not yet a line.
 type Partial = { track: string; at: string; text: string };
+// An action item, by its index in the meeting's; card and on once it's one.
+type Proposal = {
+  i: number;
+  title: string;
+  description: string;
+  owner: string;
+  board?: string;
+  at: string;
+  quote: string;
+  card?: string;
+  on?: string;
+};
+type Board = { key: string; name: string };
 type MeetingsState = {
   available: boolean;
   recording?: { id: string; at: number; since: string };
@@ -20,6 +34,10 @@ type MeetingsState = {
   meetings: Meeting[];
   transcript?: Line[];
   partial?: Partial[];
+  proposals?: Proposal[];
+  boards?: Board[];
+  working?: "proposing" | "accepting" | "dropping";
+  unproposed?: string;
 };
 
 const TONE: Record<Status, string> = {
@@ -56,6 +74,112 @@ function useTick(on: boolean) {
 }
 
 const meetings = (fn: string) => `require('corkboard.meetings').${fn}(...)`;
+
+// Yours are checked to start with, and a follow-up for someone else isn't.
+function ActionItems({ id, state, nvim }: { id: string; state: MeetingsState; nvim: ViewProps<MeetingsState>["nvim"] }) {
+  const items = state.proposals ?? [];
+  const boards = state.boards ?? [];
+  const [picked, setPicked] = useState<Record<number, boolean>>({});
+  const [board, setBoard] = useState<Record<number, string>>({});
+  const [title, setTitle] = useState<Record<number, string>>({});
+  const name = (key?: string) => boards.find((b) => b.key === key)?.name ?? key;
+  const open = items.filter((p) => !p.card);
+  const boardOf = (p: Proposal) => board[p.i] ?? p.board ?? "";
+  const isPicked = (p: Proposal) => !!boardOf(p) && (picked[p.i] ?? p.owner === "me");
+  const picks = open.filter(isPicked);
+  const busy = !!state.working;
+
+  return (
+    <div className="flex w-[52ch] flex-none flex-col gap-row overflow-y-auto border-l pl-2ch">
+      <span className="flex items-baseline gap-2ch">
+        <span className="font-bold">Action items</span>
+        {state.working ? (
+          <span className="text-working">◌ {state.working}…</span>
+        ) : (
+          <button
+            type="button"
+            title="Propose again (p)"
+            onClick={() => nvim.lua(meetings("propose"), id)}
+            className="cursor-pointer text-muted-foreground hover:text-foreground"
+          >
+            ↻
+          </button>
+        )}
+      </span>
+      {state.unproposed && <p className="text-blocked">{state.unproposed}</p>}
+      {items.map((p) =>
+        p.card ? (
+          <div key={p.i} className="flex gap-ch text-muted-foreground">
+            <span className="w-3ch flex-none text-center text-primary">✓</span>
+            <span className="flex-1">
+              {p.title} <span className="text-border">→ {p.card} on {name(p.on)}</span>
+            </span>
+          </div>
+        ) : (
+          <div key={p.i} className="group flex gap-ch" title={`${p.description}\n\n${p.at} “${p.quote}”`}>
+            <button
+              type="button"
+              disabled={!boardOf(p)}
+              onClick={() => setPicked({ ...picked, [p.i]: !isPicked(p) })}
+              className={cn("w-3ch flex-none cursor-pointer self-start disabled:cursor-default", isPicked(p) ? "text-primary" : "text-muted-foreground")}
+            >
+              {isPicked(p) ? "[x]" : "[ ]"}
+            </button>
+            <div className="flex min-w-0 flex-1 flex-col">
+              <input
+                value={title[p.i] ?? p.title}
+                onChange={(e) => setTitle({ ...title, [p.i]: e.target.value })}
+                className="w-full bg-transparent outline-none focus:bg-accent"
+              />
+              <span className="flex gap-ch text-muted-foreground">
+                <span className={cn("truncate", p.owner === "me" ? "text-primary" : "text-special")}>{p.owner}</span>
+                <span className="tabular-nums">{p.at}</span>
+                <select
+                  value={boardOf(p)}
+                  onChange={(e) => setBoard({ ...board, [p.i]: e.target.value })}
+                  className="min-w-0 flex-1 cursor-pointer appearance-none truncate bg-transparent hover:text-foreground"
+                >
+                  <option value="">—</option>
+                  {boards.map((b) => (
+                    <option key={b.key} value={b.key}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  title="Drop"
+                  disabled={busy}
+                  onClick={() => nvim.lua(meetings("drop"), id, p.i)}
+                  className="flex-none cursor-pointer opacity-0 group-hover:opacity-100 hover:text-foreground"
+                >
+                  ✕
+                </button>
+              </span>
+            </div>
+          </div>
+        ),
+      )}
+      {!items.length && !state.working && !state.unproposed && <p className="text-border">—</p>}
+      {open.length > 0 && (
+        <button
+          type="button"
+          disabled={busy || !picks.length}
+          onClick={() =>
+            nvim.lua(
+              meetings("accept"),
+              id,
+              picks.map((p) => ({ i: p.i, board: boardOf(p), title: title[p.i] ?? p.title })),
+            )
+          }
+          className="cursor-pointer self-start border px-ch hover:bg-accent disabled:cursor-default disabled:text-muted-foreground disabled:hover:bg-transparent"
+        >
+          + {picks.length} card{picks.length === 1 ? "" : "s"}
+        </button>
+      )}
+    </div>
+  );
+}
 
 export function Meetings({ state, win, focused, nvim }: ViewProps<MeetingsState>) {
   const list = useRef<HTMLUListElement>(null);
@@ -158,6 +282,9 @@ export function Meetings({ state, win, focused, nvim }: ViewProps<MeetingsState>
           ))}
           {selected && !runs.length && !partial.length && <p className="text-border">—</p>}
         </div>
+        {selected && (state.proposals || state.working || state.unproposed) && (
+          <ActionItems key={selected.id} id={selected.id} state={state} nvim={nvim} />
+        )}
       </div>
     </div>
   );
