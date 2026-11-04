@@ -55,6 +55,9 @@ local selected_hunk = 1
 -- and the one selected in agent://plan/goals.
 local goals = {}
 local selected_goal
+-- The meeting being recorded on the bridge's machine (bridge/record.ts): when it
+-- started, as the plan shows times; nil when there isn't one.
+local recording
 
 -- 9:30am, as the plan shows times.
 local function clock(m)
@@ -171,6 +174,7 @@ local function plan_state()
     fixed = fixed,
     proposal = proposal ~= nil,
     rank = selected_rank,
+    recording = recording,
   }
 end
 
@@ -234,7 +238,7 @@ end
 
 local function render_plan()
   if not (plan_buf and vim.api.nvim_buf_is_valid(plan_buf)) then return end
-  local lines, map = { "Day plan  " .. os.date("%a %d %b"), "" }, {}
+  local lines, map = { "Day plan  " .. os.date("%a %d %b") .. (recording and ("  ● recording since " .. recording) or ""), "" }, {}
   if problem then table.insert(lines, "  " .. problem) end
   if not problem and #day.blocks == 0 and not proposal then
     table.insert(lines, "  no plan yet: Pepper proposes one (plan_propose), and it shows here")
@@ -490,11 +494,52 @@ local function load_goals()
   end)
 end
 
+-- How to run `corkboard-bridge record`, as a JSON list (the bridge's
+-- CORKBOARD_RECORD_COMMAND); nil when Neovim isn't the bridge's.
+local function record_command()
+  local ok, given = pcall(vim.json.decode, vim.env.CORKBOARD_RECORD_COMMAND or "")
+  return ok and type(given) == "table" and given or nil
+end
+
+local function record(op, done)
+  local cmd = record_command()
+  if not cmd then return done and done(false, "recording needs corkboard's bridge on this machine") end
+  vim.system(vim.list_extend(vim.deepcopy(cmd), { op }), { text = true }, vim.schedule_wrap(function(res)
+    if done then done(res.code == 0, vim.trim(res.code == 0 and res.stdout or res.stderr)) end
+  end))
+end
+
+-- Whether a meeting is being recorded, started here or anywhere else.
+local function read_recording()
+  record("status", function(ok, out)
+    local r = ok and vim.json.decode(out, { luanil = { object = true } }) or nil
+    local was = recording
+    if type(r) == "table" and r.at then
+      local t = os.date("*t", math.floor(r.at / 1000))
+      recording = clock(t.hour * 60 + t.min)
+    else
+      recording = nil
+    end
+    if recording ~= was then redraw() end
+  end)
+end
+
+-- Start recording a meeting, or stop the one that is.
+function M.record()
+  record(recording and "stop" or "start", function(ok, out)
+    if not ok then vim.notify("corkboard: " .. out, vim.log.levels.ERROR) end
+    read_recording()
+  end)
+end
+
+
 -- Not waited for, like the fleet view's (fleet.lua): the window opens with
 -- it, and the keys typed meanwhile should run. Only the latest load's
 -- answer is kept.
 local loads = 0
+
 function M.load()
+  read_recording()
   if not cloud().enabled() then
     problem = "the day plan needs corkboard's bridge and the cloud"
     return redraw()
@@ -583,6 +628,7 @@ local PLAN_ACTIONS = {
   later = M.toggle_later,
   goals = function() M.goals() end,
   claude = function() require("corkboard.plan.claude").open() end,
+  record = M.record,
   open = function()
     local b = selected_block() or {}
     open_card(b.card, b.board)
@@ -679,6 +725,7 @@ function M.buffer()
     p = { "pin", "pin the block" },
     z = { "later", "show what's not today" },
     g = { "goals", "see the goals" },
+    m = { "record", "record a meeting, or stop" },
     c = { "claude", "go to Pepper, beside the plan" },
     ["<CR>"] = { "open", "open the block's card" },
     R = { "reset", "read the plan again" },

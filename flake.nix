@@ -191,8 +191,8 @@
             echo '{"name":"sharp","main":"index.js"}' > $share/node_modules/sharp/package.json
             echo 'module.exports = () => { throw new Error("no sharp"); };' > $share/node_modules/sharp/index.js
             makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-bridge \
-              --add-flags $share/bridge/server.ts \
-              --suffix PATH : ${pkgs.lib.makeBinPath [ pkgs.neovim pkgs.bun pkgs.ripgrep pkgs.fd ]} \
+              --add-flags $share/bridge/main.ts \
+              --suffix PATH : ${pkgs.lib.makeBinPath ([ pkgs.neovim pkgs.bun pkgs.ripgrep pkgs.fd ] ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.pipewire)} \
               --suffix CORKBOARD_PLUGINS : ${pluginPath pkgs} \
               --suffix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader ]} \
               ${pkgs.lib.optionalString (nvimWasm != null) "--set-default CORKBOARD_NVIM_WASM ${nvimWasm}/lib/nvim-wasm"}

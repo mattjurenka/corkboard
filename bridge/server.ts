@@ -198,13 +198,14 @@ type Session = {
 
 // What Neovim, and what it starts, has from the bridge: the Worker, for what
 // Neovim starts itself (the plan's Claude Code); this bridge's version; where
-// corkboard keeps things (dirs.ts); and how to start the MCP server, as a
-// JSON list.
+// corkboard keeps things (dirs.ts); and how to start the MCP server and the
+// meeting recorder (record.ts), as JSON lists.
 const NVIM_ENV = {
   CORKBOARD_CLOUD: CLOUD,
   CORKBOARD_BRIDGE_VERSION: BRIDGE_VERSION,
   ...dirsEnv,
   CORKBOARD_MCP_COMMAND: JSON.stringify([...SELF, "mcp"]),
+  CORKBOARD_RECORD_COMMAND: JSON.stringify([...SELF, "record"]),
 };
 
 // The project Neovim last opened (remember_project in corkboard/init.lua).
