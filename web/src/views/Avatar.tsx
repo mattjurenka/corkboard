@@ -23,13 +23,12 @@ import { modelAt, persona as personaOf, POKED, line as quip, upcoming, type Poke
 import { ACTS, type ActName } from "@/avatar/acts";
 import type { Mood, Stage } from "@/avatar/stage";
 import { type Bridge, isMood, Voice } from "@/avatar/voice";
+import { type Treat, TreatIcon, TREATS } from "@/avatar/treats";
 import { useNvim } from "@/nvim/context";
 import type { ViewProps } from "./index";
 
 // A thing said, or (emote) done.
 type Said = { id: string; text?: string; mood?: string; emote?: string };
-type Treat = "cheesecake" | "cookie" | "muffin";
-const TREATS: Treat[] = ["cheesecake", "cookie", "muffin"];
 
 // A demo asked for: its count, and the personas to show, else its own.
 type Demo = { n: number; of?: string[] | null };
@@ -422,13 +421,13 @@ export function Avatar({ state, buf }: ViewProps<AvatarState>) {
             onPointerUp={letGo}
             onPointerCancel={() => setHeld(null)}
           >
-            <TreatIcon treat={t} />
+            <TreatIcon treat={t} className="size-[calc(var(--cell-h)*1.5)]" />
           </div>
         ))}
       </div>
       {held && (
         <div className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2" style={{ left: held.x, top: held.y }}>
-          <TreatIcon treat={held.treat} />
+          <TreatIcon treat={held.treat} className="size-[calc(var(--cell-h)*1.5)]" />
         </div>
       )}
       <div
@@ -441,43 +440,6 @@ export function Avatar({ state, buf }: ViewProps<AvatarState>) {
         <span className="text-muted-foreground">{line.text.slice(shown.length)}</span>
       </div>
     </div>
-  );
-}
-
-function TreatIcon({ treat }: { treat: Treat }) {
-  return (
-    <svg viewBox="0 0 20 20" className="size-[calc(var(--cell-h)*1.5)]">
-      {treat === "cheesecake" && (
-        <>
-          <path d="M2 9 L18 5 L18 16 L2 16 Z" fill="#f4e4b5" />
-          <path d="M2 9 L18 5 L18 7.5 L2 11 Z" fill="#c8323f" />
-          <rect x="2" y="15.5" width="16" height="2.5" fill="#a9682f" />
-          <circle cx="13" cy="4.6" r="2" fill="#e0384a" />
-          <path d="M12.4 2.8 L13 1.8 L13.6 2.8" stroke="#3f8f3a" strokeWidth="0.9" fill="none" />
-        </>
-      )}
-      {treat === "cookie" && (
-        <>
-          <circle cx="10" cy="10" r="8" fill="#d39a52" />
-          <circle cx="10" cy="10" r="8" fill="none" stroke="#a96c2e" strokeWidth="0.8" />
-          {[[7, 6.5], [12.5, 7], [6, 11.5], [10.5, 11], [13.5, 13.5], [8.5, 15]].map(([x, y]) => (
-            <circle key={`${x},${y}`} cx={x} cy={y} r="1.1" fill="#4a2a17" />
-          ))}
-        </>
-      )}
-      {treat === "muffin" && (
-        <>
-          <path d="M4.5 11 L15.5 11 L14 18.5 L6 18.5 Z" fill="#e7d3b0" />
-          {[7.5, 10, 12.5].map((x) => (
-            <path key={x} d={`M${x} 11 L${x + (x - 10) * 0.15} 18.5`} stroke="#c5aa7c" strokeWidth="0.7" />
-          ))}
-          <path d="M2.5 11.5 Q2 3 10 3 Q18 3 17.5 11.5 Z" fill="#9a6232" />
-          {[[7, 6.5], [11.5, 5.5], [13.5, 9], [8.5, 9.5]].map(([x, y]) => (
-            <circle key={`${x},${y}`} cx={x} cy={y} r="1" fill="#3d3f86" />
-          ))}
-        </>
-      )}
-    </svg>
   );
 }
 

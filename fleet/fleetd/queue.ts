@@ -156,8 +156,8 @@ export class Queue {
     if (c.status === 409) return;
     if (c.status >= 400) throw new Error(`claiming ${r.id}: ${c.json.error ?? c.status}`);
     const { spawn, token: cardToken, repo, brainToken, secrets } = c.json as {
-      spawn: Remote & { board: string; card: string; agent: string; interactive?: boolean } & Pick<Spawn, "shell" | "memory" | "cores" | "job">;
-      token: string;
+      spawn: Remote & { board: string | null; card: string | null; agent: string; interactive?: boolean } & Pick<Spawn, "shell" | "memory" | "cores" | "job">;
+      token: string | null;
       repo: string | null;
       brainToken?: string;
       secrets?: Record<string, string>;
@@ -182,7 +182,7 @@ export class Queue {
     try {
       s.account = accountFor(m, spawn.account);
       write(s);
-      console.log(`${s.id}: claimed ${s.template} from the queue (card ${s.remote!.card} on ${s.remote!.board})`);
+      console.log(`${s.id}: claimed ${s.template} from the queue (${s.remote!.card ? `card ${s.remote!.card} on ${s.remote!.board}` : s.remote!.board ? `a session on ${s.remote!.board}` : "no board"})`);
     } catch (e) {
       write({ ...s, state: "failed", error: String((e as Error).message ?? e), ended: now() });
     }
@@ -213,7 +213,7 @@ export class Queue {
       });
       if (r.status >= 400 && r.status !== 409) throw new Error(`reporting ${s.id}: ${r.json.error ?? r.status}`);
       const { secrets: _, ...kept } = s.remote;
-      const remote = over ? { ...kept, token: "", ...(s.remote.brainToken !== undefined && { brainToken: "" }) } : s.remote;
+      const remote = over ? { ...kept, token: null, ...(s.remote.brainToken !== undefined && { brainToken: "" }) } : s.remote;
       if (over) for (const t of [s.remote.token, s.remote.brainToken]) if (t) await api("POST", "/api/tokens/revoke", { token: t }).catch(() => {});
       write({ ...read(s.id)!, reported: s.state, remote });
     }

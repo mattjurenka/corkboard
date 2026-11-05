@@ -2,12 +2,16 @@
 // Headless: this machine signs in as its device of the encrypted account,
 // keeps decrypted replicas of the boards and brains its index lists (or
 // of those it's given), and serves /mcp (for claude.ai and Claude Code,
-// with its own OAuth) and the phone's API, on plain HTTP behind Tailscale
-// Funnel or Caddy.
+// with its own OAuth) and the phone's API, on plain HTTP on this machine,
+// and, signed in, through the relay's tunnel at <relay>/n/<handle> (its
+// socket also tells the account's other devices this one is up; the
+// leader, `e2ee leader`, is the node the tunnel prefers: see
+// .agent/plans/local-memory.md, step 8). --origin names it when TLS ends
+// here instead, behind Tailscale Funnel or Caddy.
 //
 //   corkboard-bridge serve [--port 8787] [--host 127.0.0.1] [--origin https://NAME]
 //                          [--board KEY]... [--brain NAME]... [--timezone ZONE]
-//   corkboard-bridge serve token [--name NAME] [--days 365] [--scope owner|assistant]
+//   corkboard-bridge serve token [--name NAME] [--days 365] [--scope owner|assistant] [--brain NAME]
 //                          a bearer for the phone's API, printed once
 //   corkboard-bridge serve grants | revoke GRANT
 //   corkboard-bridge serve calendar-login [--client-id ID --client-secret SECRET]
@@ -16,28 +20,39 @@
 //                          a one-time code to approve a connector with at /authorize
 //
 // <state>/node/ has config.json (boards, brains, origin, port, host,
-// timezone: what the flags add to), oauth.json and calendar.json. Boards
+// timezone: what the flags add to), oauth.json, calendar.json, and
+// memory.db (the brains' episodes, episodes.ts, which consolidator.ts
+// turns into their log and memory with `claude -p`, whose vectors embed.ts
+// then makes and shares). Boards
 // and brains given narrow the index to them. The account's passphrase, if
 // it has one, is CORKBOARD_E2EE_PASSPHRASE.
+//
+// An account made --local (no relay yet) is served the same, from the
+// replicas on disk alone: what's written waits in their queues until
+// e2ee publish.
 
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CLOUD } from "../cloud";
 import { STATE_DIR } from "../dirs";
 import { Keystore } from "../keystore";
 import { Relay } from "../../lib/e2ee/relay";
 import { indexId, indexKey } from "../../lib/e2ee/sharing";
-import { Replica } from "../../lib/e2ee/sync";
-import { listObjects } from "./objects";
+import { type LogTransport, Replica, offline } from "../../lib/e2ee/sync";
+import { accountObject, listObjects } from "./objects";
 import { Replicas } from "./replicas";
 import { Data } from "./data";
 import { Search } from "./search";
-import { OAuthStore, SCOPES, type Scope } from "./oauth";
+import { LocalEmbedder } from "./embed";
+import { Episodes } from "./episodes";
+import { Consolidator } from "./consolidator";
+import { Handoff } from "./handoff";
+import { OAuthStore, SCOPES, type Scope, type Shared } from "./oauth";
 import { node } from "./server";
 import { loadCalendar, login, saveCalendar } from "./calendar";
 
 export const NODE_DIR = join(STATE_DIR, "node");
-const oauthStore = () => new OAuthStore(join(NODE_DIR, "oauth.json"));
+const oauthStore = (shared?: Shared) => new OAuthStore(join(NODE_DIR, "oauth.json"), shared);
 const calendarPath = join(NODE_DIR, "calendar.json");
 
 type Config = { boards?: string[]; brains?: string[]; origin?: string; port?: number; host?: string; timezone?: string };
@@ -58,37 +73,147 @@ const localZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC
 // What `e2ee approve-connector` prints, and serve as it starts.
 export const approvalCode = () => oauthStore().newApproval();
 
-async function run(args: string[]) {
+// One node per machine: two over the same replicas, as one device, would
+// make ops with the same clocks. The lock is the running one's pid.
+const LOCK = join(NODE_DIR, "lock");
+function lock() {
+  mkdirSync(NODE_DIR, { recursive: true, mode: 0o700 });
+  try {
+    const pid = Number(readFileSync(LOCK, "utf8"));
+    if (pid && pid !== process.pid) {
+      process.kill(pid, 0);
+      throw new Error(`a node is running already (pid ${pid})`);
+    }
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ESRCH") throw e;
+  }
+  writeFileSync(LOCK, String(process.pid), { mode: 0o600 });
+  return () => {
+    try {
+      if (Number(readFileSync(LOCK, "utf8")) === process.pid) rmSync(LOCK);
+    } catch {}
+  };
+}
+
+export type NodeOptions = { port?: number; host?: string; origin?: string; boards?: string[]; brains?: string[]; timezone?: string };
+
+// The node, serving: `serve`'s, and the bridge's own (app.ts). Throws
+// when this machine has no account, it can't be unlocked, or a node runs.
+export async function startNode(o: NodeOptions = {}) {
   const c = config();
   const store = new Keystore();
   const d = store.device();
   if (!d || !store.exists()) throw new Error("this machine isn't in an encrypted account: corkboard-bridge e2ee init, recover or pair");
-  if (d.relay !== CLOUD) throw new Error(`this machine's account is on ${d.relay}, not ${CLOUD} (CORKBOARD_CLOUD)`);
+  if (d.relay !== null && d.relay !== CLOUD) throw new Error(`this machine's account is on ${d.relay}, not ${CLOUD} (CORKBOARD_CLOUD)`);
   if (store.needsPassphrase() && !process.env.CORKBOARD_E2EE_PASSPHRASE) throw new Error("the account key is under a passphrase: set CORKBOARD_E2EE_PASSPHRASE");
   const root = await store.root(process.env.CORKBOARD_E2EE_PASSPHRASE);
-  const relay = new Relay({ origin: CLOUD, device: d.device, cert: d.cert, token: store.token(), onToken: (t) => store.saveToken(t) });
-  await relay.token();
+  const unlock = lock();
+  try {
+    let relay: LogTransport = offline;
+    let r: Relay | undefined;
+    if (d.relay) {
+      r = new Relay({ origin: CLOUD, device: d.device, cert: d.cert, token: store.token(), onToken: (t) => store.saveToken(t) });
+      await r.token();
+      relay = r;
+    }
 
-  const index = await Replica.open({ transport: relay, key: indexKey(root), object: indexId(root), device: d.device.id, store: store.replica(indexId(root)) });
-  await index.pull().catch((e) => console.error(`node: reading the index: ${(e as Error).message}`));
-  const objects = listObjects(root, { boards: [...(c.boards ?? []), ...options(args, "--board")], brains: [...(c.brains ?? []), ...options(args, "--brain")] }, index);
-  if (!objects.length) console.error("node: the index lists no boards or brains, and none were given (--board KEY, --brain NAME, or config.json); serving nothing");
-  const replicas = await Replicas.open({ objects, transport: relay, device: d.device.id, store: (o) => store.replica(o), index });
-  await replicas.start();
-  const data = new Data(replicas, option(args, "--timezone") ?? c.timezone ?? localZone());
-  const search = new Search(data);
-  const port = Number(option(args, "--port") ?? c.port ?? 8787);
-  const hostname = option(args, "--host") ?? c.host ?? "127.0.0.1";
-  const origin = option(args, "--origin") ?? c.origin;
-  const server = Bun.serve({ port, hostname, idleTimeout: 255, fetch: node({ data, search, oauth: oauthStore(), origin, calendar: () => loadCalendar(calendarPath) }) });
+    const index = await Replica.open({ transport: relay, key: indexKey(root), object: indexId(root), device: d.device.id, store: store.replica(indexId(root)) });
+    if (d.relay) await index.pull().catch((e) => console.error(`node: reading the index: ${(e as Error).message}`));
+    const objects = [
+      ...listObjects(root, { boards: [...(c.boards ?? []), ...(o.boards ?? [])], brains: [...(c.brains ?? []), ...(o.brains ?? [])] }, index),
+      accountObject(root, "oauth", index),
+    ];
+    const replicas = await Replicas.open({ objects, transport: relay, device: d.device.id, store: (o) => store.replica(o), index });
+    await replicas.start();
+    const data = new Data(replicas, o.timezone ?? c.timezone ?? localZone());
+    const search = new Search(data, new LocalEmbedder(data));
+    for (const b of data.brains()) search.warmLater(b.name, 0);
+    const episodes = new Episodes(join(NODE_DIR, "memory.db"));
+    // The tunnel, where the relay has one (an older one answers 404).
+    let tunnel: { url: string; connected: boolean; stop(): void } | undefined;
+    // Rollups on the node the tunnel goes to (the leader if it's connected,
+    // else the newest), or on this one offline, with no tunnel or none
+    // connected; the account's nodes asked once a minute. Another node
+    // leading, this one's episodes are handed to it.
+    let led: { at: number; leads: boolean } | undefined;
+    const leads = async () => {
+      if (!r || !tunnel) return true;
+      if (led && Date.now() - led.at < 60_000) return led.leads;
+      const v = await r.nodes();
+      const to = v.connected.find((c) => c.device === v.leader) ?? [...v.connected].sort((a, b) => b.since - a.since)[0];
+      led = { at: Date.now(), leads: !to || to.device === d.device.id };
+      return led.leads;
+    };
+    const handoff = r && new Handoff({ replicas, episodes, blobs: r });
+    const consolidator = new Consolidator({ data, episodes, after: (brain) => search.share(brain), leads, handoff });
+    consolidator.start();
+    const hostname = o.host ?? c.host ?? "127.0.0.1";
+    const origin = o.origin ?? c.origin;
+    // claude.ai's grants, the same on every node of the account.
+    const oauth = oauthStore({
+      cards: () => replicas.get("account", "oauth")!.cards(),
+      change: (...changes) => void replicas.change("account", "oauth", ...changes).catch((e) => console.error(`node: sharing grants: ${(e as Error).message}`)),
+    });
+    const served = { data, search, episodes, oauth, calendar: () => loadCalendar(calendarPath) };
+    const server = Bun.serve({ port: o.port ?? c.port ?? 8787, hostname, idleTimeout: 255, fetch: node({ ...served, origin }) });
+    if (r) {
+      const nodes = await r.nodes().catch((e) => void console.error(`node: no tunnel: ${(e as Error).message}`));
+      if (nodes) {
+        const t = { url: nodes.url, connected: false, stop: () => {} };
+        t.stop = r.serveTunnel(node({ ...served, origin: nodes.url }), { name: d.cert.body.name, onState: (up) => (t.connected = up) });
+        tunnel = t;
+      }
+    }
+    return {
+      data,
+      search,
+      episodes,
+      replicas,
+      oauth,
+      account: d.cert.body.account,
+      device: d.device.id,
+      online: !!d.relay,
+      url: `http://${hostname.includes(":") ? `[${hostname}]` : hostname}:${server.port}`,
+      origin,
+      // The tunnel's public URL, and whether its socket is up.
+      tunnel,
+      relay: r,
+      // A brain of this account's that the node doesn't keep yet, kept from now on.
+      addBrain: (name: string) => replicas.add(listObjects(root, { boards: [], brains: [name] })[0]),
+      async stop() {
+        tunnel?.stop();
+        server.stop();
+        await consolidator.stop();
+        await replicas.stop();
+        episodes.close();
+        unlock();
+      },
+    };
+  } catch (e) {
+    unlock();
+    throw e;
+  }
+}
 
-  for (const s of replicas.status()) console.log(`${s.kind.padEnd(5)} ${s.name.padEnd(30)} ${String(s.records).padStart(5)} records  ${s.error ?? "synced"}`);
-  console.log(`\nnode on http://${hostname}:${server.port}${origin ? `, as ${origin}` : ""}, account ${d.cert.body.account}`);
+export type StartedNode = Awaited<ReturnType<typeof startNode>>;
+
+async function run(args: string[]) {
+  const n = await startNode({
+    port: option(args, "--port") ? Number(option(args, "--port")) : undefined,
+    host: option(args, "--host"),
+    origin: option(args, "--origin"),
+    boards: options(args, "--board"),
+    brains: options(args, "--brain"),
+    timezone: option(args, "--timezone"),
+  });
+  if (!n.replicas.objects().some((o) => o.kind !== "account")) console.error("node: the index lists no boards or brains, and none were given (--board KEY, --brain NAME, or config.json); serving nothing");
+  for (const s of n.replicas.status()) console.log(`${s.kind.padEnd(5)} ${s.name.padEnd(30)} ${String(s.records).padStart(5)} records  ${!n.online ? `${s.pending} kept here` : (s.error ?? "synced")}`);
+  console.log(`\nnode on ${n.url}${n.origin ? `, as ${n.origin}` : ""}${n.tunnel ? `, and at ${n.tunnel.url}` : ""}, account ${n.account}${n.online ? "" : " (on this machine only)"}`);
   console.log(`approval code (10 minutes, once): ${approvalCode()}`);
 
   const quit = async () => {
-    server.stop();
-    await replicas.stop();
+    await n.stop();
     process.exit(0);
   };
   process.on("SIGINT", quit);
@@ -101,7 +226,9 @@ function mintToken(args: string[]) {
   if (!SCOPES.includes(scope)) throw new Error(`--scope is one of ${SCOPES.join(", ")}`);
   const days = Number(option(args, "--days") ?? 365);
   if (!Number.isFinite(days) || days <= 0) throw new Error("--days is a number of days");
-  console.log(oauthStore().mint(option(args, "--name") ?? "phone", days, scope));
+  // --brain NAME: a token for that brain's agent (Pepper's, say), whose
+  // memory is the brain's, its goals included.
+  console.log(oauthStore().mint(option(args, "--name") ?? "phone", days, scope, option(args, "--brain")));
 }
 
 function grants() {

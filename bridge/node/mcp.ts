@@ -18,7 +18,7 @@ import { range } from "../../lib/model/dates";
 import { type Data, type FullCard, Invalid } from "./data";
 import type { Search } from "./search";
 
-export type Caller = { scope: "owner" | "assistant"; agent: string };
+export type Caller = { scope: "owner" | "assistant"; agent: string; brain?: string };
 
 class ToolError extends Error {}
 
@@ -166,7 +166,7 @@ const TOOLS: Record<string, Tool> = {
     run: async (a, c) => read(c, (await claim(c, a.id, a.force === true)).id),
   },
   release_card: {
-    description: "Give up a card you hold without finishing it; it goes back to ready, unassigned.",
+    description: "Give up a card you hold without finishing it; it goes back to ready, unassigned. Use it when the user puts the card off for later.",
     properties: { id, note: str("Why you are letting it go") },
     required: ["id", "note"],
     run: async (a, c) =>
@@ -207,8 +207,8 @@ const TOOLS: Record<string, Tool> = {
     run: async (a, c) => brief(c, await change(c, a.id, (x) => ask(x, c.me, String(a.message), a.wait !== false))),
   },
   submit_for_review: {
-    description: "You finished a card: moves it to review and logs what changed and how you verified it.",
-    properties: { id, summary: str("What changed"), verification: str("How you checked it works") },
+    description: "You finished a card: moves it to review. The user reads your summary to decide whether to merge, so keep it short and plain; the diff shows the details.",
+    properties: { id, summary: str("What changed, in a few short sentences or bullets. Name anything the user has to do or decide."), verification: str("How you checked it works, in a sentence or two, and what you couldn't check") },
     required: ["id", "summary", "verification"],
     run: async (a, c) =>
       brief(
@@ -333,7 +333,9 @@ To pick up work, call next_card (or claim_card for a specific card). While worki
 If you need a human decision, call block with your question and stop. If you need the user to do something
 (log in, approve, test on a device), call request_user_action; both notify them on their desktop.
 When done, call submit_for_review.
-Put follow-up work you discover in new cards with create_card (parent: the card you are on).`;
+Put follow-up work you discover in new cards with create_card (parent: the card you are on).
+If the user puts a card off for later ("do it tomorrow", "push this"), call release_card so it goes back to ready.`;
+const MEMORY_INSTRUCTIONS = "Your memory, kept encrypted on the user's machines: notes, a log by day, and recall across them. The session started with memory_context; memory_recall finds the rest.";
 
 // Memory --------------------------------------------------------------------------------
 
@@ -468,9 +470,17 @@ const MEMORY_TOOLS: Record<string, MemoryTool> = {
 
 // Tools and calls ------------------------------------------------------------------------
 
-function toolsFor(hidden: readonly string[]) {
+// memoryOnly: the memory tools alone, for a local session (app.ts), whose
+// board tools are its own board's.
+function toolsFor(hidden: readonly string[], memoryOnly = false) {
   const ownKinds = (properties: Record<string, object>) =>
     Object.fromEntries(Object.entries(properties).map(([k, p]) => [k, "enum" in p && p.enum === NOTE_KINDS ? { ...p, enum: kinds(hidden) } : p]));
+  const memory = Object.entries(MEMORY_TOOLS).map(([name, t]) => ({
+    name,
+    description: t.description,
+    inputSchema: { type: "object", properties: ownKinds(t.properties ?? {}), required: t.required ?? [] },
+  }));
+  if (memoryOnly) return memory;
   return [
     {
       name: "list_boards",
@@ -482,11 +492,7 @@ function toolsFor(hidden: readonly string[]) {
       description: t.description,
       inputSchema: { type: "object", properties: { board: str("The board's key, from list_boards"), ...t.properties }, required: ["board", ...(t.required ?? [])] },
     })),
-    ...Object.entries(MEMORY_TOOLS).map(([name, t]) => ({
-      name,
-      description: t.description,
-      inputSchema: { type: "object", properties: ownKinds(t.properties ?? {}), required: t.required ?? [] },
-    })),
+    ...memory,
   ];
 }
 
@@ -495,10 +501,11 @@ export type Node = { data: Data; search: Search };
 async function callTool(node: Node, caller: Caller, name: string, args: any): Promise<unknown> {
   const { data, search } = node;
   if (name === "list_boards") return data.boards().map((b) => ({ key: b.key, name: b.key, root: null, cards: b.cards }));
-  const hidden = BRAIN_ONLY_KINDS;
+  // A brain's own agent sees its goals; the user's clients don't.
+  const hidden = caller.brain ? [] : BRAIN_ONLY_KINDS;
   if (MEMORY_TOOLS[name]) {
-    const brain = data.defaultBrain();
-    if (!brain) throw new ToolError("there's no brain on this node to remember in; start it with --brain NAME");
+    const brain = caller.brain ?? data.defaultBrain();
+    if (!brain || !data.replicas.get("brain", brain)) throw new ToolError(caller.brain ? `no brain ${brain} on this node` : "there's no brain on this node to remember in; start it with --brain NAME");
     return MEMORY_TOOLS[name].run({ ...args }, { data, search, brain, caller, hidden });
   }
   if (name === "handoff" && args.id === undefined) return HANDED_OFF;
@@ -519,7 +526,7 @@ async function callTool(node: Node, caller: Caller, name: string, args: any): Pr
 
 type Message = { jsonrpc?: string; id?: string | number | null; method?: string; params?: any };
 
-async function handle(node: Node, caller: Caller, msg: Message): Promise<object | undefined> {
+async function handle(node: Node, caller: Caller, msg: Message, memoryOnly: boolean): Promise<object | undefined> {
   const { id, method, params } = msg ?? {};
   const reply = (result: unknown) => ({ jsonrpc: "2.0", id, result });
   switch (method) {
@@ -528,15 +535,17 @@ async function handle(node: Node, caller: Caller, msg: Message): Promise<object 
         protocolVersion: params?.protocolVersion ?? "2025-06-18",
         capabilities: { tools: {} },
         serverInfo: { name: "corkboard-node", version: "0.1.0" },
-        instructions: INSTRUCTIONS(caller.agent),
+        instructions: memoryOnly ? MEMORY_INSTRUCTIONS : INSTRUCTIONS(caller.agent),
       });
     case "ping":
       return reply({});
     case "tools/list":
-      return reply({ tools: toolsFor(BRAIN_ONLY_KINDS) });
+      return reply({ tools: toolsFor(BRAIN_ONLY_KINDS, memoryOnly) });
     case "tools/call":
       try {
-        const out = await callTool(node, caller, String(params?.name), { ...(params?.arguments ?? {}) });
+        const name = String(params?.name);
+        if (memoryOnly && !MEMORY_TOOLS[name]) throw new ToolError(`unknown tool ${name}`);
+        const out = await callTool(node, caller, name, { ...(params?.arguments ?? {}) });
         return reply({ content: [{ type: "text", text: typeof out === "string" ? out : JSON.stringify(out, null, 2) }] });
       } catch (e) {
         if (e instanceof ToolError || e instanceof Invalid) return reply({ content: [{ type: "text", text: e.message }], isError: true });
@@ -555,8 +564,9 @@ export async function mcp(request: Request, node: Node, caller: Caller): Promise
   } catch {
     return Response.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } }, { status: 400 });
   }
+  const memoryOnly = new URL(request.url).searchParams.get("tools") === "memory";
   const batch = Array.isArray(body);
-  const answers = (await Promise.all((batch ? (body as unknown[]) : [body]).map((m) => handle(node, caller, m as Message)))).filter(Boolean);
+  const answers = (await Promise.all((batch ? (body as unknown[]) : [body]).map((m) => handle(node, caller, m as Message, memoryOnly)))).filter(Boolean);
   if (!answers.length) return new Response(null, { status: 202 });
   return Response.json(batch ? answers : answers[0]);
 }

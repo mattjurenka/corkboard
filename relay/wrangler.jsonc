@@ -14,10 +14,15 @@
       // Pairing mailboxes, named by their code.
       { "name": "MAILBOX", "class_name": "Mailbox" },
       // The accounts, their devices' tokens and grants: one object.
-      { "name": "ACCOUNTS", "class_name": "Accounts" }
+      { "name": "ACCOUNTS", "class_name": "Accounts" },
+      // An account's nodes' sockets and its leader, named by its handle.
+      { "name": "NODES", "class_name": "Nodes" }
     ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Log", "Mailbox", "Accounts"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Log", "Mailbox", "Accounts"] },
+    { "tag": "v2", "new_sqlite_classes": ["Nodes"] }
+  ],
   // Encrypted attachments.
   "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "corkboard-relay" }],
   "vars": {

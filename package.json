@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "bun bridge/server.ts --dev",
     "build": "vite build web",
+    "build:meet": "vite build -c web/vite.meet.config.ts",
     "dev:web": "vite web",
     "portraits": "bun web/portraits.ts",
     "lines": "bun web/lines.ts",

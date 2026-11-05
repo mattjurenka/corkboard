@@ -3,10 +3,19 @@
 // agent://settings, which owns the cursor and the keys; a click selects, and
 // a control changes its setting there and then. A field being typed in has
 // the keys until Enter, Esc or a click elsewhere hands them back.
+//
+// A keybinding's + listens for keys instead: what's pressed is the new key,
+// a sequence (<leader> c) if pressed one after another, done a moment after
+// the last; Esc gives up.
+//
+// Devices, when this machine is in an encrypted account: its address on the
+// relay, and each device, whose box makes it the leader.
 
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { prettyKeys } from "@/lib/keys";
 import type { Nvim } from "@/nvim/context";
+import { toNvimKey } from "@/nvim/input.js";
 import type { ViewProps } from "./index";
 
 type Value = string | number | boolean | string[] | null;
@@ -14,7 +23,7 @@ type Option = { value: string | number; label: string };
 type Setting = {
   key: string;
   label: string;
-  type: "text" | "number" | "bool" | "color" | "enum" | "list";
+  type: "text" | "number" | "bool" | "color" | "enum" | "list" | "keys";
   value: Value;
   theme?: string;
   default: Value;
@@ -26,7 +35,9 @@ type Setting = {
   options?: Option[];
   modified: boolean;
 };
-type SettingsState = { selected?: string; sections: { title: string; items: Setting[] }[]; palette: (string | undefined)[] };
+type Device = { device: string; name: string; seen: number; me: boolean; connected: boolean; leader: boolean };
+type Devices = { url: string; leader: string | null; devices: Device[] };
+type SettingsState = { selected?: string; sections: { title: string; items: Setting[] }[]; devices: Devices | null; leader: string; palette: (string | undefined)[] };
 type Change = (v: Value) => void;
 
 // A field's own press: the panel's (Panels.tsx) would keep the keys in
@@ -41,11 +52,24 @@ export function Settings({ state, win, focused, nvim }: ViewProps<SettingsState>
   }, [state.selected]);
   const pick = (key: string) => nvim.lua("require('corkboard.settings').select(...)", key, win);
   const set = (key: string) => (v: Value) => nvim.lua("require('corkboard.settings').set(...)", key, v);
+  const device = (key: string) => nvim.lua("require('corkboard.settings').device(...)", key);
 
   const q = query.trim().toLowerCase();
   const sections = state.sections
-    .map((s) => ({ ...s, items: q ? s.items.filter((i) => `${s.title} ${i.label} ${i.key}`.toLowerCase().includes(q)) : s.items }))
+    .map((s) => ({ ...s, items: q ? s.items.filter((i) => searched(s.title, i, state.leader).toLowerCase().includes(q)) : s.items }))
     .filter((s) => s.items.length);
+  const devices = state.devices && (!q || ["devices", "address", "leader", ...state.devices.devices.map((d) => d.name)].some((w) => w.toLowerCase().includes(q))) ? state.devices : null;
+  const row = (key: string, label: string, control: React.ReactNode) => (
+    <div
+      key={key}
+      data-selected={key === state.selected || undefined}
+      onMouseDownCapture={() => key !== state.selected && pick(key)}
+      className={cn("flex min-h-row items-center gap-2ch py-[calc(var(--cell-h)/4)] pr-ch pl-2ch", key === state.selected ? "bg-selection" : "hover:bg-accent")}
+    >
+      <span className={cn("w-[38ch] flex-none truncate", key === state.selected && focused && "font-bold")}>{label}</span>
+      <div className="flex min-w-0 flex-1 items-center gap-2ch">{control}</div>
+    </div>
+  );
 
   return (
     <div ref={root} className="flex h-full flex-col gap-row overflow-y-auto px-2ch pt-row pb-row">
@@ -80,7 +104,7 @@ export function Settings({ state, win, focused, nvim }: ViewProps<SettingsState>
             >
               <span className={cn("w-[38ch] flex-none truncate", item.key === state.selected && focused && "font-bold")}>{item.label}</span>
               <div className="flex min-w-0 flex-1 items-center">
-                <Control item={item} set={set(item.key)} palette={state.palette} nvim={nvim} />
+                <Control item={item} set={set(item.key)} palette={state.palette} leader={state.leader} nvim={nvim} />
               </div>
               {item.modified && (
                 <button
@@ -96,13 +120,46 @@ export function Settings({ state, win, focused, nvim }: ViewProps<SettingsState>
           ))}
         </section>
       ))}
-      {!sections.length && <p className="pl-2ch text-border">—</p>}
+      {devices && (
+        <section className="flex flex-col">
+          <h2 className="pl-2ch text-muted-foreground">Devices</h2>
+          {row(
+            "devices.url",
+            "Address",
+            <>
+              <span className="min-w-0 truncate select-text">{devices.url}</span>
+              <button type="button" onClick={() => device("devices.url")} className="flex-none cursor-pointer text-muted-foreground hover:text-foreground">
+                [copy]
+              </button>
+            </>,
+          )}
+          {devices.devices.map((d) =>
+            row(
+              `devices.${d.device}`,
+              d.me ? `${d.name} (this machine)` : d.name,
+              <>
+                <Check on={d.leader} set={() => device(`devices.${d.device}`)} />
+                <span className="text-muted-foreground">{d.connected ? "connected" : d.seen ? `seen ${new Date(d.seen).toLocaleString()}` : "away"}</span>
+              </>,
+            ),
+          )}
+        </section>
+      )}
+      {!sections.length && !devices && <p className="pl-2ch text-border">—</p>}
     </div>
   );
 }
 
-function Control({ item, set, palette, nvim }: { item: Setting; set: Change; palette: SettingsState["palette"]; nvim: Nvim }) {
+// What a search matches a setting by; a keybinding by its keys too.
+function searched(section: string, item: Setting, leader: string) {
+  const keys = item.type === "keys" ? ((item.value ?? item.default ?? []) as string[]).flatMap((k) => [k, prettyKeys(k, leader)]) : [];
+  return [section, item.label, item.key, ...keys].join(" ");
+}
+
+function Control({ item, set, palette, leader, nvim }: { item: Setting; set: Change; palette: SettingsState["palette"]; leader: string; nvim: Nvim }) {
   switch (item.type) {
+    case "keys":
+      return <Keys keys={(item.value ?? item.default ?? []) as string[]} leader={leader} set={set} nvim={nvim} />;
     case "bool":
       return <Check on={!!(item.value ?? item.default)} set={set} />;
     case "number":
@@ -387,6 +444,64 @@ function List({ items, set, nvim }: { items: string[]; set: Change; nvim: Nvim }
         </span>
       ))}
       <TextField value="" placeholder="+ add" set={(v) => v.trim() && set([...items, v.trim()])} nvim={nvim} className="w-[16ch]" clear />
+    </span>
+  );
+}
+
+// Each key, with × to drop it, and + to press a new one.
+function Keys({ keys, leader, set, nvim }: { keys: string[]; leader: string; set: Change; nvim: Nvim }) {
+  const [pressed, setPressed] = useState<string[] | null>(null);
+  const seq = useRef<string[] | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const stop = (keep: boolean) => {
+    clearTimeout(timer.current);
+    const got = seq.current;
+    seq.current = null;
+    setPressed(null);
+    if (keep && got?.length && !keys.includes(got.join(""))) set([...keys, got.join("")]);
+    nvim.refocus();
+  };
+  return (
+    <span className="flex flex-wrap items-center gap-ch">
+      {keys.map((k) => (
+        <span key={k} title={k} className="flex items-center border px-ch">
+          {prettyKeys(k, leader)}
+          <button
+            type="button"
+            title="Remove"
+            onClick={() => set(keys.filter((x) => x !== k))}
+            className="ml-ch cursor-pointer text-muted-foreground hover:text-destructive"
+          >
+            ×
+          </button>
+        </span>
+      ))}
+      <button
+        type="button"
+        title="Add a key"
+        onMouseDown={own}
+        onClick={(e) => {
+          seq.current = [];
+          setPressed([]);
+          e.currentTarget.focus();
+        }}
+        onKeyDown={(e) => {
+          if (!seq.current) return;
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.key === "Escape") return stop(false);
+          const key = toNvimKey(e.nativeEvent, true);
+          if (!key) return;
+          seq.current = [...seq.current, key];
+          setPressed(seq.current);
+          clearTimeout(timer.current);
+          timer.current = setTimeout(() => stop(true), 800);
+        }}
+        onBlur={() => seq.current && stop(true)}
+        className={cn("cursor-pointer px-ch outline-none", pressed ? "border border-focus" : "text-muted-foreground hover:text-foreground")}
+      >
+        {!pressed ? "+" : pressed.length ? prettyKeys(pressed.join(""), leader) : "press keys…"}
+      </button>
     </span>
   );
 }

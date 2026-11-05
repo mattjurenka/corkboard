@@ -94,7 +94,7 @@ function list(): Hosted[] {
         vm: s.slot,
         role: s.template,
         spawn: s.id,
-        ...(s.remote && { card: s.remote.card }),
+        ...(s.remote?.card && { card: s.remote.card }),
         ...(path && { transcript: path }),
       };
     });

@@ -11,6 +11,7 @@ import { marked } from "marked";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import type { Nvim } from "@/nvim/context";
+import { store } from "@/store";
 import type { ViewProps } from "./index";
 
 type FileState = { path: string; name: string; mtime?: number; size?: number; error?: string };
@@ -109,7 +110,7 @@ type MarkdownState = { path: string; text?: string; topline?: number };
 // Each top-level block is wrapped with the source line it starts on, which
 // is what scrolling follows: Neovim sends the source window's top line, and
 // the preview puts that line's block (or the right part of it) at the top.
-export function MarkdownView({ state, nvim }: ViewProps<MarkdownState>) {
+export function MarkdownView({ state, win, nvim }: ViewProps<MarkdownState>) {
   const scroller = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLElement>(null);
   const topline = useRef(state.topline);
@@ -142,6 +143,22 @@ export function MarkdownView({ state, nvim }: ViewProps<MarkdownState>) {
   useLayoutEffect(() => {
     if (scroller.current && body.current) scrollTo(scroller.current, body.current, state.topline);
   }, [html, state.topline]);
+
+  // How many rows it draws in, so a card's float is no taller than its text
+  // (corkboard.board.fit_card); another markdown view's is ignored there.
+  useEffect(() => {
+    const md = body.current;
+    if (!md) return;
+    let sent = 0;
+    const ro = new ResizeObserver(() => {
+      const rows = Math.ceil(md.offsetHeight / store.get().cell.h);
+      if (rows === sent) return;
+      sent = rows;
+      void nvim.lua("require('corkboard.board').fit_card(...)", win, rows);
+    });
+    ro.observe(md);
+    return () => ro.disconnect();
+  }, [win]);
 
   // A link in the preview never navigates the page: a web link opens in a
   // new tab, #anchor scrolls the preview, and a path opens that file in

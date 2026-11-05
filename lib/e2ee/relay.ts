@@ -19,6 +19,10 @@
 //   POST /e2ee/grants             { grant, sealed }; DELETE /e2ee/grants/:object/:member
 //   GET  /e2ee/grants?object=     an object's grants (the owner's); GET /e2ee/shared, those to me
 //   PUT  /e2ee/blob/:id           an encrypted attachment; GET it back
+//   GET  /e2ee/nodes              the account's connected nodes and its leader (NodesView), its handle and url
+//   PUT  /e2ee/nodes/leader       { device | null }
+//   GET  /e2ee/nodes/live         WebSocket: this device as a node, answering the tunnel's
+//                                 TunnelRequests (<relay>/n/<handle>/…) with TunnelResponses
 //
 // Everything but creating an account, challenges, revocations, rotated and the new device's
 // side of pairing wants a token from /e2ee/token, as a bearer (or, for a
@@ -28,8 +32,10 @@
 import { answer, type Device } from "./device";
 import type { Delivery, MailboxView, PairTransport } from "./pairing";
 import { EpochChanged, type LogTransport } from "./sync";
-import type { AccountView, Creation, DeviceCert, Grant, LogRead, NewOp, Revocation, Rotated, Rotation, Signed, Snapshot, WireOp } from "./wire";
-import { b64url, utf8 } from "./wire";
+import type { AccountView, Creation, DeviceCert, Grant, LogRead, NewOp, NodesView, Revocation, Rotated, Rotation, Signed, Snapshot, TunnelRequest, TunnelResponse, WireOp } from "./wire";
+import { LIMITS, b64url, fromB64url, utf8 } from "./wire";
+
+export type Nodes = NodesView & { handle: string; url: string };
 
 // account: the account's id, which after a rotation is no longer the key its certs name.
 export type Token = { token: string; expires: number; account?: string };
@@ -266,5 +272,73 @@ export class Relay implements PairTransport, LogTransport {
     const res = await this.f(`${this.origin}/e2ee/blob/${id}`, { headers: { Authorization: `Bearer ${await this.token()}` } });
     if (!res.ok) throw new RelayError(res.status, `GET blob: ${res.status}`);
     return new Uint8Array(await res.arrayBuffer());
+  }
+
+  async deleteBlob(id: string) {
+    const res = await this.f(`${this.origin}/e2ee/blob/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${await this.token()}` } });
+    if (!res.ok) throw new RelayError(res.status, `DELETE blob: ${res.status}`);
+  }
+
+  // Nodes ------------------------------------------------------------------------
+
+  nodes() {
+    return this.authed<Nodes>("GET", "/e2ee/nodes");
+  }
+
+  setLeader(device: string | null) {
+    return this.authed<Nodes>("PUT", "/e2ee/nodes/leader", { device });
+  }
+
+  // This device as one of the account's nodes: the tunnel's requests are
+  // answered by handler, at the node's own paths (/mcp, not /n/<handle>/mcp)
+  // on a placeholder host, so the handler must know its public origin
+  // (nodes().url). Reconnects after a drop until stopped, or until another
+  // socket of this device's replaces it.
+  serveTunnel(handler: (req: Request) => Promise<Response>, o: { name?: string; onState?(connected: boolean): void } = {}): () => void {
+    let stopped = false;
+    let ws: WebSocket | undefined;
+    let ping: ReturnType<typeof setInterval> | undefined;
+    const make = this.o.socket ?? ((url, protocols) => new WebSocket(url, protocols));
+    const answer = async (r: TunnelRequest): Promise<TunnelResponse> => {
+      try {
+        const res = await handler(new Request(`http://tunnel.invalid${r.path}`, { method: r.method, headers: r.headers, body: r.body && !/^(GET|HEAD)$/.test(r.method) ? (fromB64url(r.body) as Uint8Array<ArrayBuffer>) : undefined }));
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        if (bytes.length > LIMITS.tunnel) return { id: r.id, status: 502, headers: [["content-type", "application/json"]], body: b64url(utf8(JSON.stringify({ error: "the answer is too big for the tunnel" }))) };
+        return { id: r.id, status: res.status, headers: [...res.headers] as [string, string][], ...(bytes.length && { body: b64url(bytes) }) };
+      } catch (e) {
+        return { id: r.id, status: 500, headers: [["content-type", "application/json"]], body: b64url(utf8(JSON.stringify({ error: (e as Error).message }))) };
+      }
+    };
+    const connect = async () => {
+      if (stopped) return;
+      const t = await this.token().catch(() => undefined);
+      if (!t) return void setTimeout(connect, 5000);
+      const sock = (ws = make(`${this.origin.replace(/^http/, "ws")}/e2ee/nodes/live${o.name ? `?name=${encodeURIComponent(o.name)}` : ""}`, ["corkboard", `corkboard.bearer.${b64url(utf8(t))}`]));
+      sock.addEventListener("open", () => {
+        o.onState?.(true);
+        ping = setInterval(() => sock.readyState === 1 && sock.send("ping"), 30_000);
+      });
+      sock.addEventListener("message", (e: MessageEvent) => {
+        if (e.data === "pong") return;
+        let r: TunnelRequest;
+        try {
+          r = JSON.parse(String(e.data)) as TunnelRequest;
+        } catch {
+          return;
+        }
+        void answer(r).then((a) => sock.readyState === 1 && sock.send(JSON.stringify(a)));
+      });
+      sock.addEventListener("close", (e: CloseEvent) => {
+        if (ping) clearInterval(ping);
+        o.onState?.(false);
+        if (!stopped && e.code !== 4000) setTimeout(connect, 2000);
+      });
+    };
+    void connect();
+    return () => {
+      stopped = true;
+      if (ping) clearInterval(ping);
+      ws?.close();
+    };
   }
 }

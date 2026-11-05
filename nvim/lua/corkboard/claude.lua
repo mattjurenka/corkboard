@@ -24,6 +24,8 @@ end
 -- needs no asking.
 local function settings()
   local session = { hooks = { hook("claude-session.lua") } }
+  -- The brain's memory, from the node (hooks/claude-memory.lua).
+  local memory = { hooks = { hook("claude-memory.lua") } }
   return {
     permissions = { allow = { "mcp__corkboard-ui__say", "mcp__corkboard-ui__emote" } },
     hooks = {
@@ -31,7 +33,9 @@ local function settings()
         { matcher = "PushNotification", hooks = { hook("claude-notification.lua") } },
         session,
       },
-      SessionStart = { session },
+      SessionStart = { session, memory },
+      PreCompact = { memory },
+      SessionEnd = { memory },
       UserPromptSubmit = { session },
       PreToolUse = { session },
       PermissionRequest = { session },
@@ -50,6 +54,56 @@ local NOTIFY_PROMPT = table.concat({
   "Send it even if you think the user is watching; a \"not sent\" result is expected and still reaches them.",
 }, " ")
 
+-- The file a click in the session's terminal landed on, resolved against
+-- dir, with the line after it (path:12, path:12:3), or nil when the word
+-- there names no file.
+local function file_at(buf, dir, pos)
+  local text = vim.api.nvim_buf_get_lines(buf, pos.line - 1, pos.line, false)[1]
+  if not text or pos.column > #text then return end
+  -- The run of path characters around the click.
+  local s, e = pos.column, pos.column
+  local function part(i) return text:sub(i, i):match("[%w%._%-/~:@+]") end
+  if not part(s) then return end
+  while s > 1 and part(s - 1) do s = s - 1 end
+  while e < #text and part(e + 1) do e = e + 1 end
+  local word = text:sub(s, e):gsub("[.:]+$", "")
+  local path, line = word:match("^(.-):(%d+)")
+  path = path or word
+  if path:match("^%a[%w+.-]*://") then return end
+  path = vim.fs.normalize(path)
+  if not path:match("^/") then path = vim.fs.joinpath(dir, path) end
+  if vim.fn.filereadable(path) == 0 then return end
+  return path, tonumber(line)
+end
+
+-- A click on a file's path in the session (web/src/App.tsx, ./x.lua:12)
+-- opens it as the file explorer would, in its preview tab, at that line. A
+-- press and release on the same cell is a click; anything else, and every
+-- press and release, still goes on to the terminal or Neovim as it was.
+local function open_on_click(buf, dir)
+  local down
+  local function pass(key)
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(key, true, false, true), "n", false)
+  end
+  vim.keymap.set({ "t", "n" }, "<LeftMouse>", function()
+    down = vim.fn.getmousepos()
+    pass("<LeftMouse>")
+  end, { buffer = buf })
+  vim.keymap.set({ "t", "n" }, "<LeftRelease>", function()
+    local up, was = vim.fn.getmousepos(), down
+    down = nil
+    pass("<LeftRelease>")
+    if not (was and up.winid == was.winid and up.line == was.line and up.column == was.column) then return end
+    if up.winid == 0 or vim.api.nvim_win_get_buf(up.winid) ~= buf then return end
+    local path, line = file_at(buf, dir, up)
+    if not path then return end
+    require("corkboard").open_file(path, true)
+    if line then
+      vim.schedule(function() pcall(vim.api.nvim_win_set_cursor, 0, { line, 0 }) end)
+    end
+  end, { buffer = buf })
+end
+
 -- Start Claude Code in a new tab; returns its terminal buffer, or nil when
 -- claude is not on PATH. opts: args (after corkboard's own), cwd, env,
 -- kind (what the mod draws: "pepper", "card", or "project" by default),
@@ -65,6 +119,7 @@ local NOTIFY_PROMPT = table.concat({
 -- the session runs, which <C-`> opens there). The tab closes with the session,
 -- unless a shell in it is still running.
 function M.start(opts)
+  if require("corkboard.projects").need() then return end
   opts = opts or {}
   local exe = opts.attach and opts.attach[1] or opts.via and opts.via[1] or "claude"
   if vim.fn.executable(exe) == 0 then
@@ -102,6 +157,9 @@ function M.start(opts)
     cmd = vim.list_extend(vim.deepcopy(opts.via), { "claude", "--append-system-prompt", prompt })
   else
     cmd = { "claude", "--settings", vim.json.encode(settings()), "--append-system-prompt", prompt }
+    -- The memory tools, from the bridge's node (bridge/node/app.ts); with =,
+    -- since --mcp-config otherwise takes as many values as follow it.
+    if vim.env.CORKBOARD_MEMORY_MCP_CONFIG then table.insert(cmd, 2, "--mcp-config=" .. vim.env.CORKBOARD_MEMORY_MCP_CONFIG) end
     -- The mod (claude-plugin/) that draws the transcript as corkboard's ledger,
     -- and Pepper's plan beside it.
     local mod = vim.api.nvim_get_runtime_file("claude-plugin/.claude-plugin/plugin.json", false)[1]
@@ -120,16 +178,22 @@ function M.start(opts)
     end)(),
     -- CORKBOARD_BUF tells the hooks which terminal the session is in, and
     -- CORKBOARD_CONTEXT_LIMIT when to hand off;
-    -- CORKBOARD_LIVE and CORKBOARD_SESSION, the mod what to draw.
+    -- CORKBOARD_LIVE and CORKBOARD_SESSION, the mod what to draw;
+    -- CORKBOARD_MEMORY_BRAIN, the memory hook whose memory it is.
     env = vim.tbl_extend("force", opts.env or {}, {
       CORKBOARD_BUF = tostring(buf),
       CORKBOARD_CONTEXT_LIMIT = tostring(require("corkboard.context").limit()),
       CORKBOARD_LIVE = require("corkboard.live").path(),
       CORKBOARD_SESSION = opts.kind or "project",
+      CORKBOARD_MEMORY_BRAIN = opts.brain,
     }),
   })
-  -- Elsewhere, no hook says it started.
-  if opts.via or opts.attach then vim.schedule(require("corkboard.away").report) end
+  -- Elsewhere, no hook says it started, and its files aren't here to open.
+  if opts.via or opts.attach then
+    vim.schedule(require("corkboard.away").report)
+  else
+    open_on_click(buf, vim.fs.normalize(opts.cwd or vim.fn.getcwd()))
+  end
   vim.api.nvim_create_autocmd("TermClose", {
     buffer = buf,
     once = true,
@@ -186,10 +250,18 @@ local function follow_spawn(spawn, label)
   vim.defer_fn(look, 3000)
 end
 
+-- The sidebar's New Session: Claude Code here when this machine has it,
+-- else the choice open() gives.
+function M.new_session()
+  if vim.fn.executable("claude") == 1 then return M.start() end
+  M.open()
+end
+
 -- <C-.>: a Claude Code session, wherever you choose: here, when this
 -- machine has claude, or in one of the fleet's VMs (an environment's agent
 -- template, on this board's project), whose conversation opens when it's up.
 function M.open()
+  if require("corkboard.projects").need() then return end
   local cloud = require("corkboard.cards.cloud")
   local choices = {}
   if vim.fn.executable("claude") == 1 then table.insert(choices, { text = "Claude Code here", run = function() M.start() end }) end

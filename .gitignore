@@ -1,5 +1,6 @@
 node_modules/
 web/dist/
+web/dist-meet/
 # nix build output
 result
 result-*

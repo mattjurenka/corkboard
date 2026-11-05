@@ -6,7 +6,7 @@
 -- slot's spawn. g groups the same sessions by project instead. Then the
 -- spawns waiting or over, as the queue, at the foot.
 --
--- The view is the agent://fleet buffer, third among the tabs after the board
+-- The view is the agent://fleet buffer, fourth among the tabs after projects, the board
 -- and usage: a plain listing with the browser's HTML drawn over it. The
 -- cursor's line selects a spawn or a session. It follows the user's socket
 -- through the bridge, which says when a spawn or an environment changes, and
@@ -126,8 +126,8 @@ end
 
 local function spawn_row(s, where)
   return {
-    id = s.id, spawn = true, state = s.state, title = first_line(s.task) ~= "" and first_line(s.task) or (s.template .. " session"), project = s.board, where = where,
-    ago = ago(s.started or s.created), card = s.card,
+    id = s.id, spawn = true, state = s.state, title = first_line(s.task) ~= "" and first_line(s.task) or (s.template .. " session"), project = nil_if_null(s.board), where = where,
+    ago = ago(s.started or s.created), card = nil_if_null(s.card),
     info = fields({
       { "spawn", s.id },
       { "template", s.template },
@@ -137,7 +137,7 @@ local function spawn_row(s, where)
       { "brain", s.brain },
       { "account", s.account },
       { "asked by", s.by },
-      { "card", s.card and (s.card .. " on " .. tostring(s.board)) },
+      { "card", nil_if_null(s.card) and (s.card .. " on " .. tostring(s.board)) },
     }),
   }
 end
@@ -145,7 +145,7 @@ end
 local function spawn_entry(s)
   return {
     id = s.id, template = s.template, environment = s.environment, state = s.state,
-    brain = nil_if_null(s.brain), by = s.by, task = first_line(s.task), board = s.board, card = s.card,
+    brain = nil_if_null(s.brain), by = s.by, task = first_line(s.task), board = nil_if_null(s.board), card = nil_if_null(s.card),
     slot = nil_if_null(s.slot), ago = ago(s.ended or s.started or s.created), error = nil_if_null(s.error),
   }
 end
@@ -527,7 +527,7 @@ local function by_project(machine, spawns, shown)
     if s.state == "running" then
       local row = spawn_row(s, s.environment)
       row.machine = nil_if_null(s.slot) and machine_key(s.environment, s.slot)
-      add(s.board, row)
+      add(nil_if_null(s.board), row)
       shown[s.id] = true
     end
   end
@@ -899,6 +899,7 @@ function M.open()
   end
   local s = selected_spawn()
   if not s then return end
+  if not s.card then return vim.notify("corkboard: " .. s.id .. " is a session, with no card") end
   local here = vim.env.CORKBOARD_BOARD and vim.fs.basename(vim.env.CORKBOARD_BOARD) or require("corkboard.cards.cloud").key()
   if s.board == here then return require("corkboard.board").reveal(s.card) end
   local path = clone_here(function(p) return p.key == s.board end)
@@ -1002,17 +1003,17 @@ local function buffer()
   return buf
 end
 
--- Keep the fleet view third among the tabs, after usage, while the fleet
+-- Keep the fleet view fourth among the tabs, after usage, while the fleet
 -- is on (corkboard.features). Leaves focus where it was.
 function M.ensure()
   if not require("corkboard.features").on("fleet") then return end
-  if pinned.ensure("corkboard_fleet", 3, buffer()) then vim.schedule(M.load) end
+  if pinned.ensure("corkboard_fleet", pinned.index("corkboard_fleet"), buffer()) then vim.schedule(M.load) end
 end
 
 function M.show()
   if not require("corkboard.features").on("fleet") then return end
   M.ensure()
-  pinned.show("corkboard_fleet", 3, buffer())
+  pinned.show("corkboard_fleet", pinned.index("corkboard_fleet"), buffer())
 end
 
 -- For a channel that just attached: the last state again, if the view exists.

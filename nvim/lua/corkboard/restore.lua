@@ -14,7 +14,7 @@
 
 local M = {}
 
-local PINNED = { corkboard_board = true, corkboard_usage = true, corkboard_fleet = true, corkboard_brains = true, corkboard_plan = true }
+local PINNED = { corkboard_projects = true, corkboard_board = true, corkboard_usage = true, corkboard_fleet = true, corkboard_brains = true, corkboard_plan = true }
 
 local function path()
   if require("corkboard").window == "plan" then return require("corkboard.util").data_dir("plan", "editor.json") end
@@ -94,9 +94,7 @@ function M.state()
 end
 
 -- Home is where corkboard lands without a project; it keeps no state.
-local function homeless()
-  return require("corkboard").window ~= "plan" and vim.fn.getcwd(-1, -1) == vim.uv.os_homedir()
-end
+local function homeless() return require("corkboard.util").no_project() end
 
 local last
 function M.save()

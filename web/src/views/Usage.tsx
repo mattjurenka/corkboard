@@ -1,7 +1,7 @@
 // The token-usage view. Neovim reads the session logs and owns the
 // selection (corkboard.usage); a click on a session calls back into it.
 
-import { Marked } from "marked";
+import { md } from "@/lib/markdown";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Spinner } from "@/components/Spinner";
 import { Card } from "@/components/ui/card";
@@ -146,23 +146,6 @@ export function Usage({ state, win, focused, nvim }: ViewProps<UsageState>) {
   );
 }
 
-// Pepper's notes are model-written, and Pepper reads mail, so its markdown
-// is shown as markdown only: raw HTML as text, links only to http(s) and in
-// a new window (never this page, which drives Neovim), images as their alt
-// text.
-const escape = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-const safe = new Marked({
-  gfm: true,
-  async: false,
-  renderer: {
-    html: ({ text }) => escape(text),
-    image: ({ text }) => escape(text),
-    link({ href, tokens }) {
-      const text = this.parser.parseInline(tokens);
-      return /^https?:\/\//i.test(href) ? `<a href="${escape(href)}" target="_blank" rel="noopener noreferrer">${text}</a>` : text;
-    },
-  },
-});
 
 // The JSON Pepper ends its note with (fleet/pepper/guest.nix).
 type Recommendation = { title: string; saving?: number; change?: string; evidence?: string; cards?: string[] };
@@ -186,7 +169,6 @@ function parseAdvice(body: string, board?: string): { projects?: ProjectAdvice[]
   return { projects: [...projects].sort((a, b) => rank(a) - rank(b)), markdown };
 }
 
-const md = (s?: string) => ({ __html: s ? (safe.parse(s) as string) : "" });
 
 // What Pepper made of the reports: a section per project, or its markdown
 // on the grid like a card's.

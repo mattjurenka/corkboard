@@ -2,7 +2,8 @@
 // a Mac; corkboard.picker.tools), as a
 // window of the page's rather than a float on the grid: a title bar, a search
 // field and the tools under it, each with its key. The one chosen runs in
-// Neovim (corkboard.picker.run), in the window the picker was opened from.
+// Neovim (corkboard.picker.run), in the window the picker was opened from;
+// one that needs a project is greyed out while there's none.
 
 import { useEffect, useRef, useState } from "react";
 import { useNvim } from "@/nvim/context";
@@ -62,7 +63,7 @@ export function Tools() {
     if (moved !== null) setPicked(moved);
     else if (e.key === "Enter") {
       e.preventDefault();
-      if (shown[at]) choose(shown[at].i);
+      if (shown[at] && !shown[at].off) choose(shown[at].i);
     } else if (e.key === "Escape" || ((e.ctrlKey || e.altKey) && e.key === " ") || ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === "KeyP")) {
       e.preventDefault();
       close();
@@ -83,7 +84,9 @@ export function Tools() {
       />
       <ul className="max-h-[50vh] overflow-y-auto px-[6px] pb-[6px]">
         {shown.map((tool, n) => (
-          <Row key={tool.i} picked={n === at} onMouseMove={() => n !== at && setPicked(n)} onClick={() => choose(tool.i)}>
+          <Row key={tool.i} picked={n === at} onMouseMove={() => n !== at && setPicked(n)} onClick={() => !tool.off && choose(tool.i)}
+            aria-disabled={tool.off}
+            className={tool.off ? "opacity-50" : undefined}>
             <span className="truncate">{tool.text}</span>
             {tool.hint && (
               <span className="flex shrink-0 gap-[3px]">

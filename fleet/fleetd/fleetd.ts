@@ -46,7 +46,7 @@ async function start(m: Manifest, s: Spawn, slot: string) {
   if (!existsSync(token)) throw new Error(`no token for the ${s.account} account at ${token} (claude setup-token, signed in as it, then save it there)`);
   empty(sl.shareDir);
   empty(sl.outboxDir);
-  writeFileSync(join(sl.shareDir, "task.md"), s.remote ? s.task + cardNote(s) : s.task);
+  writeFileSync(join(sl.shareDir, "task.md"), s.remote ? s.task + (s.remote.card ? cardNote(s) : s.interactive ? sessionNote(s) : taskNote(s)) : s.task);
   if (s.interactive) {
     writeFileSync(join(sl.shareDir, "session"), "");
     if (s.task) post(sl.shareDir, message(s.task + (s.remote ? sessionNote(s) : "")));
@@ -76,11 +76,31 @@ async function start(m: Manifest, s: Spawn, slot: string) {
   if (!r.ok) throw new Error(`couldn't start ${sl.unit}: ${r.out}`);
 }
 
-const sessionNote = (s: Spawn) => `
+// What's said after the task, under a rule, or nothing when there's
+// nothing to say (a spawn on no board, holding no secrets).
+const note = (said: string, s: Spawn) => {
+  const all = (said + secretsNote(s)).trim();
+  return all ? `\n\n---\n${all}\n` : "";
+};
 
----
-This session is corkboard card ${s.remote!.card} on the ${s.remote!.board} board, and you are its agent, ${s.remote!.agent}. The corkboard MCP server is connected for it.${secretsNote(s)}
-`;
+const sessionNote = (s: Spawn) =>
+  note(
+    s.remote!.card
+      ? `This session is corkboard card ${s.remote!.card} on the ${s.remote!.board} board, and you are its agent, ${s.remote!.agent}. The corkboard MCP server is connected for it.`
+      : s.remote!.board
+        ? `This session is on the corkboard ${s.remote!.board} board, as ${s.remote!.agent}, with no card of its own. The corkboard MCP server is connected for it: list_cards and read_card show the board, and when your work becomes something worth tracking, make a card for it with create_card.`
+        : "",
+    s,
+  );
+
+// A task with no card: its final answer is the spawn's result.
+const taskNote = (s: Spawn) =>
+  note(
+    s.remote!.board
+      ? `This task is on the corkboard ${s.remote!.board} board, as ${s.remote!.agent}, with no card of its own; your final answer is its result. The corkboard MCP server is connected for it: list_cards and read_card show the board, and if the work turns up something else worth doing, make a card for it with create_card.`
+      : "",
+    s,
+  );
 
 const cardNote = (s: Spawn) => `
 

@@ -68,10 +68,10 @@ export type Spawn = {
   exit?: number;
   error?: string;
   stopRequested?: boolean;
-  // From the Worker's queue: its card, the spawn token for it, and its
+  // From the Worker's queue: its card (a session has none), the spawn token for it, and its
   // brain's token if it has one (each emptied once it's revoked, at the end),
   // and the secrets of what it holds (dropped then too).
-  remote?: { board: string; card: string; agent: string; token: string; brainToken?: string; secrets?: Record<string, string> };
+  remote?: { board: string | null; card: string | null; agent: string; token: string | null; brainToken?: string; secrets?: Record<string, string> };
   // A session you talk to rather than a task (sessions.ts); when it was
   // asked to finish, if it has been.
   interactive?: boolean;

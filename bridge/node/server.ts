@@ -19,8 +19,16 @@
 //     PUT   brains/:name/notes/:id     { kind, title, body, version? }
 //     GET   brains/:name/recall        ?q=&limit=
 //     GET   brains/:name/entries       ?from=&to=
+//     POST  brains/:name/entries       { entries: [{ day, at, who, text, key }] }: a log written elsewhere
+//                                      (memory-sync.ts's vault), each kept once: { added }
 //     POST  brains/:name/remember      { text, who? }
 //     POST  calendar                   { date, day: { blocks } }: an accepted plan onto the calendar (owner)
+//   /memory/...                        a session's hooks, as the Worker's (fleet/memory-hooks.nix), with a
+//                                      token; the brain is ?brain= (or the body's), else the default:
+//     GET   context                    Markdown: what a session starts with; ?budget= characters
+//     POST  episodes                   { session, trigger?, transcript }: a session's transcript (episodes.ts)
+//     GET   episodes                   ?pending=1 for those not yet consolidated, ?limit=
+//     GET   episodes/:id               { id, transcript }
 //
 // The origin (what tokens, metadata and redirects name) is --origin, or
 // else the request's Host: https unless it's this machine.
@@ -32,11 +40,13 @@ import { type Caller, type Consent, OAuthError, type OAuthStore, Redirect, SCOPE
 import { mcp } from "./mcp";
 import type { Search } from "./search";
 import { type CalendarConfig, CalendarError, writePlan } from "./calendar";
+import { type Episodes, TooBig } from "./episodes";
 
 export type NodeOptions = {
   data: Data;
   search: Search;
   oauth: OAuthStore;
+  episodes?: Episodes;
   origin?: string;
   // The calendar's config, read when a plan is written, so a login while
   // the node runs takes effect.
@@ -92,7 +102,7 @@ export function node(o: NodeOptions) {
 <p class="muted">→ ${escape(new URL(c.redirect_uri).host || c.redirect_uri)}</p>
 <p class="muted">${escape(c.scope)}</p>
 ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
-<form method="post" action="/authorize">
+<form method="post" action="authorize">
 <input type="hidden" name="request" value="${escape(id)}">
 <label>code <input name="code" autocomplete="off" autocapitalize="characters" spellcheck="false" autofocus></label><br>
 <button name="action" value="approve">approve</button><button name="action" value="deny">deny</button>
@@ -197,7 +207,7 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       return n;
     };
     // The goals are the brains' own agents', not the user's clients'.
-    const hidden = BRAIN_ONLY_KINDS;
+    const hidden = who.brain && who.brain === name ? [] : BRAIN_ONLY_KINDS;
 
     if (what === "status" && m === "GET" && !name) return json({ objects: data.replicas.status(), calendar: !!o.calendar?.(), default_brain: data.defaultBrain() ?? null });
     if (what === "boards") {
@@ -245,6 +255,20 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
         const from = q("from") ? checkDate(q("from")) : data.today();
         return json(data.entries(brain, from, q("to") ? checkDate(q("to")) : from));
       }
+      if (sub === "entries" && m === "POST") {
+        const b = await body();
+        if (!Array.isArray(b.entries) || b.entries.length > 2000) throw new Invalid("entries must be a list of at most 2000");
+        const list = b.entries.map((e: any, i: number) => {
+          if (typeof e?.at !== "string" || Number.isNaN(Date.parse(e.at))) throw new Invalid(`entries[${i}].at must be a time`);
+          if (typeof e.key !== "string" || !e.key || e.key.length > 200) throw new Invalid(`entries[${i}].key must be the entry's key`);
+          if (typeof e.text !== "string" || !e.text.trim() || e.text.length > 20_000) throw new Invalid(`entries[${i}].text must be the entry, at most 20000 characters`);
+          return { from: `key:${e.key}`, at: e.at, day: checkDate(e.day), text: e.text.trim(), who: typeof e.who === "string" && e.who.trim() ? e.who.trim().slice(0, 80) : "import" };
+        });
+        // The same text at the same time is the same entry, as the Worker's
+        // were when they moved here (move.ts's, without their keys).
+        const have = new Set(data.entries(brain).map((e) => `${Date.parse(e.at)}\n${e.text}`));
+        return json({ added: await data.importEntries(brain, list.filter((e: { at: string; text: string }) => !have.has(`${Date.parse(e.at)}\n${e.text}`))) });
+      }
       if (sub === "remember" && m === "POST") {
         const b = await body();
         if (typeof b.text !== "string" || !b.text.trim() || b.text.length > 4000) throw new Invalid("text must be a line under 4000 characters");
@@ -264,6 +288,42 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
         if (e instanceof CalendarError) return json({ error: e.message }, 502);
         throw e;
       }
+    }
+    return json({ error: "not found" }, 404);
+  }
+
+  async function memory(req: Request, path: string[], who: Caller): Promise<Response> {
+    const url = new URL(req.url);
+    const m = req.method;
+    const b = m === "POST" ? (((await req.json().catch(() => ({}))) ?? {}) as Record<string, any>) : {};
+    const asked = url.searchParams.get("brain") ?? (typeof b.brain === "string" ? b.brain : undefined);
+    if (who.brain && asked && asked !== who.brain) return json({ error: `this token is brain ${who.brain}'s` }, 403);
+    const brain = who.brain ?? asked ?? o.data.defaultBrain();
+    if (!brain || !o.data.replicas.get("brain", brain)) return json({ error: asked ? `no brain ${asked} on this node` : "no brain on this node to remember in" }, 404);
+    const [what, id] = path;
+    if (what === "context" && !id && m === "GET") {
+      const budget = Math.min(Math.max(Number(url.searchParams.get("budget")) || 24_000, 1000), 200_000);
+      return new Response(o.search.context(brain, budget, who.brain ? [] : BRAIN_ONLY_KINDS), { headers: { "Content-Type": "text/markdown; charset=utf-8", "Cache-Control": "no-store" } });
+    }
+    const episodes = o.episodes;
+    if (what !== "episodes" || !episodes) return json({ error: "not found" }, 404);
+    if (!id && m === "GET") return json(episodes.list(brain, Math.min(Number(url.searchParams.get("limit")) || 50, 200), url.searchParams.get("pending") === "1"));
+    if (!id && m === "POST") {
+      const session = typeof b.session === "string" ? b.session.trim() : "";
+      if (!session || session.length > 200) throw new Invalid("session must be the session's id");
+      if (typeof b.transcript !== "string" || !b.transcript) throw new Invalid("transcript must be the session's transcript");
+      const trigger = typeof b.trigger === "string" && /^[a-z-]{1,40}$/.test(b.trigger) ? b.trigger : "end";
+      try {
+        const r = episodes.add(brain, { session, agent: who.agent, trigger, transcript: b.transcript });
+        return json(r, r.added ? 201 : 200);
+      } catch (e) {
+        if (e instanceof TooBig) return json({ error: e.message }, 413);
+        throw e;
+      }
+    }
+    if (id && m === "GET") {
+      const transcript = /^[0-9a-f]{32}$/.test(id) ? episodes.transcript(brain, id) : undefined;
+      return transcript === undefined ? json({ error: `no episode ${id}` }, 404) : json({ id, transcript });
     }
     return json({ error: "not found" }, 404);
   }
@@ -297,6 +357,11 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
         const who = caller(req, origin);
         if (!who) return unauthorized(origin);
         return await api(req, p.slice("/api/node/".length).split("/").filter(Boolean).map(decodeURIComponent), who);
+      }
+      if (p.startsWith("/memory/")) {
+        const who = caller(req, origin);
+        if (!who) return unauthorized(origin);
+        return await memory(req, p.slice("/memory/".length).split("/").filter(Boolean).map(decodeURIComponent), who);
       }
       return json({ error: "not found" }, 404);
     } catch (e) {

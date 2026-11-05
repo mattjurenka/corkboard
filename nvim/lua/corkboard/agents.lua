@@ -173,6 +173,14 @@ local function type_line(buf, text)
   end, 200)
 end
 
+-- The session takes a card (t on a card from its cards panel): told to
+-- claim it, which links the two as the claim comes through.
+function M.take(buf, id)
+  if not terminal.alive(buf) then return vim.notify("corkboard: that session has ended", vim.log.levels.WARN) end
+  type_line(buf, ("Take corkboard card %s: call claim_card with id %s, read the card, and work on it."):format(id, id))
+  terminal.focus(buf)
+end
+
 local function clear(buf)
   local id = clearing[buf]
   clearing[buf] = nil
@@ -412,23 +420,36 @@ local function mcp_config(id)
 end
 
 -- sent_back: the user sent the card back from review and is at the session
--- to say what to change.
-local function prompt(card, branch, sent_back)
+-- to say what to change. feedback: the reviewer's (corkboard.autopilot), to
+-- act on.
+local function prompt(card, branch, sent_back, feedback)
   local where = branch and ("in a git worktree of your own, on branch " .. branch .. ". Commit your work on that branch.")
     or "in the project directory."
   return table.concat({
     string.format("You are working on corkboard card %s: %q, %s", card.id, card.title, where),
     string.format("Start by calling claim_card with id %s, and read the card.", card.id),
-    sent_back and "The user sent this card back from review. After reading it, wait for them to tell you what to change."
+    feedback or (sent_back and "The user sent this card back from review. After reading it, wait for them to tell you what to change.")
       or "",
     "Log progress and decisions with log. If you need a decision from the user, ask it here with AskUserQuestion:"
       .. " corkboard tells them and brings them to this session to answer.",
-    "When you are done, call submit_for_review with what changed and how you verified it.",
+    "When you are done, call submit_for_review with a short, plain summary of what changed and how you checked it.",
   }, "\n")
 end
 
+-- Says text in the card's running session, once its turn is over (or after
+-- two minutes of waiting for that).
+function M.tell(id, text, tries)
+  local buf = M.session(id)
+  if not buf then return end
+  tries = tries or 0
+  if not between_turns(buf) and tries < 40 then
+    return vim.defer_fn(function() M.tell(id, text, tries + 1) end, 3000)
+  end
+  type_line(buf, text)
+end
+
 -- Start an agent on the card now, whatever the limit, or go to its session
--- if one is running. opts.sent_back: see prompt(); opts.resume: a session
+-- if one is running. opts.sent_back, opts.feedback: see prompt(); opts.resume: a session
 -- to resume instead of starting one (corkboard.restore); opts.here: in the
 -- current window, not a tab.
 function M.start(id, opts)
@@ -453,7 +474,7 @@ function M.start(id, opts)
   if opts and opts.resume then
     vim.list_extend(args, { "--resume", opts.resume })
   else
-    vim.list_extend(args, { "--", prompt(card, branch, opts and opts.sent_back) })
+    vim.list_extend(args, { "--", prompt(card, branch, opts and opts.sent_back, opts and opts.feedback) })
   end
 
   local buf

@@ -22,6 +22,7 @@ end
 
 -- A shell in a tab of its own.
 function M.tab()
+  if require("corkboard.projects").need() then return end
   vim.cmd.tabnew()
   local empty = vim.api.nvim_get_current_buf()
   vim.cmd.terminal()
@@ -33,6 +34,7 @@ end
 -- back (the same shell) when not. One per tab, made again once it exits.
 -- Not in a shell's own tab. Beside a session in a VM, the shell is in its VM.
 function M.toggle()
+  if require("corkboard.projects").need() then return end
   if vim.t.corkboard_terminal_tab then return end
   local buf = vim.t.corkboard_terminal
   local alive = M.alive(buf)

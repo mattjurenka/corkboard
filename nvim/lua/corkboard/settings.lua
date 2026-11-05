@@ -7,6 +7,14 @@
 -- A plain listing, agent://settings, with the browser's HTML drawn over it.
 -- The cursor's line selects; <CR> changes the setting (toggles, picks or asks
 -- for it) and x puts it back to its default.
+--
+-- Devices are the encrypted account's, as the relay knows them (the bridge's
+-- node's nodes_*): <CR> on one makes it the leader, or no longer, and on the
+-- address copies it.
+--
+-- Keybindings are corkboard's own shortcuts, every global mapping whose desc
+-- starts "corkboard: ", a setting each, gathered once init.lua has made them
+-- (M.keys).
 
 local pinned = require("corkboard.pinned")
 
@@ -71,7 +79,8 @@ local function feature(name)
 end
 
 -- type: text, number, bool, color, enum (options: values, or { value,
--- label }s, or a function returning them) or list (of text). A setting
+-- label }s, or a function returning them), list (of text) or keys (of
+-- key sequences, in Neovim's notation). A setting
 -- is read from vim.g[g] unless it has its own get and set; default is what
 -- the code reading it falls back on, and placeholder stands in for one it
 -- works out.
@@ -101,9 +110,29 @@ M.SCHEMA = {
   {
     section = "Editor",
     items = {
-      vim.tbl_extend("error", { key = "number", label = "Line numbers", type = "bool", default = true }, option("number")),
-      vim.tbl_extend("error", { key = "relativenumber", label = "Relative line numbers", type = "bool", default = true }, option("relativenumber")),
+      {
+        key = "number",
+        label = "Line numbers",
+        type = "bool",
+        default = true,
+        get = function() return vim.g.corkboard_number ~= false end,
+        set = function(v)
+          vim.g.corkboard_number = v ~= false
+          require("corkboard.vimkeys").numbers()
+        end,
+      },
       vim.tbl_extend("error", { key = "wrap", label = "Wrap lines", type = "bool", default = true }, option("wrap")),
+      {
+        key = "vim",
+        label = "Vim keys",
+        type = "bool",
+        default = false,
+        get = function() return vim.g.corkboard_vim == true end,
+        set = function(v)
+          vim.g.corkboard_vim = v
+          require("corkboard.vimkeys").changed()
+        end,
+      },
       { key = "markdown_preview", label = "Markdown preview", type = "bool", default = true, g = "corkboard_markdown_preview" },
       { key = "focus_width", label = "Focus mode width", type = "number", min = 40, max = 200, step = 2, unit = "columns", placeholder = "100", g = "corkboard_focus_width" },
     },
@@ -122,6 +151,34 @@ M.SCHEMA = {
         g = "corkboard_context_limit",
       },
       { key = "agent_args", label = "Agent arguments", type = "list", default = {}, g = "corkboard_agent_args" },
+    },
+  },
+  {
+    section = "Autopilot",
+    items = {
+      { key = "ai_intake", label = "Write up new cards", type = "bool", default = true, g = "corkboard_ai_intake" },
+      { key = "autopilot", label = "Start ready cards", type = "bool", default = false, g = "corkboard_autopilot" },
+      { key = "groom_minutes", label = "Groom the board every", type = "number", min = 0, step = 5, unit = "minutes", default = 30, placeholder = "never", g = "corkboard_groom_minutes" },
+      { key = "archive_done_hours", label = "Archive done cards after", type = "number", min = 0, step = 1, unit = "hours", default = 24, placeholder = "never", g = "corkboard_archive_done_hours" },
+      { key = "pre_review", label = "Review before me", type = "bool", default = true, g = "corkboard_pre_review" },
+      { key = "review_rounds", label = "Send back at most", type = "number", min = 0, max = 10, step = 1, unit = "times", default = 2, g = "corkboard_review_rounds" },
+      { key = "auto_merge", label = "Merge low-risk work", type = "bool", default = false, g = "corkboard_auto_merge" },
+      {
+        key = "planner_model",
+        label = "Planner model",
+        type = "enum",
+        options = { "haiku", "sonnet", "opus" },
+        default = "sonnet",
+        g = "corkboard_planner_model",
+      },
+      {
+        key = "reviewer_model",
+        label = "Reviewer model",
+        type = "enum",
+        options = { "haiku", "sonnet", "opus" },
+        default = "sonnet",
+        g = "corkboard_reviewer_model",
+      },
     },
   },
   {
@@ -160,6 +217,7 @@ end
 local function apply(item, v)
   if item.set then item.set(v) else vim.g[item.g] = v end
   if item.theme then ui().push_theme() end
+  if item.type == "keys" then M.push_keys() end
 end
 
 local function options(item)
@@ -194,11 +252,15 @@ end
 local buf
 local line_key = {} -- line number -> setting key
 local selected
+-- { url, leader, devices = { { device, name, seen, me, connected, leader } } },
+-- or nil: not asked yet, or this machine isn't in a relay's account.
+local devices
 
 local function shown(v, item)
   if v == nil then return item.placeholder or "" end
   if item.type == "bool" then return v and "on" or "off" end
   if item.type == "list" then return table.concat(v, ", ") end
+  if item.type == "keys" then return #v > 0 and table.concat(v, " ") or "none" end
   if item.type == "enum" then
     for _, o in ipairs(options(item)) do
       if o.value == v then return o.label end
@@ -235,6 +297,8 @@ local function state()
         end, s.items),
       }
     end, M.SCHEMA),
+    devices = devices or vim.NIL,
+    leader = vim.g.mapleader or "\\",
     -- The terminal colors, for the color picker's swatches.
     palette = vim.iter(vim.fn.range(0, 15)):map(function(i) return vim.g["terminal_color_" .. i] end):totable(),
   }
@@ -248,6 +312,19 @@ local function render_text()
     for _, item in ipairs(s.items) do
       table.insert(lines, ("  %-38s %s%s"):format(item.label, shown(get(item), item), read()[item.key] ~= nil and "  *" or ""))
       map[#lines] = item.key
+    end
+  end
+  if devices then
+    table.insert(lines, "")
+    table.insert(lines, "Devices")
+    table.insert(lines, ("  %-38s %s"):format("Address", devices.url))
+    map[#lines] = "devices.url"
+    for _, d in ipairs(devices.devices) do
+      local what = {}
+      if d.leader then table.insert(what, "leader") end
+      table.insert(what, d.connected and "connected" or d.seen > 0 and os.date("seen %Y-%m-%d %H:%M", math.floor(d.seen / 1000)) or "away")
+      table.insert(lines, ("  %-38s %s"):format(d.name .. (d.me and " (this machine)" or ""), table.concat(what, ", ")))
+      map[#lines] = "devices." .. d.device
     end
   end
   pinned.set_lines(buf, lines)
@@ -285,9 +362,33 @@ function M.select(key, win)
   push()
 end
 
+-- The devices from the bridge, after op (nodes_list, or nodes_leader with
+-- a device or vim.NIL), redrawn when they come.
+local function load_devices(op, ...)
+  require("corkboard.cards.cloud").call_async(op or "nodes_list", function(err, res)
+    vim.schedule(function()
+      if err then return vim.notify("corkboard: devices: " .. tostring(err), vim.log.levels.WARN) end
+      devices = res ~= vim.NIL and res or nil
+      push()
+    end)
+  end, ...)
+end
+
+-- A device's line: it leads, or with the leader's, none does. The address's: copied.
+function M.device(key)
+  if not devices then return end
+  if key == "devices.url" then
+    vim.fn.setreg("+", devices.url)
+    return vim.notify("corkboard: copied " .. devices.url)
+  end
+  local id = key:match("^devices%.(.+)")
+  if id then load_devices("nodes_leader", id == devices.leader and vim.NIL or id) end
+end
+
 -- The cursor's setting, changed as a bare Neovim can: on/off flips, a
 -- choice is picked, the rest are typed.
 local function edit()
+  if selected and selected:match("^devices%.") then return M.device(selected) end
   local item = by_key[selected]
   if not item then return end
   local v = get(item)
@@ -298,11 +399,13 @@ local function edit()
       format_item = function(o) return o.label end,
     }, function(o) if o then M.set(item.key, o.value) end end)
   end
-  local text = v == nil and "" or item.type == "list" and table.concat(v, ", ") or tostring(v)
+  local sep = item.type == "keys" and " " or ", "
+  local text = v == nil and "" or (item.type == "list" or item.type == "keys") and table.concat(v, sep) or tostring(v)
   vim.ui.input({ prompt = item.label .. ": ", default = text }, function(input)
     if input == nil then return end
     if input == "" then return M.set(item.key, nil) end
     if item.type == "list" then return M.set(item.key, vim.split(input, "%s*,%s*", { trimempty = true })) end
+    if item.type == "keys" then return M.set(item.key, vim.split(input, "%s+", { trimempty = true })) end
     M.set(item.key, input)
   end)
 end
@@ -335,14 +438,127 @@ function M.open()
     pcall(vim.api.nvim_buf_delete, empty, {})
   end
   push()
+  load_devices()
+end
+
+-- Keybindings ------------------------------------------------------------------
+
+local MODES = { "n", "i", "t", "x", "c" }
+
+-- What each binding is bound to, for the menu bar's keys, and every Cmd
+-- chord mapped at all, which a Mac's page sends on (input.js) rather than
+-- leaving to the browser.
+function M.push_keys()
+  local bindings, cmd = {}, {}
+  for _, item in pairs(by_key) do
+    if item.type == "keys" then bindings[item.label:lower()] = item.get() end
+  end
+  for _, mode in ipairs(MODES) do
+    for _, m in ipairs(vim.api.nvim_get_keymap(mode)) do
+      if m.lhs:find("D%-") then cmd[m.lhs] = true end
+    end
+  end
+  ui().notify("corkboard.keys", { bindings = bindings, cmd = vim.tbl_keys(cmd) })
+end
+
+-- One shortcut's mappings, as init.lua made them: rebound, each new key gets
+-- every mode any of them had, with that mode's first one's action.
+local function binding(label, maps, keys)
+  local bound = vim.deepcopy(maps)
+  local function map(mode, lhs, m)
+    vim.keymap.set(mode, lhs, m.rhs, m.opts)
+    table.insert(bound, { mode = mode, lhs = lhs })
+  end
+  return {
+    key = "keys." .. label,
+    label = label:sub(1, 1):upper() .. label:sub(2),
+    type = "keys",
+    default = keys,
+    get = function()
+      local current = {}
+      for _, b in ipairs(bound) do
+        if not vim.tbl_contains(current, b.lhs) then table.insert(current, b.lhs) end
+      end
+      return current
+    end,
+    set = function(v)
+      for _, b in ipairs(bound) do pcall(vim.keymap.del, b.mode, b.lhs) end
+      bound = {}
+      if v == nil or vim.deep_equal(v, keys) then
+        for _, m in ipairs(maps) do map(m.mode, m.lhs, m) end
+        return
+      end
+      local first, modes = {}, {}
+      for _, m in ipairs(maps) do
+        if not first[m.mode] then
+          first[m.mode] = m
+          table.insert(modes, m.mode)
+        end
+      end
+      for _, lhs in ipairs(v) do
+        for _, mode in ipairs(modes) do map(mode, lhs, first[mode]) end
+      end
+    end,
+  }
+end
+
+-- The Keybindings section, from the mappings init.lua has made by now, with
+-- what was saved for them applied.
+function M.keys()
+  local leader = vim.g.mapleader or "\\"
+  local maps, keys, labels = {}, {}, {}
+  for _, mode in ipairs(MODES) do
+    local list = vim.api.nvim_get_keymap(mode)
+    -- Newest first, within keys that start alike: as they were made.
+    for i = #list, 1, -1 do
+      local m = list[i]
+      local label = m.desc and m.desc:match("^corkboard: (.+)")
+      if label then
+        if not maps[label] then
+          maps[label], keys[label] = {}, {}
+          table.insert(labels, label)
+        end
+        local lhs = m.lhs:sub(1, #leader) == leader and "<leader>" .. m.lhs:sub(#leader + 1) or m.lhs
+        table.insert(maps[label], {
+          mode = mode,
+          lhs = lhs,
+          rhs = m.callback or m.rhs,
+          opts = { desc = m.desc, expr = m.expr == 1, silent = m.silent == 1, nowait = m.nowait == 1, remap = m.noremap ~= 1 },
+        })
+        if not vim.tbl_contains(keys[label], lhs) then table.insert(keys[label], lhs) end
+      end
+    end
+  end
+  table.sort(labels)
+  local items = {}
+  for _, label in ipairs(labels) do
+    local item = binding(label, maps[label], keys[label])
+    by_key[item.key] = item
+    table.insert(items, item)
+  end
+  for i = #M.SCHEMA, 1, -1 do
+    if M.SCHEMA[i].section == "Keybindings" then table.remove(M.SCHEMA, i) end
+  end
+  table.insert(M.SCHEMA, { section = "Keybindings", items = items })
+  for key, v in pairs(read()) do
+    local item = by_key[key]
+    if item and item.type == "keys" then
+      local ok, err = pcall(item.set, v)
+      if not ok then vim.notify("corkboard: settings: " .. key .. ": " .. tostring(err), vim.log.levels.WARN) end
+    end
+  end
 end
 
 -- For a channel that just attached, or the colorscheme changing.
-function M.push_all() push() end
+function M.push_all()
+  push()
+  M.push_keys()
+end
 
 function M.setup()
   for key, v in pairs(read()) do
     local item = by_key[key]
+    -- Keybindings wait for M.keys.
     if item then
       local ok, err = pcall(apply, item, v)
       if not ok then vim.notify("corkboard: settings: " .. key .. ": " .. tostring(err), vim.log.levels.WARN) end

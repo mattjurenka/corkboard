@@ -5,14 +5,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newRoot, random } from "../../lib/e2ee/keys";
 import { entries, indexId, indexKey, remember } from "../../lib/e2ee/sharing";
-import { EpochChanged, type LogTransport, Replica } from "../../lib/e2ee/sync";
-import { type NewOp, type Snapshot, type WireOp, b64url } from "../../lib/e2ee/wire";
+import { EpochChanged, type LogTransport, type ReplicaStore, Replica, memoryStore, offline } from "../../lib/e2ee/sync";
+import { type NewOp, type Snapshot, type TunnelRequest, type TunnelResponse, type WireOp, b64url, fromB64url, utf8 } from "../../lib/e2ee/wire";
+import { Relay } from "../../lib/e2ee/relay";
 import { listObjects, noteRecord } from "./objects";
 import { Replicas } from "./replicas";
 import { Data } from "./data";
 import { Search } from "./search";
-import { OAuthStore, publicAddress, redirectAllowed, sameRedirect } from "./oauth";
+import { Episodes } from "./episodes";
+import { Consolidator } from "./consolidator";
+import { type Blobs, Handoff } from "./handoff";
+import { type Embed, LocalEmbedder, dequantize, pieces, quantize } from "./embed";
+import { QUIET } from "../../lib/memory/consolidate";
+import { OAuthStore, type Shared, publicAddress, redirectAllowed, sameRedirect } from "./oauth";
+import type { CardChange } from "../../lib/e2ee/merge";
 import { node, originOf } from "./server";
+import { moveMemory } from "./move";
+import { notes } from "./app";
 
 // A relay in memory: a log per object, ordered by pos, as the Worker keeps
 // them, with its epoch and snapshot. state.pad is added to what a read
@@ -77,12 +86,13 @@ async function setup() {
   const data = new Data(replicas, "UTC");
   const search = new Search(data);
   const oauth = new OAuthStore(join(dir, "oauth.json"));
-  const app = node({ data, search, oauth, origin: ORIGIN });
+  const episodes = new Episodes();
+  const app = node({ data, search, oauth, episodes, origin: ORIGIN });
   // Another device of the account: the laptop, on the same relay.
   const board = objects.find((o) => o.kind === "board")!;
   const laptop = await Replica.open({ transport: as(shared, "laptop"), key: board.key, object: board.object, device: "laptop" });
   const call = (path: string, init: RequestInit = {}) => app(new Request(`${ORIGIN}${path}`, init));
-  return { dir, root, replicas, data, search, oauth, app, call, laptop, stop: () => replicas.stop() };
+  return { dir, root, replicas, data, search, oauth, episodes, app, call, laptop, stop: () => replicas.stop() };
 }
 
 const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
@@ -229,6 +239,58 @@ describe("the node's OAuth", () => {
   });
 });
 
+describe("grants on every node of the account", () => {
+  it("refresh on another node, rotated and revoked for all, a CLI's token shared", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "corkboard-grants-"));
+    dirs.push(dir);
+    // The account's object, its changes landing when flushed, as a relay's would.
+    const object = new Map<string, unknown>();
+    let queue: CardChange[] = [];
+    const shared: Shared = { cards: () => [...object].map(([id, row]) => ({ id, row })), change: (...c) => void queue.push(...c) };
+    const flush = () => {
+      for (const c of queue) if (c.t === "card") object.set(c.card, c.set.row);
+      queue = [];
+    };
+    const laptop = new OAuthStore(join(dir, "laptop.json"), shared);
+    const desktop = new OAuthStore(join(dir, "desktop.json"), shared);
+    const origin = "https://relay.test/n/abc";
+    const redirect = "https://claude.ai/api/mcp/auth_callback";
+
+    const { client_id } = laptop.register({ client_name: "Claude", redirect_uris: [redirect], token_endpoint_auth_method: "none" }) as { client_id: string };
+    const consent = await laptop.request(new URLSearchParams({ response_type: "code", client_id, redirect_uri: redirect, code_challenge: challenge, code_challenge_method: "S256" }), origin);
+    const code = new URL(laptop.approve(consent, origin)).searchParams.get("code")!;
+    const t = await laptop.token(new URLSearchParams({ grant_type: "authorization_code", code, client_id, redirect_uri: redirect, code_verifier: verifier }), undefined, origin);
+    // A token minted by `serve token`, another process, with no object.
+    const phone = new OAuthStore(join(dir, "laptop.json")).mint("phone", 30);
+    expect(laptop.verify(phone, origin)?.scope).toBe("owner");
+    flush();
+
+    // The laptop gone, claude.ai's hourly token isn't the desktop's, its refresh token is.
+    expect(desktop.verify(t.access_token, origin)).toBeUndefined();
+    expect(desktop.verify(phone, origin)?.scope).toBe("owner");
+    const t2 = await desktop.token(new URLSearchParams({ grant_type: "refresh_token", refresh_token: t.refresh_token, client_id }), undefined, origin);
+    expect(desktop.verify(t2.access_token, origin)?.scope).toBe("assistant");
+    flush();
+    // Rotated for all.
+    await expect(laptop.token(new URLSearchParams({ grant_type: "refresh_token", refresh_token: t.refresh_token, client_id }), undefined, origin)).rejects.toThrow("refresh token is wrong");
+    const t3 = await laptop.token(new URLSearchParams({ grant_type: "refresh_token", refresh_token: t2.refresh_token, client_id }), undefined, origin);
+    flush();
+
+    // Revoked by `serve revoke` on the desktop: gone there before it lands, then everywhere.
+    const grant = desktop.grants().find((g) => g.name === "phone")!;
+    expect(new OAuthStore(join(dir, "desktop.json")).revoke(grant.id)).toBe(true);
+    expect(desktop.verify(phone, origin)).toBeUndefined();
+    expect(desktop.verify(phone, origin)).toBeUndefined();
+    flush();
+    expect(laptop.verify(phone, origin)).toBeUndefined();
+    expect(laptop.grants().map((g) => g.name)).toEqual(["Claude"]);
+    // Never given again.
+    flush();
+    expect(desktop.verify(phone, origin)).toBeUndefined();
+    expect(laptop.verify(t3.access_token, origin)?.scope).toBe("assistant");
+  });
+});
+
 describe("the node's MCP tools, over replicas", () => {
   let n: Awaited<ReturnType<typeof setup>>;
   let token: string;
@@ -344,6 +406,15 @@ describe("the phone's API", () => {
     expect(status.calendar).toBe(false);
   });
 
+  it("adds a log written elsewhere once, whatever else is sent with it", async () => {
+    const e = (key: string, text: string, at = "2030-01-02T17:00:00Z") => ({ day: "2030-01-02", at, who: "vault", text, key });
+    await n.data.importEntries("assistant", [{ from: "worker:1", at: "2030-01-02T16:00:00Z", day: "2030-01-02", who: "vault", text: "Moved already." }]);
+    expect((await api("POST", "brains/assistant/entries", { entries: [e("a", "First."), e("old", "Moved already.", "2030-01-02T16:00:00Z")] })).body).toEqual({ added: 1 });
+    expect((await api("POST", "brains/assistant/entries", { entries: [e("z", "Earlier.", "2030-01-02T15:00:00Z"), e("a", "First.")] })).body).toEqual({ added: 1 });
+    expect(n.data.entries("assistant", "2030-01-02").map((x) => x.text)).toEqual(["Earlier.", "Moved already.", "First."]);
+    expect((await api("POST", "brains/assistant/entries", { entries: [{ ...e("b", "x"), at: "soon" }] })).status).toBe(400);
+  });
+
   it("writes an accepted plan to the calendar when one is connected", async () => {
     expect((await api("POST", "calendar", { date: "2030-01-02", day: { blocks: [] } })).status).toBe(409);
     const calls: { method: string; url: string; body?: any }[] = [];
@@ -370,6 +441,292 @@ describe("the phone's API", () => {
     expect(calls.map((c) => c.method)).toEqual(["POST", "GET", "DELETE", "POST", "POST"]);
     expect(calls[3].body.summary).toBe("Deep: the node");
     expect(calls[4].body.summary).toBe("✅ Plan approved");
+  });
+});
+
+describe("a session's hooks", () => {
+  let n: Awaited<ReturnType<typeof setup>>;
+  let auth: Record<string, string>;
+  beforeAll(async () => {
+    n = await setup();
+    auth = { Authorization: `Bearer ${n.oauth.mint("laptop", 30)}`, "Content-Type": "application/json" };
+    await n.data.putNote("assistant", "user", { kind: "person", title: "Matthew", body: "Likes monospace." });
+    await n.data.putNote("assistant", "goal-ship", { kind: "goal", title: "Ship", body: "The brains' own." });
+  });
+  afterAll(() => n.stop());
+  const post = (body: unknown) => n.call("/memory/episodes", { method: "POST", headers: auth, body: JSON.stringify(body) });
+
+  it("start a session with the brain's context", async () => {
+    expect((await n.call("/memory/context")).status).toBe(401);
+    const res = await n.call("/memory/context?budget=5000", { headers: auth });
+    expect(res.headers.get("Content-Type")).toContain("markdown");
+    const text = await res.text();
+    expect(text).toContain("Likes monospace.");
+    expect(text).not.toContain("The brains' own.");
+    expect((await n.call("/memory/context?brain=nope", { headers: auth })).status).toBe(404);
+  });
+
+  it("give a brain's own token its goals, and only its brain", async () => {
+    const own = { Authorization: `Bearer ${n.oauth.mint("pepper", 30, "assistant", "assistant")}`, "Content-Type": "application/json" };
+    expect(await (await n.call("/memory/context", { headers: own })).text()).toContain("The brains' own.");
+    expect((await n.call("/memory/context?brain=other", { headers: own })).status).toBe(403);
+    const found = await toolText(await n.call("/mcp?tools=memory", rpc("tools/call", { name: "notes_search", arguments: { kind: "goal" } }, own.Authorization.slice(7))));
+    expect(JSON.parse(found.text).map((x: { id: string }) => x.id)).toEqual(["goal-ship"]);
+  });
+
+  it("keep a session's transcript once, the newest while it's unread", async () => {
+    let added = 0;
+    n.episodes.onAdded = () => void added++;
+    const first = await post({ session: "s1", trigger: "compact", transcript: "{\"a\":1}\n" });
+    expect(first.status).toBe(201);
+    expect((await post({ session: "s1", trigger: "compact", transcript: "{\"a\":1}\n" })).status).toBe(200);
+    const grown = (await (await post({ session: "s1", transcript: "{\"a\":1}\n{\"b\":2}\n" })).json()) as { id: string };
+    await post({ session: "s2", transcript: "{}\n" });
+    expect(added).toBe(3);
+    const list = (await (await n.call("/memory/episodes?pending=1", { headers: auth })).json()) as { id: string; session: string; trigger: string }[];
+    expect(list.map((e) => e.session).sort()).toEqual(["s1", "s2"]);
+    expect(list.find((e) => e.session === "s1")!.trigger).toBe("end");
+    const one = (await (await n.call(`/memory/episodes/${grown.id}`, { headers: auth })).json()) as { transcript: string };
+    expect(one.transcript).toContain("\"b\":2");
+    expect((await post({ session: "", transcript: "x" })).status).toBe(400);
+    expect(n.episodes.waiting()).toEqual(["assistant"]);
+  });
+});
+
+describe("the consolidator", () => {
+  let n: Awaited<ReturnType<typeof setup>>;
+  // A minute past the 4am (UTC) the real day turned over at, so the hours
+  // the tests move on never turn it over a second time and bring a rollup
+  // due, and it's behind the real time: what the log stamps with that stays
+  // on the day rolled up, and after what the clock stamps.
+  let clock = Math.floor((Date.now() - 4 * 3600_000) / 86_400_000) * 86_400_000 + 4 * 3600_000 + 60_000;
+  let answer: string | Error = "";
+  let leading = true;
+  const asked: { prompt: string; input: string }[] = [];
+  let c: Consolidator;
+  const ran: string[] = [];
+  beforeAll(async () => {
+    n = await setup();
+    c = new Consolidator({
+      data: n.data,
+      episodes: n.episodes,
+      after: async (brain) => void ran.push(brain),
+      now: () => clock,
+      leads: async () => leading,
+      think: async (prompt, input) => {
+        asked.push({ prompt, input });
+        if (answer instanceof Error) throw answer;
+        return answer;
+      },
+    });
+  });
+  afterAll(() => n.stop());
+  const said = (who: string, text: string, at = new Date(clock).toISOString()) =>
+    JSON.stringify({ type: who, timestamp: at, message: { content: [{ type: "text", text }] } }) + "\n";
+  const first = said("user", "Remember that I like monospace.") + said("assistant", "Noted.");
+
+  it("read an episode once it's quiet, into the log once", async () => {
+    n.episodes.add("assistant", { session: "s1", agent: "assistant", trigger: "end", transcript: first });
+    answer = "- Matthew likes monospace.\n  Everywhere.\n- Nothing else.";
+    await c.tick();
+    expect(asked.length).toBe(0);
+    clock += QUIET + 1;
+    await c.tick();
+    expect(asked.length).toBe(1);
+    expect(asked[0].input).toContain("I like monospace");
+    const log = n.data.entries("assistant");
+    expect(log.map((e) => e.text)).toEqual(["Matthew likes monospace.\n  Everywhere.", "Nothing else."]);
+    expect(log[0].who).toBe("assistant");
+    expect(n.episodes.list("assistant", 10, true)).toEqual([]);
+    expect(ran).toEqual(["assistant"]);
+    await c.tick();
+    expect(asked.length).toBe(1);
+  });
+
+  it("read only what a session added since", async () => {
+    clock += 60_000;
+    n.episodes.add("assistant", { session: "s1", agent: "assistant", trigger: "end", transcript: first + said("user", "And tabs, not spaces.") });
+    answer = "NOTHING";
+    clock += QUIET + 1;
+    await c.tick();
+    expect(asked.length).toBe(2);
+    expect(asked[1].input).toContain("tabs, not spaces");
+    expect(asked[1].input).not.toContain("I like monospace");
+    expect(n.data.entries("assistant").length).toBe(2);
+  });
+
+  it("roll the log up into the memory once a day has turned over", async () => {
+    clock += 86_400_000;
+    answer = "===MEMORY===\n- Likes monospace, and tabs.\n===SOUL-SUGGESTIONS===\n- Be terse.";
+    // Another node leads, so it's that one's to do.
+    leading = false;
+    await c.tick();
+    expect(asked.length).toBe(2);
+    leading = true;
+    await c.tick();
+    expect(asked.length).toBe(3);
+    expect(asked[2].input).toContain("Matthew likes monospace.");
+    expect(n.data.note("assistant", "memory")!.body).toBe("- Likes monospace, and tabs.\n");
+    expect(n.data.entries("assistant").at(-1)!.text).toBe("Suggested for the soul: Be terse.");
+    expect(n.data.rolled("assistant")).toBe(n.data.dayOf(new Date(clock - 86_400_000).toISOString()));
+    await c.tick();
+    expect(asked.length).toBe(3);
+  });
+
+  it("wait longer after each run that failed", async () => {
+    n.episodes.add("assistant", { session: "s2", agent: "assistant", trigger: "end", transcript: said("user", "Something new.") });
+    answer = new Error("rate limited");
+    clock += QUIET + 1;
+    await c.tick();
+    expect(asked.length).toBe(4);
+    clock += 30 * 60_000;
+    await c.tick();
+    expect(asked.length).toBe(4);
+    clock += 31 * 60_000;
+    await c.tick();
+    expect(asked.length).toBe(5);
+    expect(n.episodes.meta("assistant", "consolidate_failures")).toBe("2");
+    answer = "- Something new.";
+    clock += 2 * 3600_000 + 1;
+    await c.tick();
+    expect(n.episodes.list("assistant", 10, true)).toEqual([]);
+    expect(n.episodes.meta("assistant", "consolidate_failures")).toBe("0");
+  });
+});
+
+describe("episodes handed to the leader", () => {
+  it("give a session's new part to the node that leads, which reads it", async () => {
+    const root = newRoot();
+    const shared = relay();
+    const kept = new Map<string, Uint8Array>();
+    const blobs: Blobs = {
+      putBlob: async (id, b) => void kept.set(id, b),
+      getBlob: async (id) => kept.get(id) ?? Promise.reject(Object.assign(new Error("no such blob"), { status: 404 })),
+      deleteBlob: async (id) => void kept.delete(id),
+    };
+    const objects = listObjects(root, { boards: [], brains: ["assistant"] });
+    let clock = Date.now();
+    const said = (text: string) => JSON.stringify({ type: "user", timestamp: new Date(clock).toISOString(), message: { content: [{ type: "text", text }] } }) + "\n";
+    const device = async (name: string, leads: { now: boolean }) => {
+      const replicas = await Replicas.open({ objects, transport: as(shared, name), device: name });
+      await replicas.start({ live: false });
+      const data = new Data(replicas, "UTC");
+      const episodes = new Episodes();
+      const asked: string[] = [];
+      const c = new Consolidator({
+        data,
+        episodes,
+        now: () => clock,
+        leads: async () => leads.now,
+        handoff: new Handoff({ replicas, episodes, blobs }),
+        think: async (_, input) => (asked.push(input), "- " + name + " read it."),
+      });
+      return { replicas, data, episodes, asked, c };
+    };
+    const away = { now: true };
+    const laptop = await device("laptop", away);
+    const desktop = await device("desktop", { now: true });
+
+    // The leader away, the laptop reads its own.
+    const first = said("Tabs, not spaces.");
+    laptop.episodes.add("assistant", { session: "s1", agent: "assistant", trigger: "end", transcript: first });
+    clock += QUIET + 1;
+    await laptop.c.tick();
+    expect(laptop.asked.length).toBe(1);
+
+    // Back, the desktop's given the rest of the session, sealed.
+    away.now = false;
+    clock += 60_000;
+    laptop.episodes.add("assistant", { session: "s1", agent: "assistant", trigger: "end", transcript: first + said("And monospace.") });
+    clock += QUIET + 1;
+    await laptop.c.tick();
+    expect(laptop.asked.length).toBe(1);
+    expect(laptop.episodes.list("assistant", 10, true)).toEqual([]);
+    expect(kept.size).toBe(1);
+    expect(new TextDecoder().decode([...kept.values()][0])).not.toContain("monospace");
+    await laptop.replicas.settled();
+
+    await desktop.replicas.syncAll();
+    await desktop.c.tick();
+    expect(desktop.episodes.list("assistant", 10, true).length).toBe(1);
+    expect(kept.size).toBe(0);
+    clock += QUIET + 1;
+    await desktop.c.tick();
+    expect(desktop.asked.length).toBe(1);
+    expect(desktop.asked[0]).toContain("And monospace.");
+    expect(desktop.asked[0]).not.toContain("Tabs, not spaces.");
+    expect(desktop.data.entries("assistant").map((e) => e.text)).toEqual(["laptop read it.", "desktop read it."]);
+
+    // Taken once.
+    await desktop.c.tick();
+    expect(desktop.episodes.list("assistant", 10).length).toBe(1);
+    await laptop.replicas.stop();
+    await desktop.replicas.stop();
+  });
+});
+
+describe("recall by meaning", () => {
+  // A word's bucket for each word, cats and dogs both pets, normalized.
+  const SAME: Record<string, string> = { cat: "pet", cats: "pet", dog: "pet", dogs: "pet", kitten: "pet" };
+  let embedded = 0;
+  const embed: Embed = async (texts) =>
+    texts.map((t) => {
+      embedded++;
+      const v = new Float32Array(64);
+      for (const w of t.toLowerCase().match(/[a-z]+/g) ?? []) v[[...(SAME[w] ?? w)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 64, 7)] += 1;
+      const n = Math.hypot(...v) || 1;
+      return v.map((x) => x / n);
+    });
+
+  it("find what's meant, each text embedded once for the account", async () => {
+    // The laptop ran the session and wrote; the desktop reads.
+    const root = newRoot();
+    const shared = relay();
+    const objects = listObjects(root, { boards: [], brains: ["assistant"] });
+    const device = async (name: string) => {
+      const replicas = await Replicas.open({ objects, transport: as(shared, name), device: name });
+      await replicas.start({ live: false });
+      const data = new Data(replicas, "UTC");
+      return { replicas, data, search: new Search(data, new LocalEmbedder(data, embed, "fake")) };
+    };
+    const laptop = await device("laptop");
+    await laptop.data.putNote("assistant", "home", { kind: "memory", title: "Home", body: "Matthew has a kitten called Miso." });
+    await laptop.data.remember("assistant", "assistant", "Shipped the release on Friday.");
+    await laptop.search.share("assistant");
+    expect(embedded).toBe(2);
+    expect(laptop.data.vectorHashes("assistant").length).toBe(2);
+    await laptop.replicas.settled();
+
+    const desktop = await device("desktop");
+    const hits = await desktop.search.recall("assistant", "pets", 5);
+    expect(hits[0].id).toBe("home");
+    expect(embedded).toBe(3);
+
+    // A text changed: its new vector made, its old one dropped.
+    await laptop.data.putNote("assistant", "home", { kind: "memory", title: "Home", body: "Matthew has two dogs." });
+    await laptop.search.share("assistant");
+    expect(embedded).toBe(4);
+    expect(laptop.data.vectorHashes("assistant").length).toBe(2);
+    await laptop.replicas.settled();
+    await desktop.replicas.syncAll();
+    expect((await desktop.search.recall("assistant", "cats", 5))[0].snippet).toContain("two dogs");
+    expect(embedded).toBe(5);
+    await laptop.replicas.stop();
+    await desktop.replicas.stop();
+  });
+
+  it("keep a vector to a byte a dimension", () => {
+    const v = Float32Array.from([0.6, -0.8, 0, 0.001]);
+    const back = dequantize(quantize(v));
+    v.forEach((x, i) => expect(Math.abs(back[i] - x)).toBeLessThan(0.005));
+  });
+
+  it("embed a long note in pieces, each with its title", () => {
+    const body = Array.from({ length: 40 }, (_, i) => `Paragraph ${i} ${"word ".repeat(15)}`).join("\n\n");
+    const p = pieces(`Title\n\n${body}`);
+    expect(p.length).toBeGreaterThan(1);
+    expect(p.every((x) => x.startsWith("Title\n\n") && x.length <= 1500 + 10)).toBe(true);
+    expect(pieces("short")).toEqual(["short"]);
   });
 });
 
@@ -445,5 +802,241 @@ describe("the node's objects, from the account's index", () => {
     const late = await Replica.open({ transport: as(shared, "phone"), key: home.key, object: home.object, device: "phone" });
     await late.pull();
     expect(late.cards()[0].title).toBe("Water the plants");
+  });
+});
+
+describe("an account only on this machine", () => {
+  const root = newRoot();
+  const shared = relay();
+  // The replicas' disk, kept across the node starting again with a relay.
+  const disk = new Map<string, ReplicaStore>();
+  const storeOf = (object: string) => disk.get(object) ?? (disk.set(object, memoryStore()), disk.get(object)!);
+  const openIndex = (transport: LogTransport, device: string) => Replica.open({ transport, key: indexKey(root), object: indexId(root), device, store: storeOf(indexId(root)) });
+
+  it("keeps a brain written with no relay, and hands it whole to a second device once published", async () => {
+    const index = await openIndex(offline, "laptop");
+    const local = await Replicas.open({ objects: listObjects(root, { boards: [], brains: ["assistant"] }, index), transport: offline, device: "laptop", store: storeOf, index });
+    await local.start();
+    expect(local.online).toBe(false);
+    const data = new Data(local, "UTC");
+    await data.putNote("assistant", "user", { kind: "person", title: "Matthew", body: "Likes monospace." });
+    await data.remember("assistant", "laptop", "Chose local-first memory.");
+    await data.remember("assistant", "laptop", "Embeddings stay on the device.");
+    await local.settled();
+    expect(shared.state.logs.size).toBe(0);
+    expect(local.status()[0]).toMatchObject({ name: "assistant", pending: 3, error: null, synced: null });
+    expect(entries(index).map((e) => e.name)).toEqual(["assistant"]);
+    await local.stop();
+
+    // Published: the same stores, now over the relay; the queues go out.
+    const online = await openIndex(as(shared, "laptop"), "laptop");
+    await online.push();
+    const laptop = await Replicas.open({ objects: listObjects(root, { boards: [], brains: [] }, online), transport: as(shared, "laptop"), device: "laptop", store: storeOf, index: online });
+    await laptop.start({ live: false });
+    expect(laptop.status()[0]).toMatchObject({ name: "assistant", pending: 0, error: null });
+    await laptop.stop();
+
+    const phoneIndex = await Replica.open({ transport: as(shared, "phone"), key: indexKey(root), object: indexId(root), device: "phone" });
+    await phoneIndex.pull();
+    const phone = await Replicas.open({ objects: listObjects(root, { boards: [], brains: [] }, phoneIndex), transport: as(shared, "phone"), device: "phone", index: phoneIndex });
+    await phone.start({ live: false });
+    const there = new Data(phone, "UTC");
+    expect(there.note("assistant", "user")!.body).toBe("Likes monospace.");
+    expect(there.entries("assistant").map((e) => e.text)).toEqual(["Chose local-first memory.", "Embeddings stay on the device."]);
+    await phone.stop();
+  });
+});
+
+describe("a brain made while the node runs", () => {
+  it("is kept and listed, has one default, and moves its updated on every change", async () => {
+    const n = await setup();
+    await n.replicas.add(listObjects(n.root, { boards: [], brains: ["work"] })[0]);
+    await n.data.putBrain("assistant", { title: "Assistant", default: true });
+    const first = await n.data.putBrain("work", { title: "Work", default: false });
+    expect(n.data.brains().map((b) => b.name).sort()).toEqual(["assistant", "work"]);
+
+    const made = await n.data.putBrain("work", { default: true });
+    expect(String(made.updated) > String(first.updated)).toBe(true);
+    expect(n.data.brains().filter((b) => b.default).map((b) => b.name)).toEqual(["work"]);
+    expect(n.data.defaultBrain()).toBe("work");
+
+    await n.data.putBrain("work", { archived: "2026-11-04T00:00:00Z", default: false });
+    expect(n.data.defaultBrain()).toBe("assistant");
+    await n.stop();
+  });
+});
+
+describe("memory moved off the Worker", () => {
+  // The Worker's move routes (api.ts), over tables kept here, paged a row at a time.
+  function worker(tables: Record<string, Record<string, Row[]>>, records: Record<string, unknown>[]) {
+    const calls: string[] = [];
+    const state = { move: null as null | { account: string; state: string }, purged: false };
+    const fetch = async (path: string, init: RequestInit = {}) => {
+      const method = init.method ?? "GET";
+      calls.push(`${method} ${path.split("?")[0]}`);
+      const url = new URL(path, "https://worker.test");
+      if (url.pathname === "/api/brains") return Response.json(records);
+      if (url.pathname === "/api/memory/move" && method === "POST") {
+        state.move = { account: JSON.parse(String(init.body)).account, state: "moving" };
+        return Response.json({ ...state.move, brains: Object.keys(tables) });
+      }
+      if (url.pathname === "/api/memory/move" && method === "DELETE") return (state.move = null), new Response(null, { status: 204 });
+      if (state.move?.state !== "moving") return new Response("not moving", { status: 409 });
+      if (url.pathname === "/api/memory/move/done") return (state.purged = true), (state.move.state = "moved"), Response.json(state.move);
+      const brain = url.pathname.split("/").pop()!;
+      const table = url.searchParams.get("table")!;
+      const after = Number(url.searchParams.get("after"));
+      const episode = url.searchParams.get("episode");
+      const all = (tables[brain][table] ?? []).map((r, i): Row & { _rowid: number } => ({ _rowid: i + 1, ...r })).filter((r) => r._rowid > after && (episode === null || r.episode === episode));
+      return Response.json({ rows: all.slice(0, 1), next: all.length > 1 ? all[0]._rowid : null });
+    };
+    return { fetch, calls, state };
+  }
+  type Row = Record<string, string | number | null>;
+  const tables = (): Record<string, Record<string, Row[]>> => ({
+    pepper: {
+      notes: [
+        { id: "soul", kind: "soul", title: "Soul", body: "be kind", created: "2026-01-01T00:00:00Z", updated: "2026-02-01T00:00:00Z", version: 3 },
+        { id: "goals", kind: "goal", title: "Goals", body: "ship", created: "2026-01-01T00:00:00Z", updated: "2026-01-02T00:00:00Z", version: 1 },
+      ],
+      entries: [
+        { id: 1, at: "2026-03-01T10:00:00Z", day: "2026-03-01", who: "assistant", text: "one" },
+        { id: 2, at: "2026-03-01T10:00:00Z", day: "2026-03-01", who: "assistant", text: "two, at the same time" },
+      ],
+      episodes: [{ id: "ep1", session: "s1", agent: "assistant", trigger: "stop", at: "2026-03-01T11:00:00Z", bytes: 6, parts: 2, consolidated: 1 }],
+      episode_parts: [
+        { episode: "ep1", seq: 0, text: "abc" },
+        { episode: "ep1", seq: 1, text: "def" },
+      ],
+      consolidated_sessions: [{ session: "s1", through: "2026-03-01T11:00:00Z" }],
+      meta: [{ key: "brain", value: "pepper" }, { key: "rolled", value: "2026-03-01" }],
+    },
+    work: { notes: [], entries: [{ id: 1, at: "2026-03-02T09:00:00Z", day: "2026-03-01", who: "user", text: "late night" }] },
+  });
+  const target = (n: Awaited<ReturnType<typeof setup>>) => ({
+    ...n,
+    account: "acct-0123456789abcdefghij",
+    addBrain: (name: string) => n.replicas.add(listObjects(n.root, { boards: [], brains: [name] })[0]),
+  });
+
+  it("copies every brain's memory and settings, then purges the Worker's", async () => {
+    const n = await setup();
+    const w = worker(tables(), [{ name: "work", title: "Work", description: "the job", default: true, abilities: [], credentials: [], created: "2026-01-01T00:00:00Z" }]);
+    const moved = await moveMemory(target(n), w.fetch, { log: () => {} });
+    expect(moved.pepper).toEqual({ notes: 2, entries: 2, episodes: 1 });
+    expect(w.state.purged).toBe(true);
+
+    expect(n.data.brain("pepper").title).toBe("Pepper");
+    expect(n.data.brain("work")).toMatchObject({ title: "Work", description: "the job" });
+    expect(n.data.defaultBrain()).toBe("work");
+    expect(n.data.note("pepper", "soul")).toMatchObject({ body: "be kind", version: 3, updated: "2026-02-01T00:00:00Z" });
+    expect(n.data.entries("pepper").map((e) => e.text)).toEqual(["one", "two, at the same time"]);
+    expect(n.data.entries("work")[0].day).toBe("2026-03-01");
+    expect(n.episodes.transcript("pepper", "ep1")).toBe("abcdef");
+    expect(n.episodes.list("pepper")[0].consolidated).toBe(true);
+    expect(n.episodes.through("pepper", "s1")).toBe("2026-03-01T11:00:00Z");
+    expect(n.data.rolled("pepper")).toBe("2026-03-01");
+    await n.stop();
+  });
+
+  it("copies again only what isn't here, keeps a newer note, and a dry run leaves the Worker's", async () => {
+    const n = await setup();
+    const w = worker(tables(), []);
+    await moveMemory(target(n), w.fetch, { dryRun: true, log: () => {} });
+    expect(w.state).toEqual({ move: null, purged: false });
+    await n.data.putNote("pepper", "goals", { kind: "goal", title: "Goals", body: "ship it" }, 1);
+
+    await moveMemory(target(n), w.fetch, { log: () => {} });
+    expect(n.data.entries("pepper")).toHaveLength(2);
+    expect(n.episodes.count("pepper")).toBe(1);
+    expect(n.data.note("pepper", "goals")!.body).toBe("ship it");
+    expect(w.state.purged).toBe(true);
+    await n.stop();
+  });
+
+  it("unfreezes the Worker when an episode comes short", async () => {
+    const n = await setup();
+    const t = tables();
+    t.pepper.episode_parts!.pop();
+    const w = worker(t, []);
+    await expect(moveMemory(target(n), w.fetch, { log: () => {} })).rejects.toThrow("episode ep1 has 1 of its 2 parts");
+    expect(w.state).toEqual({ move: null, purged: false });
+    await n.stop();
+  });
+});
+
+describe("the relay's tunnel", () => {
+  // The relay's side of a node's socket: what it sends, and what comes back.
+  class FakeSocket extends EventTarget {
+    readyState = 0;
+    sent: string[] = [];
+    constructor(readonly url: string) {
+      super();
+      queueMicrotask(() => {
+        this.readyState = 1;
+        this.dispatchEvent(new Event("open"));
+      });
+    }
+    send(m: string) {
+      this.sent.push(m);
+    }
+    close() {
+      this.readyState = 3;
+      this.dispatchEvent(Object.assign(new Event("close"), { code: 1000 }));
+    }
+    request(r: TunnelRequest) {
+      this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(r) }));
+    }
+  }
+
+  it("answers at the node's own paths, as <relay>/n/<handle>, and its tokens are that origin's", async () => {
+    const n = await setup();
+    const base = "https://relay.test/n/abcdefghijklmnopqrstuv";
+    let sock: FakeSocket | undefined;
+    const r = new Relay({ origin: "https://relay.test", token: { token: "cbe_x", expires: Date.now() + 3600_000 }, socket: (url) => (sock = new FakeSocket(url)) as unknown as WebSocket });
+    const states: boolean[] = [];
+    const stop = r.serveTunnel(node({ data: n.data, search: n.search, oauth: n.oauth, episodes: n.episodes, origin: base }), { onState: (up) => states.push(up) });
+    await Bun.sleep(5);
+    expect(sock!.url).toBe("wss://relay.test/e2ee/nodes/live");
+    expect(states).toEqual([true]);
+    const answer = async (req: Omit<TunnelRequest, "id">) => {
+      const id = b64url(random(8));
+      const before = sock!.sent.length;
+      sock!.request({ id, ...req });
+      for (let i = 0; i < 100 && sock!.sent.length === before; i++) await Bun.sleep(5);
+      const a = JSON.parse(sock!.sent[before]) as TunnelResponse;
+      expect(a.id).toBe(id);
+      return { ...a, json: a.body ? JSON.parse(new TextDecoder().decode(fromB64url(a.body))) : undefined };
+    };
+    const meta = await answer({ method: "GET", path: "/.well-known/oauth-protected-resource", headers: [] });
+    expect(meta.status).toBe(200);
+    expect(meta.json.resource).toBe(`${base}/mcp`);
+    expect((await answer({ method: "GET", path: "/.well-known/oauth-authorization-server", headers: [] })).json.authorization_endpoint).toBe(`${base}/authorize`);
+    // A token for the tunnel's resource works there; another account's handle's doesn't.
+    const token = n.oauth.mint("pepper", 1, "assistant");
+    const list = await answer({ method: "POST", path: "/mcp", headers: [["content-type", "application/json"], ["authorization", `Bearer ${token}`]], body: b64url(utf8(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }))) });
+    expect(list.status).toBe(200);
+    expect(list.json.result.tools.length).toBeGreaterThan(0);
+    expect((await answer({ method: "POST", path: "/mcp", headers: [["content-type", "application/json"]], body: b64url(utf8("{}")) })).status).toBe(401);
+    const consent = await n.oauth.request(new URLSearchParams({ response_type: "code", client_id: n.oauth.register({ redirect_uris: ["https://claude.ai/api/mcp/auth_callback"], client_name: "c" }).client_id as string, redirect_uri: "https://claude.ai/api/mcp/auth_callback", code_challenge: "x".repeat(43), code_challenge_method: "S256", resource: `${base}/mcp` }), base);
+    expect(consent.client.name).toBe("c");
+    await expect(n.oauth.request(new URLSearchParams({ response_type: "code", client_id: consent.client.id, redirect_uri: "https://claude.ai/api/mcp/auth_callback", code_challenge: "x".repeat(43), code_challenge_method: "S256", resource: "https://relay.test/n/zzzzzzzzzzzzzzzzzzzzzz/mcp" }), base)).rejects.toThrow();
+    stop();
+    expect(states).toEqual([true, false]);
+    n.stop();
+  });
+});
+
+describe("the bridge's notes and goals, on the node", () => {
+  it("keeps the usage reports and reads the goals out of the goal notes", async () => {
+    const n = await setup();
+    expect(await notes(n, "note_get", ["usage-proj-laptop"])).toBeNull();
+    await notes(n, "note_put", ["usage-proj-laptop", { kind: "review", title: "Usage: proj", body: "Project: proj" }]);
+    await notes(n, "note_put", ["usage-proj-laptop", { kind: "review", title: "Usage: proj", body: "Project: proj (board proj)" }]);
+    expect(await notes(n, "note_get", ["usage-proj-laptop"])).toMatchObject({ kind: "review", body: "Project: proj (board proj)", version: 2 });
+    await expect(notes(n, "note_put", ["Bad Id", { kind: "review", title: "x", body: "" }])).rejects.toThrow();
+    await n.data.putNote("assistant", "goal-fitness", { kind: "goal", title: "Goal: Fitness, get stronger", body: "## Why\nTo feel good.\n\n## This week (week of 2026-11-02)\n- Train 3 times\n" });
+    expect(await notes(n, "goals", [])).toMatchObject([{ id: "goal-fitness", name: "Fitness", aim: "get stronger", why: "To feel good.", week: ["Train 3 times"], week_of: "2026-11-02" }]);
+    n.stop();
   });
 });

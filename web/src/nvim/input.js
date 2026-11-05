@@ -8,19 +8,39 @@ const SPECIAL = {
 for (let i = 1; i <= 12; i++) SPECIAL[`F${i}`] = `F${i}`;
 
 export const MAC = /Mac/.test(navigator.platform);
-// On a Mac, the Cmd chords corkboard maps (init.lua): Neovim types out one
+// On a Mac, the Cmd chords corkboard maps (init.lua), and once Neovim has
+// said (corkboard.keys, setCmdKeys) every one mapped: Neovim types out one
 // it doesn't map, so the rest are left to the browser.
-const CMD = new Set([
+const CMD_KEYS = [
   "<D-p>", "<D-S-p>", "<D-t>", "<D-w>", "<D-s>", "<D-,>", "<D-S-[>", "<D-S-]>",
   ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<D-${n}>`),
   ...["h", "j", "k", "l", "Left", "Down", "Up", "Right"].map((k) => `<A-D-${k}>`),
-]);
+];
+let CMD = new Set(CMD_KEYS.map(canon));
+export function setCmdKeys(keys) {
+  CMD = new Set([...CMD_KEYS, ...keys].map(canon));
+}
+
+// A chord in one spelling, as Neovim writes it differently (<D-P> for
+// <D-S-p>, <M-D-Left> for <A-D-Left>): modifiers C, A, D, S in that order,
+// Shift on a letter as S and the letter in lower case. A Ctrl chord's letter
+// is in upper case either way (<C-T>).
+function canon(chord) {
+  const m = /^<((?:[CAMDS]-)+)(.+)>$/i.exec(chord);
+  if (!m) return chord;
+  const mods = new Set(m[1].toUpperCase().replace(/M/g, "A").split("-").filter(Boolean));
+  let key = m[2];
+  if (/^[A-Z]$/.test(key) && !mods.has("C")) mods.add("S");
+  if (/^[a-z]$/i.test(key)) key = key.toLowerCase();
+  return `<${[..."CADS"].filter((c) => mods.has(c)).join("-")}-${key}>`;
+}
 // And macOS's own editing keys, as readline and Vim have them: Option+arrow
 // a word, Option+Backspace the word before, Cmd+arrow the line's ends,
 // Cmd+Backspace the line before.
 const MAC_EDIT = {
   "<A-Left>": "<M-b>", "<A-Right>": "<M-f>", "<A-BS>": "<C-w>",
   "<D-Left>": "<Home>", "<D-Right>": "<End>", "<D-BS>": "<C-u>",
+  "<A-S-Left>": "<C-S-Left>", "<A-S-Right>": "<C-S-Right>", "<D-S-Left>": "<S-Home>", "<D-S-Right>": "<S-End>",
 };
 // The key a code is on, unshifted, for a Cmd chord: e.key there may be
 // the layout's, or Shift's ("{" for Cmd+Shift+[).
@@ -28,10 +48,10 @@ const ON_CODE = { BracketLeft: "[", BracketRight: "]" };
 
 // KeyboardEvent to Neovim key notation, or null when the key is not ours
 // (a lone modifier, a dead key, composition, a Cmd chord corkboard doesn't
-// map).
-export function toNvimKey(e) {
+// map, unless any: a key being bound).
+export function toNvimKey(e, any = false) {
   if (e.isComposing || e.key === "Dead") return null;
-  if (MAC && (e.metaKey || e.altKey)) return macKey(e);
+  if (MAC && (e.metaKey || e.altKey)) return macKey(e, any);
   // Alt+digit, which goes to a tab by number: e.key may be a symbol the
   // layout puts on Alt+digit, so read the key.
   const digit = /^Digit(\d)$/.exec(e.code);
@@ -66,7 +86,7 @@ export function toNvimKey(e) {
 // A Mac's Cmd or Option chord. Option alone types what the layout puts
 // there (@ and brackets, on many), bar macOS's editing keys; Cmd chords go
 // by the key pressed, and only those in CMD.
-function macKey(e) {
+function macKey(e, any) {
   const special = SPECIAL[e.key];
   if (!e.metaKey && !e.ctrlKey && !special) return [...e.key].length === 1 ? (e.key === "<" ? "<lt>" : e.key) : null;
   const key = special ?? ON_CODE[e.code] ?? fromCode(e.code);
@@ -74,7 +94,7 @@ function macKey(e) {
   const mods = [e.ctrlKey && "C", e.altKey && "A", e.metaKey && "D", e.shiftKey && "S"].filter(Boolean);
   const chord = `<${[...mods, key === " " ? "Space" : key].join("-")}>`;
   if (MAC_EDIT[chord]) return MAC_EDIT[chord];
-  if (e.metaKey) return CMD.has(chord) ? chord : null;
+  if (e.metaKey) return any || CMD.has(canon(chord)) ? chord : null;
   // Ctrl+Option, or Option on a key that types nothing (an arrow): as
   // anywhere else.
   return chord;
@@ -98,8 +118,9 @@ function fromCode(code) {
   return m ? (m[1]?.toLowerCase() ?? m[2]) : null;
 }
 
-// Neovim's mode names (mode_change) where Ctrl+V pastes.
-const TYPING = new Set(["insert", "replace", "cmdline_normal", "cmdline_insert", "cmdline_replace", "terminal"]);
+// Neovim's mode names (mode_change) where Ctrl+V pastes: over the
+// selection, in select mode.
+const TYPING = new Set(["insert", "replace", "cmdline_normal", "cmdline_insert", "cmdline_replace", "terminal", "visual_select"]);
 // And where there is a selection for Ctrl+C to copy.
 const VISUAL = /^(visual|select)/;
 // Cmd on its own, on a Mac, where it copies and pastes as Ctrl does elsewhere.
@@ -123,7 +144,8 @@ export function attachInput(canvas, keys, grid, rpc) {
     // copies too.
     if (((e.ctrlKey && !e.altKey) || cmd(e)) && e.code === "KeyC" && VISUAL.test(grid.modeName ?? "")) {
       e.preventDefault();
-      rpc.notify("nvim_input", '"+y');
+      // Select mode keeps its selection, as an editor does.
+      rpc.notify("nvim_input", grid.modeName === "visual_select" ? '<C-g>"+ygv<C-g>' : '"+y');
       return;
     }
     const key = toNvimKey(e);

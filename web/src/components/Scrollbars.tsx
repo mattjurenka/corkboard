@@ -5,19 +5,30 @@
 // wheel passes through to the canvas, which scrolls as it always has.
 //
 // Each bar covers the window's last column and is clipped around floats
-// like a panel, so a picker over it is not drawn through.
+// like a panel, so a picker over it is not drawn through. A window wide
+// enough, once its buffer's text has come (corkboard.minimap), has a
+// minimap instead: its last columns, the buffer a character a pixel, with
+// the lines on screen shaded, scrolling with the window when the buffer is
+// taller than it.
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useNvim } from "@/nvim/context";
-import { type Bar, type Rect, useStore } from "@/store";
+import { type Bar, type Minimap as Map, type Rect, useStore } from "@/store";
 import { box, holes } from "./Panels";
 
 const MIN_THUMB = 24; // px
+// The minimap's width in cells, in a window of at least MAP_MIN of them.
+const MAP_COLS = 12;
+const MAP_MIN = 60;
+// px a line, and a character.
+const LINE_H = 2;
+const CHAR_W = 1;
 
 export function Scrollbars() {
   const nvim = useNvim();
   const scroll = useStore((s) => s.scroll);
+  const minimaps = useStore((s) => s.minimaps);
   const cell = useStore((s) => s.cell);
   // One scroll_to per frame while dragging; the latest wins.
   const scrollTo = useMemo(() => {
@@ -32,9 +43,21 @@ export function Scrollbars() {
     };
   }, [nvim]);
   if (!scroll) return null;
-  return scroll.bars.map((bar) => (
-    <Scrollbar key={bar.win} bar={bar} floats={scroll.floats} cellW={cell.w} cellH={cell.h} scrollTo={scrollTo} />
-  ));
+  return scroll.bars.map((bar) =>
+    minimaps[bar.buf] && bar.width >= MAP_MIN ? (
+      <Minimap
+        key={bar.win}
+        bar={bar}
+        map={minimaps[bar.buf]}
+        floats={scroll.floats}
+        cellW={cell.w}
+        cellH={cell.h}
+        scrollTo={scrollTo}
+      />
+    ) : (
+      <Scrollbar key={bar.win} bar={bar} floats={scroll.floats} cellW={cell.w} cellH={cell.h} scrollTo={scrollTo} />
+    ),
+  );
 }
 
 function Scrollbar({
@@ -99,7 +122,7 @@ function Scrollbar({
       <div
         ref={track}
         onMouseDown={press}
-        onWheel={(e) => document.querySelector("#editor canvas")?.dispatchEvent(new WheelEvent("wheel", e.nativeEvent))}
+        onWheel={passWheel}
         className={cn(
           "group pointer-events-auto absolute inset-y-0 right-0 w-2.5 rounded-[5px] transition-colors hover:bg-foreground/6",
           dragging && "bg-foreground/6",
@@ -114,6 +137,107 @@ function Scrollbar({
           style={{ top: Math.max(0, Math.min(trackH - thumbH, thumbTop)), height: thumbH }}
         />
       </div>
+    </div>
+  );
+}
+
+const passWheel = (e: React.WheelEvent) =>
+  document.querySelector("#editor canvas")?.dispatchEvent(new WheelEvent("wheel", e.nativeEvent));
+
+function Minimap({
+  bar,
+  map,
+  floats,
+  cellW,
+  cellH,
+  scrollTo,
+}: {
+  bar: Bar;
+  map: Map;
+  floats: Rect[];
+  cellW: number;
+  cellH: number;
+  scrollTo: (win: number, top: number) => void;
+}) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const edge = { row: bar.row, col: bar.col + bar.width - MAP_COLS, width: MAP_COLS, height: bar.height };
+  const w = MAP_COLS * cellW;
+  const h = bar.height * cellH;
+  const shown = Math.max(1, bar.bottom - bar.top + 1);
+  const scrollable = Math.max(0, bar.lines - shown);
+  const content = bar.lines * LINE_H;
+  // Taller than the window, the map moves as far through itself as the
+  // window has through the buffer.
+  const offset = content > h && scrollable ? ((bar.top - 1) / scrollable) * (content - h) : 0;
+  const sliderTop = (bar.top - 1) * LINE_H - offset;
+  const sliderH = shown * LINE_H;
+  // How far the slider moves from the first line on screen to the last.
+  const travel = content > h ? h - sliderH : scrollable * LINE_H;
+
+  useEffect(() => {
+    const c = canvas.current;
+    if (!c) return;
+    const dpr = window.devicePixelRatio || 1;
+    c.width = Math.round(w * dpr);
+    c.height = Math.round(h * dpr);
+    const ctx = c.getContext("2d")!;
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, h);
+    ctx.globalAlpha = 0.7;
+    const fg = getComputedStyle(c).color;
+    const first = Math.floor(offset / LINE_H);
+    const last = Math.min(map.lines.length, first + Math.ceil(h / LINE_H) + 1);
+    for (let i = first; i < last; i++) {
+      const runs = map.lines[i];
+      const y = i * LINE_H - offset;
+      for (let r = 0; r < runs.length; r += 3) {
+        ctx.fillStyle = map.palette[runs[r + 2]] || fg;
+        ctx.fillRect(runs[r] * CHAR_W, y, runs[r + 1] * CHAR_W, LINE_H);
+      }
+    }
+  }, [map, w, h, offset]);
+
+  // A press on the slider drags it; anywhere else first centres the lines
+  // on screen there.
+  const press = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (e.button !== 0) return;
+    const rect = canvas.current!.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    let startTop = bar.top;
+    if (y < sliderTop || y > sliderTop + sliderH) {
+      startTop = Math.max(1, Math.floor((y + offset) / LINE_H) + 1 - Math.floor(shown / 2));
+      scrollTo(bar.win, startTop);
+    }
+    const startY = e.clientY;
+    setDragging(true);
+    const move = (m: MouseEvent) =>
+      scrollTo(bar.win, startTop + Math.round(((m.clientY - startY) / Math.max(1, travel)) * scrollable));
+    const up = () => {
+      setDragging(false);
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+
+  return (
+    <div
+      className="group absolute z-2 bg-background text-foreground"
+      style={{ ...box(edge, cellW, cellH), clipPath: holes(edge, floats, cellW, cellH) || undefined }}
+      onMouseDown={press}
+      onWheel={passWheel}
+    >
+      <canvas ref={canvas} className="absolute inset-0" style={{ width: w, height: h }} />
+      <div
+        className={cn(
+          "pointer-events-none absolute inset-x-0 bg-foreground/8 transition-colors group-hover:bg-foreground/14",
+          dragging && "bg-foreground/20 group-hover:bg-foreground/20",
+        )}
+        style={{ top: sliderTop, height: Math.max(cellH / 2, sliderH) }}
+      />
     </div>
   );
 }

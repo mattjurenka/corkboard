@@ -13,9 +13,12 @@
 # never fail a session. Nor with CORKBOARD_NO_MEMORY set: the consolidator's
 # own sessions (fleet/guest/slot.nix), which are no episodes.
 #
+# `url` may be a node's (`brain` then names the brain, ?brain=).
+#
 # Gives back `hooks`, for a guest's Claude Code managed settings.
-{ pkgs, lib, url ? "https://portal.corkboard.fyi", tokenFile }:
+{ pkgs, lib, url ? "https://portal.corkboard.fyi", brain ? null, tokenFile }:
 let
+  query = lib.optionalString (brain != null) "?brain=${brain}";
   context = pkgs.writeShellApplication {
     name = "corkboard-memory-context";
     runtimeInputs = [ pkgs.curl pkgs.coreutils ];
@@ -25,7 +28,7 @@ let
       [ -s ${tokenFile} ] || exit 0
       curl -fsS --max-time 15 \
         -H "Authorization: Bearer $(tr -d '\n' < ${tokenFile})" \
-        ${url}/memory/context || true
+        "${url}/memory/context${query}" || true
     '';
   };
 
@@ -45,7 +48,7 @@ let
         curl -fsS --max-time 60 -o /dev/null \
           -H "Authorization: Bearer $(tr -d '\n' < ${tokenFile})" \
           -H "Content-Type: application/json" \
-          --data-binary @- ${url}/memory/episodes || true
+          --data-binary @- "${url}/memory/episodes${query}" || true
     '';
   };
 

@@ -57,6 +57,13 @@ function M.repo_root(dir)
   return top ~= "" and top or nil
 end
 
+-- No project open: the window's global cwd is home, where corkboard lands
+-- before one is (the day plan's window has none to want). The board, Claude
+-- Code and terminals wait for one (corkboard.projects).
+function M.no_project()
+  return require("corkboard").window ~= "plan" and vim.fn.getcwd(-1, -1) == vim.uv.os_homedir()
+end
+
 -- The project dir is in: its repository's main checkout, so a subdirectory
 -- or a worktree shares the repository's board; dir itself outside one. A
 -- home that is a repository (dotfiles) is not one project.

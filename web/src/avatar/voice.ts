@@ -215,7 +215,7 @@ async function synth(text: string, voice: string, speed: number, mood: Mood | un
 
 // An audio file's samples, at a rate.
 const decode = (path: string, rate: number): Promise<Float32Array> =>
-  fetch(new URL(path, location.href))
+  fetch(new URL(path, document.baseURI))
     .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(`no ${path}`))))
     .then((b) => new OfflineAudioContext(1, 1, rate).decodeAudioData(b))
     .then((b) => b.getChannelData(0));
@@ -265,7 +265,7 @@ let saidAhead: Promise<Record<string, SaidAhead>> | undefined;
 // A sentence: said ahead of time if it was, else made now, unless only
 // what was said ahead will do.
 async function made(a: Ask, bridge: Bridge | undefined, only: boolean): Promise<Synth> {
-  saidAhead ??= fetch(new URL("voices/said/index.json", location.href))
+  saidAhead ??= fetch(new URL("voices/said/index.json", document.baseURI))
     .then((res) => (res.ok ? res.json() : {}))
     .catch(() => ({}));
   const s = (await saidAhead)[askKey(a)];

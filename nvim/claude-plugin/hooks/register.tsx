@@ -10,6 +10,10 @@ import { work } from './work.tsx'
 
 const at = { plugin: 'corkboard-ui', key: 'at' } as const
 const took = { plugin: 'corkboard-ui', key: 'took' } as const
+const open = { plugin: 'corkboard-ui', key: 'open' } as const
+
+// An opened call shows this many lines of its input and of its output.
+const LINES = 200
 
 // The gutter: "2:02pm  │ ", the time in eight columns, the rule in the ninth.
 const TIME = 8
@@ -49,6 +53,43 @@ function gist(input: unknown, cwd: string) {
   }
   const first = Object.values(fields).find(v => typeof v === 'string' && v)
   return typeof first === 'string' ? first.split('\n')[0] ?? '' : ''
+}
+
+// A call's input in full: a command as it was typed, anything else as JSON.
+function inputText(tool: string, input: unknown) {
+  if (typeof input !== 'object' || input === null) return String(input ?? '')
+  const fields = input as Record<string, unknown>
+  if (tool === 'Bash' && typeof fields.command === 'string') return fields.command
+  return JSON.stringify(input, null, 2)
+}
+
+// A call's output as text: what a tool printed, said or read, else its result
+// as JSON.
+function outputText(output: unknown): string {
+  if (output === undefined || output === null) return ''
+  if (typeof output === 'string') return output
+  if (Array.isArray(output)) {
+    const texts = output.map(b => (typeof b === 'object' && b !== null ? (b as { text?: unknown }).text : undefined))
+    if (texts.every(t => typeof t === 'string')) return texts.join('\n')
+    return JSON.stringify(output, null, 2)
+  }
+  if (typeof output === 'object') {
+    const fields = output as Record<string, unknown>
+    if (typeof fields.stdout === 'string' || typeof fields.stderr === 'string') {
+      return [fields.stdout, fields.stderr].filter(s => typeof s === 'string' && s).join('\n')
+    }
+    if (typeof fields.content === 'string' || Array.isArray(fields.content)) return outputText(fields.content)
+    const file = fields.file as Record<string, unknown> | undefined
+    if (file && typeof file.content === 'string') return file.content
+  }
+  return JSON.stringify(output, null, 2)
+}
+
+// The first LINES lines, and how many more there are.
+function head(text: string) {
+  const lines = text.replace(/\n+$/, '').split('\n')
+  if (lines.length <= LINES) return lines.join('\n')
+  return `${lines.slice(0, LINES).join('\n')}\n… ${lines.length - LINES} more lines`
 }
 
 // A row of the ledger, a blank line above it: the time (unless it's the rest
@@ -118,41 +159,87 @@ export const register: Register = (on, options) => {
   })
 
   // One line a call: the time, a ● for how it went, the tool and what it did,
-  // how long it took.
+  // how long it took. A click opens it to its input and output, under it in
+  // the column right of the rule, and closes it again.
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
     if (e.props.isExpanded && !unfolded.has(e.props.tool_use_id)) return next(e)
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Button, Code, Text } = $.ui.resolve(e)
     const cwd = await $.session.cwd()
     const { value: start } = await $.state.get(memberOf(at, e))
     const { value: ms } = await $.state.get(memberOf(took, e))
-    const { isRunning, isErrored, isInterrupted } = e.props
+    const shown = (await $.state.get(memberOf(open, e))).value === true
+    const { tool, input, output, isRunning, isErrored, isInterrupted } = e.props
     const pin = isInterrupted ? 'inactive' : isErrored ? 'error' : isRunning ? 'warning' : 'success'
     const status = isInterrupted ? 'interrupted' : isErrored ? 'failed' : isRunning ? '…' : seconds(ms)
+    const result = outputText(output)
+    const outColor = isErrored ? 'error' : isRunning ? 'warning' : 'success'
+    // A file read is drawn as its language.
+    const path = (input as { file_path?: unknown } | null)?.file_path
+    const readPath = tool === 'Read' && typeof path === 'string' ? path : undefined
     return (
-      <Box flexDirection="row" marginTop={1}>
-        <Box width={TIME} flexShrink={0}>
-          <Text dimColor>{clock(start)}</Text>
+      <Box flexDirection="column" marginTop={1}>
+        <Box flexDirection="row">
+          <Box width={TIME} flexShrink={0}>
+            <Text dimColor>{clock(start)}</Text>
+          </Box>
+          <Box width={2} flexShrink={0}>
+            <Text color={pin}>●</Text>
+          </Box>
+          <Box flexGrow={1} flexShrink={1}>
+            <Button
+              key={e.props.tool_use_id}
+              plain
+              onPress={() => $.state.set({ ...open, id: e.props.tool_use_id }, !shown)}
+            >
+              <Text weight="bold">{toolName(tool)}</Text> <Text dimColor>{gist(input, cwd)}</Text>
+            </Button>
+          </Box>
+          <Box flexShrink={0} marginLeft={1}>
+            <Text dimColor={!isErrored} color={isErrored ? 'error' : undefined}>
+              {status}
+            </Text>
+          </Box>
         </Box>
-        <Box width={2} flexShrink={0}>
-          <Text color={pin}>●</Text>
-        </Box>
-        <Box flexGrow={1} flexShrink={1}>
-          <Text wrap="truncate-end">
-            <Text weight="bold">{toolName(e.props.tool)}</Text> <Text dimColor>{gist(e.props.input, cwd)}</Text>
-          </Text>
-        </Box>
-        <Box flexShrink={0} marginLeft={1}>
-          <Text dimColor={!isErrored} color={isErrored ? 'error' : undefined}>
-            {status}
-          </Text>
-        </Box>
+        {shown && (
+          <Box flexDirection="row">
+            <Box width={TIME} flexShrink={0} />
+            <Box width={2} flexShrink={0}>
+              <Box position="absolute" top={0} bottom={0} left={0} width={1} overflow="hidden">
+                <Text dimColor>{'│\n'.repeat(LINES * 2 + 10)}</Text>
+              </Box>
+            </Box>
+            <Box flexGrow={1} flexShrink={1} flexDirection="column">
+              <Box flexDirection="column" borderStyle="round" borderColor="suggestion" paddingX={1}>
+                <Text color="suggestion" weight="bold">
+                  {tool === 'Bash' ? 'command' : 'input'}
+                </Text>
+                <Code source={head(inputText(tool, input))} language={tool === 'Bash' ? 'bash' : 'json'} />
+              </Box>
+              <Box flexDirection="column" borderStyle="round" borderColor={outColor} paddingX={1}>
+                <Text color={outColor} weight="bold">
+                  {isRunning ? 'output …' : isErrored ? 'output · failed' : 'output'}
+                </Text>
+                {result === '' ? (
+                  <Text dimColor>{isRunning ? 'running' : 'nothing'}</Text>
+                ) : readPath && !isErrored ? (
+                  <Code source={head(result)} path={readPath} />
+                ) : (
+                  <Text color={isErrored ? 'error' : undefined}>{head(result)}</Text>
+                )}
+              </Box>
+            </Box>
+          </Box>
+        )}
       </Box>
     )
   })
 
-  // A standalone call's result, in the column right of the rule.
+  // A standalone call's result, in the column right of the rule; none while
+  // its row is opened, which shows it in full.
   on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
     if (e.props.isExpanded) return next(e)
+    const { Box } = $.ui.resolve(e)
+    if ((await $.state.get(memberOf(open, e))).value === true) return <Box />
     return row($, e, await next(e), false)
   })
 

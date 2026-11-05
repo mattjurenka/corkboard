@@ -9,11 +9,12 @@
 // note_write's check, which only holds on this node.
 
 import { type AgentState, type Card, type Fields, type LogEntry, type Priority, type Status, Invalid, fields as checkFields } from "../../lib/model/cards";
-import { type Note, type NoteInput, today } from "../../lib/model/plans";
-import type { MergedCard } from "../../lib/e2ee/merge";
+import { createHash } from "node:crypto";
+import { DAY_STARTS_HOUR, type Note, type NoteInput, today } from "../../lib/model/plans";
+import type { CardChange, MergedCard } from "../../lib/e2ee/merge";
 import { b64url } from "../../lib/e2ee/wire";
 import { random } from "../../lib/e2ee/keys";
-import { BRAIN_RECORD, entryRecord, noteRecord, recordOf } from "./objects";
+import { BRAIN_RECORD, ROLLUP_RECORD, VECTOR_PREFIX, entryRecord, noteRecord, recordOf, vectorRecord } from "./objects";
 import type { Replicas } from "./replicas";
 
 export { Invalid };
@@ -23,6 +24,9 @@ export type Entry = { id: string; at: string; day: string; who: string; text: st
 export type BrainSettings = { name: string; title: string; description: string; default: boolean; [k: string]: unknown };
 
 export const now = () => new Date().toISOString().replace(/\.\d+Z$/, "Z");
+
+// An imported entry's id (importEntries): its time, and a hash of its id where it came from.
+export const importedEntryId = (from: string, at: string) => `${Date.parse(at).toString(36)}-${createHash("sha256").update(from).digest("base64url").slice(0, 10)}`;
 
 const CARD_FIELDS = ["title", "status", "agent", "agent_state", "attention", "priority", "ordinal", "labels", "dependencies", "description", "extra", "created", "updated", "archived"];
 
@@ -151,10 +155,26 @@ export class Data {
   }
 
   // The brain the user's own clients remember in: the one whose settings say
-  // so, else the first the node was given.
+  // so, else the first the node was given. Not an archived one.
   defaultBrain(): string | undefined {
-    const all = this.brains();
+    const all = this.brains().filter((b) => !b.archived);
     return (all.find((b) => b.default === true) ?? all[0])?.name;
+  }
+
+  // A brain's settings, the fields given set (null clears one). One brain is
+  // the default, so making this one it unmakes the rest.
+  async putBrain(name: string, set: Record<string, unknown>): Promise<BrainSettings> {
+    // updated moves on every change, a second on if it's this second's, so
+    // the form's stale check (app.ts) sees two edits within one apart.
+    const after = (was: unknown) => {
+      const t = now();
+      return typeof was === "string" && t <= was ? new Date(Date.parse(was) + 1000).toISOString().replace(/\.\d+Z$/, "Z") : t;
+    };
+    if (set.default === true)
+      for (const b of this.brains()) if (b.name !== name && b.default === true) await this.replicas.change("brain", b.name, { t: "card", card: BRAIN_RECORD, set: { default: false, updated: after(b.updated) } });
+    const was = this.brains().find((b) => b.name === name)?.updated;
+    await this.replicas.change("brain", name, { t: "card", card: BRAIN_RECORD, set: { ...set, updated: after(was) } });
+    return this.brain(name);
   }
 
   private records(brain: string) {
@@ -194,6 +214,17 @@ export class Data {
     return this.note(brain, id)!;
   }
 
+  // A note as another store kept it (move.ts, from the Worker): its own
+  // times and version, over any here that's older.
+  async importNote(brain: string, n: Note): Promise<boolean> {
+    const was = this.note(brain, n.id);
+    if (was && (was.version ?? 0) >= (n.version ?? 1) && was.updated >= n.updated) return false;
+    const set: Record<string, unknown> = { kind: n.kind, title: n.title, body: n.body, created: n.created, updated: n.updated, version: n.version ?? 1 };
+    if (n.path) set.path = n.path;
+    await this.replicas.change("brain", brain, { t: "card", card: noteRecord(n.id), set });
+    return true;
+  }
+
   async appendNote(brain: string, id: string, who: string, text: string): Promise<Note> {
     const n = this.note(brain, id);
     if (!n) throw new Invalid(`no note ${id}; write it first`);
@@ -209,11 +240,84 @@ export class Data {
       .sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
   }
 
-  // An entry's id sorts by when it was made, and is random past that, so
-  // two devices never make the same one.
+  // The day an instant is on, as entries are (the day turns over at 4am).
+  dayOf(at: string) {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: this.timeZone }).format(new Date(Date.parse(at) - DAY_STARTS_HOUR * 3600_000));
+  }
+
+  // Entries from one source (an episode's bullets), each kept once however
+  // often it's written: its id is its time, its place in the list (so those
+  // at one time keep their order) and a hash of its key.
+  async addEntries(brain: string, list: { at: string; who: string; text: string; key: string }[]): Promise<number> {
+    const have = new Set(this.entries(brain).map((e) => e.id));
+    const changes: CardChange[] = [];
+    for (const [i, e] of list.entries()) {
+      const id = `${Date.parse(e.at).toString(36)}-${String(i).padStart(2, "0")}${createHash("sha256").update(e.key).digest("base64url").slice(0, 8)}`;
+      if (have.has(id)) continue;
+      have.add(id);
+      changes.push({ t: "card", card: entryRecord(id), set: { at: e.at, day: this.dayOf(e.at), who: e.who, text: e.text.trim() } });
+    }
+    if (changes.length) await this.replicas.change("brain", brain, ...changes);
+    return changes.length;
+  }
+
+  // Entries as another store kept them, by their ids there (move.ts's
+  // worker:<id>), with their days as they were: each kept once.
+  async importEntries(brain: string, list: { from: string; at: string; day: string; who: string; text: string }[]): Promise<number> {
+    const have = new Set(this.entries(brain).map((e) => e.id));
+    const changes: CardChange[] = [];
+    for (const e of list) {
+      const id = importedEntryId(e.from, e.at);
+      if (have.has(id)) continue;
+      have.add(id);
+      changes.push({ t: "card", card: entryRecord(id), set: { at: e.at, day: e.day, who: e.who, text: e.text } });
+    }
+    if (changes.length) await this.replicas.change("brain", brain, ...changes);
+    return changes.length;
+  }
+
+  // The last day rolled up into the memory, by any machine of the account.
+  rolled(brain: string): string | undefined {
+    const r = this.replica("brain", brain)
+      .cards()
+      .find((c) => c.id === ROLLUP_RECORD);
+    return typeof r?.through === "string" ? r.through : undefined;
+  }
+
+  async setRolled(brain: string, through: string) {
+    await this.replicas.change("brain", brain, { t: "card", card: ROLLUP_RECORD, set: { through } });
+  }
+
+  // A text's embedding as some device of the account made it (embed.ts's
+  // quantized form), by its hash; dropped ones are null.
+  vector(brain: string, hash: string): { q: string; s: number } | undefined {
+    const f = this.replica("brain", brain).state.cards[vectorRecord(hash)]?.fields;
+    return typeof f?.q?.value === "string" && typeof f.s?.value === "number" ? { q: f.q.value, s: f.s.value } : undefined;
+  }
+
+  vectorHashes(brain: string): string[] {
+    const cards = this.replica("brain", brain).state.cards;
+    return Object.keys(cards)
+      .filter((id) => id.startsWith(VECTOR_PREFIX) && typeof cards[id].fields.q?.value === "string")
+      .map((id) => id.slice(VECTOR_PREFIX.length));
+  }
+
+  async putVectors(brain: string, add: { hash: string; q: string; s: number }[], drop: string[] = []) {
+    const changes: CardChange[] = [
+      ...add.map((v) => ({ t: "card" as const, card: vectorRecord(v.hash), set: { q: v.q, s: v.s } })),
+      ...drop.map((h) => ({ t: "card" as const, card: vectorRecord(h), set: { q: null, s: null } })),
+    ];
+    if (changes.length) await this.replicas.change("brain", brain, ...changes);
+  }
+
+  // An entry's id sorts by when it was made (two in one millisecond in
+  // the order they were made), and is random past that, so two devices
+  // never make the same one.
+  private made = 0;
   async remember(brain: string, who: string, text: string): Promise<Entry> {
     const e = { at: now(), day: this.today(), who, text: text.trim() };
-    const id = `${Date.now().toString(36)}-${b64url(random(6))}`;
+    this.made = Math.max(Date.now(), this.made + 1);
+    const id = `${this.made.toString(36)}-${b64url(random(6))}`;
     await this.replicas.change("brain", brain, { t: "card", card: entryRecord(id), set: e });
     return { id, ...e };
   }

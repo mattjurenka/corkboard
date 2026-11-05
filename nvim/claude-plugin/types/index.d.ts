@@ -25,6 +25,9 @@ declare module 'claude-code' {
       at: StateFamily<Millis>
       // How long each tool call took, by its tool_use_id.
       took: StateFamily<Millis>
+      // Which tool calls' rows are opened to their input and output, by their
+      // tool_use_id.
+      open: StateFamily<boolean>
       // The live file, as last read.
       live: Live
       // The minute of the day now, for the band.

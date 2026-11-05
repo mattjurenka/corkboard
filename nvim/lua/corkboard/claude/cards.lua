@@ -3,10 +3,10 @@
 -- then backlog; no agent, nothing to wait on). An HTML panel
 -- (b:corkboard_view "cards") in a window to the right of the session's, one
 -- panel per session. The browser draws it (web/src/views/Cards.tsx). j/k
--- move between cards, <CR>
--- opens the selected one in the board's card float (rendered; e there edits
--- it); s or a click goes to its session, or to what it's asking, or to the
--- card on the board.
+-- move between cards, t hands the selected one to the session, <CR>
+-- opens it in the board's card float (rendered; e there edits it, and t
+-- hands it to the session); s or a click goes to its session, or to what
+-- it's asking, or to the card on the board.
 --
 -- Below it, the lower half of the column, the files agents attached to those
 -- cards (attach_file), newest first: another HTML panel (b:corkboard_view
@@ -256,11 +256,12 @@ function M.go(id)
 end
 
 -- A click on a card: what <CR> does, the card in the board's float, with
--- the session's tab left where it is.
-function M.open(id)
+-- the session's tab left where it is. p: the panel's buffer.
+function M.open(id, p)
   vim.schedule(function()
     vim.cmd.stopinsert()
-    require("corkboard.board").open_card(id)
+    local src = p and vim.api.nvim_buf_is_valid(p) and vim.b[p].corkboard_source or nil
+    require("corkboard.board").open_card(id, { session = src })
   end)
 end
 
@@ -284,8 +285,9 @@ local function panel_buf(src)
   local keys = {
     j = { step(1), "next card" },
     k = { step(-1), "previous card" },
-    ["<CR>"] = { on_card(function(id) require("corkboard.board").open_card(id) end), "open the card" },
+    ["<CR>"] = { on_card(function(id) require("corkboard.board").open_card(id, { session = src }) end), "open the card" },
     s = { on_card(M.go), "go to the card's session" },
+    t = { on_card(function(id) require("corkboard.agents").take(src, id) end), "this session takes the card" },
   }
   for lhs, key in pairs(pinned.arrows(keys)) do
     vim.keymap.set("n", lhs, key[1], { buffer = p, nowait = true, desc = "cards: " .. key[2] })

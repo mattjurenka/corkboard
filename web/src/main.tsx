@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { App } from "./App";
 import { Grid } from "./nvim/grid.js";
-import { attachInput } from "./nvim/input.js";
+import { attachInput, setCmdKeys } from "./nvim/input.js";
 import { Rpc } from "./nvim/rpc.js";
 import { EphemeralRpc, WasmRpc } from "./nvim/wasm/rpc";
 import { makeNvim, NvimContext } from "./nvim/context";
@@ -14,6 +14,7 @@ import { openPlan } from "./planWindow";
 import { remember, save as saveSkeleton } from "./skeleton";
 import { nvimFlushed, startLatency } from "./latency";
 import { navigate } from "./lib/nav";
+import { openListed } from "./views/Projects";
 
 // ?cwd=/path/to/project opens Neovim there; ?host=<name> on that machine,
 // over ssh (CORKBOARD_REMOTES in bridge/server.ts). ?view=plan is the day
@@ -98,6 +99,10 @@ rpc.on("corkboard.context", ([context]: any[]) => {
   store.set({ context });
 });
 rpc.on("corkboard.preview", ([tab]: any[]) => store.set({ previewTab: tab ?? null }));
+rpc.on("corkboard.keys", ([{ bindings, cmd }]: any[]) => {
+  setCmdKeys(cmd);
+  store.set({ keys: bindings });
+});
 // Alt+h from Neovim's leftmost window (corkboard/init.lua): keys go to
 // the sidebar's tabs (Tabs in Sidebar.tsx) until they hand them back.
 rpc.on("corkboard.focus_tabs", () => document.querySelector<HTMLElement>("#tabs")?.focus());
@@ -154,6 +159,10 @@ rpc.on("corkboard.scroll", ([scroll]: any[]) => {
   pending.scroll = scroll;
   later();
 });
+rpc.on("corkboard.minimap", ([{ buf, ...map }]: any[]) => {
+  const { [buf]: _, ...minimaps } = store.get().minimaps;
+  store.set({ minimaps: map.lines ? { ...minimaps, [buf]: map } : minimaps });
+});
 rpc.on("corkboard.tab_labels", ([labels]: any[]) => {
   tabLabels = labels ?? {};
   const tabs = store.get().tabs;
@@ -177,6 +186,10 @@ rpc.on("corkboard.tools", ([tools]: any[]) => store.set({ tools }));
 rpc.on("corkboard.projects", ([projects]: any[]) => store.set({ projects }));
 rpc.on("corkboard.brain_form", ([brainForm]: any[]) => store.set({ brainForm }));
 rpc.on("corkboard.hold_form", ([f]: any[]) => store.set({ holdForm: { hold: f?.hold ?? null } }));
+rpc.on("corkboard.ask", ([ask]: any[]) => store.set({ ask }));
+rpc.on("corkboard.ask_done", ([id]: any[]) => {
+  if (store.get().ask?.id === id) store.set({ ask: null });
+});
 rpc.on("corkboard.chime", () => chime());
 rpc.on("corkboard.message", ([m]: any[]) => notifyMessage(m));
 // A toast replaces the one with its id; one that's ended goes after a while.
@@ -191,8 +204,12 @@ rpc.on("corkboard.away_return", ([here]: any[]) => {
 });
 rpc.on("corkboard.usage",([state]: any[]) => store.set({ views: { ...store.get().views, usage: state } }));
 rpc.on("corkboard.features", ([features]: any[]) => store.set({ features }));
+rpc.on("corkboard.vim", ([vim]: any[]) => store.set({ vim }));
 rpc.on("corkboard.fleet", ([state]: any[]) => store.set({ views: { ...store.get().views, fleet: state } }));
 rpc.on("corkboard.brains", ([state]: any[]) => store.set({ views: { ...store.get().views, brains: state } }));
+rpc.on("corkboard.projects_view", ([state]: any[]) => store.set({ views: { ...store.get().views, projects: state } }));
+// <CR> on the Projects tab (corkboard.projects): opened as a click there opens it.
+rpc.on("corkboard.project_open", ([{ project, here }]: any[]) => openListed(nvim, project, here));
 // h/j/k/l in a view's window, to the item drawn that way (lib/nav.ts).
 rpc.on("corkboard.nav", ([{ win, dir, from }]: any[]) => {
   const to = navigate(win, dir, from);

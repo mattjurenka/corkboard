@@ -14,8 +14,8 @@ type Remote = {
   account?: string | null;
   state: string;
   environment: string;
-  board: string;
-  card: string;
+  board: string | null;
+  card: string | null;
   agent: string;
   stopRequested?: boolean;
 };
@@ -39,7 +39,7 @@ const server = Bun.serve({
     const m = url.pathname.match(/^\/api\/spawns\/(\w+)\/(claim|report)$/);
     const s = remote.find((x) => x.id === m?.[1]);
     if (!s) return Response.json({ error: "no" }, { status: 404 });
-    if (m![2] === "claim") return Response.json({ spawn: s, token: `cbc_${s.id}`, repo: s.board === "proj" ? repo : null, ...(s.brain && { brainToken: `cbb_${s.id}`, secrets: { github: "ghp_x" } }) });
+    if (m![2] === "claim") return Response.json({ spawn: s, token: s.board ? `cbc_${s.id}` : null, repo: s.board === "proj" ? repo : null, ...(s.brain && { brainToken: `cbb_${s.id}`, secrets: { github: "ghp_x" } }) });
     s.state = body.state;
     return Response.json(s);
   },
@@ -104,6 +104,7 @@ test("says what it runs, and claims what's queued for it as a spawn of its own",
   add({ id: "aaaaaa2", template: "coding", by: "pepper", account: "personal" });
   add({ id: "aaaaaa3", state: "pending-approval" });
   add({ id: "aaaaaa4", brain: "work", account: "work" });
+  add({ id: "aaaaaa5", board: null, card: null });
   await queue.step(new Set());
   expect(Object.keys(environment.templates)).toEqual(["coding"]);
   expect(environment).toMatchObject({ egress: { open: false, domains: ["api.anthropic.com"], suffixes: [] }, bindings: ["work"], jobs: ["consolidate"] });
@@ -117,6 +118,8 @@ test("says what it runs, and claims what's queued for it as a spawn of its own",
   // A brain's has the brain's token.
   expect(fleet.read("aaaaaa4")).toMatchObject({ brain: "work", account: "work", remote: { token: "cbc_aaaaaa4", brainToken: "cbb_aaaaaa4", secrets: { github: "ghp_x" } } });
   expect(fleet.read("aaaaaa1")!.remote!.brainToken).toBeUndefined();
+  // One on no board has no token, and nothing to say it's on one.
+  expect(fleet.read("aaaaaa5")).toMatchObject({ remote: { board: null, card: null, token: null } });
 });
 
 test("passes a stop on, and reports a run, fetching its commits and revoking its token at the end", async () => {
@@ -146,7 +149,7 @@ test("passes a stop on, and reports a run, fetching its commits and revoking its
   expect(report.body).toMatchObject({ state: "done", exit: 0 });
   expect(report.body.result).toBe(`Fixed.\n\nIts commits: branch fleet/aaaaaa1 in ${repo}.`);
   expect(calls.find((c) => c.path === "/api/tokens/revoke")?.body).toEqual({ token: "cbc_aaaaaa1" });
-  expect(fleet.read("aaaaaa1")).toMatchObject({ reported: "done", fetched: "fleet/aaaaaa1", remote: { token: "" } });
+  expect(fleet.read("aaaaaa1")).toMatchObject({ reported: "done", fetched: "fleet/aaaaaa1", remote: { token: null } });
   const log = Bun.spawnSync(["git", "-C", repo, "log", "--format=%s", "fleet/aaaaaa1"]).stdout.toString();
   expect(log).toBe("the fix\nbase\n");
 
@@ -155,7 +158,7 @@ test("passes a stop on, and reports a run, fetching its commits and revoking its
   calls.length = 0;
   await queue.step();
   expect(calls.filter((c) => c.path === "/api/tokens/revoke").map((c) => c.body.token)).toEqual(["cbc_aaaaaa4", "cbb_aaaaaa4"]);
-  expect(fleet.read("aaaaaa4")!.remote).toMatchObject({ token: "", brainToken: "" });
+  expect(fleet.read("aaaaaa4")!.remote).toMatchObject({ token: null, brainToken: "" });
   expect(fleet.read("aaaaaa4")!.remote!.secrets).toBeUndefined();
 
   // Nothing new, nothing said.

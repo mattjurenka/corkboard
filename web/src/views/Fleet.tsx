@@ -19,8 +19,8 @@ type Spawn = {
   brain?: string;
   by: string;
   task: string;
-  board: string;
-  card: string;
+  board: string | null;
+  card?: string;
   slot?: string;
   ago: string;
   error?: string;
@@ -162,7 +162,7 @@ export function Fleet({ state, win, focused, nvim }: ViewProps<FleetState>) {
                   data-nav={s.id}
                   data-selected={on || undefined}
                   onClick={() => pick(s.id)}
-                  title={`${s.id} · card ${s.card} on ${s.board} · asked by ${s.by}`}
+                  title={`${s.id} · ${s.card ? `card ${s.card}` : "session"}${s.board ? ` on ${s.board}` : ""} · asked by ${s.by}`}
                   className={cn(
                     "cursor-pointer px-ch hover:bg-accent",
                     on && "bg-selection hover:bg-selection",

@@ -8,7 +8,7 @@
 // project with a window already goes to that one (corkboard.window).
 
 import { useEffect, useRef, useState } from "react";
-import { useNvim } from "@/nvim/context";
+import { type Nvim, useNvim } from "@/nvim/context";
 import { store, useStore } from "@/store";
 import { Palette, Row, Search, matches, step } from "./Palette";
 import { Spinner } from "./Spinner";
@@ -17,8 +17,27 @@ type Project = { key: string; name: string; root: string; path?: string; where?:
 type Listed = { projects?: Project[]; dir: string; error?: string };
 type Opened = { opened?: boolean; path?: string; error?: string } | undefined;
 
+// Neovim's code run on arg, which opens a project: in this window, or, with
+// here (a project open already), in one of its own, opened before Neovim is
+// asked so the popup blocker lets it through. The error, if it failed.
+export async function openProject(nvim: Nvim, code: string, arg: unknown, here: boolean): Promise<string | null> {
+  const win = here ? window.open("about:blank", "_blank", "popup") : null;
+  if (here && !win) return "The browser blocked the new window";
+  const r: Opened = await nvim.lua(code, arg);
+  if (!r || r.error) {
+    win?.close();
+    return r?.error ?? "Neovim didn't answer";
+  }
+  if (win && r.path) {
+    const url = new URL(location.href);
+    url.searchParams.set("cwd", r.path);
+    win.location.href = url.toString();
+  } else win?.close();
+  return null;
+}
+
 // "git@github.com:me/x.git" or "https://github.com/me/x" to github.com/me/x.
-const short = (remote: string) =>
+export const short = (remote: string) =>
   remote
     .replace(/^\w+:\/\//, "")
     .replace(/^[^@/]+@/, "")
@@ -42,7 +61,7 @@ export function Projects() {
     setQuery("");
     setPicked(0);
     setListed(null);
-    setNaming(false);
+    setNaming(!!open.naming);
     setBusy(null);
     setError(null);
     input.current?.focus();
@@ -68,22 +87,13 @@ export function Projects() {
   };
 
   const run = async (n: number, code: string, arg: unknown) => {
-    const win = open.here ? window.open("about:blank", "_blank", "popup") : null;
-    if (open.here && !win) return setError("The browser blocked the new window");
     setBusy(n);
     setError(null);
-    const r: Opened = await nvim.lua(code, arg);
-    if (!r || r.error) {
-      win?.close();
+    const err = await openProject(nvim, code, arg, open.here);
+    if (err) {
       setBusy(null);
-      setError(r?.error ?? "Neovim didn't answer");
-      return;
+      return setError(err);
     }
-    if (win && r.path) {
-      const url = new URL(location.href);
-      url.searchParams.set("cwd", r.path);
-      win.location.href = url.toString();
-    } else win?.close();
     close();
   };
 

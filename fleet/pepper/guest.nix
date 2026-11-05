@@ -8,7 +8,12 @@
 # shares, no route and no resolver, only the proxy, which knows the pepper
 # brain's allowlist. Its code and settings are this closure, so Pepper can't
 # edit its own instructions. What it keeps between boots (the Claude token,
-# ~/.claude, the corkboard token) is on its disk.
+# ~/.claude, the corkboard token, the memory token) is on its disk.
+#
+# Its memory is on the user's node, not the Worker: the hooks and the
+# corkboard-memory MCP server reach the leader through the relay's tunnel,
+# with a token for the pepper brain minted there (`corkboard-bridge serve
+# token --scope assistant --brain pepper`) and copied in by hand.
 { plan, memoryHooks }:
 { config, pkgs, lib, modulesPath, ... }:
 let
@@ -18,6 +23,9 @@ let
   # The Claude account's OAuth token (`claude setup-token`), the personal
   # account's, as the pepper brain names. Copied in by hand.
   claudeToken = "/home/claude/.config/claude-token";
+  memoryToken = "/var/lib/pepper/memory-token";
+  # The user's account's tunnel, to whichever node leads.
+  node = "https://portal.corkboard.fyi/n/tXwvWRd0Ce7CGvviZ6KtY_";
 
   proxyUrl = "http://${vm.hostAddress}:${toString vm.proxyPort}";
   proxyEnv = {
@@ -42,12 +50,12 @@ let
 
   env = proxyEnv // claudeCodeEnv;
 
-  headers = pkgs.writeShellApplication {
-    name = "pepper-corkboard-headers";
+  headers = name: file: pkgs.writeShellApplication {
+    inherit name;
     runtimeInputs = [ pkgs.jq ];
     text = ''
-      if [ -s ${tokenFile} ]; then
-        jq -cn --rawfile t ${tokenFile} '{ Authorization: ("Bearer " + ($t | rtrimstr("\n"))) }'
+      if [ -s ${file} ]; then
+        jq -cn --rawfile t ${file} '{ Authorization: ("Bearer " + ($t | rtrimstr("\n"))) }'
       else
         echo '{}'
       fi
@@ -57,14 +65,21 @@ let
   managedSettings = {
     env = claudeCodeEnv;
     # Phone messages arrive with no one at the terminal to approve a call.
-    permissions.allow = [ "mcp__corkboard" ];
-    inherit (memoryHooks { inherit pkgs lib tokenFile; }) hooks;
+    permissions.allow = [ "mcp__corkboard" "mcp__corkboard-memory" ];
+    inherit (memoryHooks { inherit pkgs lib; url = node; brain = "pepper"; tokenFile = memoryToken; }) hooks;
   };
 
-  managedMcp.mcpServers.corkboard = {
-    type = "http";
-    url = "https://portal.corkboard.fyi/mcp";
-    headersHelper = lib.getExe headers;
+  managedMcp.mcpServers = {
+    corkboard = {
+      type = "http";
+      url = "https://portal.corkboard.fyi/mcp";
+      headersHelper = lib.getExe (headers "pepper-corkboard-headers" tokenFile);
+    };
+    corkboard-memory = {
+      type = "http";
+      url = "${node}/mcp?tools=memory";
+      headersHelper = lib.getExe (headers "pepper-memory-headers" memoryToken);
+    };
   };
 
   prompt = ''
@@ -79,7 +94,7 @@ let
     calendar. He sees it as a diff in the plan window or on his phone, undoes what he doesn't want, and accepts it there, which
     writes the calendar; he may also say what to change, which plan_read returns as asked. You can't accept it for him, and he
     can't skip planning by asking you to.
-    Your memory is corkboard's: the session starts with it (who you are, the last days' log, what you've learned), and a new
+    Your memory is on the corkboard-memory server (the corkboard server's memory and note tools no longer answer): the session starts with it (who you are, the last days' log, what you've learned), and a new
     session starts each day at 4am. When something happens, is decided or is learned, write it in today's log with
     memory_remember, a line that will make sense later. To find what you don't see, memory_recall (or memory_grep for exact
     words), then note_read. Keep lasting knowledge in notes (note_write; pass the version you read). Notes also hold Matt's
@@ -95,9 +110,11 @@ let
   # (usage-* notes, from nvim/lua/corkboard/usage.lua: one per board project
   # and machine, and each machine's Corkboard System for the rest) and keeps
   # a note of how to spend fewer tokens, project by project. Only corkboard's
-  # tools: in print mode anything else is refused rather than asked.
+  # tools: in print mode anything else is refused rather than asked. Its
+  # notes are corkboard-memory's.
   usageReviewPrompt = pkgs.writeText "pepper-usage-review-prompt" ''
     You are Pepper, Matt's personal assistant. Review his Claude Code token usage and suggest how to reduce it.
+    The notes are on the corkboard-memory server; the cards (list_cards) are on corkboard's.
 
     1. Find the usage reports: notes_search with kind review and the query "Token usage", then note_read each
        note whose id starts with usage- (usage-recommendations is yours, below). Use only those with a
@@ -111,11 +128,8 @@ let
        tasks, a subagent for broad searches), a Claude Code setting, or a change to corkboard itself. Work
        out which earlier recommendations the numbers now show working, or not. Skip anything the numbers
        don't support; a project with nothing worth saying gets no recommendations.
-    4. Only if a recommendation is new since the last note and would save more than about $10 a week, and
-       only for a project with a board: create one card for it on that board, titled "Usage: <what to
-       change>", with attention set so Matt sees it, and the numbers in its description. Never a card for
-       Corkboard System. At most one card a run, and none if an open card already has the same aim.
-    5. note_write usage-recommendations (kind review, title "Token usage: recommendations"), replacing it.
+    4. Make no cards: the recommendations go only in the note. note_write usage-recommendations (kind
+       review, title "Token usage: recommendations"), replacing it.
        Start it with today's date, then the recommendations as brief markdown, a section per project. End
        it with exactly one fenced ```json block, which corkboard's usage view draws the note from (the
        markdown is its fallback), in this shape:
@@ -131,8 +145,8 @@ let
                                      "status": "working" | "not working" | "too soon",
                                      "evidence": "what the numbers show (markdown)"}]}]}
        One entry per project with a report, Corkboard System last. saving is the estimated dollars a week,
-       a number. cards are the ids of cards that are about the recommendation: the one you created in
-       step 4, and any open card with the same aim. [] when none.
+       a number. cards are the ids of any open cards with the same aim (list_cards on the project's
+       board); [] when none.
   '';
 
   # tmux only holds the session: no status line, no prefix key (Claude Code
@@ -262,7 +276,7 @@ in
         User = "claude";
         Group = "users";
         ExecStart = lib.getExe (withToken "pepper-usage-review" ''
-          exec ${lib.getExe pkgs.claude-code} -p "$(cat ${usageReviewPrompt})" --allowedTools mcp__corkboard
+          exec ${lib.getExe pkgs.claude-code} -p "$(cat ${usageReviewPrompt})" --allowedTools mcp__corkboard mcp__corkboard-memory
         '');
       };
     };

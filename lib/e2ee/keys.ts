@@ -51,8 +51,10 @@ export function accountKeys(root: Uint8Array): AccountKeys {
   return { id: b64url(sign.public), sign, box: boxPair(derive(root, "account box")) };
 }
 
-export type ObjectKind = "board" | "brain" | "memory" | "index";
-export const KINDS: ObjectKind[] = ["board", "brain", "memory", "index"];
+// account: what the account's nodes share among themselves, by name
+// (bridge/node's "oauth": claude.ai's grants, so they fail over).
+export type ObjectKind = "board" | "brain" | "memory" | "index" | "account";
+export const KINDS: ObjectKind[] = ["board", "brain", "memory", "index", "account"];
 
 // An object's name (a board's key, a brain's name) goes in neither the
 // relay's view nor its ids: both are HKDF outputs.

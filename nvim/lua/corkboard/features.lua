@@ -1,7 +1,7 @@
 -- Which of corkboard's parts are on (Settings > Features), both off unless
 -- turned on, so a new install is the board and brains:
 --
---   fleet       agents spawned onto other machines: the Fleet tab (third,
+--   fleet       agents spawned onto other machines: the Fleet tab (fourth,
 --               before brains), holds, and a brain's account and credentials
 --   assistant   the day plan, meetings, and Pepper's advice on usage
 --

@@ -13,6 +13,7 @@ import { Cloud, Session as CloudSession, type Listener } from "./cloud-session";
 import { CLOUD, token } from "./cloud";
 import { host } from "./host";
 import * as remote from "./remote";
+import type { AppNode } from "./node/app";
 
 // The environment this machine is, as its fleetd names it (fleet/fleetd/queue.ts).
 const ENVIRONMENT = process.env.CORKBOARD_FLEET_ENVIRONMENT ?? hostname();
@@ -45,11 +46,22 @@ const cloud = new Cloud({
   self: remote.self,
 });
 
+// The bridge's node (node/app.ts), when it runs: the brains are its.
+let node: AppNode | undefined;
+export const useNode = (n: AppNode) => (node = n);
+
 // A Neovim session's view of the cloud: what it follows, so closing the
 // session stops its sockets once nobody else uses them. sessions: the fleet
 // view's (away.ts's list, for this Neovim's page).
 export class Session extends CloudSession {
   constructor(listener: Listener, sessions?: () => unknown[]) {
     super(cloud, listener, sessions);
+  }
+
+  override async call(op: string, args: any[]): Promise<unknown> {
+    if (op.startsWith("nodes_")) return node ? node.nodes(op, args) : null;
+    if (node && (op === "note_get" || op === "note_put" || op === "goals")) return node.notes(op, args);
+    const here = node && op.startsWith("brains_") ? await node.brains(op, args) : undefined;
+    return here !== undefined ? here : super.call(op, args);
   }
 }

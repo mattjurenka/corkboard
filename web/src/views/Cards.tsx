@@ -12,10 +12,10 @@ import type { ViewProps } from "./index";
 
 type CardsState = { mine?: BoardCard[]; open?: BoardCard[]; selected?: string };
 
-export function Cards({ state, focused, nvim }: ViewProps<CardsState>) {
+export function Cards({ state, buf, focused, nvim }: ViewProps<CardsState>) {
   const ref = useRef<HTMLDivElement>(null);
   const go = (id: string) => nvim.lua("require('corkboard.claude.cards').go(...)", id);
-  const open = (id: string) => nvim.lua("require('corkboard.claude.cards').open(...)", id);
+  const open = (id: string) => nvim.lua("require('corkboard.claude.cards').open(...)", id, buf);
 
   useEffect(() => {
     ref.current?.querySelector("[data-selected]")?.scrollIntoView({ block: "nearest" });

@@ -1,10 +1,14 @@
 // End-to-end encrypted boards from the command line, for now the only
 // client (see .agent/plans/e2ee.md):
 //
-//   corkboard-bridge e2ee init [--invite CODE | --admin] [--name NAME] [--passphrase]
+//   corkboard-bridge e2ee init [--invite CODE | --admin | --local] [--name NAME] [--passphrase]
 //                              a new account, this machine its first device; prints
 //                              the recovery phrase, once. --admin: made with this
-//                              machine's sign-in (cloud.ts), an admin's, and no invite
+//                              machine's sign-in (cloud.ts), an admin's, and no invite.
+//                              --local: on this machine only, with no relay, until publish
+//   corkboard-bridge e2ee publish [--invite CODE | --admin]
+//                              an account made --local, onto the relay, and every change
+//                              it kept meanwhile pushed
 //   corkboard-bridge e2ee recover [--name NAME] [--passphrase]
 //                              this machine into the account whose phrase is on stdin
 //   corkboard-bridge e2ee pair [--name NAME] [--passphrase]
@@ -29,10 +33,17 @@
 //                              device (the others pair again); prints the new phrase
 //   corkboard-bridge e2ee rotated
 //                              this machine onto the new root another device rotated to
-//   corkboard-bridge e2ee status | revoke DEVICE
+//   corkboard-bridge e2ee status | phrase | revoke DEVICE
+//   corkboard-bridge e2ee nodes | leader [this|DEVICE|none]
+//                              the account's nodes connected to the relay, and the leader,
+//                              the one its tunnel (<relay>/n/<handle>) goes to first
 //   corkboard-bridge e2ee approve-connector
 //                              a one-time code (ten minutes) for approving a connector
 //                              at this machine's node's /authorize (bridge/node/)
+//   corkboard-bridge e2ee move-memory [--dry-run] [--passphrase]
+//                              this sign-in's memory off the Worker and into the account's
+//                              brains, the account made or published first if it must be;
+//                              --dry-run copies it and leaves the Worker's (node/move.ts)
 //
 // The relay is the server the bridge uses (cloud.ts). The passphrase, when there is
 // one, is CORKBOARD_E2EE_PASSPHRASE or asked for.
@@ -40,7 +51,7 @@
 import { existsSync, rmSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { CLOUD, token as googleToken } from "./cloud";
+import { CLOUD, signedIn as cloudSignedIn, token as googleToken } from "./cloud";
 import { DATA_DIR } from "./dirs";
 import { Keystore } from "./keystore";
 import { type CardChange, type MergedCard } from "../lib/e2ee/merge";
@@ -48,13 +59,13 @@ import { type ObjectKind, accountKeys, newRoot, objectId, objectKey } from "../l
 import { certify, checkCert, creation, newDevice, revoke, type Device } from "../lib/e2ee/device";
 import { approve, pairNew } from "../lib/e2ee/pairing";
 import { fromPhrase, toPhrase } from "../lib/e2ee/phrase";
-import { Relay } from "../lib/e2ee/relay";
+import { type Nodes, Relay } from "../lib/e2ee/relay";
 import { type IndexEntry, checkRotated, entries, indexId, indexKey, keyOf, remember, rotate, share, sharedWithMe, unshare } from "../lib/e2ee/sharing";
 import { Replica, memoryStore } from "../lib/e2ee/sync";
 import { type DeviceCert, type Role, type Signed, ROLES, normalizeCode, showCode } from "../lib/e2ee/wire";
 
 const USAGE =
-  "usage: corkboard-bridge e2ee init|recover|pair|approve CODE|push-board KEY|pull-board KEY|share KIND NAME ACCOUNT [ROLE]|unshare KIND NAME ACCOUNT|shared|compact [KIND NAME]|rotate|rotated|status|revoke DEVICE|approve-connector";
+  "usage: corkboard-bridge e2ee init|publish|recover|pair|approve CODE|push-board KEY|pull-board KEY|share KIND NAME ACCOUNT [ROLE]|unshare KIND NAME ACCOUNT|shared|compact [KIND NAME]|rotate|rotated|status|phrase|revoke DEVICE|nodes|leader [this|DEVICE|none]|approve-connector|move-memory [--dry-run]";
 
 function option(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -81,6 +92,7 @@ function relayFor(device?: Device, cert?: Signed<DeviceCert>) {
 async function signedIn(args: string[]) {
   const d = store.device();
   if (!d || !store.exists()) throw new Error("this machine isn't in an encrypted account: corkboard-bridge e2ee init, recover or pair");
+  if (d.relay === null) throw new Error(`this machine's account is only on this machine; corkboard-bridge e2ee publish puts it on ${CLOUD}`);
   if (d.relay !== CLOUD) throw new Error(`this machine's account is on ${d.relay}, not ${CLOUD} (CORKBOARD_CLOUD)`);
   const pass = passphrase(args, false);
   const root = await store.root(pass);
@@ -91,14 +103,31 @@ function refuseTwice() {
   if (store.exists()) throw new Error(`this machine is already in an account (${store.dir}); it has one at a time`);
 }
 
-async function keep(root: Uint8Array, device: Device, cert: Signed<DeviceCert>, name: string, args: string[]) {
+async function keep(root: Uint8Array, device: Device, cert: Signed<DeviceCert>, name: string, args: string[], relay: string | null = CLOUD) {
   await store.saveRoot(root, passphrase(args, true));
-  store.saveDevice(CLOUD, name, device, cert);
+  store.saveDevice(relay, name, device, cert);
+}
+
+// An account on this machine only, its key in the keychain: what init
+// --local makes, and the bridge when it starts signed out with none (node/app.ts).
+export async function localAccount(name = hostname(), pass?: string) {
+  refuseTwice();
+  const root = newRoot();
+  const keys = accountKeys(root);
+  const device = newDevice();
+  await store.saveRoot(root, pass);
+  store.saveDevice(null, name, device, certify(keys, device, name));
+  return { root, account: keys.id };
 }
 
 async function init(args: string[]) {
   refuseTwice();
   const name = option(args, "--name") ?? hostname();
+  if (args.includes("--local")) {
+    const { root, account } = await localAccount(name, passphrase(args, true));
+    console.log(`Made the account ${account} on this machine (${name}) only; corkboard-bridge e2ee publish puts it on ${CLOUD}.\n`);
+    return printPhrase(root, "Its recovery phrase, which is the only way back in with every device gone. Write it down; it isn't shown again:");
+  }
   const root = newRoot();
   const keys = accountKeys(root);
   const device = newDevice();
@@ -110,6 +139,32 @@ async function init(args: string[]) {
   await relay.signIn();
   console.log(`Made the account ${keys.id} on ${CLOUD}, with this machine (${name}) as its first device.\n`);
   printPhrase(root, "Its recovery phrase, which is the only way back in with every device gone. Write it down; it isn't shown again:");
+}
+
+// An account made --local, made at the relay with the keys it already has,
+// and each object's queue pushed: the index first, then what it lists. The
+// replicas on disk don't change; they only have somewhere to sync now.
+async function publish(args: string[]) {
+  const d = store.device();
+  if (!d || !store.exists()) throw new Error("this machine isn't in an encrypted account: corkboard-bridge e2ee init --local");
+  if (d.relay !== null) throw new Error(`this machine's account is on ${d.relay} already`);
+  const root = await store.root(passphrase(args, false));
+  const keys = accountKeys(root);
+  const relay = relayFor(d.device, d.cert);
+  await relay.createAccount(creation(keys, CLOUD, option(args, "--invite") ?? null), d.cert, args.includes("--admin") ? await googleToken() : undefined);
+  store.saveDevice(CLOUD, d.name, d.device, d.cert);
+  await relay.signIn();
+  const me = await signedIn(args);
+  const object = indexId(me.root);
+  const index = await Replica.open({ transport: me.relay, key: indexKey(me.root), object, device: me.device.id, store: store.replica(object) });
+  let ops = await index.push();
+  for (const e of entries(index)) {
+    const rep = await objectOf(me, index, e.kind, e.name);
+    const n = await rep.push();
+    ops += n;
+    console.log(`${e.kind.padEnd(6)} ${e.name.padEnd(30)} ${n} changes`);
+  }
+  console.log(`\nThe account ${keys.id} is on ${CLOUD} now, with ${ops} changes pushed.`);
 }
 
 function printPhrase(root: Uint8Array, heading: string) {
@@ -265,17 +320,49 @@ async function pullBoard(args: string[]) {
   console.log(JSON.stringify(rep.cards(), null, 2));
 }
 
+// The recovery phrase again, for an account the bridge made with no one
+// there to write it down.
+async function phrase(args: string[]) {
+  if (!store.exists()) throw new Error("this machine isn't in an encrypted account");
+  printPhrase(await store.root(passphrase(args, false)), "This account's recovery phrase, the only way back in with every device gone:");
+}
+
 async function status(args: string[]) {
   const d = store.device();
   if (!d) return console.log("This machine isn't in an encrypted account.");
   const id = store.token()?.account ?? d.cert.body.account;
-  console.log(`account  ${id}\ndevice   ${d.device.id} (${d.name})\nrelay    ${d.relay}\nkey      ${store.needsPassphrase() ? "under a passphrase" : "in the keychain (a file)"}`);
+  console.log(`account  ${id}\ndevice   ${d.device.id} (${d.name})\nrelay    ${d.relay ?? "none: only on this machine (e2ee publish)"}\nkey      ${store.needsPassphrase() ? "under a passphrase" : "in the keychain (a file)"}`);
   if (id !== d.cert.body.account) console.log(`signs as ${d.cert.body.account} (rotated)`);
   if (d.relay !== CLOUD) return;
   const me = await signedIn(args);
   const revoked = await me.relay.revoked();
   const problem = checkCert(d.cert.body.account, d.cert, revoked as never);
   console.log(`state    ${problem ?? "signed in"}`);
+}
+
+function showNodes(n: Nodes, me: string) {
+  // A device by the name it connected with, when the relay keeps names.
+  const named = (d: string) => {
+    const k = n.known?.find((x) => x.device === d);
+    return `${k ? `${k.name} ` : ""}${d}${d === me ? " (this machine)" : ""}`;
+  };
+  console.log(`tunnel   ${n.url}`);
+  console.log(`leader   ${n.leader ? `${named(n.leader)}${n.connected.some((c) => c.device === n.leader) ? "" : ", not connected"}` : "none: the newest connected node answers"}`);
+  for (const c of n.connected) console.log(`connected ${named(c.device)} since ${new Date(c.since).toISOString()}`);
+  if (!n.connected.length) console.log("connected none");
+  for (const k of n.known ?? []) if (!n.connected.some((c) => c.device === k.device)) console.log(`away     ${named(k.device)}, seen ${new Date(k.seen).toISOString()}`);
+}
+
+async function listNodes(args: string[]) {
+  const me = await signedIn(args);
+  showNodes(await me.relay.nodes(), me.device.id);
+}
+
+async function setLeader(args: string[]) {
+  const which = args[1];
+  if (!which) throw new Error("leader takes this, a device's id (e2ee nodes lists them), or none");
+  const me = await signedIn(args);
+  showNodes(await me.relay.setLeader(which === "none" ? null : which === "this" ? me.device.id : which), me.device.id);
 }
 
 async function shareObject(args: string[]) {
@@ -377,9 +464,34 @@ async function revokeDevice(args: string[]) {
   console.log(`Revoked ${device}.`);
 }
 
+// The bridge mustn't be serving a node meanwhile (serve.ts's lock), and is
+// restarted after, to serve this one.
+async function moveMemoryOff(args: string[]) {
+  if (!cloudSignedIn()) throw new Error("not signed in: corkboard-bridge login");
+  const d = store.device();
+  if (!d || !store.exists()) await init(args);
+  else if (d.relay === null) await publish(args);
+  if (store.needsPassphrase() && !process.env.CORKBOARD_E2EE_PASSPHRASE) process.env.CORKBOARD_E2EE_PASSPHRASE = passphrase(args, false);
+  const { startNode } = await import("./node/serve");
+  const { moveMemory } = await import("./node/move");
+  const n = await startNode({ port: 0, host: "127.0.0.1", origin: undefined });
+  const dryRun = args.includes("--dry-run");
+  try {
+    await moveMemory(n, async (path, init = {}) => fetch(`${CLOUD}${path}`, { ...init, headers: { ...(init.headers as Record<string, string>), Authorization: `Bearer ${await googleToken()}` } }), { dryRun });
+  } finally {
+    await n.stop();
+  }
+  console.log(
+    dryRun
+      ? `\nCopied into the account ${n.account}; the Worker keeps its memory (a dry run).`
+      : `\nMemory is in the account ${n.account} now, and gone from ${CLOUD}. Restart the bridge to serve it.`,
+  );
+}
+
 export async function cli(args: string[]) {
   const commands: Record<string, (a: string[]) => Promise<void>> = {
     init,
+    publish,
     recover,
     pair,
     approve: approveCode,
@@ -392,7 +504,11 @@ export async function cli(args: string[]) {
     rotate: rotateAccount,
     rotated: rotatedOnto,
     status,
+    phrase,
     revoke: revokeDevice,
+    "move-memory": moveMemoryOff,
+    nodes: listNodes,
+    leader: setLeader,
     "approve-connector": async () => console.log((await import("./node/serve")).approvalCode()),
   };
   const run = commands[args[0]];

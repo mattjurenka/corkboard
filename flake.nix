@@ -155,7 +155,7 @@
           version = "0.1.0";
           src = pkgs.lib.fileset.toSource {
             root = ./.;
-            fileset = pkgs.lib.fileset.unions [ ./bridge ./nvim ./mcp ];
+            fileset = pkgs.lib.fileset.unions [ ./bridge ./lib ./nvim ./mcp ];
           };
           # The bridge's only dependency, and it has none of its own, so it is fetched
           # straight from the registry with bun.lock's integrity hash instead
@@ -172,17 +172,19 @@
           opus = [ "ogg-opus-decoder" "opus-decoder" "@wasm-audio-decoders/common" "@wasm-audio-decoders/opus-ml" "codec-parser" "@eshaz/web-worker" "simple-yenc" ];
           # Parakeet, what transcribes it: sherpa-onnx and its binaries for this system.
           asr = [ "sherpa-onnx-node" "sherpa-onnx-linux-${if pkgs.stdenv.hostPlatform.isAarch64 then "arm64" else "x64"}" ];
+          # The keystore's and the node's cryptography (lib/e2ee).
+          crypto = [ "@noble/ciphers" "@noble/curves" "@noble/hashes" "@scure/bip39" ];
           nativeBuildInputs = [ pkgs.makeWrapper pkgs.autoPatchelfHook ];
           buildInputs = [ pkgs.stdenv.cc.cc.lib ];
           installPhase = ''
             share=$out/share/corkboard
             mkdir -p $share/node_modules/@msgpack/msgpack
-            cp -r bridge nvim mcp $share/
+            cp -r bridge lib nvim mcp $share/
             echo ${rev} > $share/bridge/rev
             echo ${rev} > $share/nvim/rev
             mkdir -p $share/web && cp -r ${web} $share/web/dist
             tar -xzf $msgpack -C $share/node_modules/@msgpack/msgpack --strip-components=1
-            for p in $speech $opus $asr; do
+            for p in $speech $opus $asr $crypto; do
               mkdir -p $share/node_modules/$(dirname $p)
               cp -r ${webDeps}/$p $share/node_modules/$p
             done
@@ -200,7 +202,7 @@
               --suffix CORKBOARD_PLUGINS : ${pluginPath pkgs} \
               --suffix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader ]} \
               ${pkgs.lib.optionalString (nvimWasm != null) "--set-default CORKBOARD_NVIM_WASM ${nvimWasm}/lib/nvim-wasm"}
-            # A brain's vault into its memory in the Worker (bridge/memory-sync.ts).
+            # A brain's vault into its memory on the node (bridge/memory-sync.ts).
             makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-memory-sync \
               --add-flags $share/bridge/memory-sync.ts
           '';

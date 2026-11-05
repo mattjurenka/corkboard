@@ -146,7 +146,7 @@ export type Rotated = { rotations: Signed<Rotation>[]; cert: Signed<DeviceCert>;
 // Limits the relay holds clients to (relay/src/log.ts).
 export const LIMITS = {
   // One op's ciphertext.
-  op: 64 * 1024,
+  op: 256 * 1024,
   // One push.
   batch: 100,
   batchBytes: 1024 * 1024,
@@ -163,4 +163,28 @@ export const LIMITS = {
   compactBytes: 8 * 1024 * 1024,
   // Members of one object.
   members: 100,
+  // A request's or answer's body through the tunnel (an episode's transcript is 16 MB).
+  tunnel: 17 * 1024 * 1024,
+  // How long the relay waits for a node's answer.
+  tunnelMs: 60_000,
 };
+
+// The account's nodes (relay/src/nodes.ts): the devices with a socket open
+// to the relay, and the one the user chose to lead, where the always-on
+// work happens (.agent/plans/local-memory.md, step 8).
+// known: every device that has connected, by the name its cert gives, and
+// when it last came or went (an older relay leaves it out).
+export type NodesView = { leader: string | null; connected: { device: string; since: number }[]; known?: { device: string; name: string; seen: number }[] };
+
+// The tunnel: a request to <relay>/n/<handle>/…, sent as this to a node
+// over its socket, and the node's answer. Bodies are base64url; headers
+// are pairs, so a repeated one survives.
+export type TunnelRequest = { id: string; method: string; path: string; headers: [string, string][]; body?: string };
+export type TunnelResponse = { id: string; status: number; headers: [string, string][]; body?: string };
+
+// Where an account's nodes are reached: <relay>/n/<handle>. A hash of the
+// account id, so it's short and says nothing a URL shouldn't.
+export async function nodeHandle(account: string): Promise<string> {
+  return b64url(new Uint8Array(await crypto.subtle.digest("SHA-256", utf8(account)))).slice(0, 22);
+}
+export const HANDLE = /^[A-Za-z0-9_-]{22}$/;

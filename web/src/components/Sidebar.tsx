@@ -3,10 +3,12 @@
 //
 // Tabs are drawn from ext_tabline: Neovim stops drawing its own tabline and
 // sends tabline_update instead; gt/gT and :tab* still drive it. The first tabs
-// are always the board, token usage, the fleet (while it's on) and brains (corkboard.board,
-// .usage, .fleet and .brains keep them there), so they are labelled so
-// whatever window is focused in them, and have no close button. The tabs
-// after them come under a gap. All are numbered as Neovim does, for Alt+<n>.
+// are always the projects, the board, token usage, the fleet (while it's on)
+// and brains (corkboard.projects, .board, .usage, .fleet and .brains keep them
+// there), so they are labelled so whatever window is focused in them, and
+// have no close button. The tabs after them come under a gap. All are
+// numbered as Neovim does, for Alt+<n>. With no project open the board is
+// greyed out, as is New session at the foot of the tabs.
 // The day plan has a window of its own, opened from the project's header
 // (planWindow.ts).
 
@@ -23,7 +25,7 @@ import { Spinner } from "./Spinner";
 import { openPlan } from "@/planWindow";
 
 // The pinned tabs, by position: the fleet's only while it's on (corkboard.features).
-const pinnedTabs = (fleet: boolean) => (fleet ? ["Board", "Usage", "Fleet", "Brains"] : ["Board", "Usage", "Brains"]);
+const pinnedTabs = (fleet: boolean) => (fleet ? ["Projects", "Board", "Usage", "Fleet", "Brains"] : ["Projects", "Board", "Usage", "Brains"]);
 
 // Each tab's ribbon down its left edge, by position, whatever the colorscheme;
 // neighbors far apart in hue.
@@ -72,6 +74,7 @@ export function Sidebar() {
         }
       >
         <Tabs />
+        <NewSession off={!!context?.none} />
       </Section>
       <Files />
       <Activity />
@@ -95,6 +98,7 @@ function Tabs() {
   // and the tab went away.
   const pending = useStore((s) => s.switching);
   const PINNED = pinnedTabs(useStore((s) => s.features.fleet));
+  const none = useStore((s) => !!s.context?.none);
   const go = (tab: Tab["tab"]) => goTab(tab, nvim);
   if (!tabs) return <ol id="tabs" tabIndex={-1} className="flex-1" />;
 
@@ -149,6 +153,7 @@ function Tabs() {
     >
       {tabs.tabs.map(({ tab, name, label }, i) => {
         const pinned = PINNED[i];
+        const off = none && pinned === "Board";
         // The tab asked for, at once, as the outline is: not left behind
         // waiting on Neovim when the keys go quickly.
         const current = tab.id === (pending ?? tabs.current.id);
@@ -156,7 +161,7 @@ function Tabs() {
           <li
             key={tab.id}
             title={pinned || label?.title || name || "[No Name]"}
-            onClick={() => go(tab)}
+            onClick={() => !off && go(tab)}
             style={{ "--ribbon": RIBBON[i % RIBBON.length] } as React.CSSProperties}
             className={cn(
               // Two lines tall each, whether or not it has a directory under its name.
@@ -166,6 +171,7 @@ function Tabs() {
               // Outlined as a focused window is.
               focused && current && "outline outline-focus -outline-offset-1",
               i === PINNED.length - 1 && "mb-row",
+              off && "pointer-events-none opacity-50",
             )}
           >
             {pending === tab.id ? (
@@ -199,6 +205,23 @@ function Tabs() {
         );
       })}
     </ol>
+  );
+}
+
+// Claude Code, as Ctrl+. opens it, here in the project.
+function NewSession({ off }: { off: boolean }) {
+  const nvim = useNvim();
+  return (
+    <div className="flex-none px-2ch pb-row">
+      <Button
+        disabled={off}
+        size="cell"
+        className="w-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+        onClick={() => nvim.lua("require('corkboard.claude').new_session()")}
+      >
+        + New session
+      </Button>
+    </div>
   );
 }
 

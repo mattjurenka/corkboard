@@ -62,6 +62,7 @@ end
 -- buffer, under their path:line. The title is asked for, prefilled from a
 -- TODO comment on the first line.
 function M.card_from_code(first, last)
+  if require("corkboard.projects").need() then return end
   local b = vim.api.nvim_get_current_buf()
   local lines = vim.api.nvim_buf_get_lines(b, first - 1, last, false)
   local name = vim.api.nvim_buf_get_name(b)
@@ -123,8 +124,10 @@ end
 
 local function state()
   local agents = require("corkboard.agents")
+  local autopilot = require("corkboard.autopilot")
   return {
     root = require("corkboard.util").project_root(),
+    none = require("corkboard.util").no_project() or nil,
     statuses = M.statuses,
     selected = selected,
     activity = activity(),
@@ -141,6 +144,8 @@ local function state()
         session = agents.live(c.id),
         cost = costs[c.id],
         media = c.media,
+        review = autopilot.review(c),
+        writing = autopilot.writing(c.id),
       }
     end, shown),
   }
@@ -292,7 +297,9 @@ local function push_rendered()
   require("corkboard").notify("corkboard.view", rendered.buf, { path = path, text = table.concat(lines, "\n") })
 end
 
-local function rendered_buffer(id)
+-- session: the Claude Code session it was opened beside (its cards panel),
+-- which t hands it to.
+local function rendered_buffer(id, session)
   local b = vim.api.nvim_create_buf(false, true)
   vim.bo[b].bufhidden = "wipe"
   vim.b[b].corkboard_view = "markdown"
@@ -301,6 +308,12 @@ local function rendered_buffer(id)
     vim.keymap.set("n", lhs, "<Cmd>close<CR>", { buffer = b, nowait = true, desc = "board: close card" })
   end
   vim.keymap.set("n", "e", function() M.open_card(id, { edit = true }) end, { buffer = b, nowait = true, desc = "board: edit card" })
+  if session then
+    vim.keymap.set("n", "t", function()
+      vim.cmd.close()
+      require("corkboard.agents").take(session, id)
+    end, { buffer = b, nowait = true, desc = "board: this session takes the card" })
+  end
   vim.api.nvim_create_autocmd("BufWipeout", {
     buffer = b,
     once = true,
@@ -312,9 +325,12 @@ local function rendered_buffer(id)
   return b
 end
 
-local function card_float()
+-- rows: as tall as the text, up to the usual height; the page says how tall
+-- the rendered card draws (M.fit_card).
+local function card_float(rows)
   local width = math.min(80, vim.o.columns - 8)
   local height = math.min(math.max(10, math.floor(vim.o.lines * 0.6)), vim.o.lines - 6)
+  if rows then height = math.max(1, math.min(rows, height)) end
   return {
     relative = "editor",
     width = width,
@@ -325,12 +341,26 @@ local function card_float()
   }
 end
 
--- Rendered to read; opts.edit to edit.
+-- Rendered to read; opts.edit to edit. opts.session: the Claude Code
+-- session whose cards panel opened it, which t there hands it to.
 function M.open_card(id, opts)
+  opts = opts or {}
   -- Opening a card is seeing what its agent asked for.
   if cards.get(id).attention then M.set(id, { attention = "" }) end
-  local b = (opts and opts.edit and card_buffer or rendered_buffer)(id)
-  local title = { title = " " .. id .. " ", title_pos = "center" }
+  local edit = opts.edit
+  local b = edit and card_buffer(id) or rendered_buffer(id, opts.session)
+  -- Rendered, a guess at its height until the page measures it: the lines
+  -- as they wrap.
+  local rows
+  if not edit then
+    local width = card_float().width
+    rows = 0
+    for _, l in ipairs(vim.api.nvim_buf_get_lines(b, 0, -1, false)) do
+      rows = rows + math.max(1, math.ceil(vim.fn.strdisplaywidth(l) / width))
+    end
+  end
+  local title = " " .. id .. (opts.session and not edit and " · t take it " or " ")
+  local config = vim.tbl_extend("force", card_float(rows), { title = title, title_pos = "center" })
 
   -- A float left open in another tab is closed, not gone to: the card opens
   -- in this tab.
@@ -342,10 +372,10 @@ function M.open_card(id, opts)
     -- Save the card being replaced rather than drop its edits.
     vim.api.nvim_win_call(card_win, function() vim.cmd("silent update") end)
     vim.api.nvim_win_set_buf(card_win, b)
-    vim.api.nvim_win_set_config(card_win, title)
+    vim.api.nvim_win_set_config(card_win, config)
     vim.api.nvim_set_current_win(card_win)
   else
-    card_win = vim.api.nvim_open_win(b, true, vim.tbl_extend("error", card_float(), title))
+    card_win = vim.api.nvim_open_win(b, true, config)
     vim.wo[card_win].wrap = true
     vim.wo[card_win].linebreak = true
     local win = card_win
@@ -376,6 +406,15 @@ function M.open_card(id, opts)
   vim.api.nvim_win_set_cursor(card_win, { 1, 2 })
 end
 
+-- The rendered card's height in rows, as the page draws it
+-- (web/src/views/Viewers.tsx); any other markdown view's is ignored.
+function M.fit_card(win, rows)
+  if win ~= card_win or not vim.api.nvim_win_is_valid(win) then return end
+  if not (rendered and vim.api.nvim_win_get_buf(win) == rendered.buf) then return end
+  local c = card_float(rows)
+  vim.api.nvim_win_set_config(win, { relative = "editor", row = c.row, col = c.col, width = c.width, height = c.height })
+end
+
 -- Actions -------------------------------------------------------------------------
 
 local function move(id, by)
@@ -400,9 +439,9 @@ local actions = {
   right = function(id) move(id, 1) end,
   new = function(id)
     local status = id and cards.get(id).status or "backlog"
-    vim.ui.input({ prompt = "New card (" .. status .. "): " }, function(title)
-      if title and vim.trim(title) ~= "" then
-        selected = M.create(vim.trim(title), status)
+    vim.ui.input({ prompt = "New card (" .. status .. "): " }, function(text)
+      if text and vim.trim(text) ~= "" then
+        selected = require("corkboard.autopilot").intake(text, status)
         render_text()
         push_state()
       end
@@ -427,8 +466,18 @@ local actions = {
   review = function(id)
     if id then require("corkboard.review").open(id) end
   end,
+  -- A question on a card no agent has is the planner's or the groomer's,
+  -- answered here.
   answer = function(id)
-    if id then require("corkboard.agents").attend(id) end
+    if not id then return end
+    local agents = require("corkboard.agents")
+    local c = cards.get(id)
+    if c.attention and not c.agent_state and not agents.session(id) then
+      return vim.ui.input({ prompt = c.attention .. " " }, function(text)
+        if text and vim.trim(text) ~= "" then require("corkboard.autopilot").answer(id, c.attention, text) end
+      end)
+    end
+    agents.attend(id)
   end,
   archive = function(id)
     if id then remove(id, "archive") end
@@ -506,14 +555,14 @@ local function buffer()
   return buf
 end
 
--- Keep the board first among the tabs. Leaves focus where it was.
+-- Keep the board second among the tabs, after projects. Leaves focus where it was.
 function M.ensure()
-  if pinned.ensure("corkboard_board", 1, buffer()) then M.push() end
+  if pinned.ensure("corkboard_board", pinned.index("corkboard_board"), buffer()) then M.push() end
 end
 
 function M.show()
   M.ensure()
-  pinned.show("corkboard_board", 1, buffer())
+  pinned.show("corkboard_board", pinned.index("corkboard_board"), buffer())
 end
 
 -- Watching and pushing --------------------------------------------------------------
@@ -553,6 +602,12 @@ end
 function M.push()
   -- The day plan's window has no board.
   if require("corkboard").window == "plan" then return end
+  -- Nor does home: no cards are read, so none are handed out.
+  if require("corkboard.util").no_project() then
+    shown = {}
+    render_text()
+    return push_state()
+  end
   watch()
   -- A cloud board can fail to read (signed out, offline). That leaves the
   -- board as it was, not the page's attach and the editor's restore undone.
@@ -563,6 +618,11 @@ function M.push()
     return
   end
   last_error, shown = nil, list
+  -- Autopilot may hand out cards, which are read again so the board shows it.
+  if require("corkboard.autopilot").push(shown) then
+    local again, relisted = pcall(cards.list)
+    if again then shown = relisted end
+  end
   costs = require("corkboard.usage").card_costs()
   render_text()
   push_state()

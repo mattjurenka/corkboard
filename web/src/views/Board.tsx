@@ -24,7 +24,26 @@ export type BoardCard = {
   // What its agents' sessions cost (corkboard.usage's card_costs); cost is
   // missing until a session has recorded one.
   cost?: { cost?: number; tokens: number; sessions: number };
+  // The reviewer's look at the work in review (corkboard.autopilot).
+  review?: { state: "reviewing" | "passed" | "failed" | "error"; risk?: string; summary?: string; problems?: string[] };
+  // Claude is writing the card up from what was typed.
+  writing?: boolean;
 };
+
+const RISK: Record<string, string> = {
+  low: "text-working",
+  medium: "text-review",
+  high: "text-blocked",
+};
+
+// What a card waits on the user for, if anything, and the board action that
+// takes them to it: its question, its permission prompt, or its review.
+export function yourTurn(c: BoardCard): "answer" | "session" | "review" | undefined {
+  if (c.attention) return "answer";
+  if (c.session === "permission") return "session";
+  if (c.status === "review" && c.agent_state === "needs-review" && c.review?.state !== "reviewing") return "review";
+}
+const TURN_ORDER = { answer: 0, session: 1, review: 2 };
 
 const costLine = (c: NonNullable<BoardCard["cost"]>) =>
   `${c.cost !== undefined ? `$${c.cost.toFixed(2)}` : "—"} · ${c.sessions} session${c.sessions === 1 ? "" : "s"}`;
@@ -38,7 +57,7 @@ const SESSION: Record<string, [string, string]> = {
   permission: ["asking permission", "text-blocked"],
   exited: ["session ended", "text-muted-foreground"],
 };
-type BoardState = { root?: string; statuses: string[]; cards: BoardCard[]; selected?: string };
+type BoardState = { root?: string; none?: boolean; statuses: string[]; cards: BoardCard[]; selected?: string };
 
 const STATE_LABEL: Record<string, string> = {
   queued: "queued",
@@ -111,9 +130,44 @@ export function Board({ state, win, focused, nvim }: ViewProps<BoardState>) {
     return () => ro.disconnect();
   }, [state.statuses.length]);
 
+  const turn = state.cards
+    .map((c) => [c, yourTurn(c)] as const)
+    .filter((t): t is readonly [BoardCard, "answer" | "session" | "review"] => !!t[1])
+    .sort((a, b) => TURN_ORDER[a[1]] - TURN_ORDER[b[1]]);
+
+  // Home has no board (corkboard.projects): the way to one instead.
+  if (state.none)
+    return (
+      <div className="flex h-full items-center justify-center opacity-60">
+        <button type="button" onClick={() => nvim.lua("require('corkboard.projects').show()")} className="cursor-pointer px-ch hover:bg-accent">
+          <span className="text-primary">→</span> Projects
+        </button>
+      </div>
+    );
+
   return (
     <div ref={ref} className="@container/board flex h-full flex-col px-2ch pt-row">
       <header className="truncate pb-row text-muted-foreground">{state.root ?? ""}</header>
+      {turn.length > 0 && (
+        <section className="mb-row max-h-[40%] shrink-0 overflow-y-auto border-b pb-row">
+          <h2 className="mb-row text-blocked">
+            your turn <span className="text-muted-foreground">{turn.length}</span>
+          </h2>
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(min(30ch,100%),1fr))] gap-x-2ch gap-y-row pt-half">
+            {turn.map(([c, act]) => (
+              <BoardCardView
+                key={c.id}
+                card={c}
+                selected={false}
+                focused={focused}
+                onClick={() => select(c.id).then(() => action(act))}
+                onSession={() => select(c.id).then(() => action("session"))}
+                onAnswer={() => select(c.id).then(() => action("answer"))}
+              />
+            ))}
+          </div>
+        </section>
+      )}
       <div
         ref={grid}
         className={cn(
@@ -212,6 +266,20 @@ export function BoardCardView({
           className={cn(SESSION[card.session]?.[1], card.session !== "exited" && "hover:underline")}
         >
           ⏵ {SESSION[card.session]?.[0] ?? card.session}
+        </div>
+      )}
+      {card.writing && <div className="animate-pulse-dot text-muted-foreground">✎ writing it up</div>}
+      {card.review?.state === "reviewing" && <div className="animate-pulse-dot text-review">◆ reviewing</div>}
+      {card.review && card.review.state !== "reviewing" && (
+        <div className="text-muted-foreground">
+          {card.review.state === "passed" ? (
+            <span className={RISK[card.review.risk ?? ""] ?? "text-muted-foreground"}>✓ {card.review.risk} risk</span>
+          ) : card.review.state === "failed" ? (
+            <span className="text-blocked">✗ {card.review.problems?.length ?? 0} problems</span>
+          ) : (
+            <span className="text-blocked">✗ not reviewed</span>
+          )}
+          {card.review.summary && <div className="line-clamp-3 whitespace-pre-line">{card.review.summary}</div>}
         </div>
       )}
       {card.cost && <div className="text-muted-foreground tabular-nums">{costLine(card.cost)}</div>}

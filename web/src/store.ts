@@ -66,7 +66,10 @@ export type Layout = {
 };
 
 // One window of text's scroll position (corkboard.scroll).
-export type Bar = Rect & { win: number; top: number; bottom: number; lines: number };
+export type Bar = Rect & { win: number; buf: number; top: number; bottom: number; lines: number };
+// A buffer's text for the minimap (corkboard.minimap): each line's runs of
+// characters as [column, width, colour] triples, colour indexing palette.
+export type Minimap = { palette: string[]; lines: number[][] };
 export type Scroll = { bars: Bar[]; floats: Rect[] };
 
 // label: what Neovim calls it where the buffer name reads badly
@@ -100,10 +103,12 @@ export type State = {
   // The tab the file explorer previews into (corkboard.push_preview), shown
   // in italics while its file is untouched.
   previewTab: number | null;
-  context: { cwd: string; file?: string } | null;
+  // none: no project open yet (util.no_project), so what needs one is greyed out.
+  context: { cwd: string; project?: string; file?: string; none?: boolean } | null;
   tabs: { current: Ext; tabs: Tab[] } | null;
   layout: Layout | null;
   scroll: Scroll | null;
+  minimaps: Record<number, Minimap>;
   // The latest state of each view (board, usage) and of each viewer buffer.
   views: Record<string, any>;
   bufs: Record<number, any>;
@@ -114,6 +119,9 @@ export type State = {
   // Whether the sidebar shows the files (the View menu, or their header),
   // kept for the next time the page opens.
   filesOpen: boolean;
+  // corkboard's shortcuts and their keys, by name (settings.lua's
+  // Keybindings), for the menu bar.
+  keys: Record<string, string[]>;
   status: string | null;
   // This page's notifications, newest first, and how many came since the
   // list was last opened.
@@ -137,19 +145,25 @@ export type State = {
   // Away mode, while it's on.
   away: Away | null;
   // The tool picker (corkboard.picker.tools), while it's open.
-  tools: { leader: string; tools: { text: string; hint: string }[] } | null;
+  tools: { leader: string; tools: { text: string; hint: string; off?: boolean }[] } | null;
   // The brain form (corkboard.brains), while it's open.
   brainForm: BrainFormData | null;
   // The hold form (corkboard.holds), while it's open: the hold, none for a new one.
   holdForm: { hold: HoldFields | null } | null;
+  // A question (corkboard.ask), while it's open: text to type
+  // (vim.ui.input), or one of its choices (vim.ui.select).
+  ask: { id: number; prompt: string; default: string; choices?: string[] } | null;
   // Open project (corkboard.picker), while it's open. here: this window has a
-  // project, so the one chosen opens in a window of its own.
-  projects: { here: boolean } | null;
+  // project, so the one chosen opens in a window of its own; naming: straight
+  // to naming a new one (the Projects tab's n).
+  projects: { here: boolean; naming?: boolean } | null;
   // The projects with a window on this machine (the bridge's openWindow).
   windows: string[];
   toasts: Toast[];
   // Which of corkboard's parts are on (corkboard.features): what's off isn't shown.
   features: { fleet: boolean; assistant: boolean };
+  // Whether Neovim has Vim's keys or an editor's (corkboard.vim).
+  vim: boolean;
 };
 
 let state: State = {
@@ -160,11 +174,13 @@ let state: State = {
   tabs: null,
   layout: null,
   scroll: null,
+  minimaps: {},
   views: {},
   bufs: {},
   cell: { w: 9, h: 19 },
   filesVersion: 0,
   filesOpen: remembered("corkboard.files") !== "closed",
+  keys: {},
   status: null,
   notifications: [],
   unread: 0,
@@ -178,10 +194,12 @@ let state: State = {
   tools: null,
   brainForm: null,
   holdForm: null,
+  ask: null,
   projects: null,
   windows: [],
   toasts: [],
   features: { fleet: false, assistant: false },
+  vim: false,
 };
 
 // localStorage can be missing or refuse (a private window).

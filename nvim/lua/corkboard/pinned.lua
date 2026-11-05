@@ -1,7 +1,7 @@
 -- What the board, usage and day plan views share: each lives in a tab of its
--- own at a fixed position (in a project's window the board first and usage
--- second; in the day plan's window the plan), and each is a listing whose
--- cursor line selects an item.
+-- own at a fixed position (in a project's window by M.index; in the day
+-- plan's window the plan), and each is a listing whose cursor line selects
+-- an item.
 --
 -- Neovim can't refuse a :tabclose, so ensure() runs after anything that could
 -- have closed or moved a pinned tab, and puts it back.
@@ -30,6 +30,17 @@ local function empty_window(tab)
   local empty = vim.api.nvim_buf_get_name(b) == "" and not vim.bo[b].modified
     and vim.api.nvim_buf_line_count(b) == 1 and vim.api.nvim_buf_get_lines(b, 0, 1, false)[1] == ""
   return empty and wins[1] or nil
+end
+
+-- A project's window's pinned tabs, in order: projects, the board, usage,
+-- the fleet while it's on (corkboard.features), then brains.
+function M.index(key)
+  local order = { "corkboard_projects", "corkboard_board", "corkboard_usage" }
+  if require("corkboard.features").on("fleet") then table.insert(order, "corkboard_fleet") end
+  table.insert(order, "corkboard_brains")
+  for i, k in ipairs(order) do
+    if k == key then return i end
+  end
 end
 
 local busy = false

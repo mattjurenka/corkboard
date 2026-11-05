@@ -8,6 +8,8 @@ import { Holds } from "./Holds";
 import { Media } from "./Media";
 import { Meetings } from "./Meetings";
 import { Plan, PlanDiff, PlanGoals, PlanPriority } from "./Plan";
+import { Projects } from "./Projects";
+import { Review } from "./Review";
 import { Settings } from "./Settings";
 import { Usage } from "./Usage";
 import { ImageView, MarkdownView, PdfView } from "./Viewers";
@@ -16,7 +18,9 @@ import { ImageView, MarkdownView, PdfView } from "./Viewers";
 export type ViewProps<S = any> = { state: S; win: number; buf: number; focused: boolean; nvim: Nvim };
 
 export const VIEWS: Record<string, React.ComponentType<ViewProps>> = {
+  projects: Projects,
   board: Board,
+  review: Review,
   cards: Cards,
   media: Media,
   avatar: Avatar,

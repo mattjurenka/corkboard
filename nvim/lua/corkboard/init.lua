@@ -35,6 +35,14 @@ function M.recent_projects()
   return vim.tbl_filter(function(dir) return vim.fn.isdirectory(dir) == 1 end, lines)
 end
 
+-- Take dir off the recent projects, and off the last one opened.
+function M.forget_project(dir)
+  local left = vim.tbl_filter(function(d) return d ~= dir end, M.recent_projects())
+  pcall(vim.fn.writefile, left, projects_file)
+  local ok, last = pcall(vim.fn.readfile, last_project_file)
+  if ok and last[1] == dir then pcall(vim.fn.delete, last_project_file) end
+end
+
 -- Home is where corkboard lands without a project, so it is not one. A
 -- subdirectory or worktree is remembered as its repository.
 local function remember_project()
@@ -70,9 +78,12 @@ function M.attach(chan)
   M.push_theme()
   -- The new channel has seen nothing yet.
   last_context, last_layout, last_scroll, last_labels, shown_preview = nil, nil, nil, nil, false
+  require("corkboard.minimap").reset()
   vim.schedule(M.push_preview)
   M.push_context()
   require("corkboard.features").push()
+  require("corkboard.vimkeys").push()
+  require("corkboard.projects").push_all()
   require("corkboard.board").push_all()
   require("corkboard.viewer").push_all()
   require("corkboard.claude.cards").push_all()
@@ -216,6 +227,7 @@ function M.push_layout()
   -- Separate from the layout, which redraws every panel: scrolling changes
   -- this on nearly every redraw.
   local scroll = { bars = M.scrollbars(), floats = layout.floats }
+  require("corkboard.minimap").check(vim.tbl_map(function(bar) return bar.buf end, scroll.bars))
   key = vim.json.encode(scroll)
   if key ~= last_scroll then
     last_scroll = key
@@ -250,7 +262,8 @@ end
 
 -- For the browser's scrollbars: each split in the tab showing text, as its
 -- rectangle in grid cells (status line excluded), the first and last lines
--- on screen, and the buffer's length. Not terminals or panels.
+-- on screen, and the buffer and its length (its text goes to the minimap,
+-- corkboard.minimap). Not terminals or panels.
 function M.scrollbars()
   local bars = {}
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
@@ -260,6 +273,7 @@ function M.scrollbars()
       local info = vim.fn.getwininfo(win)[1]
       table.insert(bars, {
         win = win,
+        buf = buf,
         row = info.winrow - 1,
         col = info.wincol - 1,
         width = info.width,
@@ -335,12 +349,13 @@ function M.push_theme()
   M.notify("corkboard.theme", vim.tbl_extend("force", M.theme(), { font = vim.g.corkboard_font }))
 end
 
--- The cwd and the current window's file, for the sidebar, and the project
--- (the global cwd), which the bridge knows the window by.
+-- The cwd and the current window's file, for the sidebar, the project
+-- (the global cwd), which the bridge knows the window by, and whether
+-- there is none yet (util.no_project), which the page greys out for.
 function M.push_context()
   local buf = vim.api.nvim_get_current_buf()
   local file = (vim.bo[buf].buftype == "" or vim.b[buf].corkboard_file) and vim.api.nvim_buf_get_name(buf) or ""
-  local context = { cwd = vim.fn.getcwd(), project = vim.fn.getcwd(-1, -1), file = file ~= "" and file or nil }
+  local context = { cwd = vim.fn.getcwd(), project = vim.fn.getcwd(-1, -1), file = file ~= "" and file or nil, none = require("corkboard.util").no_project() or nil }
   local key = vim.json.encode(context)
   if key == last_context then return end
   last_context = key
@@ -620,34 +635,42 @@ end
 
 -- Before closing wins, ask about each file with unsaved changes that no
 -- other window shows; with 'hidden', :close would quietly keep them in the
--- background. Returns whether to go ahead, and the buffers to discard.
-local function settle(wins)
+-- background. done gets the buffers to discard, once each is answered; a
+-- cancel, or a failed write, never calls it.
+local function settle(wins, done)
   local closing = {}
   for _, w in ipairs(wins) do closing[w] = true end
-  local discard = {}
-  for _, w in ipairs(wins) do
+  local discard, at = {}, 0
+  local function step()
+    at = at + 1
+    local w = wins[at]
+    if not w then return done(discard) end
+    if not vim.api.nvim_win_is_valid(w) then return step() end
     local b = vim.api.nvim_win_get_buf(w)
     local elsewhere = vim.tbl_contains(vim.tbl_map(function(o)
       return not closing[o] and vim.api.nvim_win_get_buf(o) == b
     end, vim.api.nvim_list_wins()), true)
-    if vim.bo[b].modified and vim.bo[b].buftype == "" and not elsewhere and not vim.tbl_contains(discard, b) then
-      local name = vim.api.nvim_buf_get_name(b)
-      local shown = name == "" and "[No Name]" or vim.fn.fnamemodify(name, ":~:.")
-      local choice = vim.fn.confirm(("Save changes to %s?"):format(shown), "&Save\n&Discard\n&Cancel", 1)
+    if not vim.bo[b].modified or vim.bo[b].buftype ~= "" or elsewhere or vim.tbl_contains(discard, b) then return step() end
+    local name = vim.api.nvim_buf_get_name(b)
+    local shown = name == "" and "[No Name]" or vim.fn.fnamemodify(name, ":~:.")
+    local function write(path)
+      local ok, err = pcall(vim.api.nvim_buf_call, b, function() vim.cmd.write(vim.fn.fnameescape(path)) end)
+      if not ok then return vim.notify("corkboard: " .. tostring(err), vim.log.levels.ERROR) end
+      step()
+    end
+    vim.ui.select({ "Save", "Discard", "Cancel" }, { prompt = ("Save changes to %s?"):format(shown) }, function(_, choice)
       if choice == 1 then
-        if name == "" then
-          name = vim.fn.input("Save as: ", "", "file")
-          if name == "" then return false end
-        end
-        vim.api.nvim_buf_call(b, function() vim.cmd.write(vim.fn.fnameescape(name)) end)
+        if name ~= "" then return write(name) end
+        vim.ui.input({ prompt = "Save as: ", completion = "file" }, function(path)
+          if path and vim.trim(path) ~= "" then write(vim.trim(path)) end
+        end)
       elseif choice == 2 then
         table.insert(discard, b)
-      else
-        return false
+        step()
       end
-    end
+    end)
   end
-  return true, discard
+  step()
 end
 
 -- <A-q>: close the current window, or its tab when it is the last one, after
@@ -668,16 +691,22 @@ function M.close()
       return vim.notify("corkboard: last window")
     end
 
-    local go, discard = settle((float or #splits > 1) and { win } or vim.api.nvim_tabpage_list_wins(0))
-    if not go then return end
-    if float then
-      vim.api.nvim_win_close(win, true)
-    elseif #splits > 1 then
-      vim.cmd("close!")
-    else
-      vim.cmd("tabclose!")
-    end
-    for _, b in ipairs(discard) do pcall(vim.api.nvim_buf_delete, b, { force = true }) end
+    settle((float or #splits > 1) and { win } or vim.api.nvim_tabpage_list_wins(0), function(discard)
+      local done, e = pcall(function()
+        -- Answered on the page, so the window may have gone meanwhile.
+        if not vim.api.nvim_win_is_valid(win) then return end
+        vim.api.nvim_set_current_win(win)
+        if float then
+          vim.api.nvim_win_close(win, true)
+        elseif #splits > 1 then
+          vim.cmd("close!")
+        else
+          vim.cmd("tabclose!")
+        end
+        for _, b in ipairs(discard) do pcall(vim.api.nvim_buf_delete, b, { force = true }) end
+      end)
+      if not done then vim.notify("corkboard: " .. tostring(e), vim.log.levels.ERROR) end
+    end)
   end)
   if not ok then vim.notify("corkboard: " .. tostring(err), vim.log.levels.ERROR) end
 end
@@ -712,6 +741,7 @@ end
 
 function M.setup()
   vim.notify = notify_page
+  require("corkboard.ask").setup()
   vim.g.clipboard = {
     name = "corkboard",
     copy = { ["+"] = clip_copy, ["*"] = clip_copy },
@@ -719,19 +749,23 @@ function M.setup()
   }
 
   -- Editor defaults.
+  -- Relative too while Vim's keys are on (corkboard.vimkeys).
   vim.o.number = true
-  vim.o.relativenumber = true
   vim.o.statusline = "%!v:lua.require'corkboard'.statusline()"
 
   local board = require("corkboard.board")
   vim.keymap.set("n", "<leader>b", board.show, { desc = "corkboard: board" })
   vim.api.nvim_create_user_command("AgentBoard", board.show, { desc = "corkboard: board" })
+  vim.api.nvim_create_user_command("AgentProjects", function() require("corkboard.projects").show() end, { desc = "corkboard: projects" })
   vim.api.nvim_create_user_command("AgentCard", function(args) board.card_from_code(args.line1, args.line2) end, {
     range = true,
     desc = "corkboard: card from these lines",
   })
   vim.keymap.set("n", "<leader>c", "<Cmd>AgentCard<CR>", { desc = "corkboard: card from this line" })
   vim.keymap.set("x", "<leader>c", ":AgentCard<CR>", { desc = "corkboard: card from the selection" })
+  local autopilot = require("corkboard.autopilot")
+  vim.api.nvim_create_user_command("AgentGroom", autopilot.groom, { desc = "corkboard: groom the board now" })
+  vim.api.nvim_create_user_command("AgentUndoGroom", autopilot.undo_groom, { desc = "corkboard: undo the last grooming" })
   local usage = require("corkboard.usage")
   vim.keymap.set("n", "<leader>u", usage.show, { desc = "corkboard: token usage" })
   vim.api.nvim_create_user_command("AgentUsage", usage.show, { desc = "corkboard: token usage" })
@@ -783,9 +817,10 @@ function M.setup()
   vim.keymap.set({ "n", "i" }, "<C-s>", "<Cmd>update<CR>", { desc = "corkboard: write" })
   vim.keymap.set({ "n", "i" }, "<D-s>", "<Cmd>update<CR>", { desc = "corkboard: write" })
   -- Alt+b and f a word back and on, as readline has them (a Mac's
-  -- Option+arrows, input.js), which unmapped would leave insert mode.
-  vim.keymap.set({ "i", "c" }, "<M-b>", "<S-Left>", { desc = "corkboard: word back" })
-  vim.keymap.set({ "i", "c" }, "<M-f>", "<S-Right>", { desc = "corkboard: word on" })
+  -- Option+arrows, input.js), which unmapped would leave insert mode. Ctrl,
+  -- since Shift with an arrow can select (corkboard.vimkeys).
+  vim.keymap.set({ "i", "c" }, "<M-b>", "<C-Left>", { desc = "corkboard: word back" })
+  vim.keymap.set({ "i", "c" }, "<M-f>", "<C-Right>", { desc = "corkboard: word on" })
   -- Ctrl+Tab and Ctrl+Shift+Tab, or Ctrl+Shift+j and k (Cmd+Shift+] and [ on
   -- a Mac), go down and up the tabs from any mode, round from the last to the
   -- first; plain Tab stays the program's (completion, Claude Code's mode
@@ -799,7 +834,7 @@ function M.setup()
   end
 
   -- Alt+1 to 9 (Cmd+1 to 9) go to that tab, as the sidebar numbers them:
-  -- the board, usage, the fleet (while it's on), brains, then the agents.
+  -- projects, the board, usage, the fleet (while it's on), brains, then the agents.
   for i = 1, 9 do
     for _, mod in ipairs({ "A", "D" }) do
       vim.keymap.set({ "n", "i", "t" }, ("<%s-%d>"):format(mod, i), function()
@@ -852,12 +887,16 @@ function M.setup()
   for _, lhs in ipairs({ "<A-q>", "<C-F4>", "<D-w>" }) do
     vim.keymap.set({ "n", "i", "t" }, lhs, M.close, { desc = "corkboard: close window or tab" })
   end
+  -- Every shortcut above made, the Settings tab can rebind them.
+  require("corkboard.settings").keys()
+  require("corkboard.vimkeys").changed()
 
   vim.api.nvim_set_decoration_provider(vim.api.nvim_create_namespace("corkboard.layout"), {
     on_end = M.push_layout,
   })
   local group = vim.api.nvim_create_augroup("corkboard", {})
   vim.api.nvim_create_autocmd("DirChanged", { group = group, callback = board.push })
+  vim.api.nvim_create_autocmd("DirChanged", { group = group, callback = function() require("corkboard.projects").changed() end })
   -- Where to reach this Neovim, for Pepper's hand_off (hooks/handoff.lua).
   local function announce()
     local cwd = vim.fn.getcwd(-1, -1)
@@ -889,6 +928,48 @@ function M.setup()
       if vim.bo[args.buf].buftype == "terminal" and vim.api.nvim_get_current_buf() == args.buf then vim.cmd.startinsert() end
     end,
   })
+  -- A terminal, or a file in a split, scrolls no further down than its last
+  -- line at the bottom, whatever scrolled it (the wheel, Ctrl+E, zt). Put
+  -- back after the event, so the next scroll is measured from there and
+  -- fires it again.
+  local function clamp(win)
+    local buf = vim.api.nvim_win_get_buf(win)
+    local bt = vim.bo[buf].buftype
+    if not (bt == "terminal" or bt == "" and not vim.b[buf].corkboard_view and not vim.wo[win].diff
+      and vim.api.nvim_win_get_config(win).relative == "") then
+      return
+    end
+    vim.api.nvim_win_call(win, function()
+      -- The highest top line that still has the last line at the bottom:
+      -- up from the end, a line as many rows as it wraps to, a closed fold
+      -- one row.
+      local height, line, rows, bottom = vim.fn.winheight(0), vim.fn.line("$"), 0, nil
+      while line >= 1 do
+        local first = vim.fn.foldclosed(line)
+        if first == -1 then
+          first = line
+          rows = rows + vim.api.nvim_win_text_height(0, { start_row = line - 1, end_row = line - 1 }).all
+        else
+          rows = rows + 1
+        end
+        if rows > height then break end
+        bottom, line = first, first - 1
+      end
+      if bottom and vim.fn.line("w0") > bottom then vim.fn.winrestview({ topline = bottom }) end
+    end)
+  end
+  vim.api.nvim_create_autocmd("WinScrolled", {
+    group = group,
+    callback = function()
+      local wins = vim.tbl_filter(function(id) return id ~= "all" end, vim.tbl_keys(vim.v.event))
+      vim.schedule(function()
+        for _, id in ipairs(wins) do
+          local win = tonumber(id)
+          if win and vim.api.nvim_win_is_valid(win) then clamp(win) end
+        end
+      end)
+    end,
+  })
   -- A save can add a file, so the browser re-reads the folders it shows.
   vim.api.nvim_create_autocmd("BufWritePost", {
     group = group,
@@ -909,13 +990,14 @@ function M.setup()
   })
   status_highlights()
   -- Anything that could have closed or moved a pinned tab: the plan in the
-  -- day plan's window, else the board, usage, the fleet and brains, in order, so each finds the
+  -- day plan's window, else projects, the board, usage, the fleet and brains, in order, so each finds the
   -- ones before it already in place.
   vim.api.nvim_create_autocmd({ "VimEnter", "TabClosed", "TabNewEntered", "TabEnter", "WinClosed" }, {
     group = group,
     callback = function()
       vim.schedule(function()
         if M.window == "plan" then return plan.ensure() end
+        require("corkboard.projects").ensure()
         board.ensure()
         usage.ensure()
         fleet.ensure()

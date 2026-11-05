@@ -7,10 +7,14 @@
 // The account's index comes along: an object of ours the node writes that
 // it doesn't list yet goes into it. A log of ours that has grown past what
 // lib/e2ee thinks worth keeping is compacted as it syncs.
+//
+// Over sync.ts's offline transport (an account only on this machine) the
+// replicas are the whole truth: changes stay queued, and nothing is pushed,
+// pulled, followed or compacted until a relay's transport replaces it.
 
 import type { CardChange } from "../../lib/e2ee/merge";
 import { entries, remember } from "../../lib/e2ee/sharing";
-import { type LogTransport, type ReplicaStore, Replica, memoryStore } from "../../lib/e2ee/sync";
+import { type LogTransport, type ReplicaStore, Replica, memoryStore, offline } from "../../lib/e2ee/sync";
 import type { NodeObject } from "./objects";
 
 export type ObjectStatus = {
@@ -35,28 +39,57 @@ export class Replicas {
   private kept = new Map<string, Kept>();
   private listeners: ((o: NodeObject) => void)[] = [];
   private timer?: Timer;
+  private following = false;
 
   private constructor(
     private transport: LogTransport,
+    private device: string,
+    private store?: (object: string) => ReplicaStore,
     private index?: Replica,
   ) {}
 
   // index: the account's index, opened (objects.ts lists from it).
   static async open(o: { objects: NodeObject[]; transport: LogTransport; device: string; store?: (object: string) => ReplicaStore; index?: Replica }): Promise<Replicas> {
-    const r = new Replicas(o.transport, o.index);
-    for (const obj of o.objects) {
-      const rep = await Replica.open({
-        transport: o.transport,
-        key: obj.key,
-        epoch: obj.epoch,
-        keyOf: obj.keyOf,
-        object: obj.object,
-        device: o.device,
-        store: o.store?.(obj.object) ?? memoryStore(),
-      });
-      r.kept.set(`${obj.kind}/${obj.name}`, { o: obj, rep, pushing: Promise.resolve(), synced: null, error: null });
-    }
+    const r = new Replicas(o.transport, o.device, o.store, o.index);
+    for (const obj of o.objects) await r.open(obj);
     return r;
+  }
+
+  private async open(obj: NodeObject) {
+    const rep = await Replica.open({
+      transport: this.transport,
+      key: obj.key,
+      epoch: obj.epoch,
+      keyOf: obj.keyOf,
+      object: obj.object,
+      device: this.device,
+      store: this.store?.(obj.object) ?? memoryStore(),
+    });
+    const k: Kept = { o: obj, rep, pushing: Promise.resolve(), synced: null, error: null };
+    this.kept.set(`${obj.kind}/${obj.name}`, k);
+    return k;
+  }
+
+  // An object made while the node runs (a brain the Brains tab makes): kept
+  // from now on, and in the index with its first change.
+  async add(obj: NodeObject): Promise<void> {
+    if (this.kept.has(`${obj.kind}/${obj.name}`)) return;
+    const k = await this.open(obj);
+    if (!this.online) return;
+    await this.sync(k);
+    if (this.following) this.follow(k);
+  }
+
+  private follow(k: Kept) {
+    k.stop = k.rep.live((n) => {
+      k.synced = new Date().toISOString();
+      if (n) this.changed(k);
+    });
+  }
+
+  // Whether there's a relay: false for an account only on this machine.
+  get online() {
+    return this.transport !== offline;
   }
 
   objects(kind?: NodeObject["kind"]): NodeObject[] {
@@ -92,7 +125,7 @@ export class Replicas {
     if (!index || k.o.owner || entries(index).some((e) => e.object === k.o.object)) return;
     try {
       await remember(index, { object: k.o.object, kind: k.o.kind, name: k.o.name, epoch: k.rep.currentEpoch });
-      await index.push();
+      if (this.online) await index.push();
     } catch (e) {
       console.error(`node: ${k.o.kind} ${k.o.name} not in the index yet: ${(e as Error).message}`);
     }
@@ -111,7 +144,7 @@ export class Replicas {
   // One push at a time per object; a failure is tried again later.
   private push(k: Kept): Promise<void> {
     k.pushing = k.pushing.then(async () => {
-      if (!k.rep.pending) return;
+      if (!k.rep.pending || !this.online) return;
       try {
         await k.rep.push();
         k.error = null;
@@ -150,19 +183,17 @@ export class Replicas {
   }
 
   async syncAll() {
+    if (!this.online) return;
     await Promise.all([this.syncIndex(), ...[...this.kept.values()].map((k) => this.sync(k))]);
   }
 
   // Pulls each, then follows each; live: false only syncs (a transport
   // that can't follow, or a test).
   async start(o: { live?: boolean } = {}) {
+    if (!this.online) return;
     await this.syncAll();
-    if (o.live !== false && this.transport.subscribe)
-      for (const k of this.kept.values())
-        k.stop = k.rep.live((n) => {
-          k.synced = new Date().toISOString();
-          if (n) this.changed(k);
-        });
+    this.following = o.live !== false && !!this.transport.subscribe;
+    if (this.following) for (const k of this.kept.values()) this.follow(k);
     this.timer = setInterval(() => void this.syncAll(), RESYNC_MS);
   }
 

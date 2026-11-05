@@ -312,10 +312,12 @@ function M.edit()
   if h then form(h) end
 end
 
--- The secret, typed unseen, for a bare Neovim (the form has its own field).
+-- The secret, typed unseen: the form's own field, or the command line in a
+-- bare Neovim.
 function M.secret()
   local h = selected_hold()
   if not h then return end
+  if require("corkboard").attached() then return form(h) end
   local v = vim.fn.inputsecret("Secret for " .. h.name .. ": ")
   if v == "" then return end
   local res = save(fields(h), { name = h.name, about = h.about, where = nil_if_null(h.where), secret = v })

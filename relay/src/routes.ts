@@ -22,6 +22,7 @@
 import type { E2eeAccount, RelayAccounts } from "./accounts";
 import type { Appended, Log } from "./log";
 import type { Mailbox } from "./mailbox";
+import type { Nodes } from "./nodes";
 import type { Result } from "./result";
 import {
   type AccountView,
@@ -34,7 +35,10 @@ import {
   type Rotation,
   type Signed,
   type Snapshot,
+  type TunnelRequest,
+  type TunnelResponse,
   CODE_ALPHABET,
+  HANDLE,
   KEY,
   LIMITS,
   OPAQUE,
@@ -48,6 +52,7 @@ import {
   isGrant,
   isRevocation,
   isRotation,
+  nodeHandle,
   normalizeCode,
   revocationBytes,
   rotationBytes,
@@ -55,11 +60,12 @@ import {
 
 // What the routes need of the Worker serving them. ORIGIN is its own
 // origin, no trailing slash: creations and challenges name it. MEDIA holds
-// the blobs, under e2ee/<account>/.
+// the blobs, under e2ee/<account>/. NODES: each account's nodes, by handle.
 export type RelayEnv = {
   ORIGIN: string;
   LOG: DurableObjectNamespace<Log>;
   MAILBOX: DurableObjectNamespace<Mailbox>;
+  NODES: DurableObjectNamespace<Nodes>;
   MEDIA: R2Bucket;
 };
 export type Accounts = DurableObjectStub<RelayAccounts>;
@@ -164,6 +170,41 @@ const mailbox = (env: RelayEnv, code: string) => env.MAILBOX.get(env.MAILBOX.idF
 // An account's log of an object: its own, or the owner's it's shared.
 const logOf = (env: RelayEnv, owner: string, object: string) => env.LOG.get(env.LOG.idFromName(`${owner}/${object}`));
 const blobKey = (who: Who, id: string) => `e2ee/${who.account}/${id}`;
+const nodesOf = (env: RelayEnv, handle: string) => env.NODES.get(env.NODES.idFromName(handle));
+
+// The tunnel to an account's nodes (nodes.ts), for whoever its node lets
+// in: <relay>/n/<handle>/… as the node's /…, and RFC 8414's path-suffixed
+// well-knowns (/.well-known/<name>/n/<handle>) as its /.well-known/<name>.
+// Undefined when the path isn't the tunnel's. No token here: the node
+// asks for its own.
+const TUNNEL = /^\/n\/([^/]+)(\/.*)?$/;
+const WELL_KNOWN = /^\/\.well-known\/([^/]+)\/n\/([^/]+)(\/.*)?$/;
+// What isn't passed on: the hop's own, and what Cloudflare adds.
+const HOP = /^(host|connection|keep-alive|transfer-encoding|upgrade|content-length|cookie|cf-.*|x-real-ip|x-forwarded-.*)$/i;
+
+export async function tunnel(request: Request, env: RelayEnv): Promise<Response | undefined> {
+  const url = new URL(request.url);
+  const t = url.pathname.match(TUNNEL);
+  const w = t ? undefined : url.pathname.match(WELL_KNOWN);
+  if (!t && !w) return;
+  const handle = t ? t[1] : w![2];
+  const path = t ? (t[2] ?? "/") : `/.well-known/${w![1]}${w![3] ?? ""}`;
+  if (!HANDLE.test(handle)) return error(404, "no such node");
+  if (request.headers.get("Upgrade")) return error(501, "the tunnel carries requests, not sockets");
+  const length = Number(request.headers.get("Content-Length") ?? 0);
+  if (length > LIMITS.tunnel) return error(413, `a request through the tunnel is at most ${LIMITS.tunnel} bytes`);
+  const bytes = request.body ? new Uint8Array(await request.arrayBuffer()) : undefined;
+  if (bytes && bytes.length > LIMITS.tunnel) return error(413, `a request through the tunnel is at most ${LIMITS.tunnel} bytes`);
+  const headers = [...request.headers].filter(([k]) => !HOP.test(k)) as [string, string][];
+  headers.push(["x-forwarded-proto", "https"]);
+  const req: TunnelRequest = { id: random(12), method: request.method, path: path + url.search, headers, ...(bytes?.length && { body: b64url(bytes) }) };
+  const r = (await nodesOf(env, handle).forward(req)) as TunnelResponse | { none: true } | { timeout: true };
+  if ("none" in r) return error(503, "none of this account's nodes is connected");
+  if ("timeout" in r) return error(504, "the node didn't answer in time");
+  const out = new Headers(r.headers.filter(([k]) => !HOP.test(k)));
+  const nobody = r.status === 204 || r.status === 304 || request.method === "HEAD";
+  return new Response(nobody || !r.body ? null : fromB64url(r.body), { status: r.status, headers: out });
+}
 
 export async function e2ee(request: Request, env: RelayEnv, r: Accounts): Promise<Response> {
   const url = new URL(request.url);
@@ -273,6 +314,26 @@ export async function e2ee(request: Request, env: RelayEnv, r: Accounts): Promis
   if (!who) return error(401, "sign in with a device of an encrypted account (POST /e2ee/challenge, then /e2ee/token)");
 
   if (path === "/e2ee/revoked") return method === "GET" ? json(await r.e2eeRevocations(who.account)) : error(405, "method not allowed");
+
+  // The account's nodes: which are connected and which leads (GET), the
+  // leader (PUT { device | null }), and a node's own socket (live).
+  if (path === "/e2ee/nodes" || path === "/e2ee/nodes/leader" || path === "/e2ee/nodes/live") {
+    const handle = await nodeHandle(who.account);
+    const stub = nodesOf(env, handle);
+    if (path === "/e2ee/nodes/live") {
+      if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return error(426, "expected a WebSocket");
+      const name = (url.searchParams.get("name") ?? "").trim().slice(0, 100);
+      const res = await stub.fetch(new Request(request.url, { headers: { Upgrade: "websocket", "X-Device": who.device, ...(name && { "X-Device-Name": name }) } }));
+      if (res.status !== 101) return res;
+      const offered = (request.headers.get("Sec-WebSocket-Protocol") ?? "").split(",").map((p) => p.trim());
+      return new Response(null, { status: 101, webSocket: res.webSocket, headers: offered.includes("corkboard") ? { "Sec-WebSocket-Protocol": "corkboard" } : {} });
+    }
+    if (path === "/e2ee/nodes") return method === "GET" ? json({ handle, url: `${env.ORIGIN}/n/${handle}`, ...(await stub.status()) }) : error(405, "method not allowed");
+    if (method !== "PUT") return error(405, "method not allowed");
+    const { device } = await body(request);
+    if (!(device === null || (typeof device === "string" && KEY.test(device)))) return error(400, "device must be a device id, or null for none");
+    return json({ handle, url: `${env.ORIGIN}/n/${handle}`, ...(await stub.setLeader(device)) });
+  }
 
   const acct = path.match(ACCOUNT);
   if (acct) {

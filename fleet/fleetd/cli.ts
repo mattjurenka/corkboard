@@ -131,7 +131,7 @@ switch (cmd) {
   }
 
   case "queue": {
-    const rows = ((await cloud("GET", "/api/spawns?limit=30")) as any[]).map((s) => [s.id, s.state, s.template, s.environment, s.by, `${s.board}/${s.card}`, s.created.slice(5, 16).replace("T", " "), s.task.split("\n")[0].slice(0, 50)]);
+    const rows = ((await cloud("GET", "/api/spawns?limit=30")) as any[]).map((s) => [s.id, s.state, s.template, s.environment, s.by, `${s.board ?? "-"}/${s.card ?? "-"}`, s.created.slice(5, 16).replace("T", " "), s.task.split("\n")[0].slice(0, 50)]);
     const widths = rows.reduce((w, r) => r.map((c: string, i: number) => Math.max(w[i] ?? 0, c.length)), [] as number[]);
     for (const r of rows) console.log(r.map((c: string, i: number) => c.padEnd(widths[i])).join("  ").trimEnd());
     break;

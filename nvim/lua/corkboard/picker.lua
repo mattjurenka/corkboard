@@ -35,7 +35,7 @@ end
 -- Repos sit directly under home here; g:corkboard_project_dirs says otherwise.
 local function dev_dirs() return vim.g.corkboard_project_dirs or { "~" } end
 
-local function no_project() return vim.fn.getcwd() == vim.uv.os_homedir() end
+local function no_project() return require("corkboard.util").no_project() end
 
 -- With no project open yet (the cwd is home), the chosen one becomes this
 -- window's with a global :cd, so the board and every tab follow. With one
@@ -159,6 +159,12 @@ function M.open_project(p)
   return pinned(dest)
 end
 
+-- A project already on this machine, by its path (corkboard.projects).
+function M.open_path(path)
+  if vim.fn.isdirectory(path) == 0 then return { error = vim.fn.fnamemodify(path, ":~") .. " isn't there" } end
+  return go(path)
+end
+
 -- A new project: a name, beside the other projects, or a path. The folder is
 -- made if it isn't there and made a repository if it isn't one, and gets a
 -- board in the account unless its repository has one already.
@@ -206,7 +212,8 @@ function M.projects()
 end
 
 -- The tool picker (<C-Space>, <M-Space>). Each runs in the window it was opened
--- from; one with a feature only while that's on (corkboard.features).
+-- from; one with a feature only while that's on (corkboard.features), and
+-- one marked project greyed out while there's none (util.no_project).
 local tools = {
   {
     text = "New buffer",
@@ -218,6 +225,7 @@ local tools = {
   {
     text = "Card from this line",
     hint = "<leader>c",
+    project = true,
     run = function()
       local lnum = vim.api.nvim_win_get_cursor(0)[1]
       require("corkboard.board").card_from_code(lnum, lnum)
@@ -229,15 +237,16 @@ local tools = {
   { text = "Avatar demo", hint = "", run = function() require("corkboard.avatar").demo({ "all" }) end },
   { text = "Day plan", hint = "<leader>p", feature = "assistant", run = function() require("corkboard.plan").show() end },
   { text = "Meetings", hint = "", feature = "assistant", run = function() require("corkboard.meetings").open() end },
-  { text = "Claude Code", hint = "<C-.>", run = function() require("corkboard.claude").open() end },
+  { text = "Claude Code", hint = "<C-.>", project = true, run = function() require("corkboard.claude").open() end },
   { text = "Away mode", hint = "<leader>a", run = function() require("corkboard.away").enter() end },
-  { text = "Terminal", hint = "", run = function() require("corkboard.terminal").tab() end },
+  { text = "Terminal", hint = "", project = true, run = function() require("corkboard.terminal").tab() end },
   { text = "Reload window", hint = "F5", run = function() require("corkboard.restore").reload() end },
 }
 
 local shown = tools
 
 local function run(main, item)
+  if item.project and require("corkboard.projects").need() then return end
   vim.schedule(function()
     if vim.api.nvim_win_is_valid(main) then vim.api.nvim_set_current_win(main) end
     item.run(main)
@@ -265,7 +274,7 @@ function M.tools()
     local leader = vim.g.mapleader or "\\"
     corkboard.notify("corkboard.tools", {
       leader = leader == " " and "Space" or leader,
-      tools = vim.tbl_map(function(t) return { text = t.text, hint = t.hint } end, shown),
+      tools = vim.tbl_map(function(t) return { text = t.text, hint = t.hint, off = (t.project and require("corkboard.util").no_project()) or nil } end, shown),
     })
     return
   end

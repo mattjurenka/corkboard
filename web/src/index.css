@@ -157,7 +157,7 @@
     font: 15px/1.6 system-ui, sans-serif; color: var(--foreground); overflow-wrap: break-word;
   }
   /* In a float (a card) or a panel, the editor's face, on its grid. */
-  :is(.float-view, .on-grid) .markdown-body { font: var(--font-size)/var(--cell-h) var(--font); padding-top: var(--cell-h); }
+  :is(.float-view, .on-grid) .markdown-body { font: var(--font-size)/var(--cell-h) var(--font); padding: var(--cell-h) 0; }
   :is(.float-view, .on-grid) .markdown-body :is(h1, h2) { font-size: 1em; font-weight: 700; padding-bottom: 0; }
   :is(.float-view, .on-grid) .markdown-body h1 { color: var(--primary); }
   :is(.float-view, .on-grid) .markdown-body :is(h3, h4, h5, h6) { font-size: 1em; }

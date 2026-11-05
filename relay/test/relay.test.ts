@@ -9,6 +9,8 @@ import {
   type Signed,
   type DeviceCert,
   type Snapshot,
+  type TunnelRequest,
+  type TunnelResponse,
   type WireOp,
   EpochChanged,
   Relay,
@@ -22,12 +24,14 @@ import {
   checkRotated,
   creation,
   currentKey,
+  fromB64url,
   indexId,
   indexKey,
   memberKeys,
   memoryStore,
   newDevice,
   newRoot,
+  nodeHandle,
   objectId,
   objectKey,
   openBlob,
@@ -178,7 +182,7 @@ describe("logs", () => {
     const a = await account();
     const object = "o".repeat(22);
     const ok = { id: "i".repeat(22), seq: 1, nonce: b64url(new Uint8Array(24)), ciphertext: b64url(new Uint8Array(32)) };
-    await expect(a.relay.append(object, [{ ...ok, ciphertext: b64url(new Uint8Array(64 * 1024 + 1)) }])).rejects.toThrow(/at most/);
+    await expect(a.relay.append(object, [{ ...ok, ciphertext: b64url(new Uint8Array(256 * 1024 + 1)) }])).rejects.toThrow(/at most/);
     await expect(a.relay.append(object, Array.from({ length: 101 }, (_, i) => ({ ...ok, id: `${"i".repeat(20)}${i}` })))).rejects.toThrow(/at most 100/);
     await expect(a.relay.append(object, [{ ...ok, nonce: b64url(new Uint8Array(12)) }])).rejects.toThrow(/24 bytes/);
     await expect(a.relay.append(object, [{ ...ok, id: "short" }])).rejects.toThrow(/id/);
@@ -679,5 +683,80 @@ describe("rotation", () => {
     const taken = signRotation(a.keys, { v: 1, account: a.keys.id, from: a.keys.id, to: b.keys.id, box: b64url(b.keys.box.public), at: Date.now() });
     await expect(a.relay.rotate(taken, [certify(b.keys, a.device, "laptop")], roots)).rejects.toMatchObject({ status: 409 });
     await a.relay.rotate(rot(a.keys), [cert], roots);
+  });
+});
+
+describe("nodes and the tunnel", () => {
+  // A device's node socket, answering each request with who it is and what it got.
+  async function node(relay: Relay, name: string) {
+    const t = await relay.token();
+    const res = await worker(`/e2ee/nodes/live?name=${name}`, { headers: { Upgrade: "websocket", "Sec-WebSocket-Protocol": `corkboard, corkboard.bearer.${b64url(utf8(t))}` } });
+    expect(res.status).toBe(101);
+    const ws = res.webSocket!;
+    ws.addEventListener("message", (e) => {
+      const r = JSON.parse(e.data as string) as TunnelRequest;
+      const got = { name, method: r.method, path: r.path, headers: Object.fromEntries(r.headers), body: r.body ? new TextDecoder().decode(fromB64url(r.body)) : null };
+      ws.send(JSON.stringify({ id: r.id, status: 200, headers: [["content-type", "application/json"], ["x-node", name]], body: b64url(utf8(JSON.stringify(got))) } satisfies TunnelResponse));
+    });
+    ws.accept();
+    return ws;
+  }
+
+  it("forward to the leader when it's connected, else to the newest node", async () => {
+    const a = await account();
+    const phone = newDevice();
+    const phoneRelay = new Relay({ origin: ORIGIN, fetch: fetcher, device: phone, cert: certify(a.keys, phone, "phone") });
+    const handle = await nodeHandle(a.keys.id);
+    const n = await a.relay.nodes();
+    expect(n).toEqual({ handle, url: `${ORIGIN}/n/${handle}`, leader: null, connected: [], known: [] });
+    expect((await worker(`/n/${handle}/health`)).status).toBe(503);
+
+    const laptop = await node(a.relay, "laptop");
+    await vi.waitUntil(async () => (await a.relay.nodes()).connected.length === 1);
+    const res = await worker(`/n/${handle}/mcp?tools=memory`, { method: "POST", headers: { Authorization: "Bearer xyz", "Content-Type": "application/json", Cookie: "c=1" }, body: '{"a":1}' });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-node")).toBe("laptop");
+    const got = (await res.json()) as { path: string; method: string; headers: Record<string, string>; body: string };
+    expect(got).toMatchObject({ method: "POST", path: "/mcp?tools=memory", body: '{"a":1}' });
+    expect(got.headers.authorization).toBe("Bearer xyz");
+    expect(got.headers.host).toBeUndefined();
+    expect(got.headers.cookie).toBeUndefined();
+    // RFC 8414's path-suffixed metadata, as the node's own.
+    expect(((await (await worker(`/.well-known/oauth-authorization-server/n/${handle}`)).json()) as { path: string }).path).toBe("/.well-known/oauth-authorization-server");
+    expect(((await (await worker(`/.well-known/oauth-protected-resource/n/${handle}/mcp`)).json()) as { path: string }).path).toBe("/.well-known/oauth-protected-resource/mcp");
+
+    // The newest, until a leader is chosen.
+    const phoneWs = await node(phoneRelay, "phone");
+    await vi.waitUntil(async () => (await a.relay.nodes()).connected.length === 2);
+    expect((await a.relay.nodes()).known!.map((k) => [k.device, k.name])).toEqual([[phone.id, "phone"], [a.device.id, "laptop"]]);
+    expect((await worker(`/n/${handle}/x`)).headers.get("x-node")).toBe("phone");
+    expect((await phoneRelay.setLeader(a.device.id)).leader).toBe(a.device.id);
+    expect((await worker(`/n/${handle}/x`)).headers.get("x-node")).toBe("laptop");
+    // The leader away: the rest still answer.
+    laptop.close();
+    await vi.waitUntil(async () => (await a.relay.nodes()).connected.length === 1);
+    expect((await worker(`/n/${handle}/x`)).headers.get("x-node")).toBe("phone");
+    phoneWs.close();
+    await vi.waitUntil(async () => (await a.relay.nodes()).connected.length === 0);
+    // Gone, but still known, to be chosen while away.
+    expect((await a.relay.nodes()).known!.map((k) => k.name).sort()).toEqual(["laptop", "phone"]);
+    expect((await worker(`/n/${handle}/x`)).status).toBe(503);
+
+    // Not a device id, and no sockets without a token.
+    await expect(a.relay.setLeader("nope")).rejects.toMatchObject({ status: 400 });
+    expect((await worker("/e2ee/nodes/live", { headers: { Upgrade: "websocket" } })).status).toBe(401);
+    expect((await worker("/n/short/x")).status).toBe(404);
+  });
+
+  it("let a device have one socket: a newer one replaces the old", async () => {
+    const a = await account();
+    const handle = await nodeHandle(a.keys.id);
+    const first = await node(a.relay, "first");
+    let closed = 0;
+    first.addEventListener("close", (e) => void (closed = e.code));
+    await node(a.relay, "second");
+    await vi.waitUntil(() => closed === 4000);
+    expect((await a.relay.nodes()).connected).toHaveLength(1);
+    expect((await worker(`/n/${handle}/x`)).headers.get("x-node")).toBe("second");
   });
 });

@@ -21,6 +21,7 @@ import * as boards from "./boards";
 import * as remote from "./remote";
 import { speech } from "./speech";
 import * as wasm from "./wasm";
+import { startAppNode } from "./node/app";
 import { CLOUD, login, signedIn, token } from "./cloud";
 import { COMPILED, RESOURCES, STATE_DIR, dirsEnv } from "./dirs";
 
@@ -199,14 +200,23 @@ type Session = {
 // What Neovim, and what it starts, has from the bridge: the Worker, for what
 // Neovim starts itself (the plan's Claude Code); this bridge's version; where
 // corkboard keeps things (dirs.ts); and how to start the MCP server and the
-// meeting recorder (record.ts), as JSON lists.
-const NVIM_ENV = {
+// meeting recorder (record.ts), as JSON lists. And, when the bridge runs the
+// node (below), where sessions' memory is.
+const NVIM_ENV: Record<string, string> = {
   CORKBOARD_CLOUD: CLOUD,
   CORKBOARD_BRIDGE_VERSION: BRIDGE_VERSION,
   ...dirsEnv,
   CORKBOARD_MCP_COMMAND: JSON.stringify([...SELF, "mcp"]),
   CORKBOARD_RECORD_COMMAND: JSON.stringify([...SELF, "record"]),
 };
+
+// The node, for memory (node/app.ts), before Neovim starts; without it,
+// memory is the Worker's.
+const NODE = await startAppNode().catch((e) => console.error(`node: ${(e as Error).message}; memory isn't served here`));
+if (NODE) {
+  Object.assign(NVIM_ENV, NODE.env);
+  boards.useNode(NODE);
+}
 
 // The project Neovim last opened (remember_project in corkboard/init.lua).
 const LAST_PROJECT = join(STATE_DIR, "last-project");

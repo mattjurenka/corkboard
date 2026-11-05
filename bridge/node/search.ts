@@ -4,8 +4,10 @@
 // in memory (bun:sqlite), made again from a brain's replica whenever it has
 // changed since the last search, so it's never stale and never on disk.
 //
-// Recall by meaning is a seam: an Embedder, which nothing implements yet
-// (the plan's bge-m3 or smaller through onnxruntime). Without one, recall is
+// Recall by meaning is an Embedder: embed.ts's, a small model run here.
+// A brain's changes are embedded a minute after (by then, those another
+// device made come with their vectors), and at once when a session's
+// memory has been consolidated (share). Without one, recall is
 // the words and the days, as the Worker's was with vectors off.
 
 import { Database } from "bun:sqlite";
@@ -17,7 +19,13 @@ export type Hit = { type: "note" | "entry"; id: string; title: string; kind?: st
 
 // What recall by meaning would be given: the brain's items, and a question;
 // it answers the nearest items' keys ("note:<id>" or "entry:<id>"), best first.
-export type Embedder = { nearest(brain: string, query: string, items: { key: string; text: string }[]): Promise<string[]> };
+// warm makes the items' vectors ahead of a question.
+export type Embedder = {
+  nearest(brain: string, query: string, items: { key: string; text: string }[]): Promise<string[]>;
+  warm?(brain: string, items: { key: string; text: string }[]): Promise<unknown>;
+};
+
+const WARM_AFTER = 60_000;
 
 const SCHEMA = `
 CREATE VIRTUAL TABLE notes USING fts5(brain UNINDEXED, id UNINDEXED, kind UNINDEXED, updated UNINDEXED, title, body, tokenize='porter unicode61');
@@ -33,11 +41,12 @@ const ftsQuery = (q: string, any = false) =>
     .map((w) => `"${w.replace(/"/g, '""')}"`)
     .join(any ? " OR " : " ");
 
-const before = (day: string, days: number) => new Date(Date.parse(`${day}T12:00:00Z`) - days * 86_400_000).toISOString().slice(0, 10);
+export const before = (day: string, days: number) => new Date(Date.parse(`${day}T12:00:00Z`) - days * 86_400_000).toISOString().slice(0, 10);
 
 export class Search {
   private db = new Database(":memory:");
   private dirty = new Set<string>();
+  private warming = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(
     private data: Data,
@@ -45,7 +54,37 @@ export class Search {
   ) {
     this.db.exec(SCHEMA);
     for (const b of data.replicas.objects("brain")) this.dirty.add(b.name);
-    data.replicas.onChange((o) => o.kind === "brain" && this.dirty.add(o.name));
+    data.replicas.onChange((o) => {
+      if (o.kind !== "brain") return;
+      this.dirty.add(o.name);
+      this.warmLater(o.name);
+    });
+  }
+
+  private items(brain: string) {
+    return [
+      ...this.data.notes(brain).map((n) => ({ key: `note:${n.id}`, text: `${n.title}\n\n${n.body}` })),
+      ...this.data.entries(brain).map((e) => ({ key: `entry:${e.id}`, text: `${e.day} ${e.who}: ${e.text}` })),
+    ];
+  }
+
+  // A brain's vectors made, a little after its last change.
+  warmLater(brain: string, after = WARM_AFTER) {
+    if (!this.embedder?.warm) return;
+    clearTimeout(this.warming.get(brain));
+    const t = setTimeout(() => {
+      this.warming.delete(brain);
+      this.share(brain).catch((e) => console.error(`node: embedding ${brain}:`, e));
+    }, after);
+    t.unref?.();
+    this.warming.set(brain, t);
+  }
+
+  // A brain's vectors made now, for every device of the account.
+  async share(brain: string) {
+    clearTimeout(this.warming.get(brain));
+    this.warming.delete(brain);
+    await this.embedder?.warm?.(brain, this.items(brain));
   }
 
   private fresh(brain: string) {
@@ -96,11 +135,7 @@ export class Search {
   private async nearest(brain: string, query: string, hidden: readonly string[]): Promise<Hit[]> {
     if (!this.embedder) return [];
     try {
-      const items = [
-        ...this.data.notes(brain).map((n) => ({ key: `note:${n.id}`, text: `${n.title}\n\n${n.body}` })),
-        ...this.data.entries(brain).map((e) => ({ key: `entry:${e.id}`, text: `${e.day} ${e.who}: ${e.text}` })),
-      ];
-      return (await this.embedder.nearest(brain, query, items)).map((k) => this.hitFor(brain, k, hidden)).filter((h): h is Hit => !!h);
+      return (await this.embedder.nearest(brain, query, this.items(brain))).map((k) => this.hitFor(brain, k, hidden)).filter((h): h is Hit => !!h);
     } catch (e) {
       console.error("node: recall by meaning failed:", e);
       return [];
@@ -195,19 +230,25 @@ export class Search {
     const asNote = (n: Note) => `## ${n.title} (${n.id})\n\n${n.body.trim()}\n`;
     core.forEach((n) => add(asNote(n)));
     goals.forEach((n) => add(asNote(n)));
-    if (log.length) add(`## Log, newest day first (day turns over at ${DAY_STARTS_HOUR}am)\n\n${this.logText(log)}`);
+    if (log.length) add(`## Log, newest day first (day turns over at ${DAY_STARTS_HOUR}am)\n\n${logText(log, this.data.timeZone, true)}`);
     dayNotes.forEach((n) => add(asNote(n)));
     learned.forEach((n) => add(asNote(n)));
     return `# Memory: ${brain}, today ${d}\n\n${sections.join("\n")}`;
   }
 
-  private logText(log: Entry[]) {
-    const clock = new Intl.DateTimeFormat("en-GB", { timeZone: this.data.timeZone, hour: "2-digit", minute: "2-digit" });
-    const byDay = new Map<string, Entry[]>();
-    for (const e of log) byDay.set(e.day, [...(byDay.get(e.day) ?? []), e]);
-    return [...byDay]
-      .reverse()
-      .map(([day, es]) => `### ${day}\n\n${es.map((e) => `- ${clock.format(new Date(e.at))} ${e.who}: ${e.text.replace(/\n/g, "\n  ")}`).join("\n")}\n`)
-      .join("\n");
-  }
+}
+
+// Entries as Markdown, a heading a day, each day cut to `cap` characters.
+export function logText(log: Entry[], timeZone: string, newestFirst: boolean, cap = Infinity) {
+  const clock = new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", minute: "2-digit" });
+  const byDay = new Map<string, Entry[]>();
+  for (const e of log) byDay.set(e.day, [...(byDay.get(e.day) ?? []), e]);
+  const days = [...byDay];
+  if (newestFirst) days.reverse();
+  return days
+    .map(([day, es]) => {
+      const text = es.map((e) => `- ${clock.format(new Date(e.at))} ${e.who}: ${e.text.replace(/\n/g, "\n  ")}`).join("\n");
+      return `### ${day}\n\n${text.length > cap ? text.slice(0, cap) + "\n…(cut)" : text}\n`;
+    })
+    .join("\n");
 }

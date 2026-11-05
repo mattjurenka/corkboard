@@ -19,6 +19,15 @@
 // SHA-256 only. The file is read afresh for each lookup and change, so
 // `serve token` and `e2ee approve-connector`, which are other processes,
 // take effect at once.
+//
+// What lasts (clients, grants, refresh tokens and minted ones) is the
+// account's, so a client signed in on one node is on all of them: the
+// running node gives it to the account's "oauth" object (Shared, serve.ts)
+// and takes what the others gave. Codes, approvals and hourly access tokens
+// stay on the node; a client whose node changed gets a 401 and refreshes.
+// The file says which records it has shared, so a row gone from it was
+// deleted here (a revoke, a rotation, an expiry) and is cleared for all,
+// and one cleared elsewhere goes from it; a shared one is never given again.
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import { lookup } from "node:dns/promises";
@@ -26,7 +35,9 @@ import { isIP } from "node:net";
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { random } from "../../lib/e2ee/keys";
+import type { CardChange } from "../../lib/e2ee/merge";
 import { b64url } from "../../lib/e2ee/wire";
+import { SEP } from "./objects";
 
 export const SCOPES = ["assistant", "owner"] as const;
 export type Scope = (typeof SCOPES)[number];
@@ -50,10 +61,27 @@ type Client = {
   created: number;
   used?: number;
 };
-type Grant = { id: string; client: string; name: string; scope: Scope; resource: string | null; created: number };
+// A minted grant may be a brain's (`brain`): its agent, whose memory is that
+// brain's, goals and all.
+type Grant = { id: string; client: string; name: string; scope: Scope; resource: string | null; created: number; brain?: string };
 type CodeRow = { grant: Grant; redirect_uri: string; challenge: string; expires: number };
 type TokenRow = { grant: string; kind: "access" | "refresh"; expires: number };
-type File = { v: 1; clients: Record<string, Client>; grants: Record<string, Grant>; codes: Record<string, CodeRow>; tokens: Record<string, TokenRow>; approvals: { hash: string; expires: number }[] };
+type File = {
+  v: 1;
+  clients: Record<string, Client>;
+  grants: Record<string, Grant>;
+  codes: Record<string, CodeRow>;
+  tokens: Record<string, TokenRow>;
+  approvals: { hash: string; expires: number }[];
+  // The record ids of what's been given to or taken from the account.
+  shared?: string[];
+};
+
+// The account's "oauth" object: its records, each `row` a client, a grant
+// or a token (null, cleared), and a way to change them.
+export type Shared = { cards(): { id: string; row?: unknown }[]; change(...c: CardChange[]): void };
+
+const recordId = (type: "client" | "grant" | "token", id: string) => `${type}${SEP}${type === "token" ? Buffer.from(id, "hex").toString("base64url") : id}`;
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const newToken = (prefix: string) => prefix + b64url(random(32));
@@ -72,28 +100,97 @@ export class OAuthError extends Error {
   }
 }
 
-export type Caller = { scope: Scope; agent: string; grant: string; resource: string | null };
+export type Caller = { scope: Scope; agent: string; grant: string; resource: string | null; brain?: string };
 
 export class OAuthStore {
   private failures: number[] = [];
   private documents = new Map<string, { client: Client; until: number }>();
 
-  constructor(readonly path: string) {}
+  // Cleared here and not yet in the object: not to be taken back meanwhile.
+  private clearing = new Set<string>();
+
+  constructor(
+    readonly path: string,
+    private shared?: Shared,
+  ) {}
 
   private read(): File {
+    let f: File;
     try {
-      return JSON.parse(readFileSync(this.path, "utf8")) as File;
+      f = JSON.parse(readFileSync(this.path, "utf8")) as File;
     } catch {
-      return { v: 1, clients: {}, grants: {}, codes: {}, tokens: {}, approvals: [] };
+      f = { v: 1, clients: {}, grants: {}, codes: {}, tokens: {}, approvals: [] };
     }
+    if (this.share(f)) this.save(f);
+    return f;
   }
 
   private write(f: File) {
-    mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
     const t = Date.now();
     for (const [k, c] of Object.entries(f.codes)) if (c.expires < t) delete f.codes[k];
     for (const [k, r] of Object.entries(f.tokens)) if (r.expires < t) delete f.tokens[k];
     f.approvals = f.approvals.filter((a) => a.expires > t);
+    this.share(f);
+    this.save(f);
+  }
+
+  // The file's lasting rows and the account's, made the same; whether the
+  // file changed.
+  private share(f: File): boolean {
+    if (!this.shared) return false;
+    const known = new Set(f.shared ?? []);
+    const live = new Map<string, unknown>();
+    const gone = new Set<string>();
+    for (const c of this.shared.cards()) {
+      if (!/^(client|grant|token)\W/.test(c.id)) continue;
+      if (c.row === null || c.row === undefined) gone.add(c.id);
+      else live.set(c.id, c.row);
+    }
+    for (const id of gone) this.clearing.delete(id);
+    // The file's: each record id, and how it goes.
+    const t = Date.now();
+    const ours = new Map<string, { row: unknown; drop: () => void }>();
+    for (const [id, c] of Object.entries(f.clients)) ours.set(recordId("client", id), { row: c, drop: () => delete f.clients[id] });
+    for (const [id, g] of Object.entries(f.grants)) ours.set(recordId("grant", id), { row: g, drop: () => delete f.grants[id] });
+    for (const [hash, r] of Object.entries(f.tokens))
+      if (r.expires > t && (r.kind === "refresh" || f.grants[r.grant]?.client === "cli")) ours.set(recordId("token", hash), { row: r, drop: () => delete f.tokens[hash] });
+    const changes: CardChange[] = [];
+    const set = (id: string, row: unknown) => changes.push({ t: "card", card: id, set: { row } });
+    let changed = false;
+    for (const [id, o] of ours) {
+      if (gone.has(id)) {
+        o.drop();
+        known.delete(id);
+        changed = true;
+      } else if (!known.has(id)) {
+        if (!live.has(id)) set(id, o.row);
+        known.add(id);
+        changed = true;
+      }
+    }
+    for (const [id, row] of live) {
+      if (ours.has(id) || this.clearing.has(id)) continue;
+      if (known.has(id)) {
+        set(id, null);
+        this.clearing.add(id);
+        known.delete(id);
+      } else {
+        const [type, key] = [id.slice(0, id.indexOf(SEP)), id.slice(id.indexOf(SEP) + 1)];
+        if (type === "client") f.clients[key] = row as Client;
+        else if (type === "grant") f.grants[key] = row as Grant;
+        else f.tokens[Buffer.from(key, "base64url").toString("hex")] = row as TokenRow;
+        known.add(id);
+      }
+      changed = true;
+    }
+    for (const id of known) if (gone.has(id)) known.delete(id);
+    f.shared = [...known];
+    if (changes.length) this.shared.change(...changes);
+    return changed;
+  }
+
+  private save(f: File) {
+    mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
     const tmp = `${this.path}.tmp`;
     writeFileSync(tmp, JSON.stringify(f, null, 1), { mode: 0o600 });
     renameSync(tmp, this.path);
@@ -321,15 +418,15 @@ export class OAuthStore {
     const grant = row && f.grants[row.grant];
     if (!row || row.kind !== "access" || row.expires < Date.now() || !grant) return;
     if (grant.resource !== null && !ours(grant.resource, origin)) return;
-    return { scope: grant.scope, agent: "assistant", grant: grant.id, resource: grant.resource };
+    return { scope: grant.scope, agent: grant.brain ?? "assistant", grant: grant.id, resource: grant.resource, ...(grant.brain ? { brain: grant.brain } : {}) };
   }
 
   // A long-lived token for a client of the user's own (the phone), made on
   // the node's own machine: no consent, since being here is the proof.
-  mint(name: string, days: number, scope: Scope = "owner"): string {
+  mint(name: string, days: number, scope: Scope = "owner", brain?: string): string {
     const access = newToken("cbn_");
     this.change((f) => {
-      const grant: Grant = { id: b64url(random(12)), client: "cli", name, scope, resource: null, created: Date.now() };
+      const grant: Grant = { id: b64url(random(12)), client: "cli", name, scope, resource: null, created: Date.now(), ...(brain ? { brain } : {}) };
       f.grants[grant.id] = grant;
       f.tokens[sha(access)] = { grant: grant.id, kind: "access", expires: Date.now() + days * 86_400_000 };
     });
@@ -372,11 +469,14 @@ export const deniedUrl = (c: Consent, origin: string) => errorUrl(c, "access_den
 
 // A resource is this node's: its origin, /mcp or /api/node, compared in
 // canonical form (scheme and host's case, a default port, a trailing slash).
+// Through the relay's tunnel the origin has a path, <relay>/n/<handle>,
+// which the resource's must start with.
 function ours(resource: string, origin: string): boolean {
   try {
     const r = new URL(resource);
     const o = new URL(origin);
-    return !r.hash && !r.search && r.origin === o.origin && ["", "/mcp", "/api/node"].includes(r.pathname.replace(/\/$/, ""));
+    const base = o.pathname.replace(/\/$/, "");
+    return !r.hash && !r.search && r.origin === o.origin && ["", "/mcp", "/api/node"].map((p) => base + p).includes(r.pathname.replace(/\/$/, ""));
   } catch {
     return false;
   }

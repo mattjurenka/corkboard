@@ -256,6 +256,13 @@ export class Grid {
       ctx.fillRect(x, y, cellW * wide, cellH);
       if (text !== "" && text !== " ") texts.push(col);
     }
+    // Box-drawing glyphs run taller than a row (│ is 1.52em against a 1.3em
+    // cell), and only dirty rows are redrawn, so what spills into the rows
+    // around would stay there: keep the text to its own row.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, y, this.cols * cellW, cellH);
+    ctx.clip();
     for (const col of texts) {
       const { text, hl } = line[col];
       const { a, fg, bg, sp } = this.colors(hl);
@@ -274,6 +281,7 @@ export class Grid {
         ctx.fillRect(x, y + cellH / 2, cellW * wide, 1);
       }
     }
+    ctx.restore();
   }
 
   drawCursor() {
@@ -285,7 +293,7 @@ export class Grid {
     const x = col * cellW;
     const y = row * cellH;
     const pct = (mode.cell_percentage || 100) / 100;
-    const { fg, bg } = this.colors(cell.hl);
+    const { a, fg, bg } = this.colors(cell.hl);
     const cursorHl = mode.attr_id ? this.colors(mode.attr_id) : null;
     const color = cursorHl?.a.background !== undefined ? cursorHl.bg : fg;
 
@@ -298,8 +306,14 @@ export class Grid {
       ctx.fillRect(x, y, cellW, cellH);
       const text = cursorHl?.a.foreground !== undefined ? cursorHl.fg : bg;
       if (!this.drawBlock(cell.text, x, y, text, color)) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x, y, cellW, cellH);
+        ctx.clip();
+        ctx.font = `${a.italic ? "italic " : ""}${a.bold ? "bold " : ""}${this.fontSize}px ${this.fontFamily}`;
         ctx.fillStyle = hex(text);
         ctx.fillText(cell.text, x, y + cellH / 2);
+        ctx.restore();
       }
     }
   }

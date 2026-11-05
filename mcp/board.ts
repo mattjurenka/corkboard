@@ -146,7 +146,7 @@ const TOOLS: Record<string, Tool> = {
     run: (a) => full(claim(a.id, a.force === true)),
   },
   release_card: {
-    description: "Give up a card you hold without finishing it; it goes back to ready, unassigned.",
+    description: "Give up a card you hold without finishing it; it goes back to ready, unassigned. Use it when the user puts the card off for later.",
     properties: { id, note: str("Why you are letting it go") },
     required: ["id", "note"],
     run: (a) =>
@@ -198,8 +198,8 @@ const TOOLS: Record<string, Tool> = {
     run: (a) => summary(change(a.id, (c) => ask(c, String(a.message), a.wait !== false))),
   },
   submit_for_review: {
-    description: "You finished a card: moves it to review and logs what changed and how you verified it.",
-    properties: { id, summary: str("What changed"), verification: str("How you checked it works") },
+    description: "You finished a card: moves it to review. The user reads your summary to decide whether to merge, so keep it short and plain; the diff shows the details.",
+    properties: { id, summary: str("What changed, in a few short sentences or bullets. Name anything the user has to do or decide."), verification: str("How you checked it works, in a sentence or two, and what you couldn't check") },
     required: ["id", "summary", "verification"],
     run: (a) =>
       summary(
@@ -304,7 +304,8 @@ const INSTRUCTIONS = `The corkboard project board: one card per task. You are "$
 To pick up work, call next_card (or claim_card for a specific card). While working, log progress with log.
 If you need a human decision, call block with your question and stop. If you need the user to do something
 (log in, approve, test on a device), call request_user_action; both notify them on their desktop. When done, call submit_for_review.
-Put follow-up work you discover in new cards with create_card (parent: the card you are on).`;
+Put follow-up work you discover in new cards with create_card (parent: the card you are on).
+If the user puts a card off for later ("do it tomorrow", "push this"), call release_card so it goes back to ready.`;
 
 function reply(id: unknown, result: unknown) {
   process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");

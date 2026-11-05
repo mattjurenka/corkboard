@@ -1,4 +1,4 @@
-// A brain's vault into its memory in corkboard's Worker (its memory.ts):
+// A brain's vault into its memory on this machine's node (bridge/node):
 // until the vault is a mirror of the memory (.agent/plans/memory.md, step
 // 5), the files are the truth and this copies them up, one way.
 //
@@ -11,15 +11,16 @@
 // kind from its folder. The daily logs (Memory/daily/YYYY-MM-DD.md) are the
 // brain's log instead: each top-level bullet an entry on that day, at the
 // time its section's heading gives. Both are sent whole every run; the
-// Worker keeps what hasn't changed as it was, so a run only changes what
+// node keeps what hasn't changed as it was, so a run only changes what
 // changed. A file deleted here stays in the memory, and is listed.
 //
-// As the bridge, with its sign-in (bridge/cloud.ts).
+// To the node the bridge runs (bridge/node/app.ts), as the user: its
+// address is in its session-mcp.json, and the token in its owner-token.
 
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { CLOUD, token } from "./cloud";
+import { STATE_DIR } from "./dirs";
 
 const dry = process.argv.includes("--dry");
 const [brain, vault] = process.argv.slice(2).filter((a) => a !== "--dry");
@@ -44,7 +45,7 @@ const DAILY = /^Memory\/daily\/(\d{4}-\d{2}-\d{2})\.md$/;
 
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 
-// The Worker's ids are lowercase-and-dashes, at most 80 long; a longer one
+// The ids are lowercase-and-dashes, at most 80 long; a longer one
 // keeps its start and a hash, so it stays the same each run.
 function idOf(path: string) {
   if (NAMED[path]) return NAMED[path];
@@ -116,7 +117,7 @@ for (const file of files(vault)) {
     continue;
   }
   const id = idOf(path);
-  const why = body.length > 200_000 ? "longer than the Worker's 200000 characters" : found.some((n) => n.id === id) ? `its id ${id} is another file's` : "";
+  const why = body.length > 200_000 ? "longer than 200000 characters" : found.some((n) => n.id === id) ? `its id ${id} is another file's` : "";
   if (why) {
     console.warn(`skipped ${path}: ${why}`);
     skipped++;
@@ -135,25 +136,33 @@ if (dry) {
   process.exit(0);
 }
 
-const auth = { Authorization: `Bearer ${await token()}`, "Content-Type": "application/json" };
-const api = (path: string, init: RequestInit = {}) => fetch(`${CLOUD}${path}${path.includes("?") ? "&" : "?"}brain=${brain}`, { ...init, headers: auth });
+let url: string, owner: string;
+try {
+  url = JSON.parse(readFileSync(join(STATE_DIR, "node", "session-mcp.json"), "utf8")).mcpServers["corkboard-memory"].url;
+  owner = readFileSync(join(STATE_DIR, "node", "owner-token"), "utf8").trim();
+} catch {
+  console.error("this machine's node hasn't run: start corkboard (its bridge runs the node)");
+  process.exit(1);
+}
+const base = `${new URL(url).origin}/api/node/brains/${encodeURIComponent(brain)}`;
+const api = (path: string, init: RequestInit = {}) => fetch(`${base}${path}`, { ...init, headers: { Authorization: `Bearer ${owner}`, "Content-Type": "application/json" } });
 
 let changed = 0;
 for (const n of found) {
-  const before = await (await api(`/api/notes/${n.id}`)).json<any>().catch(() => ({}));
-  const res = await api(`/api/notes/${n.id}`, { method: "PUT", body: JSON.stringify({ kind: n.kind, title: n.title, body: n.body, path: n.path }) });
+  const before = await (await api(`/notes/${n.id}`)).json<any>().catch(() => ({}));
+  const res = await api(`/notes/${n.id}`, { method: "PUT", body: JSON.stringify({ kind: n.kind, title: n.title, body: n.body, path: n.path }) });
   if (!res.ok) throw new Error(`${n.path}: ${res.status} ${await res.text()}`);
   if ((await res.json<any>()).version !== before.version) changed++;
 }
 
 let added = 0;
 for (let i = 0; i < log.length; i += 500) {
-  const res = await api("/api/memory/entries", { method: "POST", body: JSON.stringify({ entries: log.slice(i, i + 500) }) });
+  const res = await api("/entries", { method: "POST", body: JSON.stringify({ entries: log.slice(i, i + 500) }) });
   if (!res.ok) throw new Error(`entries: ${res.status} ${await res.text()}`);
   added += (await res.json<any>()).added;
 }
 
 const ids = new Set(found.map((n) => n.id));
-const gone = (await (await api("/api/notes?limit=200")).json<any[]>()).map((n) => n.id).filter((id) => !ids.has(id));
+const gone = (await (await api("/notes?limit=200")).json<any[]>()).map((n) => n.id).filter((id) => !ids.has(id));
 console.log(`${brain}: ${found.length} notes (${changed} changed${skipped ? `, ${skipped} skipped` : ""}), ${log.length} log entries (${added} new)`);
 if (gone.length) console.log(`in the memory but not the vault: ${gone.join(", ")}`);

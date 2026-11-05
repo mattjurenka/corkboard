@@ -929,12 +929,12 @@ end
 -- Keep the usage view second among the tabs, after the board. Leaves focus
 -- where it was.
 function M.ensure()
-  if pinned.ensure("corkboard_usage", 2, buffer()) then M.push(true) end
+  if pinned.ensure("corkboard_usage", pinned.index("corkboard_usage"), buffer()) then M.push(true) end
 end
 
 function M.show()
   M.ensure()
-  pinned.show("corkboard_usage", 2, buffer())
+  pinned.show("corkboard_usage", pinned.index("corkboard_usage"), buffer())
   M.push(true)
 end
 

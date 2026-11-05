@@ -32,6 +32,23 @@ export type LogTransport = {
   snapshot?(object: string, s: Snapshot): Promise<void>;
 };
 
+// What a replica has before its account is on a relay (made with no relay,
+// e2ee init --local): every call refuses, so changes wait in the queue
+// until the account is published and a real transport takes over.
+export class Offline extends Error {
+  constructor() {
+    super("this account is only on this machine: no relay to sync with");
+  }
+}
+export const offline: LogTransport = {
+  append: async () => {
+    throw new Offline();
+  },
+  read: async () => {
+    throw new Offline();
+  },
+};
+
 // What a transport throws when the log has moved to another key.
 export class EpochChanged extends Error {
   constructor(readonly epoch: number) {
@@ -41,7 +58,11 @@ export class EpochChanged extends Error {
 
 export type Saved = { cursor: number; seq: number; epoch?: number; state: BoardState; outbox: NewOp[]; rejected: string[] };
 
-export type ReplicaStore = { load(): Promise<Saved | undefined>; save(s: Saved): Promise<void> };
+// save is told which cards changed since the last save, so a store that
+// keeps each card apart (SQLite) writes only those; undefined is any of
+// them (a snapshot taken). The rest of Saved is small, but for the queue,
+// which such a store matches up by op id.
+export type ReplicaStore = { load(): Promise<Saved | undefined>; save(s: Saved, changed?: ReadonlySet<string>): Promise<void> };
 
 export const memoryStore = (): ReplicaStore & { saved?: Saved } => {
   const s: ReplicaStore & { saved?: Saved } = {
@@ -79,6 +100,8 @@ export class Replica {
   private epoch: number;
   // receive runs one batch at a time, since a new epoch's key is awaited.
   private queue: Promise<unknown> = Promise.resolve();
+  // The cards changed since the last save; undefined, any of them.
+  private dirty: Set<string> | undefined = new Set();
 
   private constructor(
     private o: ReplicaOptions,
@@ -120,6 +143,12 @@ export class Replica {
     return cards(this.s.state);
   }
 
+  // The object's key at an epoch (the current one's by default): what a
+  // blob of its is sealed with (bridge/node/handoff.ts).
+  key(epoch = this.epoch): Promise<Uint8Array | undefined> {
+    return this.keyFor(epoch);
+  }
+
   private async keyFor(epoch: number): Promise<Uint8Array | undefined> {
     const had = this.keys.get(epoch);
     if (had) return had;
@@ -152,6 +181,12 @@ export class Replica {
     }
   }
 
+  private async save() {
+    const changed = this.dirty;
+    this.dirty = new Set();
+    await this.store.save(this.s, changed);
+  }
+
   // Several changes as one save; each is its own op.
   async change(...changes: CardChange[]): Promise<string[]> {
     const key = await this.keyFor(this.epoch);
@@ -160,10 +195,11 @@ export class Replica {
       const id = newOpId();
       const op: Op = { v: 1, clock: this.s.state.clock + 1, device: this.device, change };
       apply(this.s.state, id, op);
+      this.dirty?.add(change.card);
       this.s.outbox.push(this.sealOp(key, this.epoch, id, ++this.s.seq, op));
       return id;
     });
-    await this.store.save(this.s);
+    await this.save();
     return ids;
   }
 
@@ -180,7 +216,7 @@ export class Replica {
       if (op) out.push(this.sealOp(key, epoch, n.id, n.seq, op));
     }
     this.s.outbox = out;
-    await this.store.save(this.s);
+    await this.save();
   }
 
   // Sends the queue in batches the relay takes; what's acknowledged leaves
@@ -207,7 +243,7 @@ export class Replica {
       const acked = new Set(acks.map((a) => a.id));
       this.s.outbox = this.s.outbox.filter((o) => !acked.has(o.id));
       sent += acked.size;
-      await this.store.save(this.s);
+      await this.save();
       if (!acked.size) throw new Error("relay acknowledged none of a push");
     }
     return sent;
@@ -234,6 +270,7 @@ export class Replica {
       if (op) apply(state, n.id, op);
     }
     this.s.state = state;
+    this.dirty = undefined;
     this.s.cursor = snap.upTo;
     if (snap.epoch > this.epoch) await this.useEpoch(snap.epoch);
     return true;
@@ -252,7 +289,10 @@ export class Replica {
         // The device inside is what counts for the merge: the relay's
         // label is only what it was told.
         if (!op || op.device !== w.device || !apply(this.s.state, w.id, op)) this.s.rejected.push(w.id);
-        else n++;
+        else {
+          this.dirty?.add(op.change.card);
+          n++;
+        }
       }
       return n;
     });
@@ -272,7 +312,7 @@ export class Replica {
       this.kept = { count: r.count ?? 0, bytes: r.bytes ?? 0, head: r.head };
       if (!r.ops.length || this.s.cursor >= r.head) break;
     }
-    await this.store.save(this.s);
+    await this.save();
     return n;
   }
 
@@ -333,7 +373,7 @@ export class Replica {
       this.keys.set(epoch, key);
       this.epoch = epoch;
       this.s.epoch = epoch;
-      await this.store.save(this.s);
+      await this.save();
       return snap;
     }
   }
@@ -343,7 +383,7 @@ export class Replica {
     if (!this.o.transport.subscribe) throw new Error("this transport can't follow a log");
     return this.o.transport.subscribe(this.object, this.s.cursor, (ops, snapshot) => {
       void this.receive(ops, snapshot).then(async (n) => {
-        await this.store.save(this.s);
+        await this.save();
         on?.(n);
       });
     });
