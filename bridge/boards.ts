@@ -94,6 +94,10 @@ export class Session extends CloudSession {
 
   override async call(op: string, args: any[]): Promise<unknown> {
     if (op.startsWith("nodes_")) return node ? node.nodes(op, args) : null;
+    // A new device let into the account (:AgentPair).
+    if (op === "pair_status") return (await import("./e2ee")).pairStatus();
+    if (op === "pair_approve") return (await import("./e2ee")).pairApprove(args[0], args[1]);
+    if (op === "pair_confirm") return (await import("./e2ee")).pairConfirm(args[0], !!args[1]);
     // A session on the node's board: queued with node: true, its grant the
     // node's; and, once the fleet's sealed on the node, queued by the node.
     if (node && op === "fleet_session") {

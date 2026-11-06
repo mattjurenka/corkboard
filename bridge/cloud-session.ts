@@ -198,10 +198,6 @@ export class Session {
     if (op.startsWith("plan_")) return this.plan(op, args);
     if (op.startsWith("fleet_")) return this.fleet(op, args);
     if (op.startsWith("brains_")) return this.brains(op, args);
-    // A new device let into the account (:AgentPair).
-    if (op === "pair_status") return (await import("./e2ee")).pairStatus();
-    if (op === "pair_approve") return (await import("./e2ee")).pairApprove(args[0], args[1]);
-    if (op === "pair_confirm") return (await import("./e2ee")).pairConfirm(args[0], !!args[1]);
     // Pepper's session (plan/claude.lua): the one token that sees the goals.
     if (op === "pepper_token") {
       const res = await fetch(`${this.cloud.link.cloud}/api/brains/pepper/tokens`, {
