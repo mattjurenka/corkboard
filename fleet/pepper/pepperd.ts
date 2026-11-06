@@ -85,19 +85,37 @@ async function renew(state: State) {
 
 // The phone's chat ----------------------------------------------------------------------
 
-// Each message the user sent since the last one passed on, pasted as one
-// prompt (bracketed, so its newlines don't send it early) and sent. Claude
-// Code queues what arrives while it's busy. Without a session (between days,
-// or restarting) they wait for the next try.
+// One prompt into the session, pasted (bracketed, so its newlines don't send
+// it early) and sent.
+async function prompt(text: string) {
+  await tmux(["load-buffer", "-b", "phone", "-"], text);
+  await tmux(["paste-buffer", "-p", "-d", "-b", "phone", "-t", SESSION]);
+  await tmux(["send-keys", "-t", SESSION, "Enter"]);
+}
+
+// A slash command from the phone runs as one, and Pepper says how it went in
+// the chat. Bare /mcp is a menu the phone can't work, so it reconnects them all.
+function command(text: string): string | undefined {
+  const t = text.trim();
+  if (!/^\/[a-z][\w:-]*(\s|$)/i.test(t)) return;
+  return t === "/mcp" ? "/mcp reconnect all" : t;
+}
+
+// Each message the user sent since the last one passed on, as a line
+// starting "[phone]", or a command. Claude Code queues what arrives while
+// it's busy. Without a session (between days, or restarting) they wait for
+// the next try.
 async function pass(state: State) {
   const said = ((await api("GET", `/api/chat?after=${state.last}`)) as Message[]).filter(byUser);
   for (const m of said) {
     // Marked passed on first, so it can't change after; its text as it is now. Taken back: skipped.
     const now = await api("POST", `/api/chat/${m.id}/delivered`, {}).catch((e: Error) => (e.message.includes("no message") ? null : Promise.reject(e)));
     if (now) {
-      await tmux(["load-buffer", "-b", "phone", "-"], `[phone] ${now.text}`);
-      await tmux(["paste-buffer", "-p", "-d", "-b", "phone", "-t", SESSION]);
-      await tmux(["send-keys", "-t", SESSION, "Enter"]);
+      const run = command(now.text);
+      if (run) {
+        await prompt(run);
+        await prompt(`[phone] I ran ${run} from my phone. Tell me in the chat what it showed.`);
+      } else await prompt(`[phone] ${now.text}`);
     }
     state.last = m.id;
     save(state);
