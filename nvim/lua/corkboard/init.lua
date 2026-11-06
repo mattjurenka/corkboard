@@ -821,6 +821,7 @@ function M.setup()
   -- since Shift with an arrow can select (corkboard.vimkeys).
   vim.keymap.set({ "i", "c" }, "<M-b>", "<C-Left>", { desc = "corkboard: word back" })
   vim.keymap.set({ "i", "c" }, "<M-f>", "<C-Right>", { desc = "corkboard: word on" })
+  require("corkboard.pair").setup()
   -- Ctrl+Tab and Ctrl+Shift+Tab, or Ctrl+Shift+j and k (Cmd+Shift+] and [ on
   -- a Mac), go down and up the tabs from any mode, round from the last to the
   -- first; plain Tab stays the program's (completion, Claude Code's mode

@@ -153,6 +153,16 @@ export type State = {
   // A question (corkboard.ask), while it's open: text to type
   // (vim.ui.input), or one of its choices (vim.ui.select).
   ask: { id: number; prompt: string; default: string; choices?: string[] } | null;
+  // Pairing a device (corkboard.pair), while it's open.
+  pair: {
+    step: "code" | "waiting" | "sas" | "done" | "error";
+    error?: string;
+    name?: string;
+    sas?: string;
+    passphrase?: boolean;
+    confirming?: boolean;
+    refused?: boolean;
+  } | null;
   // Open project (corkboard.picker), while it's open. here: this window has a
   // project, so the one chosen opens in a window of its own; naming: straight
   // to naming a new one (the Projects tab's n).
@@ -195,6 +205,7 @@ let state: State = {
   brainForm: null,
   holdForm: null,
   ask: null,
+  pair: null,
   projects: null,
   windows: [],
   toasts: [],

@@ -239,6 +239,7 @@ local tools = {
   { text = "Meetings", hint = "", feature = "assistant", run = function() require("corkboard.meetings").open() end },
   { text = "Claude Code", hint = "<C-.>", project = true, run = function() require("corkboard.claude").open() end },
   { text = "Away mode", hint = "<leader>a", run = function() require("corkboard.away").enter() end },
+  { text = "Pair a device", hint = "", run = function() require("corkboard.pair").start() end },
   { text = "Terminal", hint = "", project = true, run = function() require("corkboard.terminal").tab() end },
   { text = "Reload window", hint = "F5", run = function() require("corkboard.restore").reload() end },
 }

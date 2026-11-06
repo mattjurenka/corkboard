@@ -190,6 +190,7 @@ rpc.on("corkboard.ask", ([ask]: any[]) => store.set({ ask }));
 rpc.on("corkboard.ask_done", ([id]: any[]) => {
   if (store.get().ask?.id === id) store.set({ ask: null });
 });
+rpc.on("corkboard.pair", ([pair]: any[]) => store.set({ pair: typeof pair === "object" ? pair : null }));
 rpc.on("corkboard.chime", () => chime());
 rpc.on("corkboard.message", ([m]: any[]) => notifyMessage(m));
 // A toast replaces the one with its id; one that's ended goes after a while.

@@ -76,7 +76,7 @@ import { Replica, memoryStore } from "../lib/e2ee/sync";
 import { type DeviceCert, type Role, type Signed, KEY, ROLES, fromB64url, normalizeCode, showCode } from "../lib/e2ee/wire";
 
 const USAGE =
-  "usage: corkboard-bridge e2ee init|publish|recover|pair|approve CODE|push-board KEY|pull-board KEY|share KIND NAME ACCOUNT [ROLE]|unshare KIND NAME ACCOUNT|shared|compact [KIND NAME]|rotate|rotated|status|phrase|revoke DEVICE|relay-device DEVICE BOX [--name NAME]|nodes|leader [this|DEVICE|none]|approve-connector|move-memory [--dry-run]|move-boards [--dry-run]|move-plans [--dry-run]";
+  "usage: corkboard-bridge e2ee init|publish|recover|pair|approve CODE|push-board KEY|pull-board KEY|share KIND NAME ACCOUNT [ROLE]|unshare KIND NAME ACCOUNT|shared|compact [KIND NAME]|rotate|rotated|status|phrase|revoke DEVICE|relay-device DEVICE BOX [--name NAME]|nodes|leader [this|DEVICE|none]|approve-connector|move-memory [--dry-run]|move-boards [--dry-run]|move-plans [--dry-run]|move-holds [--dry-run]";
 
 function option(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -208,7 +208,7 @@ async function pair(args: string[]) {
   const name = option(args, "--name") ?? hostname();
   const device = newDevice();
   const got = await pairNew(relayFor(), device, name, {
-    show: (code, qr) => console.log(`On a device that's in the account:\n\n  corkboard-bridge e2ee approve ${showCode(code)}\n\n(or scan: ${qr})\nWaiting...`),
+    show: (code, qr) => console.log(`On a device that's in the account, run Pair a device (:AgentPair) in corkboard and type:\n\n  ${showCode(code)}\n\n(or scan: ${qr})\nWaiting...`),
     confirm: async (sas) => yes(`The other device shows a six-digit code. Is it ${sas}?`),
   });
   await keep(got.root, device, got.cert, name, args);
@@ -227,6 +227,57 @@ async function approveCode(args: string[]) {
     },
   });
   console.log(`Let ${cert.body.name} in.`);
+}
+
+// Approving from the editor (cloud-session.ts's pair_*, :AgentPair): what it
+// needs first, then the code until the device joins, then the answer.
+export function pairStatus() {
+  const d = store.device();
+  return { account: !!d && store.exists() && d.relay === CLOUD, passphrase: store.needsPassphrase() };
+}
+
+const approving = new Map<string, { answer: (ok: boolean) => void; done: Promise<Signed<DeviceCert>> }>();
+
+export async function pairApprove(typed: string, pass?: string): Promise<{ id: string; sas: string; name: string; device: string }> {
+  const code = normalizeCode(typed);
+  if (!code) throw new Error("that isn't a code: it's the ten letters and digits the new device shows");
+  const d = store.device();
+  if (!d || !store.exists() || d.relay !== CLOUD) throw new Error("this machine isn't in an account the phone can join");
+  const root = await store.root(pass || process.env.CORKBOARD_E2EE_PASSPHRASE);
+  return new Promise((resolve, reject) => {
+    const id = crypto.randomUUID();
+    let joined = false;
+    // The device joins as soon as it sees the commit; unanswered, it's turned away.
+    const done = approve(
+      relayFor(d.device, d.cert),
+      root,
+      code,
+      {
+        confirm: (sas, join) =>
+          new Promise<boolean>((answer) => {
+            joined = true;
+            approving.set(id, { answer, done });
+            setTimeout(() => answer(false), 5 * 60_000).unref();
+            resolve({ id, sas, ...join });
+          }),
+      },
+      { until: Date.now() + 20_000 },
+    );
+    done
+      .catch((e) => {
+        const m = (e as Error).message;
+        if (!joined) reject(new Error(/no such pairing/.test(m) ? "no device is showing that code; check it, or start again on the device" : /timed out/.test(m) ? "the device didn't answer; start again on it" : m));
+      })
+      .finally(() => setTimeout(() => approving.delete(id), 60_000).unref());
+  });
+}
+
+export async function pairConfirm(id: string, ok: boolean): Promise<{ name: string }> {
+  const p = approving.get(id);
+  if (!p) throw new Error("that pairing is over; start again");
+  approving.delete(id);
+  p.answer(ok);
+  return { name: (await p.done).body.name };
 }
 
 // A board as the Worker or the card files have it, as cards with their logs.
