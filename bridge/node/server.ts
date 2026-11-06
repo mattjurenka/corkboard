@@ -97,7 +97,7 @@ export type AppEvents = (fn: (key: string | null, event: unknown) => void) => ()
 // The Worker's (cloud/src/api.ts's): a board's key, and a remote git clones from.
 const BOARD_KEY = /^[A-Za-z0-9._-]{1,128}$/;
 const REMOTE = /^(https?:\/\/|ssh:\/\/|git:\/\/|[\w.-]+@[\w.-]+:)[^\s]{1,500}$/;
-const APP_OPS = /^(brains_\w+|nodes_\w+|note_get|note_put|goals|plan_(get|say|accept|discard|day)|board_(board|resolve|boards|snapshot|subscribe|make|create|update|log|archive|delete|touch))$/;
+const APP_OPS = /^(brains_\w+|nodes_\w+|note_get|note_put|goals|fleet_(session|open)|plan_(get|say|accept|discard|day)|board_(board|resolve|boards|snapshot|subscribe|make|create|update|log|archive|delete|touch))$/;
 
 // What Bun.serve gives a fetch beside the request; a tunnel's and a test's
 // don't, so they're never loopback.

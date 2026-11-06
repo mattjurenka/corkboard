@@ -173,11 +173,21 @@ async function runningNode(pid: number): Promise<AppNode | undefined> {
     if (!res.ok) throw new Error(json.error ?? `the node answered ${res.status}`);
     return json.value;
   };
-  try {
-    await call("brains_get", []);
-  } catch (e) {
-    console.error(`node: one is running already (pid ${pid}) and doesn't serve this bridge (${(e as Error).message}); memory isn't served here`);
-    return;
+  // It may still be starting (two bridges restarted together), so one that
+  // can't be reached yet is tried again for a while; one that answers with an
+  // error isn't.
+  for (let tries = 0; ; tries++) {
+    try {
+      await call("brains_get", []);
+      break;
+    } catch (e) {
+      const answered = !(e instanceof TypeError || (e as any).code); // not a refused connection or a missing file
+      if (answered || tries >= 30) {
+        console.error(`node: one is running already (pid ${pid}) and doesn't serve this bridge (${(e as Error).message}); memory isn't served here`);
+        return;
+      }
+      await Bun.sleep(1000);
+    }
   }
   const { url } = where();
   console.log(`node: using the one running already (pid ${pid}) on ${url}`);

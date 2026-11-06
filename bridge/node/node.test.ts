@@ -1918,6 +1918,20 @@ describe("day plans and chat, on the node", () => {
     n.stop();
   });
 
+  it("puts an answer after what it answers, though the phone's clock is a minute fast", async () => {
+    const n = await setup();
+    const phone = await phoneOf(n);
+    const real = Date.now;
+    Date.now = () => real() + 60_000;
+    const mine = await phone.data.post("Matt", "plan my day", true).finally(() => (Date.now = real));
+    await sync(phone, n);
+    const pepper = await n.data.post("pepper", "proposed");
+    expect(pepper.id > mine.id).toBe(true);
+    expect(n.data.chat().map((m) => m.text)).toEqual(["plan my day", "proposed"]);
+    await phone.replicas.stop();
+    n.stop();
+  });
+
   it("keeps two devices' messages in order, and lets the user change one only until it's passed on", async () => {
     const n = await setup();
     const phone = await phoneOf(n);

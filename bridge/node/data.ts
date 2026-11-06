@@ -391,10 +391,13 @@ export class Data {
 
   // An entry's (or a message's) id sorts by when it was made (two in one
   // millisecond in the order they were made), and is random past that, so
-  // two devices never make the same one.
+  // two devices never make the same one. Given the newest id it's seen, it
+  // sorts after that too, however wrong the clock that made either is (a
+  // hybrid logical clock): an answer comes after what it answers.
   private made = 0;
-  private timeId() {
-    this.made = Math.max(Date.now(), this.made + 1);
+  private timeId(after?: string) {
+    const seen = after ? parseInt(after.split("-")[0], 36) : NaN;
+    this.made = Math.max(Date.now(), this.made + 1, Number.isFinite(seen) ? seen + 1 : 0);
     return `${this.made.toString(36)}-${b64url(random(6))}`;
   }
 
@@ -531,7 +534,7 @@ export class Data {
 
   // byUser: the user's own, from the phone; else a brain's.
   async post(who: string, text: string, byUser = false): Promise<Message> {
-    const id = this.timeId();
+    const id = this.timeId(this.messages().reduce((a, m) => (m.id > a ? m.id : a), ""));
     await this.replicas.change("day", DAY, { t: "card", card: chatRecord(id), set: { at: now(), who, text, by_user: byUser, delivered: null } });
     return this.message(id)!;
   }
