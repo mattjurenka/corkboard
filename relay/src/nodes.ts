@@ -17,7 +17,8 @@
 import { DurableObject } from "cloudflare:workers";
 import { CHANNEL, CHANNEL_ID, LIMITS, type NodesView, type TunnelRequest, type TunnelResponse, b64url, concat, fromB64url } from "../../lib/e2ee/wire";
 
-type Attached = { device: string; since: number };
+// tunnel: false, a socket that answers channels only (?tunnel=0).
+type Attached = { device: string; since: number; tunnel?: false };
 // An opener's socket: the channel's id, who opened it, and the node socket
 // (device and since) it's paired with.
 type Opener = { channel: string; from: string; to: string; since: number };
@@ -85,12 +86,12 @@ export class Nodes extends DurableObject {
 
   status(): NodesView {
     const known = this.sql.exec<{ device: string; name: string; seen: number }>("SELECT device, name, seen FROM devices ORDER BY seen DESC").toArray();
-    return { leader: this.leader(), connected: this.sockets().map(({ a }) => ({ device: a.device, since: a.since })), known };
+    return { leader: this.leader(), connected: this.sockets().map(({ a }) => ({ device: a.device, since: a.since, ...(a.tunnel === false && { tunnel: false as const }) })), known };
   }
 
   // The node a request goes to: the leader, or the newest.
   private target(): WebSocket | undefined {
-    const all = this.sockets();
+    const all = this.sockets().filter(({ a }) => a.tunnel !== false);
     const leader = this.leader();
     return (all.find(({ a }) => a.device === leader) ?? all.sort((x, y) => y.a.since - x.a.since)[0])?.ws;
   }
@@ -128,7 +129,7 @@ export class Nodes extends DurableObject {
     this.sql.exec("INSERT INTO devices (device, name, seen) VALUES (?, ?, ?) ON CONFLICT (device) DO UPDATE SET name = excluded.name, seen = excluded.seen", device, name, Date.now());
     const { 0: client, 1: server } = new WebSocketPair();
     this.ctx.acceptWebSocket(server, [device]);
-    server.serializeAttachment({ device, since: Date.now() } satisfies Attached);
+    server.serializeAttachment({ device, since: Date.now(), ...(request.headers.get("X-Tunnel") === "0" && { tunnel: false as const }) } satisfies Attached);
     return new Response(null, { status: 101, webSocket: client });
   }
 

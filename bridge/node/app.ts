@@ -41,6 +41,9 @@ import { Conflict, type Message } from "./day";
 import { DAY } from "./objects";
 import { NODE_DIR, NodeRunning, type StartedNode, startNode } from "./serve";
 import { touch } from "./leases";
+import { joinHub } from "../hub";
+import type { HubJoin, Link } from "../sessions";
+import type { Reach } from "../peers";
 
 const TOKEN_FILE = join(NODE_DIR, "session-token");
 const MCP_FILE = join(NODE_DIR, "session-mcp.json");
@@ -74,6 +77,10 @@ export type AppNode = {
   // A file on a card of a board the node keeps (media.ts), or undefined
   // when it has no such file: the Worker's, then.
   media(board: string, card: string, id: string): Promise<Response | undefined>;
+  // How the bridge's sessions join this machine's hub (sessions.ts's serve).
+  sessions: HubJoin;
+  // Every hub of the account's, for watching its sessions (peers.ts).
+  reach: Reach;
 };
 
 export type BoardListener = (key: string, event: BoardEvent) => void;
@@ -129,6 +136,8 @@ export async function startAppNode(): Promise<AppNode | undefined> {
     plans: (op, args) => plans(n, op, args),
     onDay: dayEvents(n),
     media: async (board, card, id) => n.media.serve(board, card, id),
+    sessions: joinHub(n.hub),
+    reach: n.reach,
   };
   n.serveApp(
     (op, args) =>
@@ -216,6 +225,64 @@ async function runningNode(pid: number): Promise<AppNode | undefined> {
     const res = await fetch(`${url}/api/node/boards/${encodeURIComponent(board)}/cards/${encodeURIComponent(card)}/media/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${token}` } });
     return res.status === 404 ? undefined : res;
   };
+  // Its hub, at /app/sessions: what it says as events while the bridge
+  // follows them, and what the bridge says POSTed in order, a list at a
+  // time. Joined again after a drop, for as long as the bridge runs.
+  const sessions: HubJoin = (hello, connect) =>
+    void (async () => {
+      for (let retry = 1000; ; retry = Math.min(retry * 2, 60_000)) {
+        let link: Link | undefined;
+        try {
+          const { url, token } = where();
+          const headers = { Authorization: `Bearer ${token}` };
+          const q = new URLSearchParams({ bridge: hello.id, machine: hello.machine, environment: hello.environment, ...(hello.url && { url: hello.url }) });
+          const res = await fetch(`${url}/app/sessions/live?${q}`, { headers });
+          if (!res.ok || !res.body) throw new Error(`the node answered ${res.status}`);
+          retry = 1000;
+          let queue: object[] = [];
+          let sending = false;
+          const flush = async () => {
+            if (sending) return;
+            sending = true;
+            while (queue.length) {
+              const batch = queue;
+              queue = [];
+              await fetch(`${url}/app/sessions?bridge=${encodeURIComponent(hello.id)}`, { method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify(batch) }).catch(() => {});
+            }
+            sending = false;
+          };
+          link = connect((m) => void (queue.push(m), flush()));
+          let buf = "";
+          for await (const chunk of res.body.pipeThrough(new TextDecoderStream())) {
+            buf += chunk;
+            for (let at = buf.indexOf("\n\n"); at >= 0; at = buf.indexOf("\n\n")) {
+              const msg = buf.slice(0, at);
+              buf = buf.slice(at + 2);
+              if (msg.startsWith("data: ")) link.receive(JSON.parse(msg.slice("data: ".length)));
+            }
+          }
+        } catch (e) {
+          console.error(`node: this bridge's sessions: ${(e as Error).message}`);
+        }
+        link?.drop();
+        await Bun.sleep(retry);
+      }
+    })();
+  // Its /app/peers and /app/peer/:device/..., the body passed as it comes.
+  const reach: Reach = {
+    devices: async () => {
+      const { url, token } = where();
+      const res = await fetch(`${url}/app/peers`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error(`the node answered ${res.status}`);
+      return (await res.json()) as { me: string; devices: string[] };
+    },
+    fetch: async (device, path, init = {}) => {
+      const { url, token } = where();
+      const headers = new Headers(init.headers);
+      headers.set("Authorization", `Bearer ${token}`);
+      return fetch(`${url}/app/peer/${encodeURIComponent(device)}${path}`, { ...init, headers, ...(init.body != null && { duplex: "half" }) } as RequestInit);
+    },
+  };
   return {
     env: env(url),
     brains: call,
@@ -226,6 +293,8 @@ async function runningNode(pid: number): Promise<AppNode | undefined> {
     plans: call,
     onDay: (fn) => listen(dayListeners, fn),
     media,
+    sessions,
+    reach,
   };
 }
 

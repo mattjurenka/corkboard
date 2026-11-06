@@ -121,6 +121,36 @@ phone / page / Neovim ──wss /e2ee/channel──▶ relay ──node's socket
    channels, it stops sending its session list to the User DO, and the Worker's
    `/api/sessions*` answers 410 for the account. An unpaired phone then sees no sessions and
    gets the pairing row.
+
+   As built (2026-11-06), with the Worker's path kept beside it:
+   - **The node is the machine's hub** (bridge/hub.ts), the User DO's session role done
+     locally. A device has one relay socket, so its bridges can't each answer channels. Every
+     bridge on the machine joins the node's hub and speaks what it speaks to `/api/live?bridge=`.
+     An in-process bridge joins directly. Another bridge's process joins on loopback: `GET
+     /app/sessions/live` (SSE, hub to bridge) and `POST /app/sessions` (a list, bridge to hub).
+     sessions.ts's `core()` gives each link its own streams, so the Worker's socket and the hub
+     are both served at once.
+   - **The routes are the Worker's own:** `/api/sessions[?follow]`, `/:b/:k`, `say`, `speech`
+     and `attach[?terminal]`. Follow and attach are ndjson, and attach takes `in`/`size` in the
+     request body. They're served on a channel only to a device without `role`, or on loopback.
+     The plaintext tunnel answers them 404.
+   - **fleetd** keeps an in-process hub and answers channels on a socket of its own with
+     `tunnel: false` (`answerChannels`). The relay lists that socket in `/e2ee/nodes` but never
+     sends the tunnel there, and the node pickers skip it.
+   - **Watching** (bridge/peers.ts): the node reaches every hub of the account's. Its own is
+     served in-process; each connected device's is on a channel the node opens and keeps
+     (serve.ts's `reach`). A bridge reaches them through `/app/peers` and `/app/peer/:device/
+     api/sessions...` on loopback. `Peers` follows each device's `?follow`, keeps its bridges
+     while the channel is down, and drops them when the device goes. cloud-session.ts's
+     `fleet_get` and `fleet_subscribe` list them first, then the Worker's other bridges, and drop
+     the Worker's events for a bridge the hubs have. `fleet_follow`, `fleet_terminal` and
+     `fleet_say` go over the channel when the hubs have that bridge. Away mode's peers merge the
+     same way (remote.ts, sessions.ts's `sealed`). A page with no machine still uses the Worker.
+   - **Still to do:** Android's channel client (a Kotlin port of channel.ts, with TS/Kotlin
+     vectors), then Sessions.kt, Avatar.kt's speech and Cloud.kt. After those and the portal's
+     replacement (its account and boards pages, and the Worker's workspace tickets read the
+     bridge registry), the cutover: bridges stop telling the User DO, and `/api/sessions*`
+     answers 410.
 4. **The fleet sealed.** A spawn's task, result, shell and secrets are sealed to the fleet's
    device (or a fleet object's key). The Worker keeps ids, state, sizes and times for the queue.
    Environments' manifests move into an encrypted `fleet` object. Holds are sealed on the

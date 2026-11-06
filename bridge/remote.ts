@@ -11,7 +11,8 @@
 import { hostname } from "node:os";
 import * as away from "./away";
 import { say, sentence } from "./speech";
-import { bridgeId, serve, type Hosted, type Peer } from "./sessions";
+import { bridgeId, serve, type Hosted, type HubJoin, type Peer } from "./sessions";
+import type { Peers } from "./peers";
 
 // This machine's, as fleetd names it (fleet/fleetd/queue.ts).
 const ENVIRONMENT = process.env.CORKBOARD_FLEET_ENVIRONMENT ?? hostname();
@@ -40,7 +41,9 @@ let id: string | undefined;
 // This bridge's id at the Worker, once it's serving.
 export const self = () => id;
 
-export function start(port: number) {
+// hub: the machine's node's, which serves them sealed (hub.ts); sealed:
+// the account's hubs, watched through it (peers.ts).
+export function start(port: number, hub?: HubJoin, sealed?: Peers) {
   if (process.env.CORKBOARD_REMOTE_SESSIONS === "0") return;
   id = bridgeId(`${hostname()}-${port}`);
   serve(id, ENVIRONMENT, {
@@ -103,5 +106,7 @@ export function start(port: number) {
         },
       };
     },
+    hub,
+    sealed,
   });
 }

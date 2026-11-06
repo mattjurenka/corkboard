@@ -8,6 +8,8 @@
 // the bridge (boards.ts), or a page with no machine (web/src/nvim/wasm/rpc.ts).
 // What differs between the two comes in a Link.
 
+import type { Attached, Peers } from "./peers";
+
 export type Link = {
   // The Worker's origin, and a current token for it.
   cloud: string;
@@ -24,6 +26,9 @@ export type Link = {
   // Worker; null and undefined where there's neither.
   machine(): unknown;
   self(): string | undefined;
+  // The account's sessions as its hubs have them, on sealed channels
+  // (peers.ts): the bridge's, with a node; a page has none.
+  peers?(): Peers | undefined;
 };
 
 // key: the board's, or USER for the user's own socket (plans).
@@ -143,15 +148,50 @@ class Live {
 export class Session {
   private keys = new Set<string>();
   // The conversations it follows (fleet_follow), by "bridge/key".
-  private conversations = new Map<string, WebSocket>();
+  private conversations = new Map<string, Attached>();
   // The terminals it mirrors (fleet_terminal), the same way.
-  private terminals = new Map<string, WebSocket>();
+  private terminals = new Map<string, Attached>();
+  // The account's hubs' bridges, as they change (fleet_subscribe).
+  private unpeer?: () => void;
   // sessions: the fleet view's (away.ts's list, for this Neovim's page).
   constructor(
     protected cloud: Cloud,
     protected listener: Listener,
     private sessions: () => unknown[] = () => [],
   ) {}
+
+  // The user's socket's events, but the Worker's word on a bridge the
+  // account's hubs have: theirs is the one that counts (peers.ts).
+  private user: Listener = (key, event: any) => {
+    if (event?.type === "bridge" && typeof event.bridge?.id === "string" && this.cloud.link.peers?.()?.has(event.bridge.id)) return;
+    this.listener(key, event);
+  };
+
+  // A session's stream: on its device's channel when the account's hubs
+  // have its bridge, else the Worker's socket. Each message, then ended once.
+  private async attach(bridge: string, key: string, terminal: boolean, message: (m: any) => void, ended: () => void): Promise<Attached> {
+    const peers = this.cloud.link.peers?.();
+    if (peers?.has(bridge)) return peers.attach(bridge, key, terminal, message, ended);
+    const ws = this.cloud.link.socket(`${this.cloud.link.cloud.replace(/^http/, "ws")}/api/sessions/${bridge}/${key}/attach${terminal ? "?terminal" : ""}`, await this.cloud.link.token());
+    ws.onmessage = (e) => {
+      let m: any;
+      try {
+        m = JSON.parse(String(e.data));
+      } catch {
+        return;
+      }
+      message(m);
+    };
+    ws.onclose = () => ended();
+    return {
+      send: (m) => {
+        const raw = JSON.stringify(m);
+        if (ws.readyState === WebSocket.OPEN) ws.send(raw);
+        else if (ws.readyState === WebSocket.CONNECTING) ws.addEventListener("open", () => ws.send(raw), { once: true });
+      },
+      close: () => ws.close(),
+    };
+  }
 
   // op and args as cards/cloud.lua sends them.
   async call(op: string, args: any[]): Promise<unknown> {
@@ -321,8 +361,9 @@ export class Session {
     };
     switch (op) {
       case "fleet_subscribe":
-        await this.cloud.follow(USER, this.listener);
+        await this.cloud.follow(USER, this.user);
         this.keys.add(USER);
+        this.unpeer ??= this.cloud.link.peers?.()?.on((bridge) => this.listener(USER, { type: "bridge", bridge }));
         return null;
       case "fleet_get": {
         const [environments, open, over] = await Promise.all([
@@ -330,8 +371,12 @@ export class Session {
           send("GET", "/spawns?state=pending-approval,queued,running&limit=50"),
           send("GET", "/spawns?state=done,failed,stopped&limit=8"),
         ]);
-        // Every other bridge's sessions, and fleetd's: this one's are sessions.
-        const bridges = ((await send("GET", "/sessions").catch(() => [])) as { id: string }[]).filter((b) => b.id !== this.cloud.link.self());
+        // Every other bridge's sessions, and fleetd's: this one's are
+        // sessions. The account's hubs' first, then the Worker's others.
+        const self = this.cloud.link.self();
+        const sealed = this.cloud.link.peers?.()?.list(self) ?? [];
+        const ids = new Set(sealed.map((b) => b.id));
+        const bridges = [...sealed, ...((await send("GET", "/sessions").catch(() => [])) as { id: string }[]).filter((b) => b.id !== self && !ids.has(b.id))];
         return { environments, spawns: [...open, ...over], sessions: this.sessions(), bridges, self: this.cloud.link.self() ?? null, machine: this.cloud.link.machine() };
       }
       // A session's conversation, as it goes, to the fleet view
@@ -342,25 +387,25 @@ export class Session {
         const id = `${bridge}/${key}`;
         if (!/^[\w-]{1,64}\/[\w.-]{1,64}$/.test(id)) throw new Error("corkboard cloud: which session?");
         this.conversations.get(id)?.close();
-        const ws = this.cloud.link.socket(`${this.cloud.link.cloud.replace(/^http/, "ws")}/api/sessions/${id}/attach`, await this.cloud.link.token());
-        this.conversations.set(id, ws);
-        ws.onmessage = (e) => {
-          let m: any;
-          try {
-            m = JSON.parse(String(e.data));
-          } catch {
-            return;
-          }
-          if (m.type === "out") {
-            const batch = JSON.parse(m.data);
-            this.listener(USER, { type: "conversation", bridge, key, items: batch.items ?? [], reset: !!batch.reset });
-          } else if (m.type === "end") this.listener(USER, { type: "conversation_end", bridge, key, why: m.why ?? "ended" });
-        };
-        ws.onclose = () => {
-          if (this.conversations.get(id) !== ws) return;
-          this.conversations.delete(id);
-          this.listener(USER, { type: "conversation_end", bridge, key, why: "no longer followed" });
-        };
+        this.conversations.delete(id);
+        let a: Attached | undefined;
+        a = await this.attach(
+          bridge,
+          key,
+          false,
+          (m) => {
+            if (m.type === "out") {
+              const batch = JSON.parse(m.data);
+              this.listener(USER, { type: "conversation", bridge, key, items: batch.items ?? [], reset: !!batch.reset });
+            } else if (m.type === "end") this.listener(USER, { type: "conversation_end", bridge, key, why: m.why ?? "ended" });
+          },
+          () => {
+            if (!a || this.conversations.get(id) !== a) return;
+            this.conversations.delete(id);
+            this.listener(USER, { type: "conversation_end", bridge, key, why: "no longer followed" });
+          },
+        );
+        this.conversations.set(id, a);
         return null;
       }
       // A session's terminal, mirrored (corkboard/mirror.lua): its bytes,
@@ -372,32 +417,28 @@ export class Session {
         const id = `${bridge}/${key}`;
         if (!/^[\w-]{1,64}\/[\w.-]{1,64}$/.test(id)) throw new Error("corkboard cloud: which session?");
         this.terminals.get(id)?.close();
-        const ws = this.cloud.link.socket(`${this.cloud.link.cloud.replace(/^http/, "ws")}/api/sessions/${id}/attach?terminal`, await this.cloud.link.token());
-        this.terminals.set(id, ws);
-        ws.onmessage = (e) => {
-          let m: any;
-          try {
-            m = JSON.parse(String(e.data));
-          } catch {
-            return;
-          }
-          if (m.type === "out") this.listener(USER, { type: "terminal", bridge, key, data: m.data });
-          else if (m.type === "end") this.listener(USER, { type: "terminal_end", bridge, key, why: m.why ?? "ended" });
-        };
-        ws.onclose = () => {
-          if (this.terminals.get(id) !== ws) return;
-          this.terminals.delete(id);
-          this.listener(USER, { type: "terminal_end", bridge, key, why: "no longer connected" });
-        };
+        this.terminals.delete(id);
+        let a: Attached | undefined;
+        a = await this.attach(
+          bridge,
+          key,
+          true,
+          (m) => {
+            if (m.type === "out") this.listener(USER, { type: "terminal", bridge, key, data: m.data });
+            else if (m.type === "end") this.listener(USER, { type: "terminal_end", bridge, key, why: m.why ?? "ended" });
+          },
+          () => {
+            if (!a || this.terminals.get(id) !== a) return;
+            this.terminals.delete(id);
+            this.listener(USER, { type: "terminal_end", bridge, key, why: "no longer connected" });
+          },
+        );
+        this.terminals.set(id, a);
         return null;
       }
       case "fleet_terminal_send": {
         const [bridge, key, m] = args as [string, string, object];
-        const ws = this.terminals.get(`${bridge}/${key}`);
-        if (!ws) return null;
-        const raw = JSON.stringify(m);
-        if (ws.readyState === WebSocket.OPEN) ws.send(raw);
-        else if (ws.readyState === WebSocket.CONNECTING) ws.addEventListener("open", () => ws.send(raw), { once: true });
+        this.terminals.get(`${bridge}/${key}`)?.send(m);
         return null;
       }
       case "fleet_unterminal": {
@@ -417,11 +458,12 @@ export class Session {
       // Typed into a session: text, then keys (enter, esc, …).
       case "fleet_say": {
         const [bridge, key, text, keys] = args as [string, string, string, string[]];
-        const res = await fetch(`${this.cloud.link.cloud}/api/sessions/${encodeURIComponent(bridge)}/${encodeURIComponent(key)}/say`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${await this.cloud.link.token()}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ text: text ?? "", keys: keys ?? [] }),
-        });
+        const path = `/api/sessions/${encodeURIComponent(bridge)}/${encodeURIComponent(key)}/say`;
+        const body = JSON.stringify({ text: text ?? "", keys: keys ?? [] });
+        const peers = this.cloud.link.peers?.();
+        const res = peers?.has(bridge)
+          ? await peers.fetch(bridge, path, { method: "POST", headers: { "Content-Type": "application/json" }, body })
+          : await fetch(`${this.cloud.link.cloud}${path}`, { method: "POST", headers: { Authorization: `Bearer ${await this.cloud.link.token()}`, "Content-Type": "application/json" }, body });
         const json = (await res.json().catch(() => ({}))) as any;
         if (!res.ok) throw new Error(`corkboard cloud: ${json.error ?? `HTTP ${res.status}`}`);
         return null;
@@ -492,7 +534,7 @@ export class Session {
       case "brains_recall":
         return read("memory/recall", { q: String(args[1]) });
       case "brains_get":
-        await this.cloud.follow(USER, this.listener);
+        await this.cloud.follow(USER, this.user);
         this.keys.add(USER);
         return send("GET", "?archived=1");
       case "brains_create":
@@ -508,7 +550,7 @@ export class Session {
       // What brains hold (holds.lua): every hold, and the spawns waiting on
       // the user because of one. A stale edit answers with the hold as it is.
       case "brains_holds": {
-        await this.cloud.follow(USER, this.listener);
+        await this.cloud.follow(USER, this.user);
         this.keys.add(USER);
         const [list, waiting] = await Promise.all([holds("GET", "/holds"), holds("GET", "/spawns?state=pending-approval&limit=50")]);
         return { holds: list, waiting };
@@ -528,7 +570,7 @@ export class Session {
   // its changes. A stale version answers with the plan as it is now.
   private async plan(op: string, args: any[]): Promise<unknown> {
     if (op === "plan_subscribe") {
-      await this.cloud.follow(USER, this.listener);
+      await this.cloud.follow(USER, this.user);
       this.keys.add(USER);
       return null;
     }
@@ -565,14 +607,16 @@ export class Session {
   }
 
   close() {
-    for (const ws of this.conversations.values()) ws.close();
+    const attached = [...this.conversations.values(), ...this.terminals.values()];
     this.conversations.clear();
-    for (const ws of this.terminals.values()) ws.close();
     this.terminals.clear();
+    for (const a of attached) a.close();
+    this.unpeer?.();
+    this.unpeer = undefined;
     for (const key of this.keys) {
       const l = this.cloud.live.get(key);
       if (!l) continue;
-      l.listeners.delete(this.listener);
+      l.listeners.delete(key === USER ? this.user : this.listener);
       if (!l.listeners.size) {
         l.close();
         this.cloud.live.delete(key);

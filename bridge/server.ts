@@ -22,6 +22,7 @@ import * as remote from "./remote";
 import { speech } from "./speech";
 import * as wasm from "./wasm";
 import { startAppNode } from "./node/app";
+import { Peers } from "./peers";
 import { CLOUD, login, signedIn, token } from "./cloud";
 import { COMPILED, RESOURCES, STATE_DIR, dirsEnv } from "./dirs";
 
@@ -915,4 +916,10 @@ if (PARENT) {
 }
 
 // What the phone needs from this bridge (remote.ts).
-remote.start(PORT);
+// The account's sessions on sealed channels, through the node (peers.ts).
+const PEERS = NODE ? new Peers(NODE.reach) : undefined;
+if (PEERS) {
+  PEERS.start();
+  boards.usePeers(PEERS);
+}
+remote.start(PORT, NODE?.sessions, PEERS);

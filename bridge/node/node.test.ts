@@ -25,6 +25,9 @@ import { QUIET } from "../../lib/memory/consolidate";
 import { OAuthStore, type Shared, publicAddress, redirectAllowed, sameRedirect } from "./oauth";
 import type { CardChange } from "../../lib/e2ee/merge";
 import { node, originOf } from "./server";
+import { Hub, joinHub } from "../hub";
+import { type Hosted, type TerminalOut, serve } from "../sessions";
+import { type PeerEvent, type Reach, Peers } from "../peers";
 import type { Fleet } from "./mcp";
 import { moveBoards, moveMemory, movePlans } from "./move";
 import { type DayEvent, boardEvents, boards, dayEvents, notes, plans } from "./app";
@@ -1969,5 +1972,171 @@ describe("day plans and chat, the phone's API", () => {
     expect((await api(owner, "GET", `chat?after=${mine.id}`)).body.map((m: { text: string }) => m.text)).toEqual(["hello"]);
     expect((await api(owner, "DELETE", "chat/nope")).status).toBe(404);
     n.stop();
+  });
+});
+
+describe("the machine's sessions, on a channel", () => {
+  it("serves its bridges' sessions to the account's devices, sealed, and takes a bridge on loopback", async () => {
+    const n = await setup();
+    const hub = new Hub();
+    const app = node({ data: n.data, search: n.search, oauth: n.oauth, origin: ORIGIN, hub });
+    // A bridge in this process, with one session and a terminal.
+    const typed: unknown[] = [];
+    const term: unknown[] = [];
+    let to: TerminalOut | undefined;
+    const watchers: (() => void)[] = [];
+    let sessions: Hosted[] = [{ key: "1-2", name: "Fixing", state: "working", project: "proj" }];
+    serve("laptop-1", "laptop", {
+      list: () => sessions,
+      watch: (fn) => void watchers.push(fn),
+      say: async (key, text, keys) => (typed.push([key, text, keys]), { ok: true }),
+      screen: async (key) => (key === "1-2" ? { lines: ["$ hi"], width: 80 } : { error: "no such", missing: true }),
+      terminals: (t) => ((to = t), { open: (s, k) => term.push(["open", k]), input: (s, d) => (term.push(["in", d]), to!.out(s, "echo")), size: (s, r, c) => void term.push(["size", r, c]), close: () => void term.push(["close"]) }),
+      hub: joinHub(hub),
+    });
+    const keys = accountKeys(newRoot());
+    const id = (name: string, role?: "relay"): Identity => {
+      const d = newDevice();
+      return { device: d, cert: certify(keys, d, name, Date.now(), role), trust: (c) => checkCert(keys.id, c, []) };
+    };
+    const open = async (me: Identity) => {
+      const here = id("node");
+      let a: ReturnType<typeof pipe>, b: ReturnType<typeof pipe>;
+      a = pipe((m) => queueMicrotask(() => b.deliver(m)), (r) => b.end(r));
+      b = pipe((m) => queueMicrotask(() => a.deliver(m)), (r) => a.end(r));
+      const [ch] = await Promise.all([initiate(a.link, me, here.device.id), respond(b.link, here, { serve: (req, c) => app(req, undefined, c.peer) })]);
+      return ch;
+    };
+    const ch = await open(id("phone"));
+    const list = (await (await ch.fetch("/api/sessions")).json()) as any[];
+    expect(list).toMatchObject([{ id: "laptop-1", environment: "laptop", sessions: [{ key: "1-2", name: "Fixing", terminal: true }] }]);
+    expect(await (await ch.fetch("/api/sessions/laptop-1/1-2")).json()).toEqual({ lines: ["$ hi"], width: 80 });
+    expect((await ch.fetch("/api/sessions/laptop-1/9-9")).status).toBe(404);
+    expect((await ch.fetch("/api/sessions/laptop-1/1-2/say", { method: "POST", body: JSON.stringify({ text: "go", keys: ["enter"] }) })).status).toBe(200);
+    expect((await ch.fetch("/api/sessions/laptop-1/1-2/say", { method: "POST", body: JSON.stringify({ keys: ["meta"] }) })).status).toBe(400);
+    expect(typed).toEqual([["1-2", "go", ["enter"]]]);
+    // Following the list: it whole, then each change.
+    const follow = (await ch.fetch("/api/sessions?follow")).body!.getReader();
+    const next = async (r: ReadableStreamDefaultReader<Uint8Array>) => JSON.parse(new TextDecoder().decode((await r.read()).value!).trim());
+    expect(await next(follow)).toMatchObject({ type: "bridges", bridges: [{ id: "laptop-1" }] });
+    sessions = [{ key: "1-2", name: "Fixing", state: "idle" }];
+    watchers.forEach((fn) => fn());
+    expect(await next(follow)).toMatchObject({ type: "bridge", bridge: { id: "laptop-1", sessions: [{ state: "idle" }] } });
+    await follow.cancel();
+    // Its terminal, both ways.
+    const input = new TransformStream<Uint8Array, Uint8Array>();
+    const res = await ch.fetch("/api/sessions/laptop-1/1-2/attach?terminal", { method: "POST", body: input.readable, duplex: "half" } as RequestInit);
+    const w = input.writable.getWriter();
+    await w.write(utf8(JSON.stringify({ type: "size", rows: 24, cols: 80 }) + "\n" + JSON.stringify({ type: "in", data: "eA" }) + "\n"));
+    const r = res.body!.getReader();
+    expect(await next(r)).toEqual({ type: "out", data: "echo" });
+    await r.cancel();
+    await Bun.sleep(10);
+    expect(term).toEqual([["open", "1-2"], ["size", 24, 80], ["in", "eA"], ["close"]]);
+    ch.close();
+    // Not to a relay-only device, nor through the tunnel.
+    const fleetd = await open(id("fleetd", "relay"));
+    expect((await fleetd.fetch("/api/sessions")).status).toBe(404);
+    fleetd.close();
+    const owner = n.oauth.mint("dev bridge", 1, "owner");
+    expect((await app(new Request(`${ORIGIN}/api/sessions`, { headers: { Authorization: `Bearer ${owner}` } }))).status).toBe(404);
+    // A bridge on loopback: what the hub says as events, what it says POSTed.
+    const local = { requestIP: () => ({ address: "127.0.0.1" }) };
+    const live = await app(new Request(`${ORIGIN}/app/sessions/live?bridge=dev-2&machine=laptop`, { headers: { Authorization: `Bearer ${owner}` } }), local);
+    expect(live.status).toBe(200);
+    const post = (body: unknown) => app(new Request(`${ORIGIN}/app/sessions?bridge=dev-2`, { method: "POST", headers: { Authorization: `Bearer ${owner}` }, body: JSON.stringify(body) }), local);
+    expect((await post([{ type: "sessions", environment: "laptop", sessions: [{ key: "3-4", name: "Dev" }] }])).status).toBe(200);
+    expect(hub.bridges().map((b) => b.id)).toEqual(["dev-2", "laptop-1"]);
+    const events = live.body!.pipeThrough(new TextDecoderStream()).getReader();
+    expect((await events.read()).value).toBe(": up\n\n");
+    const asked = hub.ask("dev-2", { type: "screen", key: "3-4" });
+    const q = JSON.parse((await events.read()).value!.replace(/^data: /, ""));
+    expect(q).toMatchObject({ type: "screen", key: "3-4" });
+    await post([{ type: "answer", ask: q.ask, lines: ["dev"], width: 10 }]);
+    expect((await asked).value).toEqual({ lines: ["dev"], width: 10 });
+    await events.cancel();
+    expect(hub.bridges().map((b) => b.id)).toEqual(["laptop-1"]);
+    expect((await app(new Request(`${ORIGIN}/app/sessions/live?bridge=dev-2`, { headers: { Authorization: `Bearer ${owner}` } }), { requestIP: () => ({ address: "10.0.0.2" }) })).status).toBe(404);
+    await n.stop();
+  });
+  it("watches every hub of the account's: its own, and another device's on a channel", async () => {
+    const n = await setup();
+    const keys = accountKeys(newRoot());
+    const ident = (name: string): Identity => {
+      const d = newDevice();
+      return { device: d, cert: certify(keys, d, name, Date.now()), trust: (c) => checkCert(keys.id, c, []) };
+    };
+    const [here, there] = [ident("laptop"), ident("desktop")];
+    // Each machine's hub, with a bridge on it.
+    const bridge = (hub: Hub, id: string, term: unknown[] = []) => {
+      const watchers: (() => void)[] = [];
+      const b = { sessions: [{ key: "1-2", name: id, state: "working" }] as Hosted[], tell: () => watchers.forEach((fn) => fn()) };
+      let to: TerminalOut;
+      serve(id, id, {
+        list: () => b.sessions,
+        watch: (fn) => void watchers.push(fn),
+        say: async (key, text) => (term.push(["say", key, text]), { ok: true }),
+        terminals: (t) => ((to = t), { open: (st) => (term.push(["open"]), to.out(st, "hi")), input: (st, d) => void term.push(["in", d]), size: () => {}, close: () => void term.push(["close"]) }),
+        hub: joinHub(hub),
+      });
+      return b;
+    };
+    const [mine, theirs] = [new Hub(), new Hub()];
+    bridge(mine, "laptop-1");
+    const term: unknown[] = [];
+    const desk = bridge(theirs, "desktop-1", term);
+    const far = node({ data: n.data, search: n.search, oauth: n.oauth, origin: ORIGIN, hub: theirs });
+    let a: ReturnType<typeof pipe>, b: ReturnType<typeof pipe>;
+    a = pipe((m) => queueMicrotask(() => b.deliver(m)), (r) => b.end(r));
+    b = pipe((m) => queueMicrotask(() => a.deliver(m)), (r) => a.end(r));
+    const [ch] = await Promise.all([initiate(a.link, here, there.device.id), respond(b.link, there, { serve: (req, c) => far(req, undefined, c.peer) })]);
+    const me = here.device.id;
+    const reach: Reach = {
+      devices: async () => ({ me, devices: [me, there.device.id] }),
+      fetch: async (device, path, init = {}) => (device === me ? (await mine.serve(new Request(`http://node.invalid${path}`, { ...init, ...(init.body != null && { duplex: "half" }) } as RequestInit)))! : ch.fetch(path, init)),
+    };
+    // The node's loopback way to them, for another bridge's process.
+    const app = node({ data: n.data, search: n.search, oauth: n.oauth, origin: ORIGIN, hub: mine, reach });
+    const owner = n.oauth.mint("dev bridge", 1, "owner");
+    const local = { requestIP: () => ({ address: "127.0.0.1" }) };
+    const get = (path: string, peer = local) => app(new Request(`${ORIGIN}${path}`, { headers: { Authorization: `Bearer ${owner}` } }), peer);
+    expect(await (await get("/app/peers")).json()).toEqual({ me, devices: [me, there.device.id] });
+    expect(await (await get(`/app/peer/${there.device.id}/api/sessions`)).json()).toMatchObject([{ id: "desktop-1" }]);
+    expect((await get(`/app/peer/${there.device.id}/mcp`)).status).toBe(404);
+    expect((await get("/app/peers", { requestIP: () => ({ address: "10.0.0.2" }) })).status).toBe(404);
+    // Both machines' bridges, but this one's own.
+    const peers = new Peers(reach);
+    const events: PeerEvent[] = [];
+    peers.on((e) => events.push(e));
+    for (let i = 0; i < 50 && peers.list().length < 2; i++) await Bun.sleep(5);
+    expect(peers.list("laptop-1").map((p) => [p.id, p.device])).toEqual([["desktop-1", there.device.id]]);
+    expect(peers.list().length).toBe(2);
+    // A change there, as it happens.
+    desk.sessions = [{ key: "1-2", name: "desktop-1", state: "idle" }];
+    desk.tell();
+    for (let i = 0; i < 50 && !events.some((e) => "sessions" in e && e.sessions[0]?.state === "idle"); i++) await Bun.sleep(5);
+    expect(events.at(-1)).toMatchObject({ id: "desktop-1", sessions: [{ state: "idle" }] });
+    // Its terminal, both ways, on the channel; and what's typed.
+    const out: unknown[] = [];
+    let ended = 0;
+    const t = peers.attach("desktop-1", "1-2", true, (m) => out.push(m), () => ended++);
+    for (let i = 0; i < 50 && !out.length; i++) await Bun.sleep(5);
+    expect(out).toEqual([{ type: "out", data: "hi" }]);
+    t.send({ type: "in", data: "eA" });
+    for (let i = 0; i < 50 && term.length < 2; i++) await Bun.sleep(5);
+    t.close();
+    for (let i = 0; i < 50 && term.length < 3; i++) await Bun.sleep(5);
+    expect(term).toEqual([["open"], ["in", "eA"], ["close"]]);
+    expect(ended).toBe(1);
+    expect((await peers.fetch("desktop-1", "/api/sessions/desktop-1/1-2/say", { method: "POST", body: JSON.stringify({ text: "go" }) })).status).toBe(200);
+    expect((await peers.fetch("nobody", "/api/sessions/nobody/1-2/say", { method: "POST", body: "{}" })).status).toBe(404);
+    // The device gone: its bridges with it.
+    reach.devices = async () => ({ me, devices: [me] });
+    await (peers as any).look();
+    expect(peers.list().map((p) => p.id)).toEqual(["laptop-1"]);
+    expect(events.at(-1)).toEqual({ id: "desktop-1", gone: true });
+    peers.stop();
+    ch.close();
+    await n.stop();
   });
 });

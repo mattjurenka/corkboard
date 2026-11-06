@@ -865,7 +865,7 @@ describe("channels", () => {
   });
 
   it("let a relay-only device open channels and list the nodes, and nothing else", async () => {
-    const { a, node, nodeRelay } = await devices();
+    const { a, laptop, node, nodeRelay } = await devices();
     const stop = serve(nodeRelay, async () => new Response("ok"));
     await vi.waitUntil(async () => (await a.relay.nodes()).connected.length === 1);
     const fleetd = newDevice();
@@ -882,6 +882,14 @@ describe("channels", () => {
     expect((await as("/e2ee/nodes/live", { headers: { Upgrade: "websocket" } })).status).toBe(403);
     expect((await as("/e2ee/nodes/leader", { method: "PUT", body: JSON.stringify({ device: fleetd.id }) })).status).toBe(403);
     expect((await as("/e2ee/pair/ABCDEFGHJK/commit", { method: "POST", body: JSON.stringify({ commit: "x" }) })).status).toBe(403);
+    // Its own socket answers channels only: listed so, and never the tunnel's.
+    const own = relayOnly.serveTunnel(async () => new Response("never"), { name: "fleetd", tunnel: false, channels: async () => new Response("fleetd's") });
+    await vi.waitUntil(async () => (await a.relay.nodes()).connected.length === 2);
+    expect((await a.relay.nodes()).connected.find((c) => c.device === fleetd.id)).toMatchObject({ tunnel: false });
+    expect((await a.relay.nodes()).connected.find((c) => c.device === node.id)?.tunnel).toBeUndefined();
+    expect(await (await worker(`/n/${await nodeHandle(a.keys.id)}/x`)).text()).toBe("tunnel");
+    expect(await (await (await laptop.channel(fleetd.id)).fetch("/")).text()).toBe("fleetd's");
+    own();
     // A cert with a role it doesn't know is no cert.
     const odd = certify(a.keys, fleetd, "odd");
     (odd.body as any).role = "admin";

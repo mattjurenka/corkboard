@@ -317,7 +317,9 @@ export async function e2ee(request: Request, env: RelayEnv, r: Accounts): Promis
 
   const who = await whoIs(request, r);
   if (!who) return error(401, "sign in with a device of an encrypted account (POST /e2ee/challenge, then /e2ee/token)");
-  if (who.relayOnly && !(path === "/e2ee/channel" || (method === "GET" && (path === "/e2ee/nodes" || path === "/e2ee/revoked")))) return error(403, "a relay-only device opens channels, and nothing else");
+  // A relay-only device opens channels and answers them (its socket, never the tunnel's).
+  const channelsOnly = path === "/e2ee/nodes/live" && url.searchParams.get("tunnel") === "0";
+  if (who.relayOnly && !(path === "/e2ee/channel" || channelsOnly || (method === "GET" && (path === "/e2ee/nodes" || path === "/e2ee/revoked")))) return error(403, "a relay-only device opens channels and answers them, and nothing else");
 
   if (path === "/e2ee/revoked") return method === "GET" ? json(await r.e2eeRevocations(who.account)) : error(405, "method not allowed");
 
@@ -337,6 +339,7 @@ export async function e2ee(request: Request, env: RelayEnv, r: Accounts): Promis
       } else {
         const name = (url.searchParams.get("name") ?? "").trim().slice(0, 100);
         if (name) headers["X-Device-Name"] = name;
+        if (channelsOnly) headers["X-Tunnel"] = "0";
       }
       const res = await stub.fetch(new Request(request.url, { headers }));
       if (res.status !== 101) return res;

@@ -5,11 +5,16 @@
 // an interrupt; its conversation is read from the logs it writes to
 // the slot's outbox; and whether it's at work is what it was sent against
 // how many turns it has finished.
+//
+// With a device (the manifest's node.device), they're served sealed too,
+// on the channels the account's devices open to it (bridge/hub.ts).
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { basename, join } from "node:path";
 import { bridgeId, serve, type Hosted } from "../../bridge/sessions";
+import { Hub, joinHub } from "../../bridge/hub";
+import { answerChannels } from "./node";
 import { manifest, spawns, type Manifest, type Spawn } from "./fleet";
 import { ENVIRONMENT } from "./queue";
 
@@ -131,5 +136,14 @@ export function serveSessions() {
       console.error("fleetd sessions:", (e as Error).message);
     }
   }, 1000);
-  serve(bridgeId(`fleetd-${hostname()}`), ENVIRONMENT, { list, watch: (fn) => watchers.add(fn), say });
+  const hub = new Hub();
+  serve(bridgeId(`fleetd-${hostname()}`), ENVIRONMENT, { list, watch: (fn) => watchers.add(fn), say, hub: joinHub(hub) });
+  const node = manifest().node;
+  if (node?.device)
+    try {
+      // The user's own devices', not another relay-only one's.
+      answerChannels(node, async (req, ch) => (!ch.peer.body.role && (await hub.serve(req))) || Response.json({ error: "not found" }, { status: 404 }));
+    } catch (e) {
+      console.error("fleetd sessions:", (e as Error).message);
+    }
 }

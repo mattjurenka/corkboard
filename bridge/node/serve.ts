@@ -53,6 +53,9 @@ import { Media } from "./media";
 import { startLeases } from "./leases";
 import { OAuthStore, SCOPES, type Scope, type Shared } from "./oauth";
 import { type AppCall, type AppEvents, node } from "./server";
+import { Hub } from "../hub";
+import type { Reach } from "../peers";
+import type { Channel } from "../../lib/e2ee/channel";
 import { lentCalendar, loadCalendar, login, saveCalendar, startCalendar } from "./calendar";
 
 export const NODE_DIR = join(STATE_DIR, "node");
@@ -165,7 +168,8 @@ export async function startNode(o: NodeOptions = {}) {
       if (!r || !tunnel) return true;
       if (led && Date.now() - led.at < 60_000) return led.leads;
       const v = await r.nodes();
-      const to = v.connected.find((c) => c.device === v.leader) ?? [...v.connected].sort((a, b) => b.since - a.since)[0];
+      const nodes = v.connected.filter((c) => c.tunnel !== false);
+      const to = nodes.find((c) => c.device === v.leader) ?? nodes.sort((a, b) => b.since - a.since)[0];
       led = { at: Date.now(), leads: !to || to.device === d.device.id };
       return led.leads;
     };
@@ -185,10 +189,38 @@ export async function startNode(o: NodeOptions = {}) {
     });
     const media = new Media({ data, blobs: r, dir: join(NODE_DIR, "blobs") });
     const addBoard = (key: string) => replicas.add(listObjects(root, { boards: [key], brains: [] })[0]);
-    const served = { data, search, episodes, media, oauth, addBoard, fleet: () => (signedIn() ? fleetQueue : undefined), calendar };
+    // This machine's sessions, which its bridges join (ciphertext-relay.md step 3).
+    const hub = new Hub();
+    const served = { data, search, episodes, media, oauth, addBoard, fleet: () => (signedIn() ? fleetQueue : undefined), calendar, hub };
+    // Every hub of the account's (this one, and each connected device's on a
+    // channel to it), for this machine's bridges to watch (peers.ts).
+    const channels = new Map<string, Promise<Channel>>();
+    const channel = (to: string) => {
+      let c = channels.get(to);
+      if (!c) {
+        const p = (c = r!.channel(to));
+        channels.set(to, p);
+        const drop = () => channels.get(to) === p && channels.delete(to);
+        p.then((ch) => ch.closed.then(drop), drop);
+      }
+      return c;
+    };
+    const reach: Reach = {
+      devices: async () => ({ me: d.device.id, devices: [...new Set([d.device.id, ...(r && tunnel ? (await r.nodes()).connected.map((c) => c.device) : [])])] }),
+      fetch: async (device, path, init = {}) => {
+        if (device === d.device.id) return (await hub.serve(new Request(`http://node.invalid${path}`, { ...init, ...(init.body != null && { duplex: "half" }) } as RequestInit))) ?? Response.json({ error: "not found" }, { status: 404 });
+        if (!r || !tunnel) return Response.json({ error: "this node has no relay" }, { status: 404 });
+        let ch = await channel(device);
+        if (!ch.open) {
+          await ch.closed;
+          ch = await channel(device);
+        }
+        return ch.fetch(path, init);
+      },
+    };
     let app: AppCall | undefined;
     let appEvents: AppEvents | undefined;
-    const server = Bun.serve({ port: o.port ?? c.port ?? 8787, hostname, idleTimeout: 255, fetch: node({ ...served, origin, app: () => app, appEvents: () => appEvents }) });
+    const server = Bun.serve({ port: o.port ?? c.port ?? 8787, hostname, idleTimeout: 255, fetch: node({ ...served, origin, app: () => app, appEvents: () => appEvents, reach }) });
     if (r) {
       const nodes = await r.nodes().catch((e) => void console.error(`node: no tunnel: ${(e as Error).message}`));
       if (nodes) {
@@ -223,6 +255,9 @@ export async function startNode(o: NodeOptions = {}) {
       addBoard,
       // The calendar the node writes accepted days to, if it has one.
       calendar,
+      // This machine's sessions, for an in-process bridge to join.
+      hub,
+      reach,
       // The app's operations on the loopback /app (app.ts's), and its
       // boards' events on /app/events, not the tunnel's.
       serveApp: (f: AppCall, events: AppEvents) => void ((app = f), (appEvents = events)),

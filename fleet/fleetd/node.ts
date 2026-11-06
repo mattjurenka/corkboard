@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { CLOUD } from "../../bridge/cloud";
-import { type Channel } from "../../lib/e2ee/channel";
+import { type Channel, type Handler } from "../../lib/e2ee/channel";
 import { type Device, checkCert, fromSecrets, newDevice } from "../../lib/e2ee/device";
 import { Relay } from "../../lib/e2ee/relay";
 import { type DeviceCert, type Signed, b64url, fromB64url } from "../../lib/e2ee/wire";
@@ -46,8 +46,8 @@ export function storeCert(file: string, cert: unknown) {
   writeFileSync(file, JSON.stringify({ ...f, cert: c }, null, 2) + "\n", { mode: 0o600 });
 }
 
-// What a channel's opened with: the relay's, or a test's.
-export type Opener = Pick<Relay, "nodes" | "channel">;
+// What a channel's opened with, and answered on: the relay's, or a test's.
+export type Opener = Pick<Relay, "nodes" | "channel"> & Partial<Pick<Relay, "serveTunnel">>;
 
 const channels = new Map<string, Promise<Channel>>();
 const openers = new Map<string, Opener>();
@@ -70,7 +70,10 @@ export function setOpener(file: string, o: Opener) {
 
 async function open(file: string): Promise<Channel> {
   const r = opener(file);
-  const { leader, connected } = await r.nodes();
+  const v = await r.nodes();
+  // Not a device that only answers channels: those aren't nodes.
+  const { leader } = v;
+  const connected = v.connected.filter((c) => c.tunnel !== false);
   const to = connected.some((c) => c.device === leader) ? leader! : connected.toSorted((a, b) => b.since - a.since)[0]?.device;
   if (!to) throw new Error("the node: none of the account's nodes is connected");
   return r.channel(to);
@@ -87,6 +90,14 @@ function channel(file: string): Promise<Channel> {
     p.then((ch) => ch.closed.then(drop), drop);
   }
   return c;
+}
+
+// The channels the account's devices open to fleetd's device (its
+// sessions, ciphertext-relay.md step 3), on a socket of its own that the
+// relay never sends the tunnel to; gives back the way to stop.
+export function answerChannels(node: NodeLink, channels: Handler): () => void {
+  if (!node.device) return () => {};
+  return opener(node.device).serveTunnel?.(async () => new Response(null, { status: 404 }), { name: "fleetd", tunnel: false, channels }) ?? (() => {});
 }
 
 // A request to the node's HTTP, at its own paths (/api/node/...).

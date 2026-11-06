@@ -6,11 +6,14 @@
 // its conversation as it goes, read from its log (transcript.ts), or its
 // terminal itself, mirrored both ways where the source has one. The
 // bridge serves its pages' sessions (remote.ts), fleetd its VMs'
-// (fleet/fleetd/sessions.ts).
+// (fleet/fleetd/sessions.ts). The same, said to its machine's hub
+// (hub.ts), is served sealed on the relay's channels instead
+// (.agent/plans/ciphertext-relay.md, step 3).
 
 import { hostname } from "node:os";
 import { CLOUD, token } from "./cloud";
 import { Follower, type Item } from "./transcript";
+import type { Peers } from "./peers";
 
 // One session, as the Worker hears of it, and where its log is (which stays
 // here). key: what it's asked for by.
@@ -51,6 +54,11 @@ export type Source = {
   // changes. They stay as they were while it can't be reached, so a blip
   // doesn't look like each of them ending.
   peers?(bridges: Peer[]): void;
+  // Its machine's hub (hub.ts), joined beside the Worker's socket.
+  hub?: HubJoin;
+  // The account's hubs, watched on sealed channels (peers.ts): their
+  // bridges are told to peers beside the Worker's, and over them.
+  sealed?: Peers;
 };
 
 // Another bridge, as the Worker says of it (its user.ts Bridge).
@@ -70,25 +78,37 @@ const FIRST = 200;
 // the portal opens boards there (the hosted Worker's portal.ts).
 const PAGE = process.env.CORKBOARD_ORIGIN;
 
-type Stream = { key: string; follower?: Follower; timer?: ReturnType<typeof setInterval> };
+// A link the bridge speaks the protocol on: the Worker's socket, or its
+// machine's hub (hub.ts). send: what it says down it.
+export type Link = { receive(m: any): void; drop(): void };
+// How a bridge joins its machine's hub, and keeps joined: given who it is
+// and connect, called each time a link opens, with how to send down it.
+export type HubJoin = (hello: { id: string; machine: string; url?: string | null; environment: string }, connect: (send: (m: object) => void) => Link) => void;
 
-export function serve(id: string, environment: string, source: Source) {
-  let ws: WebSocket | undefined;
+type Stream = { key: string; send(m: object): void; follower?: Follower; timer?: ReturnType<typeof setInterval> };
+
+// The protocol's bridge end, whatever it's linked to: each link hears the
+// list, is asked and is sent its own streams.
+function core(environment: string, source: Source) {
+  const links = new Set<(m: object) => void>();
   const streams = new Map<string, Stream>();
-  const send = (m: object) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify(m));
+  const mirrored = new Map<string, (m: object) => void>();
 
   // Where its log is stays here: only whether it can be followed goes. With
   // no screen to show, a session is followed before it has a log (fleetd's,
   // before its first message), which the stream waits for.
-  const report = () =>
-    send({
-      type: "sessions",
-      environment,
-      sessions: source.list().map(({ transcript, ...s }) => ({ ...s, attach: !!transcript || !source.screen, terminal: !!source.terminals })),
-    });
-  source.watch(report);
+  const listed = () => ({
+    type: "sessions",
+    environment,
+    sessions: source.list().map(({ transcript, ...s }) => ({ ...s, attach: !!transcript || !source.screen, terminal: !!source.terminals })),
+  });
+  source.watch(() => {
+    if (!links.size) return;
+    const m = listed();
+    for (const send of links) send(m);
+  });
 
-  const answer = async (q: any) => {
+  const answer = async (send: (m: object) => void, q: any) => {
     if (typeof q.key !== "string") return send({ type: "answer", ask: q.ask, error: "which session?" });
     const a =
       q.type === "screen"
@@ -111,35 +131,35 @@ export function serve(id: string, environment: string, source: Source) {
 
   const end = (stream: string, why?: string) => {
     const s = streams.get(stream);
+    const send = s?.send ?? mirrored.get(stream);
     if (s) {
       streams.delete(stream);
       clearInterval(s.timer);
     }
     if (mirrored.delete(stream)) terminals?.close(stream);
-    send({ type: "end", stream, ...(why && { why }) });
+    send?.({ type: "end", stream, ...(why && { why }) });
   };
 
   // A terminal's streams: its bytes as they come, base64 in "out".
-  const mirrored = new Set<string>();
   const terminals = source.terminals?.({
-    out: (stream, data) => mirrored.has(stream) && send({ type: "out", stream, data }),
+    out: (stream, data) => mirrored.get(stream)?.({ type: "out", stream, data }),
     end: (stream, why) => mirrored.has(stream) && end(stream, why),
   });
-  const mirror = (stream: string, key: string) => {
-    if (!terminals) return end(stream, "that session has no terminal here");
-    mirrored.add(stream);
+  const mirror = (send: (m: object) => void, stream: string, key: string) => {
+    if (!terminals) return send({ type: "end", stream, why: "that session has no terminal here" });
+    mirrored.set(stream, send);
     terminals.open(stream, key);
   };
 
   // In batches, each well under a socket message's limit.
-  const out = (stream: string, items: Item[], reset = false) => {
+  const out = (s: Stream, stream: string, items: Item[], reset = false) => {
     for (let i = 0; i < items.length || (reset && i === 0); i += 40) {
-      send({ type: "out", stream, data: JSON.stringify({ items: items.slice(i, i + 40), ...(reset && i === 0 && { reset: true }) }) });
+      s.send({ type: "out", stream, data: JSON.stringify({ items: items.slice(i, i + 40), ...(reset && i === 0 && { reset: true }) }) });
     }
   };
 
-  const attach = (stream: string, key: string) => {
-    const s: Stream = { key };
+  const attach = (send: (m: object) => void, stream: string, key: string) => {
+    const s: Stream = { key, send };
     streams.set(stream, s);
     const look = () => {
       const session = source.list().find((x) => x.key === s.key);
@@ -147,12 +167,39 @@ export function serve(id: string, environment: string, source: Source) {
       if (!session.transcript) return source.screen ? end(stream, "that session has no conversation here") : undefined;
       if (s.follower?.path !== session.transcript) {
         s.follower = new Follower(session.transcript);
-        out(stream, s.follower.read().slice(-FIRST), true);
-      } else out(stream, s.follower.read());
+        out(s, stream, s.follower.read().slice(-FIRST), true);
+      } else out(s, stream, s.follower.read());
     };
     look();
     if (streams.get(stream) === s) s.timer = setInterval(look, 500);
   };
+
+  // A link opening: it's told the list at once. Its streams are its own,
+  // and go with it.
+  return (send: (m: object) => void): Link => {
+    links.add(send);
+    send(listed());
+    const mine = (stream: unknown) => typeof stream === "string" && (streams.get(stream)?.send ?? mirrored.get(stream)) === send;
+    return {
+      receive(m: any) {
+        if ((m.type === "screen" || m.type === "say" || m.type === "speech") && typeof m.ask === "number") answer(send, m);
+        else if (m.type === "attach" && typeof m.stream === "string" && typeof m.key === "string" && !streams.has(m.stream) && !mirrored.has(m.stream))
+          (m.terminal ? mirror : attach)(send, m.stream, m.key);
+        else if (m.type === "detach" && mine(m.stream)) end(m.stream);
+        else if (m.type === "in" && mine(m.stream) && mirrored.has(m.stream) && typeof m.data === "string") terminals?.input(m.stream, m.data);
+        else if (m.type === "size" && mine(m.stream) && mirrored.has(m.stream)) terminals?.size(m.stream, m.rows, m.cols, m.focus === true);
+      },
+      drop() {
+        links.delete(send);
+        for (const stream of [...streams.keys(), ...mirrored.keys()]) if (mine(stream)) end(stream);
+      },
+    };
+  };
+}
+
+export function serve(id: string, environment: string, source: Source) {
+  const connect = core(environment, source);
+  source.hub?.({ id, machine: hostname(), url: PAGE ?? null, environment }, connect);
 
   // Peers ------------------------------------------------------------------------
   //
@@ -160,7 +207,12 @@ export function serve(id: string, environment: string, source: Source) {
   // the Worker tells every socket of the user's, this one too.
 
   const peers = new Map<string, Peer>();
-  const told = () => source.peers?.([...peers.values()]);
+  const told = () => {
+    const sealed = (source.sealed?.list(id) ?? []) as unknown as Peer[];
+    const ids = new Set(sealed.map((b) => b.id));
+    source.peers?.([...sealed, ...[...peers.values()].filter((b) => !ids.has(b.id))]);
+  };
+  if (source.peers) source.sealed?.on(told);
   const peer = (b: any) => {
     if (typeof b?.id !== "string" || b.id === id) return;
     if (b.gone || !Array.isArray(b.sessions)) peers.delete(b.id);
@@ -182,11 +234,12 @@ export function serve(id: string, environment: string, source: Source) {
   const follow = async () => {
     try {
       const url = `${CLOUD.replace(/^http/, "ws")}/api/live?bridge=${encodeURIComponent(id)}&machine=${encodeURIComponent(hostname())}${PAGE ? `&url=${encodeURIComponent(PAGE)}` : ""}`;
-      ws = new WebSocket(url, { headers: { Authorization: `Bearer ${await token()}` } } as any);
-      const ping = setInterval(() => ws?.readyState === WebSocket.OPEN && ws.send("ping"), 30_000);
+      const ws = new WebSocket(url, { headers: { Authorization: `Bearer ${await token()}` } } as any);
+      const ping = setInterval(() => ws.readyState === WebSocket.OPEN && ws.send("ping"), 30_000);
+      let link: Link | undefined;
       ws.onopen = () => {
         retry = 1000;
-        report();
+        link = connect((m) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(m)));
         if (source.peers) lookUp();
       };
       ws.onmessage = (e) => {
@@ -196,20 +249,15 @@ export function serve(id: string, environment: string, source: Source) {
         } catch {
           return;
         }
-        if ((m.type === "screen" || m.type === "say" || m.type === "speech") && typeof m.ask === "number") answer(m);
-        else if (m.type === "attach" && typeof m.stream === "string" && typeof m.key === "string") (m.terminal ? mirror : attach)(m.stream, m.key);
-        else if (m.type === "detach" && typeof m.stream === "string") end(m.stream);
-        else if (m.type === "in" && mirrored.has(m.stream) && typeof m.data === "string") terminals?.input(m.stream, m.data);
-        else if (m.type === "size" && mirrored.has(m.stream)) terminals?.size(m.stream, m.rows, m.cols, m.focus === true);
-        else if (m.type === "bridge" && source.peers) {
+        if (m.type === "bridge" && source.peers) {
           peer(m.bridge);
           told();
-        }
+        } else link?.receive(m);
       };
       ws.onclose = () => {
         clearInterval(ping);
         // Its streams went with it.
-        for (const stream of [...streams.keys(), ...mirrored]) end(stream);
+        link?.drop();
         setTimeout(follow, (retry = Math.min(retry * 2, 60_000)));
       };
     } catch {

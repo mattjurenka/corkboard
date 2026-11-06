@@ -233,6 +233,8 @@ type Stream = {
   remoteEnd: boolean;
   localEnd: boolean;
   dead?: Error;
+  // This side's body being sent, stopped as soon as the stream ends.
+  stop?: () => void;
   head?: { ok(h: Head): void; fail(e: Error): void };
 };
 
@@ -419,6 +421,7 @@ export class Channel {
   private async pump(s: Stream, body: ReadableStream<Uint8Array> | null) {
     if (body) {
       const rd = body.getReader();
+      s.stop = () => void rd.cancel().catch(() => {});
       try {
         for (;;) {
           if (s.dead) return void rd.cancel().catch(() => {});
@@ -459,6 +462,7 @@ export class Channel {
     s.dead = e;
     s.wake?.();
     s.waiting?.();
+    s.stop?.();
     s.head?.fail(e);
     s.head = undefined;
     this.streams.delete(s.id);

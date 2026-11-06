@@ -24,6 +24,7 @@ import { CLOUD, signedIn, token } from "./cloud";
 import { host } from "./host";
 import * as remote from "./remote";
 import type { AppNode } from "./node/app";
+import type { Peers } from "./peers";
 
 // cards/cloud.lua's board operations.
 const BOARD_OPS = new Set(["resolve", "boards", "subscribe", "make", "create", "update", "log", "archive", "delete", "touch", "token", "revoke"]);
@@ -63,11 +64,15 @@ const cloud = new Cloud({
   remotes,
   machine: () => ({ ...host(), environment: ENVIRONMENT }),
   self: remote.self,
+  peers: () => peers,
 });
 
 // The bridge's node (node/app.ts), when it runs: the brains are its.
 let node: AppNode | undefined;
 export const useNode = (n: AppNode) => (node = n);
+// The account's hubs, watched through the node (peers.ts).
+let peers: Peers | undefined;
+export const usePeers = (p: Peers) => (peers = p);
 
 // A Neovim session's view of the cloud: what it follows, so closing the
 // session stops its sockets once nobody else uses them. sessions: the fleet

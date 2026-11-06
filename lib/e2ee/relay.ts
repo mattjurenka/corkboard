@@ -344,7 +344,10 @@ export class Relay implements PairTransport, LogTransport {
   //
   // channels: what this device serves on the channels other devices open to
   // it (channel.ts); without it, they're closed as they open.
-  serveTunnel(handler: (req: Request) => Promise<Response>, o: { name?: string; onState?(connected: boolean): void; channels?: Handler; onChannel?(ch: Channel): void } = {}): () => void {
+  //
+  // tunnel: false, channels only: the tunnel never comes here, and handler
+  // isn't asked (fleetd's sessions, ciphertext-relay.md step 3).
+  serveTunnel(handler: (req: Request) => Promise<Response>, o: { name?: string; tunnel?: false; onState?(connected: boolean): void; channels?: Handler; onChannel?(ch: Channel): void } = {}): () => void {
     let stopped = false;
     let ws: WebSocket | undefined;
     const links = new Map<string, ReturnType<typeof pipe>>();
@@ -364,7 +367,8 @@ export class Relay implements PairTransport, LogTransport {
       if (stopped) return;
       const t = await this.token().catch(() => undefined);
       if (!t) return void setTimeout(connect, 5000);
-      const sock = (ws = make(`${this.origin.replace(/^http/, "ws")}/e2ee/nodes/live${o.name ? `?name=${encodeURIComponent(o.name)}` : ""}`, ["corkboard", `corkboard.bearer.${b64url(utf8(t))}`]));
+      const q = new URLSearchParams({ ...(o.name && { name: o.name }), ...(o.tunnel === false && { tunnel: "0" }) }).toString();
+      const sock = (ws = make(`${this.origin.replace(/^http/, "ws")}/e2ee/nodes/live${q ? `?${q}` : ""}`, ["corkboard", `corkboard.bearer.${b64url(utf8(t))}`]));
       sock.addEventListener("open", () => {
         o.onState?.(true);
         ping = setInterval(() => sock.readyState === 1 && sock.send("ping"), 30_000);

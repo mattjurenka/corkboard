@@ -57,6 +57,8 @@ import type { CalendarConfig } from "./calendar";
 import { type Episodes, TooBig } from "./episodes";
 import type { Media } from "./media";
 import type { DeviceCert, Signed } from "../../lib/e2ee/wire";
+import type { Hub, Joined } from "../hub";
+import type { Reach } from "../peers";
 
 export type NodeOptions = {
   data: Data;
@@ -76,6 +78,12 @@ export type NodeOptions = {
   // one's holds the node: loopback only.
   app?: () => AppCall | undefined;
   appEvents?: () => AppEvents | undefined;
+  // This machine's sessions (hub.ts): its bridges join on loopback
+  // (/app/sessions), and the account's devices watch them on a channel.
+  hub?: Hub;
+  // Every hub of the account's, the account's devices' on channels: for
+  // this machine's bridges, on loopback (/app/peers, /app/peer/:device/...).
+  reach?: Reach;
 };
 
 export type AppCall = (op: string, args: any[]) => Promise<unknown>;
@@ -157,6 +165,8 @@ function sse(follow: (send: (event: unknown) => void) => () => void): Response {
 
 export function node(o: NodeOptions) {
   const consents = new Map<string, Consent>();
+  // Each bridge's link to the hub, by its id: its /app/sessions/live.
+  const joined = new Map<string, Joined>();
 
   const consentPage = (id: string, c: Consent, wrong = "") =>
     page(
@@ -489,6 +499,55 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       if (p.startsWith("/upload/")) {
         if (!o.media) return json({ error: "not found" }, 404);
         return await o.media.upload(req, p.slice("/upload/".length));
+      }
+      if (p === "/api/sessions" || p.startsWith("/api/sessions/")) {
+        // Sealed, never the tunnel's: on a channel, from a device that's
+        // more than a relay-only one, or on loopback.
+        const who = caller(req, origin, from);
+        if (!who) return unauthorized(origin);
+        if (!o.hub || who.scope !== "owner" || !(from ? from.body.role === undefined : loopback(req, peer))) return json({ error: "not found" }, 404);
+        return (await o.hub.serve(req)) ?? json({ error: "not found" }, 404);
+      }
+      if (p === "/app/sessions/live" || p === "/app/sessions") {
+        const who = caller(req, origin, from);
+        if (!who) return unauthorized(origin);
+        const hub = o.hub;
+        if (!hub || who.scope !== "owner" || !loopback(req, peer)) return json({ error: "not found" }, 404);
+        const q = new URL(req.url).searchParams;
+        const id = q.get("bridge") ?? "";
+        // A bridge's link: what the hub says to it, as events, while it
+        // follows; what it says, POSTed as a list.
+        if (p === "/app/sessions/live") {
+          if (req.method !== "GET") return json({ error: "method not allowed" }, 405);
+          if (!/^[\w-]{1,64}$/.test(id)) throw new Invalid("bad bridge id");
+          return sse((send) => {
+            const j = hub.join({ id, machine: q.get("machine") ?? "", url: q.get("url"), environment: q.get("environment") }, send);
+            joined.set(id, j);
+            return () => {
+              j.drop();
+              if (joined.get(id) === j) joined.delete(id);
+            };
+          });
+        }
+        if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
+        const j = joined.get(id);
+        if (!j) return json({ error: `bridge ${id} isn't joined` }, 404);
+        const said = await req.json().catch(() => null);
+        for (const m of Array.isArray(said) ? said : []) j.receive(m);
+        return json({});
+      }
+      if (p === "/app/peers" || p.startsWith("/app/peer/")) {
+        const who = caller(req, origin, from);
+        if (!who) return unauthorized(origin);
+        const reach = o.reach;
+        if (!reach || who.scope !== "owner" || !loopback(req, peer)) return json({ error: "not found" }, 404);
+        if (p === "/app/peers") return json(await reach.devices());
+        // A device's own path, as its hub serves it, the body as it comes.
+        const [, device, rest] = p.match(/^\/app\/peer\/([\w-]{1,128})(\/api\/sessions(?:\/.*)?)$/) ?? [];
+        if (!device) return json({ error: "not found" }, 404);
+        const type = req.headers.get("content-type");
+        const hasBody = !/^(GET|HEAD)$/i.test(req.method);
+        return await reach.fetch(device, rest + new URL(req.url).search, { method: req.method, headers: type ? { "content-type": type } : {}, ...(hasBody && { body: req.body }), signal: req.signal });
       }
       if (p === "/app/events") {
         const who = caller(req, origin, from);
