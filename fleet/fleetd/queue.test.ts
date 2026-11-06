@@ -1,5 +1,6 @@
 // fleetd's side of the Worker's queue, against a stand-in Worker: what it
-// claims, what it passes on, and what it reports.   bun test fleet/fleetd
+// claims, what it passes on, and what it reports; and, against a stand-in
+// node, what it asks the node for and writes on its cards.   bun test fleet/fleetd
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,6 +19,7 @@ type Remote = {
   card: string | null;
   agent: string;
   stopRequested?: boolean;
+  node?: true;
 };
 
 const dir = mkdtempSync(join(tmpdir(), "fleet-queue-"));
@@ -39,9 +41,38 @@ const server = Bun.serve({
     const m = url.pathname.match(/^\/api\/spawns\/(\w+)\/(claim|report)$/);
     const s = remote.find((x) => x.id === m?.[1]);
     if (!s) return Response.json({ error: "no" }, { status: 404 });
-    if (m![2] === "claim") return Response.json({ spawn: s, token: s.board ? `cbc_${s.id}` : null, repo: s.board === "proj" ? repo : null, ...(s.brain && { brainToken: `cbb_${s.id}`, secrets: { github: "ghp_x" } }) });
+    if (m![2] === "claim") return Response.json({ spawn: s, token: s.board && !s.node ? `cbc_${s.id}` : null, repo: s.board === "proj" ? repo : null, ...(s.brain && { brainToken: `cbb_${s.id}`, secrets: { github: "ghp_x" } }) });
     s.state = body.state;
     return Response.json(s);
+  },
+});
+
+// The node: its cards, the grants it hands out, and those ended.
+const cards: Record<string, any> = {};
+const grants: any[] = [];
+const revoked: string[] = [];
+const nodeCalls: { method: string; path: string; body: any }[] = [];
+const node = Bun.serve({
+  port: 0,
+  async fetch(req) {
+    const url = new URL(req.url);
+    const body = req.method === "GET" ? undefined : await req.json().catch(() => undefined);
+    nodeCalls.push({ method: req.method, path: url.pathname, body });
+    if (req.headers.get("authorization") !== "Bearer nodeowner") return Response.json({ error: "who?" }, { status: 401 });
+    const p = url.pathname.replace(/^\/api\/node/, "");
+    if (p === "/grants" && req.method === "POST") {
+      grants.push(body);
+      const token = `cbn_${body.scope}_${body.card ?? body.brain ?? body.spawn}`;
+      return Response.json(body.scope === "brain" ? { token, url: url.origin } : { token, expires_at: "x", url: `${url.origin}/mcp` });
+    }
+    if (p === "/grants" && req.method === "DELETE") return Response.json({ revoked: revoked.push(body.token) > 0 });
+    if (p === "/boards/mine") return Response.json({ key: "mine", root: "/nowhere", roots: { local: repo } });
+    const m = p.match(/^\/boards\/mine\/cards\/([\w-]+)(\/log)?$/);
+    const c = m && cards[m[1]];
+    if (!c) return Response.json({ error: "no" }, { status: 404 });
+    if (m![2]) c.log.push(body.note);
+    else if (req.method === "PATCH") Object.assign(c, body);
+    return Response.json(c);
   },
 });
 
@@ -56,6 +87,7 @@ beforeAll(async () => {
   process.env.CORKBOARD_FLEET_MANIFEST = join(dir, "fleet.json");
   process.env.CORKBOARD_FLEET_ENVIRONMENT = "local";
   mkdirSync(join(dir, "state/corkboard"), { recursive: true });
+  writeFileSync(join(dir, "node-token"), "nodeowner\n");
   writeFileSync(
     join(dir, "state/corkboard/auth.json"),
     JSON.stringify({ cloud: process.env.CORKBOARD_CLOUD, client_id: "c", access_token: "owner", refresh_token: "r", expires_at: Date.now() + 3600_000 }),
@@ -75,6 +107,7 @@ beforeAll(async () => {
       },
       bindings: { work: { shares: ["vault"] } },
       defaultAccount: "personal",
+      node: { url: `http://localhost:${node.port}`, tokenFile: join(dir, "node-token") },
     }),
   );
   // A repo with a commit, and a bundle of one more on top, as a slot hands back.
@@ -94,7 +127,10 @@ beforeAll(async () => {
   if (!fleet.SPAWNS.startsWith(dir) || !(await import("../../bridge/cloud")).CLOUD.includes(String(server.port))) throw new Error("fleet's paths aren't the test's");
   queue = new (await import("./queue")).Queue();
 });
-afterAll(() => server.stop(true));
+afterAll(() => {
+  server.stop(true);
+  node.stop(true);
+});
 
 const add = (s: Partial<Remote> & { id: string }) =>
   remote.push({ template: "coding", task: "fix it", by: "user", state: "queued", environment: "local", board: "fleet", card: "TASK-1", agent: `coding-${s.id}`, ...s });
@@ -165,4 +201,57 @@ test("passes a stop on, and reports a run, fetching its commits and revoking its
   calls.length = 0;
   await queue.step();
   expect(calls.filter((c) => c.path.includes("/report"))).toEqual([]);
+});
+
+test("equips one on the node's board from the node, and writes how it goes on its card there", async () => {
+  cards["TASK-9"] = { id: "TASK-9", status: "backlog", agent: "coding-bbbbbb1", agent_state: "queued", attention: "approve: coding for work", log: [] };
+  cards["TASK-8"] = { id: "TASK-8", status: "backlog", agent: "coding-bbbbbb2", agent_state: "queued", attention: "approve: coding for work", log: [] };
+  add({ id: "bbbbbb1", board: "mine", card: "TASK-9", node: true, brain: "work", account: "work" });
+  add({ id: "bbbbbb2", board: "mine", card: "TASK-8", node: true, state: "stopped" });
+  (queue as any).dirty = true;
+  calls.length = 0;
+  await queue.step();
+
+  // Its grant, repo (the board's root here) and memory are the node's; the
+  // Worker's brain token is given back; the approval is over.
+  expect(grants).toEqual([
+    { scope: "card", board: "mine", card: "TASK-9", agent: "coding-bbbbbb1" },
+    { scope: "brain", brain: "work", agent: "coding-bbbbbb1" },
+  ]);
+  const node$ = `http://localhost:${node.port}`;
+  expect(fleet.read("bbbbbb1")).toMatchObject({ state: "queued", repo, remote: { node: true, token: "cbn_card_TASK-9", mcp: `${node$}/mcp`, brainToken: "cbn_brain_work", memory: node$ } });
+  expect(calls.find((c) => c.path === "/api/tokens/revoke")?.body).toEqual({ token: "cbb_bbbbbb1" });
+  expect(cards["TASK-9"]).toMatchObject({ attention: null, log: ["approved"] });
+
+  // One stopped before it was claimed lets go of its card, and is over here.
+  expect(cards["TASK-8"]).toMatchObject({ agent: null, agent_state: null, attention: null, status: "backlog", log: ["stopped before it ran"] });
+  expect(fleet.read("bbbbbb2")).toMatchObject({ state: "stopped", reported: "stopped", carded: "stopped" });
+
+  // Running, then done: each said once on the card, and the node's tokens
+  // ended through the node.
+  fleet.write({ ...fleet.read("bbbbbb1")!, state: "running", slot: "agent-0" });
+  await queue.step();
+  await queue.step();
+  expect(cards["TASK-9"].log).toEqual(["approved", "running in agent-0 (local)"]);
+  expect(fleet.read("bbbbbb1")).toMatchObject({ reported: "running", carded: "running" });
+
+  mkdirSync(join(fleet.SPAWNS, "bbbbbb1"), { recursive: true });
+  writeFileSync(join(fleet.SPAWNS, "bbbbbb1/result.json"), JSON.stringify({ result: "Done it." }));
+  fleet.write({ ...fleet.read("bbbbbb1")!, state: "done", exit: 0 });
+  calls.length = 0;
+  await queue.step();
+  expect(cards["TASK-9"]).toMatchObject({ status: "review", agent_state: "needs-review" });
+  expect(cards["TASK-9"].log.at(-1)).toBe("done:\nDone it.");
+  expect(revoked).toEqual(["cbn_card_TASK-9", "cbn_brain_work"]);
+  expect(calls.filter((c) => c.path === "/api/tokens/revoke")).toEqual([]);
+  expect(fleet.read("bbbbbb1")).toMatchObject({ reported: "done", carded: "done", remote: { token: null, brainToken: "" } });
+
+  // A stopped one leaves the card as the agent left it, but lets go of it.
+  cards["TASK-7"] = { id: "TASK-7", status: "doing", agent: "coding-bbbbbb3", agent_state: "working", log: [] };
+  add({ id: "bbbbbb3", board: "mine", card: "TASK-7", node: true });
+  (queue as any).dirty = true;
+  await queue.step();
+  fleet.write({ ...fleet.read("bbbbbb3")!, state: "stopped" });
+  await queue.step();
+  expect(cards["TASK-7"]).toMatchObject({ status: "doing", agent: null, agent_state: null, log: ["stopped"] });
 });

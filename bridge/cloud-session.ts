@@ -427,10 +427,11 @@ export class Session {
         return null;
       }
       // A session you talk to, in one of an environment's slots: on a
-      // board's project (its clone there), when one is named.
+      // board's project (its clone there), when one is named; onNode, a
+      // board the node has (boards.ts), which hands out its grant.
       case "fleet_session": {
-        const [environment, template, board] = args as [string, string, string?];
-        return send("POST", "/spawns", { environment, template, interactive: true, task: "", ...(board && { board }) });
+        const [environment, template, board, onNode] = args as [string, string, string?, boolean?];
+        return send("POST", "/spawns", { environment, template, interactive: true, task: "", ...(board && { board }), ...(onNode && { node: true }) });
       }
       case "fleet_approve":
       case "fleet_stop":

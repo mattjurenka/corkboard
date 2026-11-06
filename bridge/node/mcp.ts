@@ -2,7 +2,8 @@
 // notes and memory, over the node's replicas instead of its Durable Objects.
 // Same names, descriptions and rules, so a client moved from the Worker to
 // the node sees the same tools, less those with nothing on the node yet:
-// boards made over MCP, day plans, the chat and the fleet.
+// boards made over MCP, day plans and the chat. The fleet's spawn tools
+// queue on the Worker (Fleet), signed in to it.
 //
 // Streamable HTTP, stateless, as the Worker's: each POST is a JSON-RPC
 // message (or a batch) answered with JSON; GET is 405. Every tool here
@@ -389,6 +390,101 @@ Put follow-up work you discover in new cards with create_card (parent: the card 
 If the user puts a card off for later ("do it tomorrow", "push this"), call release_card so it goes back to ready.`;
 const MEMORY_INSTRUCTIONS = "Your memory, kept encrypted on the user's machines: notes, a log by day, and recall across them. The session started with memory_context; memory_recall finds the rest.";
 
+// The fleet -----------------------------------------------------------------------------
+
+// The Worker's fleet queue (its /api/spawns and /api/fleet), as the user
+// signed in to it; it throws the Worker's error.
+export type Fleet = (method: string, path: string, body?: unknown) => Promise<any>;
+
+type FleetCall = { data: Data; fleet: Fleet; me: string };
+type FleetTool = { description: string; properties?: Record<string, object>; required?: string[]; run: (a: any, c: FleetCall) => Promise<unknown> };
+
+// What a spawn brings to its VM: its tools, and its size.
+const VM = {
+  packages: strings("nixpkgs attribute names to have, e.g. nodejs_22, postgresql"),
+  shell: str('A flake ref whose devShell it runs in, e.g. github:me/envs#rust, or ".#" for its repo\'s own'),
+  needs: strings("Capabilities its VM must have (spawn_status lists them), e.g. gpu"),
+  memory: { type: "integer", description: "MiB of RAM, if it needs more than its template's" },
+  cores: { type: "integer", description: "vCPUs, if it needs more than its template's" },
+};
+
+// A spawn on one of the node's boards is queued on the Worker with the
+// board's key and card's id alone (node: true); the card is checked and
+// marked here, as the Worker marks its own boards' (its fleet.ts's spawn),
+// and fleetd writes how it goes. Any other board is still the Worker's.
+async function queue(c: FleetCall, a: Record<string, unknown>) {
+  const board = typeof a.board === "string" && a.board ? a.board : null;
+  if (!board || !c.data.replicas.get("board", board)) return c.fleet("POST", "/spawns", a);
+  const id = typeof a.card === "string" && a.card ? a.card.toUpperCase() : null;
+  if (id) {
+    const card = c.data.card(board, id);
+    if (card.archived) throw new ToolError(`${id} is archived`);
+    if (card.agent && card.agent_state && card.agent_state !== "done") throw new ToolError(`${id} is ${card.agent_state} with ${card.agent}`);
+  }
+  const s = await c.fleet("POST", "/spawns", { ...a, board, ...(id && { card: id }), node: true });
+  if (!id) return s;
+  const what = `${s.template}${s.brain ? ` for the ${s.brain} brain` : ""}`;
+  const shell = s.shell ? `, with ${"flake" in s.shell ? s.shell.flake : s.shell.packages.join(" ")}` : "";
+  await c.data.updateCard(board, id, {
+    agent: s.agent,
+    agent_state: "queued",
+    ...(s.state === "pending-approval" && { attention: `approve: ${c.me} wants to spawn ${what}` }),
+  });
+  await c.data.appendLog(board, id, "fleet", `spawned ${s.id}: ${what} in ${s.environment}${shell}, asked by ${c.me}`);
+  return s;
+}
+
+// The Worker's spawn tools, with the same names and descriptions.
+const FLEET_TOOLS: Record<string, FleetTool> = {
+  spawn_agent: {
+    description:
+      "Start an agent on a task, in a VM of its own: a coding agent to fix something, a brain's agent to work with its memory. It makes no card: its state and answer are in spawn_status. Name a card (and its board) and it works on that card, leaving its answer there; name only a board and it can read it and make cards for work worth tracking. With a board that is a project, it works in that project's repo and its commits come back as the branch fleet/<id>. spawn_status lists the templates and where they run. Bring its tools with packages or shell (built inside its VM), and size it with memory and cores, within what its machine offers. It may wait for room on the machine; it doesn't wait for you.",
+    properties: {
+      template: str("A template's name, from spawn_status: the VM type; left out, the smallest one that has every need"),
+      brain: str("The brain it works for, from spawn_status: it starts with the brain's memory and runs as its account; left out, none"),
+      task: str("What the agent should do, in full: it knows only this and its repo"),
+      environment: str("Where to run it; the first that has the template, if left out"),
+      board: str("The board's key, from list_boards: a project board's repo is what it works in"),
+      card: str("A card on board for it to work on, e.g. TASK-4; left out, none"),
+      ...VM,
+    },
+    required: ["task"],
+    run: (a, c) => queue(c, a),
+  },
+  start_session: {
+    description:
+      "Start a Claude Code session in a VM of its own, for the user to talk to from their phone or the fleet view, rather than an agent on a task: it runs until stopped (spawn_stop), and its commits come back as the branch fleet/<id>. It gets no card; it can make one on its board when its work is worth tracking. spawn_status lists the templates (VM types) and where they run.",
+    properties: {
+      template: str("A template's name, from spawn_status: the VM type; left out, the smallest one that has every need"),
+      brain: str("The brain it works for, from spawn_status: it starts with the brain's memory and runs as its account; left out, none"),
+      board: str("The board's key, from list_boards: its project's repo is what the session works in"),
+      environment: str("Where to run it; the first that has the template, if left out"),
+      message: str("What to say to it first, if anything"),
+      ...VM,
+    },
+    required: ["board"],
+    run: (a, c) => {
+      const { message, card: _, ...rest } = a;
+      return queue(c, { ...rest, task: message ?? "", interactive: true });
+    },
+  },
+  spawn_status: {
+    description: "One spawned agent: its state, its card (a session has none), and its answer when done. Without an id, the newest spawns, and the templates each environment can run.",
+    properties: { id: str("The spawn's id") },
+    run: (a, c) => c.fleet("GET", `/fleet/status${a.id ? `?id=${encodeURIComponent(String(a.id))}` : ""}`),
+  },
+  spawn_stop: {
+    description: "Stop a spawned agent: before it runs it never will; while it runs its VM is stopped.",
+    properties: { id: str("The spawn's id") },
+    required: ["id"],
+    run: (a, c) => c.fleet("POST", `/spawns/${encodeURIComponent(String(a.id))}/stop`),
+  },
+};
+
+// The user's own clients spawn, as on the Worker: not a brain's token, nor
+// one held to a board.
+const spawns = (caller: Caller, fleet?: Fleet) => !!fleet && (caller.scope === "owner" || caller.scope === "assistant") && !caller.brain;
+
 // Memory --------------------------------------------------------------------------------
 
 type MemoryCall = { data: Data; search: Search; brain: string; caller: Caller; hidden: readonly string[] };
@@ -531,7 +627,7 @@ const reaches = (name: string, caller: Caller) => (caller.scope === "session" ? 
 // memoryOnly: the memory tools alone, for a local session (app.ts), whose
 // board tools are its own board's. One held to a board, that board's tools
 // it reaches, with no board argument.
-function toolsFor(caller: Caller, hidden: readonly string[], memoryOnly = false) {
+function toolsFor(caller: Caller, hidden: readonly string[], memoryOnly = false, fleet?: Fleet) {
   if (boardBound(caller))
     return Object.entries(memoryOnly ? {} : TOOLS)
       .filter(([name]) => reaches(name, caller))
@@ -556,15 +652,24 @@ function toolsFor(caller: Caller, hidden: readonly string[], memoryOnly = false)
       inputSchema: { type: "object", properties: { board: str("The board's key, from list_boards"), ...t.properties }, required: ["board", ...(t.required ?? [])] },
     })),
     ...memory,
+    ...Object.entries(spawns(caller, fleet) ? FLEET_TOOLS : {}).map(([name, t]) => ({
+      name,
+      description: t.description,
+      inputSchema: { type: "object", properties: t.properties ?? {}, required: t.required ?? [] },
+    })),
   ];
 }
 
-export type Node = { data: Data; search: Search; media?: Media; origin: string };
+export type Node = { data: Data; search: Search; media?: Media; origin: string; fleet?: Fleet };
 
 async function callTool(node: Node, caller: Caller, name: string, args: any): Promise<unknown> {
   const { data, search, media, origin } = node;
   const bound = boardBound(caller);
   if (name === "list_boards" && !bound) return data.boards();
+  if (FLEET_TOOLS[name] && spawns(caller, node.fleet))
+    return FLEET_TOOLS[name].run({ ...args }, { data, fleet: node.fleet!, me: caller.agent }).catch((e) => {
+      throw e instanceof Invalid || e instanceof ToolError ? e : new ToolError((e as Error).message);
+    });
   // A brain's own agent sees its goals; the user's clients don't.
   const hidden = caller.brain ? [] : BRAIN_ONLY_KINDS;
   if (MEMORY_TOOLS[name] && !bound) {
@@ -619,7 +724,7 @@ async function handle(node: Node, caller: Caller, msg: Message, memoryOnly: bool
     case "ping":
       return reply({});
     case "tools/list":
-      return reply({ tools: toolsFor(caller, BRAIN_ONLY_KINDS, memoryOnly) });
+      return reply({ tools: toolsFor(caller, BRAIN_ONLY_KINDS, memoryOnly, node.fleet) });
     case "tools/call":
       try {
         const name = String(params?.name);

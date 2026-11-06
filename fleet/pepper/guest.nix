@@ -77,7 +77,7 @@ let
     };
     corkboard-memory = {
       type = "http";
-      url = "${node}/mcp?tools=memory";
+      url = "${node}/mcp";
       headersHelper = lib.getExe (headers "pepper-memory-headers" memoryToken);
     };
   };
@@ -94,7 +94,8 @@ let
     calendar. He sees it as a diff in the plan window or on his phone, undoes what he doesn't want, and accepts it there, which
     writes the calendar; he may also say what to change, which plan_read returns as asked. You can't accept it for him, and he
     can't skip planning by asking you to.
-    Your memory is on the corkboard-memory server (the corkboard server's memory and note tools no longer answer): the session starts with it (who you are, the last days' log, what you've learned), and a new
+    Your memory is on the corkboard-memory server (the corkboard server's memory and note tools no longer answer), and so are the
+    boards it lists (list_boards) and their cards; a board it doesn't list is still on the corkboard server. The session starts with your memory (who you are, the last days' log, what you've learned), and a new
     session starts each day at 4am. When something happens, is decided or is learned, write it in today's log with
     memory_remember, a line that will make sense later. To find what you don't see, memory_recall (or memory_grep for exact
     words), then note_read. Keep lasting knowledge in notes (note_write; pass the version you read). Notes also hold Matt's
@@ -114,7 +115,7 @@ let
   # notes are corkboard-memory's.
   usageReviewPrompt = pkgs.writeText "pepper-usage-review-prompt" ''
     You are Pepper, Matt's personal assistant. Review his Claude Code token usage and suggest how to reduce it.
-    The notes are on the corkboard-memory server; the cards (list_cards) are on corkboard's.
+    The notes are on the corkboard-memory server, and so are the cards (list_cards) of the boards it lists; the rest are on corkboard's.
 
     1. Find the usage reports: notes_search with kind review and the query "Token usage", then note_read each
        note whose id starts with usage- (usage-recommendations is yours, below). Use only those with a

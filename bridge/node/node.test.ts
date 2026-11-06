@@ -22,6 +22,7 @@ import { QUIET } from "../../lib/memory/consolidate";
 import { OAuthStore, type Shared, publicAddress, redirectAllowed, sameRedirect } from "./oauth";
 import type { CardChange } from "../../lib/e2ee/merge";
 import { node, originOf } from "./server";
+import type { Fleet } from "./mcp";
 import { moveMemory } from "./move";
 import { boardEvents, boards, notes } from "./app";
 import { LEASE_MS, sweep, touch } from "./leases";
@@ -79,7 +80,7 @@ const ORIGIN = "https://node.test";
 const dirs: string[] = [];
 afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
-async function setup() {
+async function setup(o: { fleet?: Fleet } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "corkboard-node-"));
   dirs.push(dir);
   const root = newRoot();
@@ -93,7 +94,7 @@ async function setup() {
   const episodes = new Episodes();
   const blobs = memoryBlobs();
   const media = new Media({ data, blobs, dir: join(dir, "blobs") });
-  const app = node({ data, search, oauth, episodes, media, origin: ORIGIN });
+  const app = node({ data, search, oauth, episodes, media, origin: ORIGIN, fleet: () => o.fleet });
   // Another device of the account: the laptop, on the same relay.
   const board = objects.find((o) => o.kind === "board")!;
   const laptop = await Replica.open({ transport: as(shared, "laptop"), key: board.key, object: board.object, device: "laptop" });
@@ -1231,6 +1232,36 @@ describe("card grants and leases, on the node", () => {
     expect((await tool("handoff", { text: "x" })).text).toContain("Handed off");
   });
 
+  it("hands fleetd a slot's grant, owner only, for the /mcp it asked at", async () => {
+    const c = await card("For a slot");
+    const ask = (token: string, method: string, body: unknown) =>
+      n.call("/api/node/grants", { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const owner = n.oauth.mint("fleetd", 1);
+    expect((await ask(n.oauth.mint("pepper", 1, "assistant", "pepper"), "POST", { scope: "card", board: "proj", card: c.id, agent: "fleet" })).status).toBe(403);
+    expect((await ask(owner, "POST", { scope: "card", board: "nope", card: c.id, agent: "fleet" })).status).toBe(404);
+    expect((await ask(owner, "POST", { scope: "card", board: "proj", card: "TASK-NONE", agent: "fleet" })).status).toBe(404);
+    expect((await ask(owner, "POST", { scope: "owner", board: "proj", agent: "fleet" })).status).toBe(400);
+    const res = await ask(owner, "POST", { scope: "card", board: "proj", card: c.id.toLowerCase(), agent: "fleet" });
+    expect(res.status).toBe(201);
+    const g = (await res.json()) as { token: string; url: string };
+    expect(g.url).toBe(`${ORIGIN}/mcp`);
+    expect(JSON.parse((await as(g.token)("claim_card", { id: c.id })).text).id).toBe(c.id);
+    // Not a grant to hand out more.
+    expect((await ask(g.token, "POST", { scope: "session", board: "proj", spawn: "s2", agent: "x" })).status).toBe(401);
+    const s = (await (await ask(owner, "POST", { scope: "session", board: "proj", spawn: "s2", agent: "fleet" })).json()) as { token: string };
+    expect(n.oauth.grants().find((x) => x.spawn === "s2")?.scope).toBe("session");
+    // A brain's, for a slot's memory hooks, and the board's settings, for its repo.
+    const brain = (await (await ask(owner, "POST", { scope: "brain", brain: "assistant", agent: "coding-1" })).json()) as { token: string; url: string };
+    expect(brain.url).toBe(ORIGIN);
+    expect((await n.call("/memory/context", { headers: { Authorization: `Bearer ${brain.token}` } })).status).toBe(200);
+    expect((await ask(owner, "POST", { scope: "brain", brain: "nope", agent: "x" })).status).toBe(404);
+    await n.data.putBoard("proj", { roots: { local: "/srv/proj" } });
+    expect(((await (await n.call("/api/node/boards/proj", { headers: { Authorization: `Bearer ${owner}` } })).json()) as any).roots).toEqual({ local: "/srv/proj" });
+    for (const t of [g.token, s.token, brain.token]) expect(await (await ask(owner, "DELETE", { token: t })).json()).toEqual({ revoked: true });
+    expect((await n.call("/mcp", rpc("tools/list", {}, g.token))).status).toBe(401);
+    expect(n.oauth.grants().some((x) => x.brain === "assistant" && x.name.startsWith("coding-1"))).toBe(false);
+  });
+
   it("keeps a working card's claim while its agent is heard from, and blocks it when it isn't", async () => {
     const c = await card("Long one");
     const quiet = await card("Never heard");
@@ -1266,6 +1297,59 @@ describe("card grants and leases, on the node", () => {
     // The heartbeat, through the app's touch.
     await n.data.updateCard("proj", c.id, { extra: {} });
     expect(((await boards(b, "touch", ["proj", c.id.toLowerCase(), "claude"])) as { until: number }).until).toBeGreaterThan(Date.now());
+  });
+});
+
+describe("the fleet's spawns, from the node", () => {
+  let n: Awaited<ReturnType<typeof setup>>;
+  const asked: { method: string; path: string; body?: any }[] = [];
+  const fleet: Fleet = async (method, path, body?: any) => {
+    asked.push({ method, path, body });
+    if (path === "/spawns") return { id: "sp1", template: "coding", environment: "droplet", agent: "fleet-sp1", state: "queued" };
+    return { path };
+  };
+  const as = (token: string) => async (name: string, args: Record<string, unknown> = {}) => toolText(await n.call("/mcp", rpc("tools/call", { name, arguments: args }, token)));
+  const names = async (token: string) => ((await (await n.call("/mcp", rpc("tools/list", {}, token))).json()) as any).result.tools.map((t: { name: string }) => t.name) as string[];
+  beforeAll(async () => void (n = await setup({ fleet })));
+  afterAll(() => n.stop());
+
+  it("queues a spawn on the node's card with node: true, and marks and logs the card", async () => {
+    const c = await n.data.createCard("proj", { title: "Fix it", status: "ready" });
+    const tool = as(n.oauth.mint("phone", 1));
+    expect(JSON.parse((await tool("spawn_agent", { task: "fix it", board: "proj", card: c.id.toLowerCase() })).text).id).toBe("sp1");
+    expect(asked.at(-1)).toEqual({ method: "POST", path: "/spawns", body: { task: "fix it", board: "proj", card: c.id, node: true } });
+    expect(n.data.card("proj", c.id)).toMatchObject({ agent: "fleet-sp1", agent_state: "queued" });
+    expect(n.data.card("proj", c.id).log.at(-1)).toMatchObject({ who: "fleet", note: "spawned sp1: coding in droplet, asked by assistant" });
+    // Once it has an agent at work, not again.
+    const again = await tool("spawn_agent", { task: "again", board: "proj", card: c.id });
+    expect(again.error).toBe(true);
+    expect(again.text).toContain("queued with fleet-sp1");
+    expect(asked).toHaveLength(1);
+  });
+
+  it("leaves another board's spawn, and status and stop, to the Worker", async () => {
+    const tool = as(n.oauth.mint("claude.ai", 1, "assistant"));
+    await tool("spawn_agent", { task: "x", board: "elsewhere", card: "TASK-2" });
+    expect(asked.at(-1)!.body).toEqual({ task: "x", board: "elsewhere", card: "TASK-2" });
+    await tool("start_session", { board: "elsewhere", message: "hi" });
+    expect(asked.at(-1)!.body).toEqual({ board: "elsewhere", task: "hi", interactive: true });
+    expect(JSON.parse((await tool("spawn_status", { id: "sp 1" })).text).path).toBe("/fleet/status?id=sp%201");
+    await tool("spawn_stop", { id: "sp1" });
+    expect(asked.at(-1)).toEqual({ method: "POST", path: "/spawns/sp1/stop", body: undefined });
+  });
+
+  it("shows the spawn tools to the user's own clients alone", async () => {
+    expect(await names(n.oauth.mint("phone", 1))).toContain("spawn_agent");
+    expect(await names(n.oauth.mint("claude.ai", 1, "assistant"))).toContain("spawn_status");
+    const c = await n.data.createCard("proj", { title: "Held", status: "ready" });
+    for (const t of [
+      n.oauth.mint("pepper", 1, "assistant", "assistant"),
+      n.oauth.mintBound({ scope: "card", board: "proj", card: c.id, agent: "claude" }).token,
+      n.oauth.mintBound({ scope: "session", board: "proj", spawn: "s1", agent: "fleet" }).token,
+    ]) {
+      expect(await names(t)).not.toContain("spawn_agent");
+      expect((await as(t)("spawn_agent", { task: "x" })).text).toBe("unknown tool spawn_agent");
+    }
   });
 });
 

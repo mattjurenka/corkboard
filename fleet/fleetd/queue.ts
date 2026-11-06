@@ -8,8 +8,14 @@
 // dropped socket costs a minute, not a spawn. A claimed spawn becomes a
 // file like the CLI's, with `remote` saying where it came from; from there
 // fleetd's tick runs it like any other, and this reports each new state.
+//
+// A spawn on a board the user's node keeps (the Worker's `node`, .agent/
+// plans/local-boards.md) is the node's to equip: its card or session
+// grant, its repo (the board's root here) and its brain's memory come from
+// the node's API through the tunnel (Manifest.node), and how it goes is
+// written on its card there, as the Worker writes on its own boards' cards.
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { CLOUD, token } from "../../bridge/cloud";
@@ -34,7 +40,15 @@ type Remote = {
   account?: string | null;
   state: "pending-approval" | "queued" | "running" | State;
   stopRequested?: boolean;
+  board?: string | null;
+  card?: string | null;
+  agent?: string;
+  node?: true;
+  created?: string;
 };
+
+// As the Worker cuts a spawn's result.
+const RESULT = 8000;
 
 async function api(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
   const res = await fetch(`${CLOUD}${path}`, {
@@ -49,6 +63,48 @@ async function ok(method: string, path: string, body?: unknown) {
   const r = await api(method, path, body);
   if (r.status >= 400) throw new Error(`${method} ${path}: ${r.json.error ?? `HTTP ${r.status}`}`);
   return r.json;
+}
+
+// The node's API, as the manifest's owner token.
+async function nodeApi(m: Manifest, method: string, path: string, body?: unknown): Promise<any> {
+  if (!m.node) throw new Error("its board is the node's, and this host's manifest names no node");
+  const res = await fetch(`${m.node.url}/api/node${path}`, {
+    method,
+    headers: { Authorization: `Bearer ${readFileSync(m.node.tokenFile, "utf8").trim()}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const json = (await res.json().catch(() => ({}))) as any;
+  if (res.status >= 400) throw new Error(`the node: ${method} ${path}: ${json.error ?? `HTTP ${res.status}`}`);
+  return json;
+}
+
+const cardPath = (r: { board: string | null; card: string | null }) => `/boards/${encodeURIComponent(r.board!)}/cards/${encodeURIComponent(r.card!)}`;
+
+// A line on a spawn's card on the node, and the card moved along with it
+// (the Worker's onCard). The agent may have moved it itself; this never
+// moves it back. A session has none.
+async function onCard(m: Manifest, r: NonNullable<Spawn["remote"]>, note: string, fn?: (c: any) => Record<string, unknown>) {
+  if (!r.card || !r.board) return;
+  await nodeApi(m, "POST", `${cardPath(r)}/log`, { note, who: "fleet" });
+  if (!fn) return;
+  const fields = fn(await nodeApi(m, "GET", cardPath(r)));
+  if (Object.keys(fields).length) await nodeApi(m, "PATCH", cardPath(r), fields);
+}
+
+// A stopped spawn lets go of its card, unless someone else has taken it since.
+const letGo = (r: { agent?: string }, c: any) => (c.agent === r.agent ? { agent: null } : {});
+
+// What a state says on the card, as the Worker's report says it.
+async function cardSays(m: Manifest, s: Spawn, result: string) {
+  const r = s.remote!;
+  const failure = s.error ?? `exit ${s.exit ?? "?"}`;
+  const cut = result.length > RESULT ? result.slice(0, RESULT - 1) + "…" : result;
+  if (s.state === "running") await onCard(m, r, `running${s.slot ? ` in ${s.slot}` : ""} (${ENVIRONMENT})`);
+  else if (s.state === "done")
+    await onCard(m, r, `done${cut ? `:\n${cut}` : ""}`, (c) => (c.status === "done" || c.status === "review" ? {} : { status: "review", agent_state: "needs-review" }));
+  else if (s.state === "failed")
+    await onCard(m, r, `failed: ${failure}${cut ? `\n${cut}` : ""}`, (c) => (c.status === "done" ? {} : { attention: `spawn failed: ${failure.split("\n")[0].slice(0, 160)}` }));
+  else if (s.state === "stopped") await onCard(m, r, "stopped", (c) => (c.status === "done" ? {} : { ...letGo(r, c), agent_state: null }));
 }
 
 const told = (r: Occupancy & { host?: Host }) => JSON.stringify({ ...r, host: steady(r.host) });
@@ -145,9 +201,18 @@ export class Queue {
     for (const r of listed) {
       const here = read(r.id);
       if (!here && r.state === "queued") await this.claim(m, r);
+      else if (!here && r.state === "stopped" && r.node) await this.stoppedFirst(m, r);
       else if (here && (here.state === "queued" || here.state === "running") && (r.stopRequested || r.state === "stopped") && !here.stopRequested)
         write({ ...here, stopRequested: true });
     }
+  }
+
+  // One on the node's board stopped before it was claimed: its card let go
+  // of, and kept here as over, so it's said once.
+  private async stoppedFirst(m: Manifest, r: Remote) {
+    const remote = { board: r.board ?? null, card: r.card ?? null, agent: r.agent ?? "", token: null, node: true as const };
+    await onCard(m, remote, "stopped before it ran", (c) => (c.status === "done" ? {} : { ...letGo(remote, c), agent_state: null, attention: null, status: "backlog" }));
+    write({ id: r.id, template: r.template, task: r.task, by: r.by, account: "", state: "stopped", created: r.created ?? now(), ended: now(), reported: "stopped", carded: "stopped", remote });
   }
 
   private async claim(m: Manifest, r: Remote) {
@@ -156,7 +221,7 @@ export class Queue {
     if (c.status === 409) return;
     if (c.status >= 400) throw new Error(`claiming ${r.id}: ${c.json.error ?? c.status}`);
     const { spawn, token: cardToken, repo, brainToken, secrets } = c.json as {
-      spawn: Remote & { board: string | null; card: string | null; agent: string; interactive?: boolean } & Pick<Spawn, "shell" | "memory" | "cores" | "job">;
+      spawn: Remote & { board: string | null; card: string | null; agent: string; interactive?: boolean; node?: true } & Pick<Spawn, "shell" | "memory" | "cores" | "job">;
       token: string | null;
       repo: string | null;
       brainToken?: string;
@@ -180,11 +245,38 @@ export class Queue {
       ...(spawn.job && { job: spawn.job }),
     };
     try {
+      if (spawn.node) await this.equip(m, s, spawn);
       s.account = accountFor(m, spawn.account);
       write(s);
       console.log(`${s.id}: claimed ${s.template} from the queue (${s.remote!.card ? `card ${s.remote!.card} on ${s.remote!.board}` : s.remote!.board ? `a session on ${s.remote!.board}` : "no board"})`);
     } catch (e) {
       write({ ...s, state: "failed", error: String((e as Error).message ?? e), ended: now() });
+    }
+  }
+
+  // A spawn on the node's board, given what the Worker didn't: its grant
+  // and repo from the node, and the brain's memory there (not a job's: the
+  // Worker's consolidator is the Worker's). The approval its card waited on
+  // is over, since it's queued.
+  private async equip(m: Manifest, s: Spawn, spawn: { id: string; board: string | null; card: string | null; agent: string }) {
+    const r = s.remote!;
+    r.node = true;
+    if (spawn.board) {
+      const g = await nodeApi(m, "POST", "/grants", spawn.card ? { scope: "card", board: spawn.board, card: spawn.card, agent: spawn.agent } : { scope: "session", board: spawn.board, spawn: spawn.id, agent: spawn.agent });
+      r.token = g.token;
+      r.mcp = g.url;
+      const b = await nodeApi(m, "GET", `/boards/${encodeURIComponent(spawn.board)}`);
+      const root = b.roots?.[ENVIRONMENT] ?? b.root;
+      if (typeof root === "string" && existsSync(join(root, ".git"))) s.repo = root;
+      if (spawn.card && String((await nodeApi(m, "GET", cardPath(r))).attention ?? "").startsWith("approve:")) await onCard(m, r, "approved", () => ({ attention: null }));
+    }
+    if (s.brain && !s.job && m.node) {
+      const g = await nodeApi(m, "POST", "/grants", { scope: "brain", brain: s.brain, agent: spawn.agent }).catch((e) => void console.error(`${s.id}: the brain's memory: ${(e as Error).message}`));
+      if (g) {
+        if (r.brainToken) await api("POST", "/api/tokens/revoke", { token: r.brainToken }).catch(() => {});
+        r.brainToken = g.token;
+        r.memory = g.url;
+      }
     }
   }
 
@@ -204,6 +296,10 @@ export class Queue {
         } else note = `\n\n(its commits didn't fetch: ${(await new Response(p.stderr).text()).trim()})`;
       }
       const result = (answer(s) ?? "") + (s.fetched ? `\n\nIts commits: branch ${s.fetched} in ${s.repo}.` : "") + note;
+      if (s.remote.node && s.carded !== s.state) {
+        await cardSays(manifest(), s, result.trim());
+        write({ ...read(s.id)!, carded: s.state });
+      }
       const r = await api("POST", `/api/spawns/${s.id}/report`, {
         state: s.state,
         slot: s.slot,
@@ -214,7 +310,12 @@ export class Queue {
       if (r.status >= 400 && r.status !== 409) throw new Error(`reporting ${s.id}: ${r.json.error ?? r.status}`);
       const { secrets: _, ...kept } = s.remote;
       const remote = over ? { ...kept, token: null, ...(s.remote.brainToken !== undefined && { brainToken: "" }) } : s.remote;
-      if (over) for (const t of [s.remote.token, s.remote.brainToken]) if (t) await api("POST", "/api/tokens/revoke", { token: t }).catch(() => {});
+      if (over)
+        for (const [t, node] of [
+          [s.remote.token, s.remote.node],
+          [s.remote.brainToken, s.remote.memory],
+        ] as const)
+          if (t) await (node ? nodeApi(manifest(), "DELETE", "/grants", { token: t }) : api("POST", "/api/tokens/revoke", { token: t })).catch(() => {});
       write({ ...read(s.id)!, reported: s.state, remote });
     }
   }

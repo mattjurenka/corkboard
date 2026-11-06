@@ -107,6 +107,30 @@ phone ── relay directly (Encrypted.kt), as a paired device
    account's pieces never reach the relay when it's published later; no Range requests.
 5. **Remote agents on the tunnel.** Pepper's `corkboard` MCP and fleet slots' `mcp.json` go to
    `/n/<handle>/mcp`; claude.ai's connector too. The fleet's card lifecycle (see **Decide**).
+   Decided 2026-11-05: Pepper's `corkboard-memory` server drops `?tools=memory` and so serves
+   the card tools too; the Worker's `corkboard` hides card tools from a brain grant and keeps
+   plans and chat. fleetd holds a node owner token (minted by hand, as Pepper's memory-token),
+   mints and revokes slots' card and session grants with the node's `POST`/`DELETE
+   /api/node/grants` (owner only, tunnel-reachable, the grant's url the tunnel's), and writes the
+   claim, running, done/failed and stop to the card with `/api/node/boards`; the Worker's queue
+   keeps ids and touches no card. `spawn_agent` with a card moves to the node (its MCP and
+   Neovim's spawn): the node checks and marks the card, then queues the spawn on the Worker
+   with ids only. Slots' memory hooks go to `/n/<handle>` too.
+   **Built 2026-11-05.** The node's `POST`/`DELETE /api/node/grants` (card, session and brain
+   grants, owner only) and `GET /api/node/boards/:key` (its roots, for the slot's repo). fleetd's
+   manifest takes `node {url, tokenFile}`; for a `node` spawn queue.ts's `equip()` gets the
+   slot's grant, repo and brain memory from the node, writes running/done/failed/stopped on the
+   node's card, and revokes the grants there; slots' memory hooks take the node's url. The
+   Worker's `spawn()` takes `node: true` (the ids checked by shape only: no board read, no card
+   touched, no grant or repo at the claim) and `GET /api/fleet/status` answers the node's
+   spawn_status. The node's mcp.ts has the Worker's four spawn tools (owner or assistant, no
+   brain): on a board the node has it checks the card, queues with `node: true`, and marks and
+   logs the card; any other board's spawn is the Worker's, unchanged. Neovim's `fleet_session`
+   on a node board sends `node: true` (boards.ts). Pepper's corkboard-memory server is the
+   node's whole /mcp; the Worker hides the board tools from a brain's token once the account has
+   no board there (so not until step 7). Tests: "the fleet's spawns, from the node" (86/86),
+   fleetd's (22/22), the Worker's fleet.test.ts. Not yet: claude.ai's connector at
+   `/n/<handle>/mcp` (the user adds it); uploads in parts through the tunnel.
 6. **The portal and the phone.** The portal's board list, Add project and `/open` tickets,
    which need a board's name, root and remotes; the phone's plain board screens (NewSession's
    picker, Media) read the encrypted replica its pairing gives it.

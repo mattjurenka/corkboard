@@ -81,6 +81,8 @@ export class Session extends CloudSession {
 
   override async call(op: string, args: any[]): Promise<unknown> {
     if (op.startsWith("nodes_")) return node ? node.nodes(op, args) : null;
+    // A session on the node's board: queued with node: true, its grant the node's.
+    if (node && op === "fleet_session" && args[2] && signedIn() && (await this.nodes(node, args[2]))) return super.call(op, [...args.slice(0, 3), true]);
     if (node && (op === "note_get" || op === "note_put" || op === "goals")) return node.notes(op, args);
     if (node && BOARD_OPS.has(op)) {
       const answer = await this.board(node, op, args);

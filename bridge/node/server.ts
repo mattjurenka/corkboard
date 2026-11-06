@@ -9,6 +9,7 @@
 //   /api/node/...                      the phone's API, with a token:
 //     GET   status                     which objects are synced, and how far
 //     GET   boards                     [{ key, cards: [summary] }]
+//     GET   boards/:key                its settings (name, root, roots, commit, remotes)
 //     GET   boards/:key/cards          ?log=1 with their logs, ?all=1 archived too
 //     POST  boards/:key/cards          fields: a new card
 //     GET   boards/:key/cards/:id
@@ -25,6 +26,10 @@
 //                                      (memory-sync.ts's vault), each kept once: { added }
 //     POST  brains/:name/remember      { text, who? }
 //     POST  calendar                   { date, day: { blocks } }: an accepted plan onto the calendar (owner)
+//     POST  grants                     { scope: card|session, board, card|spawn, agent }: a token held
+//                                      to the board, for a fleet slot, and the /mcp it's for; or
+//                                      { scope: brain, brain, agent }, a week's, for its memory hooks (owner)
+//     DELETE grants                    { token }: that token ended (owner)
 //   /memory/...                        a session's hooks, as the Worker's (fleet/memory-hooks.nix), with a
 //                                      token; the brain is ?brain= (or the body's), else the default:
 //     GET   context                    Markdown: what a session starts with; ?budget= characters
@@ -39,7 +44,7 @@ import { BRAIN_ONLY_KINDS, type Plan, blocks as checkBlocks, date as checkDate, 
 import { waitingOn } from "../../lib/model/cards";
 import { type Data, Invalid } from "./data";
 import { type Caller, type Consent, OAuthError, type OAuthStore, Redirect, SCOPES, boardBound, deniedUrl } from "./oauth";
-import { mcp } from "./mcp";
+import { type Fleet, mcp } from "./mcp";
 import type { Search } from "./search";
 import { type CalendarConfig, CalendarError, writePlan } from "./calendar";
 import { type Episodes, TooBig } from "./episodes";
@@ -56,6 +61,8 @@ export type NodeOptions = {
   // the node runs takes effect.
   calendar?: () => CalendarConfig | undefined;
   fetch?: (input: string, init?: RequestInit) => Promise<Response>;
+  // The Worker's fleet queue while this machine is signed in to it: /mcp's spawn tools.
+  fleet?: () => Fleet | undefined;
   // The app's brains_*, nodes_*, notes and board_* operations (app.ts's),
   // and its boards' events, for another bridge on this machine while this
   // one's holds the node: loopback only.
@@ -217,7 +224,7 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       headers: { "Content-Type": "application/json", "WWW-Authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource", scope="assistant"` },
     });
 
-  async function api(req: Request, path: string[], who: Caller): Promise<Response> {
+  async function api(req: Request, path: string[], who: Caller, origin: string): Promise<Response> {
     const { data, search } = o;
     const url = new URL(req.url);
     const q = (k: string) => url.searchParams.get(k) ?? undefined;
@@ -241,6 +248,7 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
           }),
         );
       if (!data.replicas.get("board", name)) return json({ error: `no board ${name} on this node` }, 404);
+      if (!sub && m === "GET") return json({ key: name, ...data.board(name) });
       if (sub === "cards" && !id && m === "GET") {
         const cards = data.cards(name, q("all") === "1");
         return json(cards.map((c) => (q("log") === "1" ? c : (({ log: _, ...rest }) => rest)(c))));
@@ -258,6 +266,31 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       }
       if (sub === "cards" && id && more === "media" && path[5] && !path[6] && m === "GET")
         return o.media?.serve(name, id.toUpperCase(), path[5]) ?? json({ error: `no file ${path[5]} on ${id}` }, 404);
+    }
+    if (what === "grants" && !name) {
+      if (who.scope !== "owner") return json({ error: "only the user's own clients hand out grants" }, 403);
+      const b = await body();
+      if (m === "DELETE") return json({ revoked: typeof b.token === "string" && o.oauth.revokeToken(b.token) });
+      if (m !== "POST") return json({ error: "not found" }, 404);
+      const str = (k: string) => {
+        if (typeof b[k] !== "string" || !b[k].trim()) throw new Invalid(`${k} must be a non-empty string`);
+        return b[k].trim() as string;
+      };
+      if (b.scope === "brain") {
+        const brain = brainOf(str("brain"));
+        const token = o.oauth.mint(`${str("agent")} for ${brain}`, 7, "assistant", brain);
+        return json({ token, url: origin }, 201);
+      }
+      const board = str("board");
+      if (!data.replicas.get("board", board)) return json({ error: `no board ${board} on this node` }, 404);
+      const grant =
+        b.scope === "card"
+          ? o.oauth.mintBound({ scope: "card", board, card: data.card(board, str("card").toUpperCase()).id, agent: str("agent") })
+          : b.scope === "session"
+            ? o.oauth.mintBound({ scope: "session", board, spawn: str("spawn"), agent: str("agent") })
+            : undefined;
+      if (!grant) throw new Invalid("scope must be card or session");
+      return json({ ...grant, url: `${origin}/mcp` }, 201);
     }
     if (what === "brains") {
       if (!name && m === "GET") return json(data.brains().map((b) => ({ ...b, default: b.name === data.defaultBrain(), notes: data.notes(b.name).length, entries: data.entries(b.name).length })));
@@ -375,7 +408,7 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       if (p === "/mcp") {
         const who = caller(req, origin, true);
         if (!who) return unauthorized(origin);
-        return await mcp(req, { data: o.data, search: o.search, media: o.media, origin }, who);
+        return await mcp(req, { data: o.data, search: o.search, media: o.media, origin, fleet: o.fleet?.() }, who);
       }
       if (p.startsWith("/upload/")) {
         if (!o.media) return json({ error: "not found" }, 404);
@@ -422,7 +455,7 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       if (p.startsWith("/api/node/")) {
         const who = caller(req, origin);
         if (!who) return unauthorized(origin);
-        return await api(req, p.slice("/api/node/".length).split("/").filter(Boolean).map(decodeURIComponent), who);
+        return await api(req, p.slice("/api/node/".length).split("/").filter(Boolean).map(decodeURIComponent), who, origin);
       }
       if (p.startsWith("/memory/")) {
         const who = caller(req, origin);

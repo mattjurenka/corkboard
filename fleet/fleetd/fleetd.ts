@@ -8,9 +8,10 @@
 // account's Claude Code token, the repo bundle and the shell the guest
 // builds in its share, then `systemctl start`. The guest runs the task and
 // powers off, which ends the unit. A spawn from the Worker's queue
-// (queue.ts) also gets corkboard's MCP server with its spawn token, and is
-// told which card is its own; a brain's, the brain's token, which the
-// guest's memory hooks send (fleet/memory-hooks.nix).
+// (queue.ts) also gets corkboard's MCP server with its spawn token (the
+// node's /mcp, for a board the node keeps), and is told which card is its
+// own; a brain's, the brain's token, which the guest's memory hooks send
+// (fleet/memory-hooks.nix), and the node's address when it's the node's.
 //
 // A resident that is an assistant gets its token and the phone's chat
 // (assistant.ts).
@@ -57,10 +58,11 @@ async function start(m: Manifest, s: Spawn, slot: string) {
   }
   copyFileSync(token, join(sl.shareDir, "claude-token"));
   if (s.remote?.token) {
-    const mcp = { mcpServers: { corkboard: { type: "http", url: `${CLOUD}/mcp`, headers: { Authorization: `Bearer ${s.remote.token}` } } } };
+    const mcp = { mcpServers: { corkboard: { type: "http", url: s.remote.mcp ?? `${CLOUD}/mcp`, headers: { Authorization: `Bearer ${s.remote.token}` } } } };
     writeFileSync(join(sl.shareDir, "mcp.json"), JSON.stringify(mcp, null, 2) + "\n", { mode: 0o600 });
   }
   if (s.remote?.brainToken) writeFileSync(join(sl.shareDir, "brain-token"), s.remote.brainToken + "\n", { mode: 0o600 });
+  if (s.remote?.memory) writeFileSync(join(sl.shareDir, "memory-url"), s.remote.memory + "\n");
   if (s.remote?.secrets) {
     mkdirSync(join(sl.shareDir, "secrets"), { mode: 0o700 });
     for (const [name, v] of Object.entries(s.remote.secrets)) writeFileSync(join(sl.shareDir, "secrets", name), v, { mode: 0o600 });

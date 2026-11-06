@@ -34,7 +34,7 @@
 
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CLOUD } from "../cloud";
+import { CLOUD, signedIn, token } from "../cloud";
 import { STATE_DIR } from "../dirs";
 import { Keystore } from "../keystore";
 import { Relay } from "../../lib/e2ee/relay";
@@ -69,6 +69,19 @@ function config(): Config {
   } catch {
     return {};
   }
+}
+
+// The Worker's fleet queue, as this machine signs in to it (cloud.ts).
+async function fleetQueue(method: string, path: string, body?: unknown) {
+  const res = await fetch(`${CLOUD}/api${path}`, {
+    method,
+    headers: { Authorization: `Bearer ${await token()}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const json = (await res.json().catch(() => ({}))) as any;
+  if (!res.ok) throw new Error(`the fleet: ${json.error ?? `HTTP ${res.status}`}`);
+  return json;
 }
 
 const localZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -164,7 +177,7 @@ export async function startNode(o: NodeOptions = {}) {
       change: (...changes) => void replicas.change("account", "oauth", ...changes).catch((e) => console.error(`node: sharing grants: ${(e as Error).message}`)),
     });
     const media = new Media({ data, blobs: r, dir: join(NODE_DIR, "blobs") });
-    const served = { data, search, episodes, media, oauth, calendar: () => loadCalendar(calendarPath) };
+    const served = { data, search, episodes, media, oauth, fleet: () => (signedIn() ? fleetQueue : undefined), calendar: () => loadCalendar(calendarPath) };
     let app: AppCall | undefined;
     let appEvents: AppEvents | undefined;
     const server = Bun.serve({ port: o.port ?? c.port ?? 8787, hostname, idleTimeout: 255, fetch: node({ ...served, origin, app: () => app, appEvents: () => appEvents }) });

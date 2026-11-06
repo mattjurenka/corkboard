@@ -48,6 +48,11 @@ export type Manifest = {
   bindings?: Record<string, { shares: string[] }>;
   // The account a spawn runs as when nothing says.
   defaultAccount: string | null;
+  // The user's node, through the relay's tunnel (<portal>/n/<handle>), and
+  // a file holding an owner token of its (`serve token`): a spawn on a board
+  // the node keeps gets its grants, repo and card there (queue.ts), and a
+  // brain's spawn its memory.
+  node?: { url: string; tokenFile: string };
 };
 
 export type State = "queued" | "running" | "done" | "failed" | "stopped";
@@ -76,14 +81,27 @@ export type Spawn = {
   stopRequested?: boolean;
   // From the Worker's queue: its card (a session has none), the spawn token for it, and its
   // brain's token if it has one (each emptied once it's revoked, at the end),
-  // and the secrets of what it holds (dropped then too).
-  remote?: { board: string | null; card: string | null; agent: string; token: string | null; brainToken?: string; secrets?: Record<string, string> };
+  // and the secrets of what it holds (dropped then too). node: its board is
+  // the node's, whose /mcp is mcp and whose card fleetd writes; memory: the
+  // node the brain token is for.
+  remote?: {
+    board: string | null;
+    card: string | null;
+    agent: string;
+    token: string | null;
+    brainToken?: string;
+    secrets?: Record<string, string>;
+    node?: true;
+    mcp?: string;
+    memory?: string;
+  };
   // A session you talk to rather than a task (sessions.ts); when it was
   // asked to finish, if it has been.
   interactive?: boolean;
   ending?: string;
-  // The last state the Worker was told of.
+  // The last state the Worker was told of, and its card on the node.
   reported?: State;
+  carded?: State;
   // The branch its commits were fetched into, in its repo.
   fetched?: string;
   // What the spawner brought: the tools the guest builds itself (a nixpkgs

@@ -122,7 +122,7 @@ export class OAuthError extends Error {
   }
 }
 
-export type Caller = { scope: Kind; agent: string; grant: string; resource: string | null; brain?: string; board?: string; card?: string };
+export type Caller = { scope: Kind; agent: string; grant: string; resource: string | null; brain?: string; board?: string; card?: string; spawn?: string };
 
 export class OAuthStore {
   private failures: number[] = [];
@@ -449,6 +449,7 @@ export class OAuthStore {
       ...(grant.brain ? { brain: grant.brain } : {}),
       ...(grant.board ? { board: grant.board } : {}),
       ...(grant.card ? { card: grant.card } : {}),
+      ...(grant.spawn ? { spawn: grant.spawn } : {}),
     };
   }
 
@@ -493,13 +494,14 @@ export class OAuthStore {
   }
 
   // A token ended, by itself (agents.lua's, as its agent exits): a grant held
-  // to a board, whose only token it is, with it.
+  // to a board, or minted here, whose only token it is, with it.
   revokeToken(token: string): boolean {
     return this.change((f) => {
       const row = f.tokens[sha(token)];
       if (!row) return false;
       delete f.tokens[sha(token)];
-      if (f.grants[row.grant] && boardBound(f.grants[row.grant])) delete f.grants[row.grant];
+      const g = f.grants[row.grant];
+      if (g && (boardBound(g) || g.client === "cli") && !Object.values(f.tokens).some((t) => t.grant === g.id)) delete f.grants[g.id];
       return true;
     });
   }

@@ -22,11 +22,13 @@
 #   /mnt/share/repo.bundle   optional: a git bundle of the repo to work in
 #   /mnt/share/mcp.json      optional: corkboard's MCP server, with the spawn
 #                            token for the agent's card (a spawn from the
-#                            Worker's queue)
+#                            Worker's queue): the Worker's, or the node's
 #   /mnt/share/brain-token   optional: a token for the brain it works for,
 #                            which the memory hooks send, so each session
 #                            starts with the brain's context and ends as one
 #                            of its episodes (fleet/memory-hooks.nix)
+#   /mnt/share/memory-url    optional: the node that token is for (through
+#                            the relay's tunnel), where the hooks go then
 #   /mnt/share/secrets/      optional: a file per hold the spawn has (its
 #                            brain's and its template's) whose secret is
 #                            kept in corkboard (the hosted Worker's holds.ts)
@@ -78,6 +80,7 @@ let
 
   memoryHooks = import ../memory-hooks.nix {
     inherit pkgs lib url;
+    urlFile = "/mnt/share/memory-url";
     tokenFile = "/mnt/share/brain-token";
   };
 
