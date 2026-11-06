@@ -277,7 +277,7 @@ function M.open(id)
 
   local width = math.min(120, vim.o.columns - 6)
   local height = vim.o.lines - 6
-  vim.api.nvim_open_win(buf, true, {
+  local win = vim.api.nvim_open_win(buf, true, {
     relative = "editor",
     width = width,
     height = height,
@@ -287,6 +287,7 @@ function M.open(id)
     title = " Review " .. id .. " ",
     title_pos = "center",
   })
+  require("corkboard").popup(win)
   local notify = function(st) require("corkboard").notify("corkboard.view", buf, st) end
   notify(s)
   vim.api.nvim_create_autocmd("BufWipeout", {

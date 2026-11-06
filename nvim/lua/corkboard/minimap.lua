@@ -1,6 +1,7 @@
 -- The text the page's minimap draws beside each window of text
 -- (Scrollbars.tsx): corkboard.minimap, a buffer's lines as runs of
--- characters, each with its colour from treesitter's highlights. Sent when a
+-- characters, each with its colour from treesitter's highlights, or the
+-- syntax file's where the language has no parser. Sent when a
 -- buffer comes into a window, and once typing in it pauses; { buf } alone
 -- when it has left every window, so the page forgets it.
 --
@@ -70,8 +71,35 @@ local function captures(parser, buf, first, last, color)
   return colors
 end
 
+-- The same from the syntax file, for a buffer without a parser: the
+-- colour at the start of each word, or run of punctuation, for all of it.
+local function syntax_colors(buf, first, last)
+  local colors, ids = {}, {}
+  vim.api.nvim_buf_call(buf, function()
+    for row = first, last - 1 do
+      local text = vim.fn.getline(row + 1):sub(1, MAX_COLS * 4)
+      local line, b, c = {}, 1, 0
+      while b <= #text do
+        local word = text:match("^[%w_]+", b) or text:match("^[^%w_%s]+", b) or text:match("^%s+", b)
+        if not word:match("^%s") then
+          local id = vim.fn.synIDtrans(vim.fn.synID(row + 1, b, 1))
+          if ids[id] == nil then
+            local fg = id ~= 0 and vim.api.nvim_get_hl(0, { name = vim.fn.synIDattr(id, "name"), link = false }).fg
+            ids[id] = fg and string.format("#%06x", fg) or false
+          end
+          c = ids[id]
+          for i = b, b + #word - 1 do line[i] = c end
+        end
+        b = b + #word
+      end
+      colors[row] = line
+    end
+  end)
+  return colors
+end
+
 -- One line's runs: tabs to the next tabstop, a UTF-8 character one column.
-local function runs(text, colors, ts)
+local function runs(text, colors, ts, color)
   local out, col, start, width, run_color = {}, 0, nil, 0, nil
   local function flush()
     if start then vim.list_extend(out, { start, width, run_color }) end
@@ -85,6 +113,7 @@ local function runs(text, colors, ts)
       col = byte == 9 and (math.floor(col / ts) + 1) * ts or col + 1
     elseif byte < 0x80 or byte >= 0xC0 then
       local c = colors and colors[b] or 0
+      if type(c) ~= "number" then c = c and color(c) or 0 end
       if start and c ~= run_color then flush() end
       if not start then start, width, run_color = col, 0, c end
       width = width + 1
@@ -105,15 +134,27 @@ local function send(buf)
   local color = colorer(palette)
   local ok, parser = pcall(vim.treesitter.get_parser, buf, nil, { error = false })
   if not ok or not parser or not pcall(parser.parse, parser, true) then parser = nil end
+  local syntax = not parser and vim.bo[buf].syntax ~= ""
+  -- A syntax colour (#rrggbb) as its palette index.
+  local index = {}
+  local function syntax_color(fg)
+    if fg == palette[1] then return 0 end
+    if not index[fg] then
+      table.insert(palette, fg)
+      index[fg] = #palette - 1
+    end
+    return index[fg]
+  end
   local ts = vim.bo[buf].tabstop
   local lines = {}
   local function slice(first)
     -- Gone, or a newer send has begun.
     if not vim.api.nvim_buf_is_valid(buf) or sent[buf] ~= tick then return end
     local last = math.min(first + SLICE, count)
-    local colors = parser and captures(parser, buf, first, last, color) or {}
+    local colors = parser and captures(parser, buf, first, last, color)
+      or syntax and syntax_colors(buf, first, last) or {}
     for i, text in ipairs(vim.api.nvim_buf_get_lines(buf, first, last, false)) do
-      lines[first + i] = runs(text, colors[first + i - 1], ts)
+      lines[first + i] = runs(text, colors[first + i - 1], ts, syntax_color)
     end
     if last < count then return vim.schedule(function() slice(last) end) end
     require("corkboard").notify("corkboard.minimap", { buf = buf, palette = palette, lines = lines })

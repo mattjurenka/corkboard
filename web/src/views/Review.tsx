@@ -79,15 +79,15 @@ export function Review({ state, nvim }: ViewProps<ReviewState>) {
               "no branch"
             )}
           </div>
-          <div className="flex gap-ch">
-            <Button variant="link" size="cell" onClick={() => call("approve")} className={cn("hover:no-underline", blocked ? "text-muted-foreground" : "text-working")}>
-              <kbd>A</kbd> approve{state.main ? " and merge" : ""}
+          <div className="flex gap-x-3ch">
+            <Button variant="link" size="cell" onClick={() => call("approve")} className="px-0 text-muted-foreground hover:text-foreground hover:no-underline">
+              <kbd className={blocked ? "text-muted-foreground" : "text-working"}>A</kbd> approve{state.main ? " and merge" : ""}
             </Button>
-            <Button variant="link" size="cell" onClick={() => call("send_back")} className="text-review hover:no-underline">
-              <kbd>S</kbd> send back
+            <Button variant="link" size="cell" onClick={() => call("send_back")} className="px-0 text-muted-foreground hover:text-foreground hover:no-underline">
+              <kbd className="text-review">S</kbd> send back
             </Button>
-            <Button variant="link" size="cell" onClick={() => call("close")} className="text-muted-foreground hover:no-underline">
-              <kbd>q</kbd> close
+            <Button variant="link" size="cell" onClick={() => call("close")} className="px-0 text-muted-foreground hover:text-foreground hover:no-underline">
+              <kbd className="text-primary">q</kbd> close
             </Button>
           </div>
         </div>
@@ -185,8 +185,9 @@ export function Review({ state, nvim }: ViewProps<ReviewState>) {
           </section>
         )}
 
+        {/* Open when there's no summary, so the view isn't empty. */}
         {state.description && (
-          <Fold label="what was asked">
+          <Fold label="what was asked" open={!state.summary}>
             <article className="markdown-body" dangerouslySetInnerHTML={md(state.description)} />
           </Fold>
         )}
@@ -204,8 +205,8 @@ export function Review({ state, nvim }: ViewProps<ReviewState>) {
 
 const H = ({ children }: { children: React.ReactNode }) => <h2 className="mb-half font-bold">{children}</h2>;
 
-function Fold({ label, children }: { label: string; children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
+function Fold({ label, open: initially = false, children }: { label: string; open?: boolean; children: React.ReactNode }) {
+  const [open, setOpen] = useState(initially);
   return (
     <div className="mb-row">
       <button type="button" onClick={() => setOpen(!open)} className="cursor-pointer text-muted-foreground hover:text-foreground">

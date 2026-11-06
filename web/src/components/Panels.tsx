@@ -77,6 +77,21 @@ export function Panels() {
           </div>
         );
       })}
+      {/* A popup's ×, on its top border by the corner, over a view's
+          border or the one Neovim draws. */}
+      {layout.popups?.map((p) => (
+        <button
+          key={`close:${p.win}`}
+          type="button"
+          aria-label="Close"
+          onMouseDown={keepFocus}
+          onClick={() => void nvim.lua("require('corkboard').close_popup(...)", p.win)}
+          className="absolute z-4 cursor-pointer bg-background text-center text-muted-foreground hover:text-foreground"
+          style={{ left: (p.col + p.width - 4) * cellW, top: p.row * cellH, width: 3 * cellW, height: cellH }}
+        >
+          ×
+        </button>
+      ))}
       {/* A terminal put back that has yet to draw (a Claude Code session
           starting). Clicks pass through to it. */}
       {layout.wins

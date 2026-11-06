@@ -60,13 +60,16 @@ export type ViewWin = Rect & { win: number; buf: number; view: string; focused?:
 export type Layout = {
   views: ViewWin[];
   floats: Rect[];
+  popups?: (Rect & { win: number })[];
   focus: (Rect & { left?: boolean; right?: boolean }) | null;
   wins?: (Rect & { loading?: boolean })[];
   restored?: boolean;
 };
 
 // One window of text's scroll position (corkboard.scroll).
-export type Bar = Rect & { win: number; buf: number; top: number; bottom: number; lines: number };
+// git: the lines changed since the last commit, as [first line, count, kind].
+export type GitRange = [number, number, "add" | "change" | "delete"];
+export type Bar = Rect & { win: number; buf: number; top: number; bottom: number; lines: number; cursor: number; git?: GitRange[] };
 // A buffer's text for the minimap (corkboard.minimap): each line's runs of
 // characters as [column, width, colour] triples, colour indexing palette.
 export type Minimap = { palette: string[]; lines: number[][] };
@@ -116,6 +119,8 @@ export type State = {
   cell: { w: number; h: number };
   // Bumped when files in the project come or go.
   filesVersion: number;
+  // The last file opened in a window, counted so opening it again counts.
+  opened: { file: string; n: number } | null;
   // Whether the sidebar shows the files (the View menu, or their header),
   // kept for the next time the page opens.
   filesOpen: boolean;
@@ -191,6 +196,7 @@ let state: State = {
   bufs: {},
   cell: { w: 9, h: 19 },
   filesVersion: 0,
+  opened: null,
   filesOpen: remembered("corkboard.files") !== "closed",
   keys: {},
   status: null,

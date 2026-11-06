@@ -72,16 +72,17 @@ local function file_at(buf, dir, pos)
   path = path or word
   if path:match("^%a[%w+.-]*://") then return end
   path = vim.fs.normalize(path)
-  if not path:match("^/") then path = vim.fs.joinpath(dir, path) end
+  if not path:match("^/") then path = vim.fs.joinpath(type(dir) == "function" and dir() or dir, path) end
   if vim.fn.filereadable(path) == 0 then return end
   return path, tonumber(line)
 end
 
--- A click on a file's path in the session (web/src/App.tsx, ./x.lua:12)
+-- A click on a file's path in a terminal (web/src/App.tsx, ./x.lua:12)
 -- opens it as the file explorer would, in its preview tab, at that line. A
 -- press and release on the same cell is a click; anything else, and every
 -- press and release, still goes on to the terminal or Neovim as it was.
-local function open_on_click(buf, dir)
+-- dir: what relative paths are from, or a function giving it at the click.
+function M.open_on_click(buf, dir)
   local down
   local function pass(key)
     vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(key, true, false, true), "n", false)
@@ -193,7 +194,7 @@ function M.start(opts)
   if opts.via or opts.attach then
     vim.schedule(require("corkboard.away").report)
   else
-    open_on_click(buf, vim.fs.normalize(opts.cwd or vim.fn.getcwd()))
+    M.open_on_click(buf, vim.fs.normalize(opts.cwd or vim.fn.getcwd()))
   end
   vim.api.nvim_create_autocmd("TermClose", {
     buffer = buf,

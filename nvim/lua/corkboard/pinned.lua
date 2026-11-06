@@ -60,16 +60,18 @@ function M.ensure(key, index, buf)
       if #tabs == 1 and empty_window(tabs[1]) then
         tab = tabs[1]
       else
-        vim.cmd((index - 1) .. "tabnew")
+        vim.cmd(math.min(index - 1, #tabs) .. "tabnew")
         tab = vim.api.nvim_get_current_tabpage()
       end
       vim.t[tab][key] = true
       created = true
     end
 
+    -- No further than the last tab, made or moved: one made before the tabs
+    -- ahead of it (the fleet's before the board's) is moved up as they come.
     if vim.api.nvim_tabpage_get_number(tab) ~= index then
       vim.api.nvim_set_current_tabpage(tab)
-      vim.cmd("tabmove " .. (index - 1))
+      vim.cmd("tabmove " .. math.min(index - 1, #vim.api.nvim_list_tabpages()))
     end
 
     if not find_win(tab, buf) then

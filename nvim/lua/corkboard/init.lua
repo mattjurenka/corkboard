@@ -132,6 +132,36 @@ function M.notify(method, ...)
   end
 end
 
+-- A popup (a card, a review): focus going elsewhere (Alt+h/j/k/l, a click
+-- off it) closes it, saving edits, and the page draws an × on its top
+-- right corner (M.layout).
+function M.popup(win)
+  vim.w[win].corkboard_popup = true
+  local group = vim.api.nvim_create_augroup("corkboard.popup" .. win, {})
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = group,
+    pattern = tostring(win),
+    once = true,
+    callback = function() vim.api.nvim_del_augroup_by_id(group) end,
+  })
+  vim.api.nvim_create_autocmd("WinLeave", {
+    group = group,
+    callback = function()
+      if vim.api.nvim_get_current_win() ~= win then return end
+      vim.schedule(function()
+        if vim.api.nvim_win_is_valid(win) and vim.api.nvim_get_current_win() ~= win then M.close_popup(win) end
+      end)
+    end,
+  })
+end
+
+-- The × clicked, or focus gone.
+function M.close_popup(win)
+  if not vim.api.nvim_win_is_valid(win) then return end
+  vim.api.nvim_win_call(win, function() vim.cmd("silent! update") end)
+  pcall(vim.api.nvim_win_close, win, true)
+end
+
 -- A toast in the page's corner: kind is "pending", "done" or "error"; the
 -- same id again replaces it. With no page, only how it ended, as a message.
 function M.toast(id, kind, text)
@@ -160,13 +190,14 @@ local function rect(win, config)
 end
 
 -- Windows in the current tabpage that show an HTML view, the floats the
--- browser must not cover, and the focused window (with its status line),
+-- browser must not cover, the popups (M.popup) it draws an × on, and the
+-- focused window (with its status line),
 -- which the browser outlines. In grid cells.
 -- Also every split, and whether its content is still coming (a terminal
 -- put back that has drawn nothing yet), and whether the editor has been put
 -- back at all, for the page to show what is loading.
 function M.layout()
-  local views, floats, wins, current = {}, {}, {}, vim.api.nvim_get_current_win()
+  local views, floats, wins, popups, current = {}, {}, {}, {}, vim.api.nvim_get_current_win()
   local restore = require("corkboard.restore")
   local splits, focus = 0, nil
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
@@ -178,6 +209,9 @@ function M.layout()
       splits = splits + 1
       if win == current then focus = rect(win, config) end
       table.insert(wins, vim.tbl_extend("error", rect(win, config), { loading = restore.loading(buf) or nil }))
+    end
+    if floating and vim.w[win].corkboard_popup then
+      table.insert(popups, vim.tbl_extend("error", rect(win, config), { win = win }))
     end
     if view then
       table.insert(views, vim.tbl_extend("error", rect(win, config), {
@@ -207,7 +241,7 @@ function M.layout()
     focus.left = focus.col > 0 or nil
     focus.right = focus.col + focus.width < vim.o.columns or nil
   end
-  return { views = views, floats = floats, focus = focus, wins = wins, restored = restore.restored() }
+  return { views = views, floats = floats, popups = popups, focus = focus, wins = wins, restored = restore.restored() }
 end
 
 -- Checked after every redraw and sent when it changed. Window events aren't
@@ -246,10 +280,16 @@ end
 -- card or pepper), which the page marks, and its state from its hooks
 -- (corkboard.agents), which the page animates while working. By tab handle;
 -- the page names the rest from their buffers.
+-- Each from the tab's main window, its top left, not the focused one: a
+-- session's tab is named for the session while its cards panel has the
+-- keys. names: that window's buffer name, as ext_tabline would send it
+-- (relative, or with ~), which the page uses in place of the focused one's.
 function M.tab_labels()
-  local labels = vim.empty_dict()
-  for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
-    local buf = vim.api.nvim_win_get_buf(vim.api.nvim_tabpage_get_win(tab))
+  local labels, names = vim.empty_dict(), vim.empty_dict()
+  for nr, tab in ipairs(vim.api.nvim_list_tabpages()) do
+    local buf = vim.api.nvim_win_get_buf(vim.fn.win_getid(1, nr))
+    local name = vim.fn.bufname(buf)
+    names[tostring(tab)] = name:sub(1, 1) == "/" and vim.fn.fnamemodify(name, ":~") or name
     local kind = vim.b[buf].corkboard_claude
     if kind then labels[tostring(tab)] = {
         title = require("corkboard.claude").title(buf),
@@ -257,12 +297,14 @@ function M.tab_labels()
         state = require("corkboard.agents").state(buf),
       } end
   end
-  return labels
+  return { labels = labels, names = names }
 end
 
 -- For the browser's scrollbars: each split in the tab showing text, as its
 -- rectangle in grid cells (status line excluded), the first and last lines
--- on screen, and the buffer and its length (its text goes to the minimap,
+-- on screen, the cursor's line, the lines changed since the last commit
+-- (corkboard.gitlines),
+-- and the buffer and its length (its text goes to the minimap,
 -- corkboard.minimap). Not terminals or panels.
 function M.scrollbars()
   local bars = {}
@@ -281,6 +323,8 @@ function M.scrollbars()
         top = info.topline,
         bottom = info.botline,
         lines = vim.api.nvim_buf_line_count(buf),
+        cursor = vim.api.nvim_win_get_cursor(win)[1],
+        git = require("corkboard.gitlines").ranges(buf),
       })
     end
   end
@@ -778,7 +822,9 @@ function M.setup()
   vim.keymap.set("n", "<leader>p", M.open_plan, { desc = "corkboard: day plan" })
   vim.api.nvim_create_user_command("AgentPlan", M.open_plan, { desc = "corkboard: day plan" })
 
+  require("corkboard.pair").setup()
   require("corkboard.viewer").setup()
+  require("corkboard.gitlines").setup()
   require("corkboard.claude.cards").setup()
   require("corkboard.avatar").setup()
   require("corkboard.restore").setup()
@@ -822,7 +868,6 @@ function M.setup()
   -- since Shift with an arrow can select (corkboard.vimkeys).
   vim.keymap.set({ "i", "c" }, "<M-b>", "<C-Left>", { desc = "corkboard: word back" })
   vim.keymap.set({ "i", "c" }, "<M-f>", "<C-Right>", { desc = "corkboard: word on" })
-  require("corkboard.pair").setup()
   -- Ctrl+Tab and Ctrl+Shift+Tab, or Ctrl+Shift+j and k (Cmd+Shift+] and [ on
   -- a Mac), go down and up the tabs from any mode, round from the last to the
   -- first; plain Tab stays the program's (completion, Claude Code's mode
@@ -923,6 +968,17 @@ function M.setup()
       wo.winhighlight = "SignColumn:Normal,WinBar:Normal,WinBarNC:Normal"
     end,
   })
+  -- Any terminal opens the paths clicked in it, from the shell's directory
+  -- at the time (a session's own sets it again, from where it started).
+  vim.api.nvim_create_autocmd("TermOpen", {
+    group = group,
+    callback = function(args)
+      local pid = vim.b[args.buf].terminal_job_pid
+      require("corkboard.claude").open_on_click(args.buf, function()
+        return pid and vim.uv.fs_readlink(("/proc/%d/cwd"):format(pid)) or vim.fn.getcwd()
+      end)
+    end,
+  })
   -- Entering a terminal is entering terminal mode; <C-\><C-n> leaves it.
   vim.api.nvim_create_autocmd({ "TermOpen", "BufEnter", "WinEnter" }, {
     group = group,
@@ -931,33 +987,53 @@ function M.setup()
     end,
   })
   -- A terminal, or a file in a split, scrolls no further down than its last
-  -- line at the bottom, whatever scrolled it (the wheel, Ctrl+E, zt). Put
-  -- back after the event, so the next scroll is measured from there and
-  -- fires it again.
-  local function clamp(win)
+  -- line at the bottom, whatever scrolled it (the wheel, Ctrl+E, zt).
+  local function clamped(win)
     local buf = vim.api.nvim_win_get_buf(win)
     local bt = vim.bo[buf].buftype
-    if not (bt == "terminal" or bt == "" and not vim.b[buf].corkboard_view and not vim.wo[win].diff
-      and vim.api.nvim_win_get_config(win).relative == "") then
-      return
-    end
-    vim.api.nvim_win_call(win, function()
-      -- The highest top line that still has the last line at the bottom:
-      -- up from the end, a line as many rows as it wraps to, a closed fold
-      -- one row.
-      local height, line, rows, bottom = vim.fn.winheight(0), vim.fn.line("$"), 0, nil
-      while line >= 1 do
-        local first = vim.fn.foldclosed(line)
-        if first == -1 then
-          first = line
-          rows = rows + vim.api.nvim_win_text_height(0, { start_row = line - 1, end_row = line - 1 }).all
-        else
-          rows = rows + 1
-        end
-        if rows > height then break end
-        bottom, line = first, first - 1
+    return bt == "terminal" or bt == "" and not vim.b[buf].corkboard_view and not vim.wo[win].diff
+      and vim.api.nvim_win_get_config(win).relative == ""
+  end
+  -- The highest top line that still has the last line at the bottom: up
+  -- from the end, a line as many rows as it wraps to, a closed fold one
+  -- row. In the current window.
+  local function last_top()
+    local height, line, rows, bottom = vim.fn.winheight(0), vim.fn.line("$"), 0, nil
+    while line >= 1 do
+      local first = vim.fn.foldclosed(line)
+      if first == -1 then
+        first = line
+        rows = rows + vim.api.nvim_win_text_height(0, { start_row = line - 1, end_row = line - 1 }).all
+      else
+        rows = rows + 1
       end
-      if bottom and vim.fn.line("w0") > bottom then vim.fn.winrestview({ topline = bottom }) end
+      if rows > height then break end
+      bottom, line = first, first - 1
+    end
+    return bottom or 1
+  end
+  -- The wheel stops at the end itself: scrolled past it and put back after,
+  -- the page draws the overshoot first and the view snaps back.
+  local function wheel_down()
+    local pos = vim.fn.getmousepos()
+    if pos.winid == 0 or not vim.api.nvim_win_is_valid(pos.winid) then return end
+    local steps = tonumber(vim.o.mousescroll:match("ver:(%d+)")) or 3
+    vim.api.nvim_win_call(pos.winid, function()
+      local stop = clamped(pos.winid) and last_top() or math.huge
+      for _ = 1, steps do
+        if vim.fn.line("w0") >= stop then break end
+        vim.cmd("normal! \5")
+      end
+    end)
+  end
+  vim.keymap.set({ "n", "v", "i" }, "<ScrollWheelDown>", wheel_down)
+  -- Anything else is put back after the event, so the next scroll is
+  -- measured from there and fires it again.
+  local function clamp(win)
+    if not clamped(win) then return end
+    vim.api.nvim_win_call(win, function()
+      local bottom = last_top()
+      if vim.fn.line("w0") > bottom then vim.fn.winrestview({ topline = bottom }) end
     end)
   end
   vim.api.nvim_create_autocmd("WinScrolled", {
@@ -970,6 +1046,16 @@ function M.setup()
           if win and vim.api.nvim_win_is_valid(win) then clamp(win) end
         end
       end)
+    end,
+  })
+  -- A file opened in a window (not one gone back to), for the files panel
+  -- to show it.
+  vim.api.nvim_create_autocmd("BufWinEnter", {
+    group = group,
+    callback = function(args)
+      if vim.bo[args.buf].buftype ~= "" and not vim.b[args.buf].corkboard_file then return end
+      local file = vim.api.nvim_buf_get_name(args.buf)
+      if file ~= "" then M.notify("corkboard.opened", file) end
     end,
   })
   -- A save can add a file, so the browser re-reads the folders it shows.

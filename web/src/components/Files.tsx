@@ -19,6 +19,7 @@ export function Files() {
   const root = useStore((s) => s.context?.cwd ?? null);
   const current = useStore((s) => s.context?.file ?? null);
   const version = useStore((s) => s.filesVersion);
+  const opened = useStore((s) => s.opened);
   const open = useStore((s) => s.filesOpen);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // dir -> its entries; what was read stays cached, so reopening is instant.
@@ -69,6 +70,29 @@ export function Files() {
     }
     setExpanded(next);
   };
+
+  // A file opened under the root: the files shown if they were folded, its
+  // folders opened down to it, and its row scrolled to once it is drawn.
+  const reveal = useRef<string | null>(null);
+  const lastOpened = useRef(opened);
+  useEffect(() => {
+    if (opened === lastOpened.current) return;
+    lastOpened.current = opened;
+    const file = opened?.file;
+    if (!root || !file?.startsWith(`${root}/`)) return;
+    const dirs: string[] = [];
+    for (let i = file.indexOf("/", root.length + 1); i >= 0; i = file.indexOf("/", i + 1)) dirs.push(file.slice(0, i));
+    reveal.current = file;
+    store.set({ filesOpen: true });
+    setExpanded((prev) => new Set([...prev, root, ...dirs]));
+    load(dirs.filter((d) => !children.has(d)));
+  }, [opened, root, children, load]);
+  useEffect(() => {
+    const row = reveal.current && tree.current?.querySelector(`[data-path="${CSS.escape(reveal.current)}"]`);
+    if (!row) return;
+    row.scrollIntoView({ block: "nearest" });
+    reveal.current = null;
+  });
 
   // Every folder shut, back to the root's own entries.
   const collapseAll = () => {

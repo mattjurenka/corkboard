@@ -389,19 +389,7 @@ function M.open_card(id, opts)
         vim.api.nvim_del_augroup_by_id(group)
       end,
     })
-    -- Focus going elsewhere (a click off it, another window) closes it,
-    -- saving edits.
-    vim.api.nvim_create_autocmd("WinLeave", {
-      group = group,
-      callback = function()
-        if vim.api.nvim_get_current_win() ~= win then return end
-        vim.schedule(function()
-          if not vim.api.nvim_win_is_valid(win) or vim.api.nvim_get_current_win() == win then return end
-          vim.api.nvim_win_call(win, function() vim.cmd("silent! update") end)
-          pcall(vim.api.nvim_win_close, win, true)
-        end)
-      end,
-    })
+    require("corkboard").popup(win)
   end
   vim.api.nvim_win_set_cursor(card_win, { 1, 2 })
 end
@@ -489,8 +477,11 @@ local actions = {
       if choice == "Delete" then remove(id, "delete") end
     end)
   end,
+  -- A card in review opens to its review.
   open = function(id)
-    if id then M.open_card(id) end
+    if not id then return end
+    if cards.get(id).status == "review" then return require("corkboard.review").open(id) end
+    M.open_card(id)
   end,
   edit = function(id)
     if id then M.open_card(id, { edit = true }) end

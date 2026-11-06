@@ -139,7 +139,7 @@ export function Board({ state, win, focused, nvim }: ViewProps<BoardState>) {
   if (state.none)
     return (
       <div className="flex h-full items-center justify-center opacity-60">
-        <button type="button" onClick={() => nvim.lua("require('corkboard.projects').show()")} className="cursor-pointer px-ch hover:bg-accent">
+        <button type="button" onClick={() => nvim.lua("require('corkboard.projects').show()")} className="cursor-pointer px-ch text-muted-foreground hover:text-foreground">
           <span className="text-primary">→</span> Projects
         </button>
       </div>
@@ -263,7 +263,7 @@ export function BoardCardView({
             e.stopPropagation();
             onSession();
           }}
-          className={cn(SESSION[card.session]?.[1], card.session !== "exited" && "hover:underline")}
+          className={cn(SESSION[card.session]?.[1], card.session !== "exited" && "cursor-pointer hover:text-foreground")}
         >
           ⏵ {SESSION[card.session]?.[0] ?? card.session}
         </div>
@@ -292,7 +292,7 @@ export function BoardCardView({
               e.stopPropagation();
               onAnswer();
             }}
-            className="whitespace-nowrap text-primary hover:underline"
+            className="cursor-pointer whitespace-nowrap text-primary hover:text-foreground"
           >
             ↩ go to it
           </span>

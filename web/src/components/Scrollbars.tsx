@@ -9,12 +9,14 @@
 // enough, once its buffer's text has come (corkboard.minimap), has a
 // minimap instead: its last columns, the buffer a character a pixel, with
 // the lines on screen shaded, scrolling with the window when the buffer is
-// taller than it.
+// taller than it. Either is marked down its right edge where the file has
+// changed since the last commit, in the files panel's colours, and across
+// at the cursor's line.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useNvim } from "@/nvim/context";
-import { type Bar, type Minimap as Map, type Rect, useStore } from "@/store";
+import { type Bar, type GitRange, type Minimap as Map, type Rect, useStore } from "@/store";
 import { box, holes } from "./Panels";
 
 const MIN_THUMB = 24; // px
@@ -24,6 +26,20 @@ const MAP_MIN = 60;
 // px a line, and a character.
 const LINE_H = 2;
 const CHAR_W = 1;
+
+const GIT_COLOR: Record<GitRange[2], string> = { add: "bg-working", change: "bg-review", delete: "bg-blocked" };
+
+// The changes down the right edge: y gives a line's top in px, h the height
+// of n lines.
+function GitMarks({ git, y, h }: { git?: GitRange[]; y: (line: number) => number; h: (n: number) => number }) {
+  return git?.map(([first, n, kind]) => (
+    <div
+      key={`${first}:${kind}`}
+      className={cn("pointer-events-none absolute right-0 w-[3px]", GIT_COLOR[kind])}
+      style={{ top: y(first), height: Math.max(2, h(n)) }}
+    />
+  ));
+}
 
 export function Scrollbars() {
   const nvim = useNvim();
@@ -128,6 +144,11 @@ function Scrollbar({
           dragging && "bg-foreground/6",
         )}
       >
+        <GitMarks git={bar.git} y={(l) => ((l - 1) / bar.lines) * trackH} h={(n) => (n / bar.lines) * trackH} />
+        <div
+          className="pointer-events-none absolute inset-x-0 z-1 h-0.5 bg-foreground/70"
+          style={{ top: Math.min(trackH - 2, ((bar.cursor - 1) / bar.lines) * trackH) }}
+        />
         <div
           ref={thumb}
           className={cn(
@@ -231,6 +252,11 @@ function Minimap({
       onWheel={passWheel}
     >
       <canvas ref={canvas} className="absolute inset-0" style={{ width: w, height: h }} />
+      <GitMarks git={bar.git} y={(l) => (l - 1) * LINE_H - offset} h={(n) => n * LINE_H} />
+      <div
+        className="pointer-events-none absolute inset-x-0 bg-foreground/60"
+        style={{ top: (bar.cursor - 1) * LINE_H - offset, height: LINE_H }}
+      />
       <div
         className={cn(
           "pointer-events-none absolute inset-x-0 bg-foreground/8 transition-colors group-hover:bg-foreground/14",

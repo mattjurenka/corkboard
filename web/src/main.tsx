@@ -109,6 +109,7 @@ rpc.on("corkboard.focus_tabs", () => document.querySelector<HTMLElement>("#tabs"
 // A new commit, under `bun run dev` (bridge/server.ts).
 rpc.on("corkboard.reload", () => location.reload());
 rpc.on("corkboard.focus", ([focus]: any[]) => store.set({ focus: focus ?? null }));
+rpc.on("corkboard.opened", ([file]: any[]) => store.set({ opened: { file, n: (store.get().opened?.n ?? 0) + 1 } }));
 rpc.on("corkboard.files_changed",() => store.set({ filesVersion: store.get().filesVersion + 1 }));
 
 // Neovim sends a layout just before the flush that draws it. Rendering it
@@ -134,10 +135,13 @@ const later = () => {
   clearTimeout(layoutTimer);
   layoutTimer = setTimeout(applyLayout, 50);
 };
-// Neovim's names for tabs whose buffer names read badly, by tab handle
+// Neovim's names for tabs whose buffer names read badly, and every tab's
+// main window's buffer name in place of the focused window's, by tab handle
 // (corkboard.tab_labels), put on the tabs so the skeleton keeps them.
 let tabLabels: Record<string, NonNullable<Tab["label"]>> = {};
-const labelTabs = (tabs: Tab[]) => tabs.map((t) => ({ ...t, label: tabLabels[t.tab.id] }));
+let tabNames: Record<string, string> = {};
+const labelTabs = (tabs: Tab[]) =>
+  tabs.map((t) => ({ ...t, name: tabNames[t.tab.id] ?? t.name, label: tabLabels[t.tab.id] }));
 rpc.on("redraw", (batches: any[]) => {
   grid.redraw(batches);
   for (const [name, ...calls] of batches) {
@@ -163,8 +167,9 @@ rpc.on("corkboard.minimap", ([{ buf, ...map }]: any[]) => {
   const { [buf]: _, ...minimaps } = store.get().minimaps;
   store.set({ minimaps: map.lines ? { ...minimaps, [buf]: map } : minimaps });
 });
-rpc.on("corkboard.tab_labels", ([labels]: any[]) => {
+rpc.on("corkboard.tab_labels", ([{ labels, names }]: any[]) => {
   tabLabels = labels ?? {};
+  tabNames = names ?? {};
   const tabs = store.get().tabs;
   if (tabs) store.set({ tabs: { ...tabs, tabs: labelTabs(tabs.tabs) } });
 });
@@ -328,7 +333,7 @@ new ResizeObserver(() => {
   }
 }).observe(container);
 
-attachInput(canvas, container.querySelector("#keys")!, grid, rpc);
+attachInput(canvas, container.querySelector("#keys")!, grid, rpc, () => store.get().layout?.wins);
 // Whether this window has focus, which Neovim passes on to terminals that
 // ask (Claude Code holds back notifications while it thinks you're looking).
 const focus = () => rpc.notify("nvim_ui_set_focus", document.hasFocus());

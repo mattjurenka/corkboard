@@ -127,9 +127,25 @@ const VISUAL = /^(visual|select)/;
 // Cmd on its own, on a Mac, where it copies and pastes as Ctrl does elsewhere.
 const cmd = (e) => MAC && e.metaKey && !e.ctrlKey && !e.altKey;
 
+// The resize cursor for a cell on a split's separator or status line, where
+// a drag resizes the windows beside it; "" elsewhere. wins: the layout's
+// splits (corkboard.layout). The bottom row of status lines is left out, as
+// dragging it changes 'cmdheight', and so is the corner where a separator
+// meets a status line.
+function edgeAt(wins, row, col) {
+  const bottom = Math.max(...wins.map((w) => w.row + w.height));
+  for (const w of wins) {
+    const below = w.row + w.height;
+    if (col === w.col + w.width && row >= w.row && row < below) return "col-resize";
+    if (row === below && below < bottom && col >= w.col && col < w.col + w.width) return "row-resize";
+  }
+  return "";
+}
+
 // keys: the textarea a touchscreen types into (App.tsx), which has the
 // on-screen keyboard while it has focus; a tap on the grid leaves it there.
-export function attachInput(canvas, keys, grid, rpc) {
+// wins: the current splits, for the cursor over their edges.
+export function attachInput(canvas, keys, grid, rpc, wins) {
   const onKeyDown = (e) => {
     // Paste is left to the browser so the paste event below fires with the
     // system clipboard. Ctrl+Shift+V always; Ctrl+V only where text is being
@@ -235,18 +251,47 @@ export function attachInput(canvas, keys, grid, rpc) {
     if (held) mouse(held, "press", e);
     e.preventDefault();
   });
-  canvas.addEventListener("mousemove", (e) => held && mouse(held, "drag", e));
+  // The cursor stays as it was pressed for the length of a drag.
+  canvas.addEventListener("mousemove", (e) => {
+    if (held) return mouse(held, "drag", e);
+    const rect = canvas.getBoundingClientRect();
+    const { row, col } = grid.cellAt(e.clientX - rect.left, e.clientY - rect.top);
+    canvas.style.cursor = edgeAt(wins() ?? [], row, col);
+  });
   window.addEventListener("mouseup", (e) => {
     if (held) mouse(held, "release", e);
     held = null;
   });
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  // A trackpad, or a Mac's smooth-scrolling mouse, sends a stream of small
+  // deltas where a wheel sends one big one a notch. Each step scrolls
+  // 'mousescroll' lines (3), so the deltas are summed and a step goes in for
+  // every three cells' worth; a notch, bigger than that alone, is one step.
+  const wheel = { x: 0, y: 0 };
+  const STEP_CELLS = 3;
+  const scroll = (axis, delta, cell, neg, pos, e) => {
+    if (!delta) return;
+    if (Math.sign(delta) !== Math.sign(wheel[axis])) wheel[axis] = 0;
+    const step = STEP_CELLS * cell;
+    if (Math.abs(delta) >= step) {
+      wheel[axis] = 0;
+      mouse("wheel", delta > 0 ? pos : neg, e);
+      return;
+    }
+    wheel[axis] += delta;
+    while (Math.abs(wheel[axis]) >= step) {
+      mouse("wheel", wheel[axis] > 0 ? pos : neg, e);
+      wheel[axis] -= Math.sign(wheel[axis]) * step;
+    }
+  };
   canvas.addEventListener(
     "wheel",
     (e) => {
       e.preventDefault();
-      if (e.deltaY) mouse("wheel", e.deltaY > 0 ? "down" : "up", e);
-      if (e.deltaX) mouse("wheel", e.deltaX > 0 ? "right" : "left", e);
+      // deltaMode 1 is lines, 2 pages; 0, pixels, is what most browsers send.
+      const unit = (cell, cells) => (e.deltaMode === 1 ? cell : e.deltaMode === 2 ? cell * cells : 1);
+      scroll("y", e.deltaY * unit(grid.cellH, grid.rows), grid.cellH, "up", "down", e);
+      scroll("x", e.deltaX * unit(grid.cellW, grid.cols), grid.cellW, "left", "right", e);
     },
     { passive: false },
   );
