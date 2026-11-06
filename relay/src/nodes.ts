@@ -8,11 +8,24 @@
 //
 // What goes through the tunnel is the node's own HTTP (OAuth, /mcp, the
 // phone's API): it's plaintext here in passing, and nothing of it is kept.
+//
+// Channels (lib/e2ee/channel.ts) come through here too: another device's
+// socket to /e2ee/channel?to=<device>, paired with that device's node
+// socket, its messages passed on both ways (wire.ts's CHANNEL). They're
+// sealed between the two devices, so all this sees is their size.
 
 import { DurableObject } from "cloudflare:workers";
-import { LIMITS, type NodesView, type TunnelRequest, type TunnelResponse } from "../../lib/e2ee/wire";
+import { CHANNEL, CHANNEL_ID, LIMITS, type NodesView, type TunnelRequest, type TunnelResponse, b64url, concat, fromB64url } from "../../lib/e2ee/wire";
 
 type Attached = { device: string; since: number };
+// An opener's socket: the channel's id, who opened it, and the node socket
+// (device and since) it's paired with.
+type Opener = { channel: string; from: string; to: string; since: number };
+
+const isOpener = (a: Attached | Opener | null): a is Opener => !!a && "channel" in a;
+const utf8 = (s: string) => new TextEncoder().encode(s);
+// A close's reason is at most 123 bytes.
+const why = (reason: string) => reason.slice(0, 120);
 
 export class Nodes extends DurableObject {
   private sql: SqlStorage;
@@ -41,9 +54,33 @@ export class Nodes extends DurableObject {
 
   private sockets(): { ws: WebSocket; a: Attached }[] {
     return this.ctx.getWebSockets().flatMap((ws) => {
-      const a = ws.deserializeAttachment() as Attached | null;
-      return a && ws.readyState === WebSocket.OPEN ? [{ ws, a }] : [];
+      const a = ws.deserializeAttachment() as Attached | Opener | null;
+      return a && !isOpener(a) && ws.readyState === WebSocket.OPEN ? [{ ws, a }] : [];
     });
+  }
+
+  // The openers' sockets paired with a node socket.
+  private openers(device: string, since: number, channel?: string): { ws: WebSocket; o: Opener }[] {
+    return this.ctx.getWebSockets(channel ? `ch:${channel}` : `to:${device}`).flatMap((ws) => {
+      const o = ws.deserializeAttachment() as Attached | Opener | null;
+      return isOpener(o) && o.to === device && o.since === since ? [{ ws, o }] : [];
+    });
+  }
+
+  private static frame(kind: number, channel: string, payload: Uint8Array) {
+    return concat(Uint8Array.of(kind), fromB64url(channel), payload);
+  }
+
+  // Another device's channel to one of the account's connected devices.
+  private openChannel(from: string, to: string): Response {
+    const node = this.sockets().find(({ a }) => a.device === to);
+    if (!node) return Response.json({ error: "that device isn't connected" }, { status: 404 });
+    const channel = b64url(crypto.getRandomValues(new Uint8Array(CHANNEL_ID)));
+    const { 0: client, 1: server } = new WebSocketPair();
+    this.ctx.acceptWebSocket(server, [`ch:${channel}`, `to:${to}`]);
+    server.serializeAttachment({ channel, from, to, since: node.a.since } satisfies Opener);
+    node.ws.send(Nodes.frame(CHANNEL.open, channel, utf8(JSON.stringify({ from }))));
+    return new Response(null, { status: 101, webSocket: client });
   }
 
   status(): NodesView {
@@ -84,6 +121,8 @@ export class Nodes extends DurableObject {
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return new Response("expected a WebSocket", { status: 426 });
     const device = request.headers.get("X-Device");
     if (!device) return new Response("no device", { status: 400 });
+    const to = request.headers.get("X-Channel-To");
+    if (to) return this.openChannel(device, to);
     for (const { ws, a } of this.sockets()) if (a.device === device) this.drop(ws, 4000, "replaced");
     const name = request.headers.get("X-Device-Name") || device.slice(0, 8);
     this.sql.exec("INSERT INTO devices (device, name, seen) VALUES (?, ?, ?) ON CONFLICT (device) DO UPDATE SET name = excluded.name, seen = excluded.seen", device, name, Date.now());
@@ -94,7 +133,13 @@ export class Nodes extends DurableObject {
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
-    if (typeof message !== "string" || message.length > LIMITS.tunnel * 1.4) return;
+    const a = ws.deserializeAttachment() as Attached | Opener | null;
+    if (isOpener(a)) return this.fromOpener(ws, a, message);
+    if (typeof message !== "string") {
+      if (a) this.fromNode(a, new Uint8Array(message));
+      return;
+    }
+    if (message.length > LIMITS.tunnel * 1.4) return;
     let r: TunnelResponse;
     try {
       r = JSON.parse(message) as TunnelResponse;
@@ -106,20 +151,54 @@ export class Nodes extends DurableObject {
     if (p?.ws === ws) p.done(r);
   }
 
+  // An opener's message, to the node it's paired with.
+  private fromOpener(ws: WebSocket, o: Opener, message: string | ArrayBuffer) {
+    if (typeof message === "string" || message.byteLength > LIMITS.channelMessage) return this.close(ws, 1009, "a channel carries binary messages, each at most " + LIMITS.channelMessage + " bytes");
+    const node = this.sockets().find(({ a }) => a.device === o.to && a.since === o.since);
+    if (!node) return this.close(ws, 1001, "the device went away");
+    node.ws.send(Nodes.frame(CHANNEL.message, o.channel, new Uint8Array(message)));
+  }
+
+  // A node's message on one of its channels, to its opener.
+  private fromNode(a: Attached, b: Uint8Array) {
+    if (b.length < 1 + CHANNEL_ID || b.length > LIMITS.channelMessage + 1 + CHANNEL_ID) return;
+    const channel = b64url(b.subarray(1, 1 + CHANNEL_ID));
+    const payload = b.subarray(1 + CHANNEL_ID);
+    for (const { ws } of this.openers(a.device, a.since, channel)) {
+      if (b[0] === CHANNEL.message) ws.send(payload);
+      else if (b[0] === CHANNEL.close) this.close(ws, 1000, new TextDecoder().decode(payload));
+    }
+  }
+
+  private close(ws: WebSocket, code: number, reason: string) {
+    try {
+      ws.close(code, why(reason));
+    } catch {}
+  }
+
   private drop(ws: WebSocket, code: number, reason = "") {
     for (const [, p] of this.pending) if (p.ws === ws) p.done(undefined);
+    const a = ws.deserializeAttachment() as Attached | Opener | null;
+    if (a && !isOpener(a)) for (const o of this.openers(a.device, a.since)) this.close(o.ws, 1001, "the device went away");
     try {
       ws.close(code, reason);
     } catch {}
   }
 
-  webSocketClose(ws: WebSocket, code: number) {
-    const a = ws.deserializeAttachment() as Attached | null;
+  webSocketClose(ws: WebSocket, code: number, reason: string) {
+    const a = ws.deserializeAttachment() as Attached | Opener | null;
+    if (isOpener(a)) {
+      // The opener gone: its channel's end, to the node.
+      this.sockets()
+        .find(({ a: n }) => n.device === a.to && n.since === a.since)
+        ?.ws.send(Nodes.frame(CHANNEL.close, a.channel, utf8(why(reason || "the other side went away"))));
+      return this.close(ws, code === 1005 ? 1000 : code, reason);
+    }
     if (a) this.sql.exec("UPDATE devices SET seen = ? WHERE device = ?", Date.now(), a.device);
     this.drop(ws, code === 1005 ? 1000 : code);
   }
 
   webSocketError(ws: WebSocket) {
-    this.drop(ws, 1011);
+    this.webSocketClose(ws, 1011, "");
   }
 }

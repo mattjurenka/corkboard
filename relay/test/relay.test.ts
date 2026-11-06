@@ -771,3 +771,128 @@ describe("nodes and the tunnel", () => {
     expect((await worker(`/n/${handle}/x`)).headers.get("x-node")).toBe("second");
   });
 });
+
+describe("channels", () => {
+  // Relay's socket(), made from the test Worker's fetch: a WebSocket-shaped
+  // thing that opens once the upgrade's done.
+  function socketVia(): (url: string, protocols: string[]) => WebSocket {
+    return (url, protocols) => {
+      const t = new EventTarget() as EventTarget & { readyState: number; binaryType: string; send(b: unknown): void; close(code?: number, reason?: string): void; ws?: WebSocket };
+      t.readyState = 0;
+      t.binaryType = "blob";
+      t.send = (b) => t.ws!.send(b as ArrayBuffer);
+      t.close = (code, reason) => (t.ws ? t.ws.close(code, reason) : undefined);
+      void fetcher(url.replace(/^ws/, "http"), { headers: { Upgrade: "websocket", "Sec-WebSocket-Protocol": protocols.join(", ") } }).then((res) => {
+        if (!res.webSocket) {
+          t.readyState = 3;
+          return t.dispatchEvent(Object.assign(new Event("close"), { code: 1006, reason: `${res.status}` }));
+        }
+        const ws = (t.ws = res.webSocket);
+        // What the client asked for (wsLink and serveTunnel ask for ArrayBuffers).
+        (ws as unknown as { binaryType: string }).binaryType = t.binaryType;
+        ws.addEventListener("message", (e) => t.dispatchEvent(Object.assign(new Event("message"), { data: e.data })));
+        ws.addEventListener("close", (e) => {
+          t.readyState = 3;
+          t.dispatchEvent(Object.assign(new Event("close"), { code: e.code, reason: e.reason }));
+        });
+        ws.accept();
+        t.readyState = 1;
+        t.dispatchEvent(new Event("open"));
+      });
+      return t as unknown as WebSocket;
+    };
+  }
+
+  async function devices() {
+    const a = await account();
+    const laptop = new Relay({ origin: ORIGIN, fetch: fetcher, device: a.device, cert: a.cert, socket: socketVia() });
+    const node = newDevice();
+    const nodeRelay = new Relay({ origin: ORIGIN, fetch: fetcher, device: node, cert: certify(a.keys, node, "node"), socket: socketVia() });
+    return { a, laptop, node, nodeRelay };
+  }
+
+  const serve = (relay: Relay, channels: (req: Request) => Promise<Response>) => {
+    const stop = relay.serveTunnel(async () => new Response("tunnel"), { name: "node", channels });
+    return stop;
+  };
+
+  it("join two of the account's devices through the relay, which passes on only sealed frames", async () => {
+    const { a, laptop, node, nodeRelay } = await devices();
+    // Not connected yet.
+    await expect(laptop.channel(node.id)).rejects.toThrow(/404/);
+    const stop = serve(nodeRelay, async (req) => new Response(`${req.method} ${new URL(req.url).pathname}: ${await req.text()}`));
+    await vi.waitUntil(async () => (await a.relay.nodes()).connected.length === 1);
+
+    const ch = await laptop.channel(node.id);
+    expect(ch.peer.body.name).toBe("node");
+    expect(await (await ch.fetch("/api/node/boards", { method: "POST", body: "a secret" })).text()).toBe("POST /api/node/boards: a secret");
+    // The tunnel's text answers still work on the same socket.
+    expect(await (await worker(`/n/${await nodeHandle(a.keys.id)}/x`)).text()).toBe("tunnel");
+
+    // Without a token, or to something that isn't a device, no channel.
+    expect((await worker(`/e2ee/channel?to=${node.id}`, { headers: { Upgrade: "websocket" } })).status).toBe(401);
+    const t = await laptop.token();
+    expect((await worker("/e2ee/channel?to=nope", { headers: { Upgrade: "websocket", Authorization: `Bearer ${t}` } })).status).toBe(400);
+
+    // Another account's device can't reach this one's.
+    const b = await account();
+    const theirs = new Relay({ origin: ORIGIN, fetch: fetcher, device: b.device, cert: b.cert, socket: socketVia() });
+    await expect(theirs.channel(node.id)).rejects.toThrow(/404/);
+
+    // The node going away ends the channel.
+    stop();
+    expect(await ch.closed).toMatch(/went away|closed/);
+  });
+
+  it("refuse a revoked device's channel at the relay, and at the other end", async () => {
+    const { a, laptop, node, nodeRelay } = await devices();
+    const stop = serve(nodeRelay, async () => new Response("ok"));
+    await vi.waitUntil(async () => (await a.relay.nodes()).connected.length === 1);
+    const phone = newDevice();
+    const phoneCert = certify(a.keys, phone, "phone");
+    const phoneRelay = new Relay({ origin: ORIGIN, fetch: fetcher, device: phone, cert: phoneCert, socket: socketVia() });
+    await phoneRelay.token();
+    await a.relay.revoke(revoke(a.keys, phone.id));
+    // Its token's gone.
+    await expect(phoneRelay.channel(node.id)).rejects.toThrow(/refused|401/);
+    // A relay that lets it in anyway (here, on the laptop's token): the node
+    // goes by the account's revocations, and the phone's hello is its own.
+    const sneaky = new Relay({ origin: ORIGIN, fetch: fetcher, device: phone, cert: phoneCert, token: { token: await laptop.token(), expires: Date.now() + 3600_000 }, socket: socketVia() });
+    await expect(sneaky.channel(node.id)).rejects.toThrow(/revoked/);
+    // The laptop still gets in.
+    expect(await (await (await laptop.channel(node.id)).fetch("/")).text()).toBe("ok");
+    stop();
+  });
+
+  it("carry a stream past the tunnel's 17 MB", async () => {
+    const { a, laptop, node, nodeRelay } = await devices();
+    const stop = serve(nodeRelay, async (req) => new Response(req.body));
+    await vi.waitUntil(async () => (await a.relay.nodes()).connected.length === 1);
+    const ch = await laptop.channel(node.id);
+    const big = new Uint8Array(18 * 1024 * 1024);
+    for (let k = 0; k < big.length; k += 1000) big[k] = k % 251;
+    const back = new Uint8Array(await (await ch.fetch("/big", { method: "POST", body: big })).arrayBuffer());
+    expect(back.length).toBe(big.length);
+    let same = true;
+    for (let k = 0; k < big.length; k += 1000) same &&= back[k] === big[k];
+    expect(same).toBe(true);
+    ch.close();
+    stop();
+  }, 120_000);
+
+  it("keep a stream open past the tunnel's 60 seconds", async () => {
+    const { a, laptop, node, nodeRelay } = await devices();
+    let send!: ReadableStreamDefaultController<Uint8Array>;
+    const stop = serve(nodeRelay, async () => new Response(new ReadableStream<Uint8Array>({ start: (c) => void (send = c) })));
+    await vi.waitUntil(async () => (await a.relay.nodes()).connected.length === 1);
+    const ch = await laptop.channel(node.id);
+    const rd = (await ch.fetch("/events")).body!.getReader();
+    send.enqueue(utf8("first"));
+    expect(new TextDecoder().decode((await rd.read()).value)).toBe("first");
+    await new Promise((r) => setTimeout(r, 61_000));
+    send.enqueue(utf8("a minute later"));
+    expect(new TextDecoder().decode((await rd.read()).value)).toBe("a minute later");
+    ch.close();
+    stop();
+  }, 90_000);
+});

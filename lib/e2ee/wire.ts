@@ -167,6 +167,8 @@ export const LIMITS = {
   tunnel: 17 * 1024 * 1024,
   // How long the relay waits for a node's answer.
   tunnelMs: 60_000,
+  // One message on a channel (channel.ts's FRAME of body, sealed and framed, with room).
+  channelMessage: 80 * 1024,
 };
 
 // The account's nodes (relay/src/nodes.ts): the devices with a socket open
@@ -181,6 +183,16 @@ export type NodesView = { leader: string | null; connected: { device: string; si
 // are pairs, so a repeated one survives.
 export type TunnelRequest = { id: string; method: string; path: string; headers: [string, string][]; body?: string };
 export type TunnelResponse = { id: string; status: number; headers: [string, string][]; body?: string };
+
+// Channels (lib/e2ee/channel.ts): GET /e2ee/channel?to=<device> is a
+// socket of the opener's own, carrying the channel's messages as they are.
+// The relay passes them on over the device's node socket as binary
+// messages, kind (1) || channel id (CHANNEL_ID) || payload: open's payload
+// is { from } as JSON (the opener, in the relay's word; the handshake is
+// what to go by), a message's is the message, close's the reason. The
+// device sends message and close back the same way.
+export const CHANNEL = { open: 0, message: 1, close: 2 } as const;
+export const CHANNEL_ID = 16;
 
 // Where an account's nodes are reached: <relay>/n/<handle>. A hash of the
 // account id, so it's short and says nothing a URL shouldn't.

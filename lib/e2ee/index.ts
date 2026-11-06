@@ -13,3 +13,4 @@ export * from "./merge";
 export * from "./sync";
 export * from "./relay";
 export * from "./sharing";
+export * from "./channel";

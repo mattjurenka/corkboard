@@ -23,18 +23,21 @@
 //   GET  /e2ee/nodes              the account's connected nodes and its leader (NodesView), its handle and url
 //   PUT  /e2ee/nodes/leader       { device | null }
 //   GET  /e2ee/nodes/live         WebSocket: this device as a node, answering the tunnel's
-//                                 TunnelRequests (<relay>/n/<handle>/…) with TunnelResponses
+//                                 TunnelRequests (<relay>/n/<handle>/…) with TunnelResponses,
+//                                 and carrying the channels opened to it (binary, wire.ts's CHANNEL)
+//   GET  /e2ee/channel?to=        WebSocket: a sealed channel (channel.ts) to a connected device
 //
 // Everything but creating an account, challenges, revocations, rotated and the new device's
 // side of pairing wants a token from /e2ee/token, as a bearer (or, for a
 // browser's socket, the corkboard.bearer.<base64url> subprotocol). A token
 // that's expired or refused is got again, once, from the device's keys.
 
-import { answer, type Device } from "./device";
+import { type Channel, type Handler, type Identity, initiate, pipe, respond, wsLink } from "./channel";
+import { answer, checkCert, type Device } from "./device";
 import type { Delivery, MailboxView, PairTransport } from "./pairing";
 import { EpochChanged, type LogTransport } from "./sync";
 import type { AccountView, Creation, DeviceCert, Grant, LogRead, NewOp, NodesView, Revocation, Rotated, Rotation, Signed, Snapshot, TunnelRequest, TunnelResponse, WireOp } from "./wire";
-import { LIMITS, b64url, fromB64url, utf8 } from "./wire";
+import { CHANNEL, CHANNEL_ID, LIMITS, b64url, concat, fromB64url, fromUtf8, utf8 } from "./wire";
 
 export type Nodes = NodesView & { handle: string; url: string };
 
@@ -66,9 +69,13 @@ export type RelayOptions = {
   socket?(url: string, protocols: string[]): WebSocket;
 };
 
+// How long a device goes by the relay's list of revocations before asking again.
+const REVOKED_MS = 60_000;
+
 export class Relay implements PairTransport, LogTransport {
   readonly origin: string;
   private f: Fetch;
+  private revocations?: { at: number; list: Promise<Signed<Revocation>[]> };
   constructor(private o: RelayOptions) {
     this.origin = o.origin.replace(/\/$/, "");
     this.f = o.fetch ?? ((input, init) => fetch(input, init));
@@ -292,14 +299,55 @@ export class Relay implements PairTransport, LogTransport {
     return this.authed<Nodes>("PUT", "/e2ee/nodes/leader", { device });
   }
 
+  // Channels ---------------------------------------------------------------------
+
+  // A cert of this account's now, not revoked: what a channel's other side
+  // must show. The relay's list of revocations is the account key's
+  // signatures, so a relay can keep one back but not make one up.
+  private identity(): Identity {
+    const { device, cert } = this.o;
+    if (!device || !cert) throw new Error("this relay client has no device to open channels with");
+    return {
+      device,
+      cert,
+      trust: async (peer) => {
+        if (!this.revocations || this.revocations.at + REVOKED_MS < Date.now()) {
+          const list = this.revoked();
+          this.revocations = { at: Date.now(), list };
+          list.catch(() => (this.revocations = undefined));
+        }
+        return checkCert(cert.body.account, peer, await this.revocations.list);
+      },
+    };
+  }
+
+  // A sealed channel to another of the account's connected devices (one
+  // serving its socket, serveTunnel). serve: what this side answers on it.
+  async channel(to: string, o: { serve?: Handler } = {}): Promise<Channel> {
+    const me = this.identity();
+    const make = this.o.socket ?? ((url, protocols) => new WebSocket(url, protocols));
+    const t = await this.token();
+    const ws = make(`${this.origin.replace(/^http/, "ws")}/e2ee/channel?to=${encodeURIComponent(to)}`, ["corkboard", `corkboard.bearer.${b64url(utf8(t))}`]);
+    const link = wsLink(ws);
+    await new Promise<void>((ok, fail) => {
+      ws.addEventListener("open", () => ok());
+      ws.addEventListener("close", (e: CloseEvent) => fail(new RelayError(e.code, `channel to ${to}: ${e.reason || "the relay refused it"}`)));
+    });
+    return initiate(link, me, to, o);
+  }
+
   // This device as one of the account's nodes: the tunnel's requests are
   // answered by handler, at the node's own paths (/mcp, not /n/<handle>/mcp)
   // on a placeholder host, so the handler must know its public origin
   // (nodes().url). Reconnects after a drop until stopped, or until another
   // socket of this device's replaces it.
-  serveTunnel(handler: (req: Request) => Promise<Response>, o: { name?: string; onState?(connected: boolean): void } = {}): () => void {
+  //
+  // channels: what this device serves on the channels other devices open to
+  // it (channel.ts); without it, they're closed as they open.
+  serveTunnel(handler: (req: Request) => Promise<Response>, o: { name?: string; onState?(connected: boolean): void; channels?: Handler; onChannel?(ch: Channel): void } = {}): () => void {
     let stopped = false;
     let ws: WebSocket | undefined;
+    const links = new Map<string, ReturnType<typeof pipe>>();
     let ping: ReturnType<typeof setInterval> | undefined;
     const make = this.o.socket ?? ((url, protocols) => new WebSocket(url, protocols));
     const answer = async (r: TunnelRequest): Promise<TunnelResponse> => {
@@ -321,7 +369,39 @@ export class Relay implements PairTransport, LogTransport {
         o.onState?.(true);
         ping = setInterval(() => sock.readyState === 1 && sock.send("ping"), 30_000);
       });
+      sock.binaryType = "arraybuffer";
+      // A channel's open, message or close.
+      const onChannel = (b: Uint8Array) => {
+        if (b.length < 1 + CHANNEL_ID) return;
+        const raw = b.slice(1, 1 + CHANNEL_ID);
+        const id = b64url(raw);
+        const payload = b.subarray(1 + CHANNEL_ID);
+        const out = (kind: number, p: Uint8Array) => sock.readyState === 1 && sock.send(concat(Uint8Array.of(kind), raw, p) as Uint8Array<ArrayBuffer>);
+        if (b[0] === CHANNEL.open) {
+          if (!o.channels || links.has(id)) return out(CHANNEL.close, utf8("this device takes no channels"));
+          const p = pipe(
+            (m) => out(CHANNEL.message, m),
+            (reason) => {
+              links.delete(id);
+              out(CHANNEL.close, utf8(reason.slice(0, 120)));
+            },
+          );
+          links.set(id, p);
+          respond(p.link, this.identity(), { serve: o.channels }).then(
+            (ch) => {
+              void ch.closed.then(() => links.delete(id));
+              o.onChannel?.(ch);
+            },
+            () => links.delete(id),
+          );
+        } else if (b[0] === CHANNEL.message) links.get(id)?.deliver(payload.slice());
+        else if (b[0] === CHANNEL.close) {
+          links.get(id)?.end(fromUtf8(payload) || "the other side went away");
+          links.delete(id);
+        }
+      };
       sock.addEventListener("message", (e: MessageEvent) => {
+        if (typeof e.data !== "string") return onChannel(new Uint8Array(e.data as ArrayBuffer));
         if (e.data === "pong") return;
         let r: TunnelRequest;
         try {
@@ -333,6 +413,8 @@ export class Relay implements PairTransport, LogTransport {
       });
       sock.addEventListener("close", (e: CloseEvent) => {
         if (ping) clearInterval(ping);
+        for (const p of links.values()) p.end("the relay went away");
+        links.clear();
         o.onState?.(false);
         if (!stopped && e.code !== 4000) setTimeout(connect, 2000);
       });

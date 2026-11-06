@@ -316,14 +316,23 @@ export async function e2ee(request: Request, env: RelayEnv, r: Accounts): Promis
   if (path === "/e2ee/revoked") return method === "GET" ? json(await r.e2eeRevocations(who.account)) : error(405, "method not allowed");
 
   // The account's nodes: which are connected and which leads (GET), the
-  // leader (PUT { device | null }), and a node's own socket (live).
-  if (path === "/e2ee/nodes" || path === "/e2ee/nodes/leader" || path === "/e2ee/nodes/live") {
+  // leader (PUT { device | null }), a node's own socket (live), and a
+  // channel to one of them (channel?to=).
+  if (path === "/e2ee/nodes" || path === "/e2ee/nodes/leader" || path === "/e2ee/nodes/live" || path === "/e2ee/channel") {
     const handle = await nodeHandle(who.account);
     const stub = nodesOf(env, handle);
-    if (path === "/e2ee/nodes/live") {
+    if (path === "/e2ee/nodes/live" || path === "/e2ee/channel") {
       if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return error(426, "expected a WebSocket");
-      const name = (url.searchParams.get("name") ?? "").trim().slice(0, 100);
-      const res = await stub.fetch(new Request(request.url, { headers: { Upgrade: "websocket", "X-Device": who.device, ...(name && { "X-Device-Name": name }) } }));
+      const headers: Record<string, string> = { Upgrade: "websocket", "X-Device": who.device };
+      if (path === "/e2ee/channel") {
+        const to = url.searchParams.get("to") ?? "";
+        if (!KEY.test(to)) return error(400, "to must be a device id");
+        headers["X-Channel-To"] = to;
+      } else {
+        const name = (url.searchParams.get("name") ?? "").trim().slice(0, 100);
+        if (name) headers["X-Device-Name"] = name;
+      }
+      const res = await stub.fetch(new Request(request.url, { headers }));
       if (res.status !== 101) return res;
       const offered = (request.headers.get("Sec-WebSocket-Protocol") ?? "").split(",").map((p) => p.trim());
       return new Response(null, { status: 101, webSocket: res.webSocket, headers: offered.includes("corkboard") ? { "Sec-WebSocket-Protocol": "corkboard" } : {} });

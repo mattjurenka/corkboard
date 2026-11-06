@@ -527,7 +527,9 @@ Still to do:
 ## Open questions
 
 - Whether the phone talks to the node directly or through the relay (the relay would see only
-  ciphertext if the phone and node encrypt between themselves).
+  ciphertext if the phone and node encrypt between themselves). Decided 2026-11-05: through the
+  relay, sealed between devices; see ciphertext-relay.md, which also takes sessions and the fleet
+  off the Worker.
 - The trust boundary of the web page: a page served from our domain can be changed to steal keys.
   Only the signed desktop app and reproducible Nix builds are trustworthy clients; the portal
   should say so, or load only through the app.
