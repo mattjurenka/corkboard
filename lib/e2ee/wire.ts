@@ -53,8 +53,11 @@ export function canonical(o: Flat): string {
 export const signed = (kind: string, o: Flat) => utf8(`${VERSION} ${kind}\n${canonical(o)}`);
 
 // A device certificate: the account's signing key vouches for a device's
-// signing key (and its box key, for what's wrapped to it).
-export type DeviceCert = { v: 1; account: string; device: string; box: string; name: string; issued: number };
+// signing key (and its box key, for what's wrapped to it). role "relay": a
+// relay-only device (fleetd's, ciphertext-relay.md), never given the root,
+// whose tokens open channels and list the nodes and nothing else; absent
+// for every other device, so their certs sign as they always have.
+export type DeviceCert = { v: 1; account: string; device: string; box: string; name: string; issued: number; role?: "relay" };
 export type Signed<T> = { body: T; sig: string };
 
 // The account's word that a device is no longer one of its own.
@@ -69,7 +72,7 @@ export type Challenge = { v: 1; origin: string; nonce: string; account: string; 
 
 export function isCert(c: unknown): c is DeviceCert {
   const o = c as DeviceCert;
-  return !!o && o.v === 1 && KEY.test(o.account) && KEY.test(o.device) && KEY.test(o.box) && typeof o.name === "string" && o.name.length <= 100 && Number.isSafeInteger(o.issued);
+  return !!o && o.v === 1 && KEY.test(o.account) && KEY.test(o.device) && KEY.test(o.box) && typeof o.name === "string" && o.name.length <= 100 && Number.isSafeInteger(o.issued) && (o.role === undefined || o.role === "relay");
 }
 
 export function isRevocation(r: unknown): r is Revocation {

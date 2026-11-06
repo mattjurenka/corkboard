@@ -864,6 +864,31 @@ describe("channels", () => {
     stop();
   });
 
+  it("let a relay-only device open channels and list the nodes, and nothing else", async () => {
+    const { a, node, nodeRelay } = await devices();
+    const stop = serve(nodeRelay, async () => new Response("ok"));
+    await vi.waitUntil(async () => (await a.relay.nodes()).connected.length === 1);
+    const fleetd = newDevice();
+    const relayOnly = new Relay({ origin: ORIGIN, fetch: fetcher, device: fleetd, cert: certify(a.keys, fleetd, "fleetd", Date.now(), "relay"), socket: socketVia() });
+    const t = await relayOnly.token();
+    expect(t).toMatch(/^cbo_/);
+    expect((await relayOnly.nodes()).connected[0].device).toBe(node.id);
+    expect(await relayOnly.revoked()).toEqual([]);
+    expect(await (await (await relayOnly.channel(node.id)).fetch("/")).text()).toBe("ok");
+    const as = (path: string, init: RequestInit = {}) => worker(path, { ...init, headers: { ...init.headers, Authorization: `Bearer ${t}` } });
+    expect((await as("/e2ee/log/0123456789abcdef0123")).status).toBe(403);
+    expect((await as("/e2ee/blob/0123456789abcdef0123")).status).toBe(403);
+    expect((await as("/e2ee/grants?object=0123456789abcdef0123")).status).toBe(403);
+    expect((await as("/e2ee/nodes/live", { headers: { Upgrade: "websocket" } })).status).toBe(403);
+    expect((await as("/e2ee/nodes/leader", { method: "PUT", body: JSON.stringify({ device: fleetd.id }) })).status).toBe(403);
+    expect((await as("/e2ee/pair/ABCDEFGHJK/commit", { method: "POST", body: JSON.stringify({ commit: "x" }) })).status).toBe(403);
+    // A cert with a role it doesn't know is no cert.
+    const odd = certify(a.keys, fleetd, "odd");
+    (odd.body as any).role = "admin";
+    expect((await post("/e2ee/token", { cert: odd, answer: {} })).status).toBe(401);
+    stop();
+  });
+
   it("carry a stream past the tunnel's 17 MB", async () => {
     const { a, laptop, node, nodeRelay } = await devices();
     const stop = serve(nodeRelay, async (req) => new Response(req.body));

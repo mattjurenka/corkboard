@@ -71,6 +71,9 @@ export type RelayEnv = {
 export type Accounts = DurableObjectStub<RelayAccounts>;
 
 export const E2EE_TOKEN = "cbe_";
+// A relay-only device's (its cert's role "relay"): channels, the nodes and
+// the revocations, nothing that reads or writes the account's objects.
+export const E2EE_RELAY_TOKEN = "cbo_";
 const TOKEN_TTL = 24 * 3600_000;
 const CHALLENGE_TTL = 2 * 60_000;
 
@@ -133,7 +136,7 @@ export async function createAccount(request: Request, env: RelayEnv, accounts: A
 // elsewhere within CACHE_MS.
 const CACHE_MS = 30_000;
 const cache = new Map<string, { who: Who | null; until: number }>();
-export type Who = { account: string; device: string };
+export type Who = { account: string; device: string; relayOnly?: true };
 
 function bearer(request: Request): string | undefined {
   const auth = request.headers.get("Authorization");
@@ -150,12 +153,13 @@ function bearer(request: Request): string | undefined {
 
 async function whoIs(request: Request, r: Accounts): Promise<Who | null> {
   const token = bearer(request);
-  if (!token?.startsWith(E2EE_TOKEN)) return null;
+  const relayOnly = !!token?.startsWith(E2EE_RELAY_TOKEN);
+  if (!token || (!token.startsWith(E2EE_TOKEN) && !relayOnly)) return null;
   const hash = await sha256(token);
   const hit = cache.get(hash);
   if (hit && hit.until > Date.now()) return hit.who;
   const t = await r.e2eeToken(hash);
-  const who = t ? { account: t.account, device: t.device } : null;
+  const who = t ? { account: t.account, device: t.device, ...(relayOnly && { relayOnly: true as const }) } : null;
   cache.set(hash, { who, until: Math.min(Date.now() + CACHE_MS, t?.expires ?? Infinity) });
   return who;
 }
@@ -241,7 +245,7 @@ export async function e2ee(request: Request, env: RelayEnv, r: Accounts): Promis
     if (account.status !== "active") return error(403, `this account is ${account.status}`);
     if (crt.account !== account.key) return error(401, "the account's key has changed since this certificate: POST /e2ee/rotated");
     if (await r.isRevoked(account.id, crt.device)) return error(403, "this device has been revoked");
-    const token = E2EE_TOKEN + random(32);
+    const token = (crt.role === "relay" ? E2EE_RELAY_TOKEN : E2EE_TOKEN) + random(32);
     const expires = Date.now() + TOKEN_TTL;
     await r.mintE2eeToken(await sha256(token), account.id, crt.device, expires);
     return json({ token, expires, account: account.id });
@@ -301,6 +305,7 @@ export async function e2ee(request: Request, env: RelayEnv, r: Accounts): Promis
     }
     const who = await whoIs(request, r);
     if (!who) return error(401, "sign in with a device of the account first");
+    if (who.relayOnly) return error(403, "a relay-only device can't approve a pairing");
     if (!step) return method === "GET" ? reply(await box.viewApprover(code, who.account)) : error(405, "method not allowed");
     if (method !== "POST") return error(405, "method not allowed");
     if (step === "commit") return reply(await box.commit(who.account, String(b.commit ?? "")));
@@ -312,6 +317,7 @@ export async function e2ee(request: Request, env: RelayEnv, r: Accounts): Promis
 
   const who = await whoIs(request, r);
   if (!who) return error(401, "sign in with a device of an encrypted account (POST /e2ee/challenge, then /e2ee/token)");
+  if (who.relayOnly && !(path === "/e2ee/channel" || (method === "GET" && (path === "/e2ee/nodes" || path === "/e2ee/revoked")))) return error(403, "a relay-only device opens channels, and nothing else");
 
   if (path === "/e2ee/revoked") return method === "GET" ? json(await r.e2eeRevocations(who.account)) : error(405, "method not allowed");
 

@@ -3,7 +3,8 @@
 // keeps decrypted replicas of the boards and brains its index lists (or
 // of those it's given), and serves /mcp (for claude.ai and Claude Code,
 // with its own OAuth) and the phone's API, on plain HTTP on this machine,
-// and, signed in, through the relay's tunnel at <relay>/n/<handle> (its
+// and, signed in, through the relay's tunnel at <relay>/n/<handle> and on
+// the sealed channels the account's devices open to it (channel.ts; its
 // socket also tells the account's other devices this one is up; the
 // leader, `e2ee leader`, is the node the tunnel prefers: see
 // .agent/plans/local-memory.md, step 8). --origin names it when TLS ends
@@ -192,7 +193,12 @@ export async function startNode(o: NodeOptions = {}) {
       const nodes = await r.nodes().catch((e) => void console.error(`node: no tunnel: ${(e as Error).message}`));
       if (nodes) {
         const t = { url: nodes.url, connected: false, stop: () => {} };
-        t.stop = r.serveTunnel(node({ ...served, origin: nodes.url }), { name: d.cert.body.name, onState: (up) => (t.connected = up) });
+        // The same HTTP on the sealed channels the account's devices open
+        // (ciphertext-relay.md step 2), at the tunnel's origin, so the
+        // phone's tokens work on either; never loopback. One with no
+        // token is its device's, the owner (fleetd's relay-only one).
+        const tunneled = node({ ...served, origin: nodes.url });
+        t.stop = r.serveTunnel(tunneled, { name: d.cert.body.name, onState: (up) => (t.connected = up), channels: (req, ch) => tunneled(req, undefined, ch.peer) });
         tunnel = t;
       }
     }

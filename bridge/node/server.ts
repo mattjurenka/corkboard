@@ -56,6 +56,7 @@ import type { Search } from "./search";
 import type { CalendarConfig } from "./calendar";
 import { type Episodes, TooBig } from "./episodes";
 import type { Media } from "./media";
+import type { DeviceCert, Signed } from "../../lib/e2ee/wire";
 
 export type NodeOptions = {
   data: Data;
@@ -248,8 +249,11 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
   });
 
   // One held to a board (a card's agent, a fleet session) is only /mcp's.
-  function caller(req: Request, origin: string, mcp = false): Caller | undefined {
+  // On a sealed channel with no bearer, the device at its other end, whose
+  // cert the channel checked: the account's own, so the owner.
+  function caller(req: Request, origin: string, from: Signed<DeviceCert> | undefined, mcp = false): Caller | undefined {
     const auth = req.headers.get("Authorization");
+    if (!auth && from) return { scope: "owner", agent: from.body.name, grant: `device:${from.body.device}`, resource: null };
     const who = auth?.startsWith("Bearer ") ? o.oauth.verify(auth.slice(7).trim(), origin) : undefined;
     return who && (mcp || !boardBound(who)) ? who : undefined;
   }
@@ -456,7 +460,8 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
     return json({ error: "not found" }, 404);
   }
 
-  return async function fetch(req: Request, peer?: Peer): Promise<Response> {
+  // from: the device a sealed channel's request came from (serve.ts's).
+  return async function fetch(req: Request, peer?: Peer, from?: Signed<DeviceCert>): Promise<Response> {
     const url = new URL(req.url);
     const origin = originOf(req, o.origin);
     const p = url.pathname;
@@ -477,7 +482,7 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       if (p === "/authorize") return await authorize(req, origin);
       if (p === "/token") return await token(req, origin);
       if (p === "/mcp") {
-        const who = caller(req, origin, true);
+        const who = caller(req, origin, from, true);
         if (!who) return unauthorized(origin);
         return await mcp(req, { data: o.data, search: o.search, media: o.media, origin, fleet: o.fleet?.() }, who);
       }
@@ -486,14 +491,14 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
         return await o.media.upload(req, p.slice("/upload/".length));
       }
       if (p === "/app/events") {
-        const who = caller(req, origin);
+        const who = caller(req, origin, from);
         if (!who) return unauthorized(origin);
         const events = o.appEvents?.();
         if (!events || who.scope !== "owner" || req.method !== "GET" || !loopback(req, peer)) return json({ error: "not found" }, 404);
         return sse((send) => events((key, event) => send({ key, event })));
       }
       if (p === "/app") {
-        const who = caller(req, origin);
+        const who = caller(req, origin, from);
         if (!who) return unauthorized(origin);
         const call = o.app?.();
         if (!call || who.scope !== "owner" || req.method !== "POST" || !loopback(req, peer)) return json({ error: "not found" }, 404);
@@ -504,12 +509,12 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
         return json(value === undefined ? {} : { value });
       }
       if (p.startsWith("/api/node/")) {
-        const who = caller(req, origin);
+        const who = caller(req, origin, from);
         if (!who) return unauthorized(origin);
         return await api(req, p.slice("/api/node/".length).split("/").filter(Boolean).map(decodeURIComponent), who, origin);
       }
       if (p.startsWith("/memory/")) {
-        const who = caller(req, origin);
+        const who = caller(req, origin, from);
         if (!who) return unauthorized(origin);
         return await memory(req, p.slice("/memory/".length).split("/").filter(Boolean).map(decodeURIComponent), who);
       }

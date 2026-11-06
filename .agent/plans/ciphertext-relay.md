@@ -95,6 +95,26 @@ phone / page / Neovim ──wss /e2ee/channel──▶ relay ──node's socket
    gets a channel client (Kotlin, lazysodium: X25519, XChaCha20, Ed25519 are all there), and
    its node calls move off `/n/<handle>`. The portal does the same once it can pair (step 6).
    fleetd uses it too once it has a device (**Decide**).
+
+   As built (2026-11-06):
+   - serve.ts serves the node's HTTP on channels at the tunnel's origin, so the phone's
+     tokens work on either. A request on a channel with no Authorization header is the peer
+     device's, as the owner. `/app` and `/app/events` stay loopback-only.
+   - **The relay-only cert** is a DeviceCert with `role: "relay"`, signed only when present,
+     so every other cert signs as before (Wire.kt has it too). `corkboard-bridge e2ee
+     relay-device DEVICE BOX` makes one on a machine with the root. Its relay tokens get 403
+     on everything but `/e2ee/channel`, GET `/e2ee/nodes` and GET `/e2ee/revoked`.
+   - **fleetd**: `corkboard-fleet device` makes its keys and prints the relay-device line;
+     `corkboard-fleet device cert < cert.json` keeps the cert. The manifest's `node.device`
+     names the file. fleet/fleetd/node.ts opens a channel to the leader, or else the newest
+     node, and reopens it after it ends. Without `device`, fleetd uses the tunnel url and the
+     token file as before. A rotation (bridge rotateAccount) keeps only the rotating device,
+     so fleetd's cert must be issued again after one.
+   - **Android needs no move**: it never called `/n/<handle>`. It is a paired device with its
+     own replicas, so a channel client is moot for node calls. Sessions (step 3) still need one.
+   - **Spawned guests and Pepper's guest** (fleetd.ts start()'s `remote.mcp` and memory urls;
+     fleet/pepper/guest.nix's `node`) are HTTPS clients like claude.ai. They move to step 5's
+     `<label>.n.corkboard.fyi`, not to a fleetd proxy.
 3. **Sessions over the channel.** sessions.ts's `serve()` answers on channels, and fleetd's
    sessions.ts likewise. cloud-session.ts's `fleet_*` (Neovim, the web page) open channels.
    Android's Sessions.kt and Avatar.kt's speech go over the channel. Once a machine serves

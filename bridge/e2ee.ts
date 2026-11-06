@@ -34,6 +34,11 @@
 //   corkboard-bridge e2ee rotated
 //                              this machine onto the new root another device rotated to
 //   corkboard-bridge e2ee status | phrase | revoke DEVICE
+//   corkboard-bridge e2ee relay-device DEVICE BOX [--name NAME]
+//                              a relay-only device's cert (fleetd's: `corkboard-fleet device` prints
+//                              its keys), as JSON: it opens channels to the account's nodes
+//                              and is their owner there, but never has the root; revoke
+//                              ends it as any device's
 //   corkboard-bridge e2ee nodes | leader [this|DEVICE|none]
 //                              the account's nodes connected to the relay, and the leader,
 //                              the one its tunnel (<relay>/n/<handle>) goes to first
@@ -68,10 +73,10 @@ import { fromPhrase, toPhrase } from "../lib/e2ee/phrase";
 import { type Nodes, Relay } from "../lib/e2ee/relay";
 import { type IndexEntry, checkRotated, entries, indexId, indexKey, keyOf, remember, rotate, share, sharedWithMe, unshare } from "../lib/e2ee/sharing";
 import { Replica, memoryStore } from "../lib/e2ee/sync";
-import { type DeviceCert, type Role, type Signed, ROLES, normalizeCode, showCode } from "../lib/e2ee/wire";
+import { type DeviceCert, type Role, type Signed, KEY, ROLES, fromB64url, normalizeCode, showCode } from "../lib/e2ee/wire";
 
 const USAGE =
-  "usage: corkboard-bridge e2ee init|publish|recover|pair|approve CODE|push-board KEY|pull-board KEY|share KIND NAME ACCOUNT [ROLE]|unshare KIND NAME ACCOUNT|shared|compact [KIND NAME]|rotate|rotated|status|phrase|revoke DEVICE|nodes|leader [this|DEVICE|none]|approve-connector|move-memory [--dry-run]|move-boards [--dry-run]|move-plans [--dry-run]";
+  "usage: corkboard-bridge e2ee init|publish|recover|pair|approve CODE|push-board KEY|pull-board KEY|share KIND NAME ACCOUNT [ROLE]|unshare KIND NAME ACCOUNT|shared|compact [KIND NAME]|rotate|rotated|status|phrase|revoke DEVICE|relay-device DEVICE BOX [--name NAME]|nodes|leader [this|DEVICE|none]|approve-connector|move-memory [--dry-run]|move-boards [--dry-run]|move-plans [--dry-run]";
 
 function option(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -456,6 +461,15 @@ async function revokeDevice(args: string[]) {
   console.log(`Revoked ${device}.`);
 }
 
+// Signed here, where the root is; the device's keys never leave its machine.
+async function relayDevice(args: string[]) {
+  const [, device, box] = args;
+  if (!device || !KEY.test(device) || !box || !KEY.test(box)) throw new Error("relay-device takes the device's id and box key (corkboard-fleet device prints them)");
+  const me = await signedIn(args);
+  const cert = certify(accountKeys(me.root), { id: device, box: fromB64url(box) }, option(args, "--name") ?? "fleetd", Date.now(), "relay");
+  console.log(JSON.stringify(cert));
+}
+
 // The bridge mustn't be serving a node meanwhile (serve.ts's lock), and is
 // restarted after, to serve this one.
 async function moveOff(args: string[], what: "memory" | "boards" | "plans") {
@@ -501,6 +515,7 @@ export async function cli(args: string[]) {
     status,
     phrase,
     revoke: revokeDevice,
+    "relay-device": relayDevice,
     "move-memory": (a) => moveOff(a, "memory"),
     "move-boards": (a) => moveOff(a, "boards"),
     "move-plans": (a) => moveOff(a, "plans"),

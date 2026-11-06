@@ -48,9 +48,9 @@ export function verify(pub: string, bytes: Uint8Array, sig: string): boolean {
   }
 }
 
-export function certify(account: AccountKeys, device: { id: string; box: KeyPair | Uint8Array }, name: string, issued = Date.now()): Signed<DeviceCert> {
+export function certify(account: AccountKeys, device: { id: string; box: KeyPair | Uint8Array }, name: string, issued = Date.now(), role?: "relay"): Signed<DeviceCert> {
   const box = device.box instanceof Uint8Array ? device.box : device.box.public;
-  const body: DeviceCert = { v: 1, account: account.id, device: device.id, box: b64url(box), name: name.slice(0, 100), issued };
+  const body: DeviceCert = { v: 1, account: account.id, device: device.id, box: b64url(box), name: name.slice(0, 100), issued, ...(role && { role }) };
   return { body, sig: sign(account.sign, certBytes(body)) };
 }
 

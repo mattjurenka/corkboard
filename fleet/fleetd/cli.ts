@@ -10,11 +10,19 @@
 //   corkboard-fleet templates
 //   corkboard-fleet queue              the Worker's spawns, wherever they run
 //   corkboard-fleet approve <id>       a brain's spawn that holds credentials
+//   corkboard-fleet device [FILE]      fleetd's relay-only device for the node (node.ts): makes
+//                                      its keys (the manifest's node.device, or in the state
+//                                      dir) and prints the line that certifies it, for a
+//                                      machine with the account's root
+//   corkboard-fleet device cert [FILE] < cert.json
+//                                      keeps the cert that line printed
 
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { CLOUD, token } from "../../bridge/cloud";
-import { accountFor, answer, manifest, newId, read, schedule, SPAWNS, spawns, write, type Spawn } from "./fleet";
+import { accountFor, answer, MANIFEST, manifest, newId, read, schedule, SPAWNS, STATE, spawns, write, type Spawn } from "./fleet";
+import { makeDevice, storeCert } from "./node";
+import { b64url } from "../../lib/e2ee/wire";
 
 const die = (msg: string): never => {
   console.error(msg);
@@ -144,6 +152,23 @@ switch (cmd) {
     break;
   }
 
+  case "device": {
+    const certing = args[0] === "cert";
+    const file = resolve((certing ? args[1] : args[0]) ?? (existsSync(MANIFEST) ? manifest().node?.device : undefined) ?? join(STATE, "device.json"));
+    if (certing) {
+      try {
+        storeCert(file, JSON.parse(await Bun.stdin.text()));
+      } catch (e: any) {
+        die(e.message);
+      }
+      console.log(`kept in ${file}; the manifest's node wants "device": "${file}"`);
+      break;
+    }
+    const d = makeDevice(file);
+    console.log(`${file}: device ${d.id}\n\non a machine with the account's root:\n  corkboard-bridge e2ee relay-device ${d.id} ${b64url(d.box.public)} --name fleetd > cert.json\nthen here:\n  corkboard-fleet device cert${args[0] ? ` ${file}` : ""} < cert.json`);
+    break;
+  }
+
   default:
-    die("corkboard-fleet spawn|list|show|attach|stop|fetch|templates|queue|approve");
+    die("corkboard-fleet spawn|list|show|attach|stop|fetch|templates|queue|approve|device");
 }

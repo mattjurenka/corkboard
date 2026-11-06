@@ -10,6 +10,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { NodeLink } from "./node";
 
 // Where a VM is and what it may reach, as host.nix configures it.
 export type Network = {
@@ -49,10 +50,12 @@ export type Manifest = {
   // The account a spawn runs as when nothing says.
   defaultAccount: string | null;
   // The user's node, through the relay's tunnel (<portal>/n/<handle>), and
-  // a file holding an owner token of its (`serve token`): a spawn on a board
-  // the node keeps gets its grants, repo and card there (queue.ts), and a
-  // brain's spawn its memory.
-  node?: { url: string; tokenFile: string };
+  // a file holding an owner token of its (`serve token`), or the file of
+  // fleetd's relay-only device, for a sealed channel to it instead (node.ts):
+  // a spawn on a board the node keeps gets its grants, repo and card there
+  // (queue.ts), and a brain's spawn its memory. url is still what spawns are
+  // given for its /mcp.
+  node?: NodeLink;
 };
 
 export type State = "queued" | "running" | "done" | "failed" | "stopped";

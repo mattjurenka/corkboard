@@ -22,6 +22,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { type NodeLink as Node, nodeFetch } from "./node";
 import { CLOUD, token } from "../../bridge/cloud";
 import type { Assistant } from "./fleet";
 
@@ -33,7 +34,6 @@ const DAY = 24 * 3600_000;
 type State = { last: number | string; from?: "node"; token?: string; minted?: number; nodeToken?: string; nodeMinted?: number };
 // by_user: the user's own, from the phone; a Worker from before it says "matt".
 type Message = { id: number | string; at: string; who: string; text: string; by_user?: boolean; delivered?: string | null };
-type Node = { url: string; tokenFile: string };
 const byUser = (m: Message) => m.by_user ?? m.who === "matt";
 
 // A slash command from the phone runs as one, and the assistant says how it
@@ -79,11 +79,11 @@ async function chatApi(node: Node | undefined, method: string, path: string, bod
   return { node: true, json: await nodeApi(node, method, path, body) };
 }
 
-// The node's API, through its tunnel, with fleetd's owner token for it.
+// The node's API, as its owner (node.ts).
 async function nodeApi(node: Node, method: string, path: string, body?: unknown) {
-  const res = await fetch(`${node.url}/api/node${path}`, {
+  const res = await nodeFetch(node, `/api/node${path}`, {
     method,
-    headers: { Authorization: `Bearer ${readFileSync(node.tokenFile, "utf8").trim()}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    headers: body === undefined ? {} : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(30_000),
   });
@@ -261,7 +261,7 @@ export function assist(name: string, brain: string, a: Assistant, node?: Node) {
   async function followNode() {
     if (!node || state?.from !== "node") return void setTimeout(followNode, 10_000);
     try {
-      const res = await fetch(`${node.url}/api/node/day/events`, { headers: { Authorization: `Bearer ${readFileSync(node.tokenFile, "utf8").trim()}` } });
+      const res = await nodeFetch(node, "/api/node/day/events");
       if (!res.ok || !res.body) throw new Error(`the node's day events: HTTP ${res.status}`);
       following = true;
       nodeRetry = 1000;

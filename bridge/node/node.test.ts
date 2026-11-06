@@ -3,11 +3,13 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newRoot, random } from "../../lib/e2ee/keys";
+import { accountKeys, newRoot, random } from "../../lib/e2ee/keys";
 import { entries, indexId, indexKey, remember } from "../../lib/e2ee/sharing";
 import { EpochChanged, type LogTransport, type ReplicaStore, Replica, memoryStore, offline } from "../../lib/e2ee/sync";
 import { type NewOp, type Snapshot, type TunnelRequest, type TunnelResponse, type WireOp, b64url, fromB64url, utf8 } from "../../lib/e2ee/wire";
 import { Relay } from "../../lib/e2ee/relay";
+import { type Identity, initiate, pipe, respond } from "../../lib/e2ee/channel";
+import { certify, checkCert, newDevice } from "../../lib/e2ee/device";
 import { DAY, dayObject, listObjects, noteRecord } from "./objects";
 import { Conflict } from "./day";
 import { Replicas } from "./replicas";
@@ -521,6 +523,33 @@ describe("the phone's API", () => {
     const status = (await api("GET", "status")).body;
     expect(status.objects.map((o: { kind: string; name: string }) => `${o.kind}/${o.name}`)).toEqual(["board/proj", "brain/assistant", "day/day"]);
     expect(status.calendar).toBe(false);
+  });
+
+  it("is the same on a sealed channel, the phone's token and all, or the device's own, but never loopback", async () => {
+    const keys = accountKeys(newRoot());
+    const id = (name: string): Identity => {
+      const d = newDevice();
+      return { device: d, cert: certify(keys, d, name), trust: (c) => checkCert(keys.id, c, []) };
+    };
+    const phone = id("fleetd");
+    phone.cert = certify(keys, phone.device, "fleetd", Date.now(), "relay");
+    const here = id("node");
+    let a: ReturnType<typeof pipe>, b: ReturnType<typeof pipe>;
+    a = pipe((m) => queueMicrotask(() => b.deliver(m)), (r) => b.end(r));
+    b = pipe((m) => queueMicrotask(() => a.deliver(m)), (r) => a.end(r));
+    // serve.ts's: the tunnel's handler, at its origin.
+    const [ch] = await Promise.all([initiate(a.link, phone, here.device.id), respond(b.link, here, { serve: (req, c) => n.app(req, undefined, c.peer) })]);
+    expect((await ch.fetch("/api/node/boards", { headers: { Authorization: "Bearer cbn_nonsense" } })).status).toBe(401);
+    // No token: the relay-only device, which is the owner.
+    const grant = await ch.fetch("/api/node/grants", { method: "POST", body: JSON.stringify({ scope: "brain", brain: "assistant", agent: "pepper" }) });
+    expect(grant.status).toBe(201);
+    const res = await ch.fetch("/api/node/boards", { headers: auth });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { key: string }[])[0].key).toBe("proj");
+    const made = await ch.fetch("/api/node/boards/proj/cards", { method: "POST", headers: auth, body: JSON.stringify({ title: "Sealed" }) });
+    expect(made.status).toBe(201);
+    expect((await ch.fetch("/app", { method: "POST", headers: auth, body: JSON.stringify({ op: "board_boards", args: [] }) })).status).toBe(404);
+    ch.close();
   });
 
   it("adds a log written elsewhere once, whatever else is sent with it", async () => {

@@ -12,14 +12,15 @@
 // A spawn on a board the user's node keeps (the Worker's `node`, .agent/
 // plans/local-boards.md) is the node's to equip: its card or session
 // grant, its repo (the board's root here) and its brain's memory come from
-// the node's API through the tunnel (Manifest.node), and how it goes is
+// the node's API (Manifest.node, node.ts), and how it goes is
 // written on its card there, as the Worker writes on its own boards' cards.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { CLOUD, token } from "../../bridge/cloud";
 import { host, steady, type Host } from "../../bridge/host";
+import { nodeFetch } from "./node";
 import { accountFor, answer, egressOf, manifest, occupancy, OVERHEAD, read, SPAWNS, spawns, write, type Manifest, type Occupancy, type Spawn, type State } from "./fleet";
 
 // This machine's name, unless told otherwise.
@@ -65,12 +66,12 @@ async function ok(method: string, path: string, body?: unknown) {
   return r.json;
 }
 
-// The node's API, as the manifest's owner token.
+// The node's API, as its owner (node.ts).
 async function nodeApi(m: Manifest, method: string, path: string, body?: unknown): Promise<any> {
   if (!m.node) throw new Error("its board is the node's, and this host's manifest names no node");
-  const res = await fetch(`${m.node.url}/api/node${path}`, {
+  const res = await nodeFetch(m.node, `/api/node${path}`, {
     method,
-    headers: { Authorization: `Bearer ${readFileSync(m.node.tokenFile, "utf8").trim()}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    headers: body === undefined ? {} : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const json = (await res.json().catch(() => ({}))) as any;
