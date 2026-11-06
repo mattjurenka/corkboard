@@ -120,6 +120,7 @@ export class Grid {
     this.cols = cols;
     this.rows = rows;
     const dpr = window.devicePixelRatio || 1;
+    this.dpr = dpr;
     this.canvas.width = cols * this.cellW * dpr;
     this.canvas.height = rows * this.cellH * dpr;
     this.canvas.style.width = `${cols * this.cellW}px`;
@@ -205,6 +206,22 @@ export class Grid {
     return { a, fg, bg, sp: a.special ?? this.defaults.sp };
   }
 
+  // Rectangles on whole device pixels. At a fractional devicePixelRatio
+  // (125%, a zoomed page) cell edges fall inside pixels, and a background
+  // painted over the cursor only partly covers them: a faint bar is left.
+  snap(draw, x, y, w, h) {
+    const d = this.dpr || 1;
+    const l = Math.round(x * d) / d;
+    const t = Math.round(y * d) / d;
+    const r = Math.max(l + 1 / d, Math.round((x + w) * d) / d);
+    const b = Math.max(t + 1 / d, Math.round((y + h) * d) / d);
+    draw.call(this.ctx, l, t, r - l, b - t);
+  }
+
+  fill(x, y, w, h) {
+    this.snap(this.ctx.fillRect, x, y, w, h);
+  }
+
   // A block element drawn as rectangles; false for any other text.
   drawBlock(text, x, y, fg, bg) {
     const code = text.length === 1 ? text.charCodeAt(0) : 0;
@@ -212,7 +229,7 @@ export class Grid {
     const shade = SHADES.get(code);
     if (shade) {
       ctx.fillStyle = hex(mix(fg, bg, shade));
-      ctx.fillRect(x, y, cellW, cellH);
+      this.fill(x, y, cellW, cellH);
       return true;
     }
     const parts = BLOCKS.get(code);
@@ -221,7 +238,7 @@ export class Grid {
     // Edges on whole pixels, so neighbouring cells meet exactly.
     const at = (n, size) => Math.round((n * size) / 8);
     for (const [l, t, w, h] of parts) {
-      ctx.fillRect(x + at(l, cellW), y + at(t, cellH), at(l + w, cellW) - at(l, cellW), at(t + h, cellH) - at(t, cellH));
+      this.fill(x + at(l, cellW), y + at(t, cellH), at(l + w, cellW) - at(l, cellW), at(t + h, cellH) - at(t, cellH));
     }
     return true;
   }
@@ -246,14 +263,14 @@ export class Grid {
       // whole cell).
       if (a.separator && (text === "│" || text === "─")) {
         ctx.fillStyle = hex(this.defaults.bg);
-        ctx.fillRect(x, y, cellW, cellH);
+        this.fill(x, y, cellW, cellH);
         ctx.fillStyle = hex(mix(this.defaults.fg, this.defaults.bg, 0.18));
-        if (text === "│") ctx.fillRect(x + Math.floor(cellW / 2), y, 1, cellH);
-        else ctx.fillRect(x, y + Math.floor(cellH / 2), cellW, 1);
+        if (text === "│") this.fill(x + Math.floor(cellW / 2), y, 1, cellH);
+        else this.fill(x, y + Math.floor(cellH / 2), cellW, 1);
         continue;
       }
       ctx.fillStyle = hex(bg);
-      ctx.fillRect(x, y, cellW * wide, cellH);
+      this.fill(x, y, cellW * wide, cellH);
       if (text !== "" && text !== " ") texts.push(col);
     }
     // Box-drawing glyphs run taller than a row (│ is 1.52em against a 1.3em
@@ -261,7 +278,7 @@ export class Grid {
     // around would stay there: keep the text to its own row.
     ctx.save();
     ctx.beginPath();
-    ctx.rect(0, y, this.cols * cellW, cellH);
+    this.snap(ctx.rect, 0, y, this.cols * cellW, cellH);
     ctx.clip();
     for (const col of texts) {
       const { text, hl } = line[col];
@@ -274,11 +291,11 @@ export class Grid {
       ctx.fillText(text, x, y + cellH / 2);
       if (a.underline || a.undercurl) {
         ctx.fillStyle = hex(a.undercurl ? sp : fg);
-        ctx.fillRect(x, y + cellH - 2, cellW * wide, 1);
+        this.fill(x, y + cellH - 2, cellW * wide, 1);
       }
       if (a.strikethrough) {
         ctx.fillStyle = hex(fg);
-        ctx.fillRect(x, y + cellH / 2, cellW * wide, 1);
+        this.fill(x, y + cellH / 2, cellW * wide, 1);
       }
     }
     ctx.restore();
@@ -299,16 +316,16 @@ export class Grid {
 
     ctx.fillStyle = hex(color);
     if (mode.cursor_shape === "vertical") {
-      ctx.fillRect(x, y, Math.max(1, cellW * pct), cellH);
+      this.fill(x, y, Math.max(1, cellW * pct), cellH);
     } else if (mode.cursor_shape === "horizontal") {
-      ctx.fillRect(x, y + cellH * (1 - pct), cellW, Math.max(1, cellH * pct));
+      this.fill(x, y + cellH * (1 - pct), cellW, Math.max(1, cellH * pct));
     } else {
-      ctx.fillRect(x, y, cellW, cellH);
+      this.fill(x, y, cellW, cellH);
       const text = cursorHl?.a.foreground !== undefined ? cursorHl.fg : bg;
       if (!this.drawBlock(cell.text, x, y, text, color)) {
         ctx.save();
         ctx.beginPath();
-        ctx.rect(x, y, cellW, cellH);
+        this.snap(ctx.rect, x, y, cellW, cellH);
         ctx.clip();
         ctx.font = `${a.italic ? "italic " : ""}${a.bold ? "bold " : ""}${this.fontSize}px ${this.fontFamily}`;
         ctx.fillStyle = hex(text);
