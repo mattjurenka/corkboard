@@ -36,6 +36,13 @@ export function command(text: string): string | undefined {
   return t === "/mcp" ? "/mcp reconnect all" : t;
 }
 
+// Whether a command's result is on the screen: a "⎿" line under its last
+// "❯ <command>".
+export function ran(screen: string[], run: string): boolean {
+  const at = screen.findLastIndex((l) => l.trimEnd() === `❯ ${run}`);
+  return at >= 0 && screen.slice(at + 1).some((l) => l.trimStart().startsWith("⎿"));
+}
+
 async function api(method: string, path: string, body?: unknown) {
   const res = await fetch(`${CLOUD}${path}`, {
     method,
@@ -98,6 +105,18 @@ export function assist(name: string, brain: string, a: Assistant) {
     await tmux(["send-keys", "-t", session, "Enter"]);
   }
 
+  // A command runs at once, not queued, and what's pasted while it runs is
+  // lost: so the next prompt waits for its result (a "⎿" line under it on
+  // the screen), or a minute and a half.
+  async function done(run: string) {
+    for (let i = 0; i < 90; i++) {
+      await Bun.sleep(1000);
+      const proc = Bun.spawn([...ssh, "tmux", "-S", a.tmuxSocket, "capture-pane", "-p", "-t", session, "-S", "-40"], { stdout: "pipe", stderr: "ignore" });
+      const screen = (await new Response(proc.stdout).text()).split("\n");
+      if (ran(screen, run)) return;
+    }
+  }
+
   // Each message the user sent since the last one passed on, as a line
   // starting "[phone]", or a command. Claude Code queues what arrives while
   // it's busy. Without a session (between days, or restarting) they wait for
@@ -111,6 +130,7 @@ export function assist(name: string, brain: string, a: Assistant) {
         const run = command(now.text);
         if (run) {
           await prompt(run);
+          await done(run);
           await prompt(`[phone] I ran ${run} from my phone. Tell me in the chat what it showed.`);
         } else await prompt(`[phone] ${now.text}`);
       }
