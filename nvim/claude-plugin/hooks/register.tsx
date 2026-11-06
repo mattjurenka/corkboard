@@ -6,6 +6,7 @@ import { memberOf } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren, RenderInput } from 'claude-code'
 
 import { say } from './say.tsx'
+import { show } from './show.tsx'
 import { work } from './work.tsx'
 
 const at = { plugin: 'corkboard-ui', key: 'at' } as const
@@ -119,6 +120,7 @@ async function row($: EngineInterface, e: RenderInput, body: RenderChildren, tim
 export const register: Register = (on, options) => {
   work(on, options)
   say(on, options)
+  show(on, options)
 
   // The calls of the groups this mod unfolded: their rows come marked
   // expanded, as a ctrl+o row does, but draw as the ledger's.

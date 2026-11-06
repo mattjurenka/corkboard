@@ -1,5 +1,5 @@
-// The files agents attached to this session's cards (corkboard.claude.cards'
-// media panel), under its cards: the list, newest first, and the selected
+// The files agents attached to this session's cards, and the ones it showed
+// (corkboard.claude.cards' media panel), under its cards: the list, newest first, and the selected
 // file below it. Images, video, audio, PDFs and text show here; anything
 // else is a download. Each comes from the bridge's /media once, as a blob.
 
@@ -8,7 +8,20 @@ import { cn } from "@/lib/utils";
 import type { Nvim } from "@/nvim/context";
 import type { ViewProps } from "./index";
 
-type MediaFile = { key: string; url: string; card: string; name: string; type: string; size: number; at: string; who: string };
+// A card's file has the bridge's url; one the session showed from Neovim's
+// machine, its path there.
+type MediaFile = {
+  key: string;
+  url?: string;
+  path?: string;
+  mtime?: number;
+  card?: string;
+  name: string;
+  type: string;
+  size: number;
+  at: string;
+  who: string;
+};
 type MediaState = { files?: MediaFile[]; selected?: string };
 
 export function Media({ state, win, focused, nvim }: ViewProps<MediaState>) {
@@ -53,15 +66,16 @@ function Shown({ file, nvim }: { file: MediaFile; nvim: Nvim }) {
   const [blob, setBlob] = useState<{ url?: string; text?: string; error?: string }>({});
   useEffect(() => {
     let live = true;
-    nvim.media(file.url).then(
+    (file.path ? nvim.blob(file.path, file.mtime) : nvim.media(file.url ?? "")).then(
       async (url) => {
         const text = textual(file.type) ? await (await fetch(url)).text() : undefined;
         if (live) setBlob({ url, text });
       },
-      (err) => live && setBlob({ error: `could not read: ${err?.message ?? err}` }),
+      // Neovim's errors arrive as [type, message].
+      (err) => live && setBlob({ error: `could not read: ${err?.[1] ?? err?.message ?? err}` }),
     );
     return () => void (live = false);
-  }, [file.url]);
+  }, [file.key]);
 
   // Video, audio and PDFs take keyboard focus when clicked; it goes back to
   // Neovim when the pointer leaves.
@@ -100,7 +114,7 @@ function Shown({ file, nvim }: { file: MediaFile; nvim: Nvim }) {
         {body}
       </div>
       <div className="flex-none truncate border-t px-ch text-muted-foreground">
-        {file.card} · {file.who} · {when(file.at)}
+        {[file.card, file.who, when(file.at)].filter(Boolean).join(" · ")}
       </div>
     </>
   );

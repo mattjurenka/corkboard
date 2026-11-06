@@ -9,7 +9,8 @@
 -- it's asking, or to the card on the board.
 --
 -- Below it, the lower half of the column, the files agents attached to those
--- cards (attach_file), newest first: another HTML panel (b:corkboard_view
+-- cards (attach_file) and the ones the session showed from this machine
+-- (the mod's show), newest first: another HTML panel (b:corkboard_view
 -- "media", web/src/views/Media.tsx), one line a file, the selected one
 -- shown. It opens when there's a file to show, or from the Media tool; a
 -- file that arrives opens it and is selected, so it shows as soon as it's sent.
@@ -110,6 +111,33 @@ local line_file = {} -- media panel buffer -> line number -> file key
 local picked = {} -- media panel buffer -> the file key its cursor is on
 local newest = {} -- media panel buffer -> the newest file key it has shown
 local seen = {} -- Claude Code terminal buffer -> the newest file key on its cards
+local shown = {} -- Claude Code terminal buffer -> the files on this machine it showed (M.show_file)
+
+local MIME = {
+  png = "image/png",
+  jpg = "image/jpeg",
+  jpeg = "image/jpeg",
+  gif = "image/gif",
+  webp = "image/webp",
+  avif = "image/avif",
+  svg = "image/svg+xml",
+  pdf = "application/pdf",
+  mp4 = "video/mp4",
+  webm = "video/webm",
+  mov = "video/quicktime",
+  mp3 = "audio/mpeg",
+  wav = "audio/wav",
+  ogg = "audio/ogg",
+  m4a = "audio/mp4",
+  json = "application/json",
+  html = "text/html",
+  csv = "text/csv",
+}
+
+local function mime(path)
+  local ext = (path:match("%.([^./]+)$") or ""):lower()
+  return MIME[ext] or (vim.filetype.match({ filename = path }) and "text/plain") or "application/octet-stream"
+end
 
 -- The board's key, for the files' URLs; nil with card files, which have none.
 local function board_key()
@@ -119,12 +147,12 @@ local function board_key()
   return ok and k or nil
 end
 
--- What was attached to src's session's cards, newest first. url is the
--- bridge's (bridge/server.ts's /media).
+-- What was attached to src's session's cards, and the files it showed,
+-- newest first. A card's has the bridge's url (bridge/server.ts's /media);
+-- a shown one its path, which the page reads through Neovim.
 local function files(src)
-  local k, out = board_key(), {}
-  if not k then return out end
-  for _, c in ipairs((sections(src))) do
+  local k, out = board_key(), vim.deepcopy(shown[src] or {})
+  for _, c in ipairs(k and (sections(src)) or {}) do
     for _, m in ipairs(type(c.media) == "table" and c.media or {}) do
       table.insert(out, {
         key = c.id .. "/" .. m.id,
@@ -138,7 +166,8 @@ local function files(src)
       })
     end
   end
-  table.sort(out, function(a, b) return a.at > b.at end)
+  -- Shown in the same second, the later first.
+  table.sort(out, function(a, b) return a.at > b.at or (a.at == b.at and (a.n or 0) > (b.n or 0)) end)
   return out
 end
 
@@ -148,7 +177,7 @@ local function push_media(src)
   local list = files(src)
   local lines, map = {}, {}
   for _, f in ipairs(list) do
-    table.insert(lines, ("%s  %s  %s"):format(f.name, f.type, f.card))
+    table.insert(lines, ("%s  %s  %s"):format(f.name, f.type, f.card or ""))
     map[#lines] = f.key
   end
   line_file[p] = map
@@ -424,6 +453,46 @@ function M.media()
   if #sessions == 0 then return vim.notify("corkboard: no Claude Code session in this tab") end
   vim.t.corkboard_cards_off = nil
   show_media(vim.api.nvim_win_get_buf(sessions[1]), open(sessions[1]))
+end
+
+-- The mod's show (claude-plugin/hooks/show.tsx, through hooks/show.lua): a
+-- file on this machine in src's media panel, selected, the panel opened
+-- under its cards if the session's window is up. Shown again (it changed),
+-- it moves to the top. Returns whether it's shown, and what to tell Claude.
+local count = 0
+function M.show_file(src, path, title)
+  if not (vim.api.nvim_buf_is_valid(src) and vim.b[src].corkboard_claude) then return false, "no session in terminal " .. src end
+  local stat = vim.uv.fs_stat(path)
+  if not (stat and stat.type == "file") then return false, "no file at " .. path end
+  if not shown[src] then
+    vim.api.nvim_create_autocmd("BufWipeout", { buffer = src, once = true, callback = function() shown[src] = nil end })
+  end
+  local list = vim.tbl_filter(function(f) return f.path ~= path end, shown[src] or {})
+  local mtime = stat.mtime.sec * 1e3 + math.floor(stat.mtime.nsec / 1e6)
+  count = count + 1
+  table.insert(list, {
+    key = ("file:%s@%d"):format(path, mtime),
+    path = path,
+    mtime = mtime,
+    name = type(title) == "string" and title ~= "" and title or vim.fs.basename(path),
+    type = mime(path),
+    size = stat.size,
+    at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+    who = "claude",
+    n = count,
+  })
+  shown[src] = list
+  local p = panels[src]
+  local up = p and vim.api.nvim_buf_is_valid(p) and vim.fn.win_findbuf(p)[1]
+  local win = vim.fn.win_findbuf(src)[1]
+  if up then
+    push(src, p)
+  elseif win then
+    vim.t[vim.api.nvim_win_get_tabpage(win)].corkboard_cards_off = nil
+    show_media(src, open(win))
+  end
+  push_media(src)
+  return true, (up or win) and "shown in the media panel" or "in the media panel, for when the user opens the session"
 end
 
 -- The open cards, in board order, from corkboard.board.

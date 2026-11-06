@@ -52,10 +52,11 @@ local NOTIFY_PROMPT = table.concat({
   "You are running inside corkboard, which forwards PushNotification calls to the user's desktop when they are not looking at it.",
   "Call PushNotification whenever you need the user to decide, approve or do something, and when you finish a task that took more than a minute or two.",
   "Send it even if you think the user is watching; a \"not sent\" result is expected and still reaches them.",
+  "Whenever you have something for the user to look at (a screenshot, image, plot, recording, PDF), show it in the media panel beside you with mcp__corkboard-ui__show rather than giving its path or describing it.",
 }, " ")
 
--- The file a click in the session's terminal landed on, resolved against
--- dir, with the line after it (path:12, path:12:3), or nil when the word
+-- The file a click in a terminal landed on, resolved against dir, with the
+-- line after it (path:12, path:12:3), or nil when the word
 -- there names no file.
 local function file_at(buf, dir, pos)
   local text = vim.api.nvim_buf_get_lines(buf, pos.line - 1, pos.line, false)[1]

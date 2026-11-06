@@ -11,6 +11,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Block, Live } from '../types'
 import { EMOTE, SAY } from './say.tsx'
+import { SHOW } from './show.tsx'
 
 const live = atom({ plugin: 'corkboard-ui', key: 'live' } as const, {})
 const minute = atom({ plugin: 'corkboard-ui', key: 'minute' } as const, 0)
@@ -102,6 +103,7 @@ export const work: Register = on => {
     kind = (await $.env.get('CORKBOARD_SESSION')) ?? 'project'
     await $.tool.register(SAY)
     await $.tool.register(EMOTE)
+    if ((await $.env.get('NVIM')) && (await $.env.get('CORKBOARD_BUF'))) await $.tool.register(SHOW)
     const path = await $.env.get('CORKBOARD_LIVE')
     if (path) {
       const seen = { mtime: -1 }

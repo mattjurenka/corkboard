@@ -83,3 +83,21 @@ test('a project session edits anywhere', async ($, on) => {
   const out = await $.tool.call({ tool: 'Edit', file_path: '/home/m/corkboard/x.ts', old_string: 'a', new_string: 'b' })
   expect(out).toEqual({ result: 'written' })
 })
+
+test('show asks Neovim, through hooks/show.lua, with the path from the session', async ($, on) => {
+  let ran: { argv: readonly string[]; stdin?: string } | undefined
+  on('process.run', (_, e) => {
+    ran = { argv: e.argv, stdin: e.init?.stdin }
+    return { value: { exitCode: 0, stdout: 'shown in the media panel\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('session.cwd', () => ({ value: '/home/m/corkboard' }))
+  const env: Record<string, string> = { NVIM: '/run/nvim.sock', CORKBOARD_BUF: '12', CORKBOARD_SESSION: 'project' }
+  on('env.get', (_, e) => ({ value: env[e.name] }))
+  on('tool.register', () => ({ value: { tool: 'mcp__corkboard-ui__show' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/home/m/corkboard', surface: 'terminal', isInteractive: true })
+  const out = await $.tool.call({ tool: 'mcp__corkboard-ui__show', path: 'shot.png', title: 'Board' })
+  expect(ran?.argv[4]).toMatch(/\/\.\.\/hooks\/show\.lua$/)
+  expect(JSON.parse(ran?.stdin ?? '{}')).toEqual({ server: '/run/nvim.sock', buf: '12', path: '/home/m/corkboard/shot.png', title: 'Board' })
+  expect(out).toEqual({ result: 'shown in the media panel' })
+})
