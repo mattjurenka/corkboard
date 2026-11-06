@@ -692,16 +692,17 @@ async function latency(req: Request): Promise<Response> {
 }
 
 // /media/<board>/<card>/<id>: a file an agent attached to a card, from the
-// Worker with the bridge's sign-in, for the page's media panel. The token
+// node when it has it (node/media.ts), else the Worker with the bridge's
+// sign-in, for the page's media panel. The token
 // header is the guard: a page elsewhere can't send it without a preflight
 // the bridge never answers, and a same-origin GET carries no Origin.
-const MEDIA_PATH = /^\/media\/([A-Za-z0-9._-]{1,128})\/([A-Za-z]+-\d+)\/([0-9a-f]{12})$/;
+const MEDIA_PATH = /^\/media\/([A-Za-z0-9._-]{1,128})\/([A-Za-z]+-[0-9A-Za-z]+)\/([0-9a-f]{12})$/;
 async function media(req: Request, url: URL): Promise<Response> {
   if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
   if (!TOKEN && !isLoopback(url.hostname)) return new Response(`wrong host: ${url.host}`, { status: 403 });
   const m = url.pathname.match(MEDIA_PATH);
   if (!m || req.method !== "GET") return new Response("not found", { status: 404 });
-  const res = await fetch(`${CLOUD}/api/boards/${m[1]}/cards/${m[2]}/media/${m[3]}`, { headers: { Authorization: `Bearer ${await token()}` } });
+  const res = (await NODE?.media(m[1], m[2], m[3]).catch((e) => void console.error(`node: media: ${(e as Error).message}`))) ?? (await fetch(`${CLOUD}/api/boards/${m[1]}/cards/${m[2]}/media/${m[3]}`, { headers: { Authorization: `Bearer ${await token()}` } }));
   const headers = new Headers({ "x-content-type-options": "nosniff" });
   for (const h of ["content-type", "content-length", "etag", "cache-control"]) {
     const v = res.headers.get(h);

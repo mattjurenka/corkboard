@@ -5,7 +5,8 @@
 // minutes each is synced whole as well, in case a socket died quietly.
 //
 // The account's index comes along: an object of ours the node writes that
-// it doesn't list yet goes into it. A log of ours that has grown past what
+// it doesn't list yet goes into it, and one another device adds to it is
+// kept from the next sync on. A log of ours that has grown past what
 // lib/e2ee thinks worth keeping is compacted as it syncs.
 //
 // Over sync.ts's offline transport (an account only on this machine) the
@@ -46,11 +47,13 @@ export class Replicas {
     private device: string,
     private store?: (object: string) => ReplicaStore,
     private index?: Replica,
+    private discover?: () => NodeObject[],
   ) {}
 
-  // index: the account's index, opened (objects.ts lists from it).
-  static async open(o: { objects: NodeObject[]; transport: LogTransport; device: string; store?: (object: string) => ReplicaStore; index?: Replica }): Promise<Replicas> {
-    const r = new Replicas(o.transport, o.device, o.store, o.index);
+  // index: the account's index, opened (objects.ts lists from it); discover:
+  // what it lists now, after it's synced.
+  static async open(o: { objects: NodeObject[]; transport: LogTransport; device: string; store?: (object: string) => ReplicaStore; index?: Replica; discover?: () => NodeObject[] }): Promise<Replicas> {
+    const r = new Replicas(o.transport, o.device, o.store, o.index, o.discover);
     for (const obj of o.objects) await r.open(obj);
     return r;
   }
@@ -177,6 +180,7 @@ export class Replicas {
     try {
       await index.sync();
       await this.compact(index, "the index");
+      for (const o of this.discover?.() ?? []) if (!this.kept.has(`${o.kind}/${o.name}`)) await this.add(o);
     } catch (e) {
       console.error(`node: syncing the index: ${(e as Error).message}`);
     }

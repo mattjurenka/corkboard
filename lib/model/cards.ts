@@ -82,9 +82,10 @@ const MAX_TITLE = 300;
 const MAX_ATTENTION = 200;
 const MAX_TEXT = 100_000;
 
-// TASK-12, case-insensitively; returned upper-case.
+// TASK-12, or TASK-7F3K as the node makes them (bridge/node/board.ts),
+// case-insensitively; returned upper-case.
 export function cardId(id: string): string {
-  if (!/^[a-z]+-\d+$/i.test(id)) throw new Invalid(`bad card id ${id}; ids look like TASK-12`);
+  if (!/^[a-z]+-[0-9a-z]{1,12}$/i.test(id)) throw new Invalid(`bad card id ${id}; ids look like TASK-12`);
   return id.toUpperCase();
 }
 

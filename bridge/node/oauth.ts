@@ -41,6 +41,13 @@ import { SEP } from "./objects";
 
 export const SCOPES = ["assistant", "owner"] as const;
 export type Scope = (typeof SCOPES)[number];
+// A grant's kind: an OAuth scope, or held to one board (mcp.ts) as the
+// Worker's are: `card`, one agent on one card (corkboard's agents.lua
+// asks for it), and `session`, a fleet session's, which has no card.
+export type Kind = Scope | "card" | "session";
+export const boardBound = (c: { scope: Kind }) => c.scope === "card" || c.scope === "session";
+// A card grant's life, as the Worker's card tokens': revoked when the agent exits.
+const BOUND_DAYS = 7;
 
 const ACCESS_TTL = 3600_000;
 const REFRESH_IDLE = 30 * 24 * 3600_000;
@@ -62,8 +69,23 @@ type Client = {
   used?: number;
 };
 // A minted grant may be a brain's (`brain`): its agent, whose memory is that
-// brain's, goals and all.
-type Grant = { id: string; client: string; name: string; scope: Scope; resource: string | null; created: number; brain?: string };
+// brain's, goals and all. One held to a board names it, its card or spawn and
+// its agent, and goes when it expires (every node drops it then, so none
+// drops it early for a token it hasn't heard of yet).
+type Grant = {
+  id: string;
+  client: string;
+  name: string;
+  scope: Kind;
+  resource: string | null;
+  created: number;
+  brain?: string;
+  board?: string;
+  card?: string;
+  spawn?: string;
+  agent?: string;
+  expires?: number;
+};
 type CodeRow = { grant: Grant; redirect_uri: string; challenge: string; expires: number };
 type TokenRow = { grant: string; kind: "access" | "refresh"; expires: number };
 type File = {
@@ -100,7 +122,7 @@ export class OAuthError extends Error {
   }
 }
 
-export type Caller = { scope: Scope; agent: string; grant: string; resource: string | null; brain?: string };
+export type Caller = { scope: Kind; agent: string; grant: string; resource: string | null; brain?: string; board?: string; card?: string };
 
 export class OAuthStore {
   private failures: number[] = [];
@@ -129,6 +151,7 @@ export class OAuthStore {
     const t = Date.now();
     for (const [k, c] of Object.entries(f.codes)) if (c.expires < t) delete f.codes[k];
     for (const [k, r] of Object.entries(f.tokens)) if (r.expires < t) delete f.tokens[k];
+    for (const [k, g] of Object.entries(f.grants)) if (g.expires !== undefined && g.expires < t) delete f.grants[k];
     f.approvals = f.approvals.filter((a) => a.expires > t);
     this.share(f);
     this.save(f);
@@ -418,7 +441,15 @@ export class OAuthStore {
     const grant = row && f.grants[row.grant];
     if (!row || row.kind !== "access" || row.expires < Date.now() || !grant) return;
     if (grant.resource !== null && !ours(grant.resource, origin)) return;
-    return { scope: grant.scope, agent: grant.brain ?? "assistant", grant: grant.id, resource: grant.resource, ...(grant.brain ? { brain: grant.brain } : {}) };
+    return {
+      scope: grant.scope,
+      agent: grant.agent ?? grant.brain ?? "assistant",
+      grant: grant.id,
+      resource: grant.resource,
+      ...(grant.brain ? { brain: grant.brain } : {}),
+      ...(grant.board ? { board: grant.board } : {}),
+      ...(grant.card ? { card: grant.card } : {}),
+    };
   }
 
   // A long-lived token for a client of the user's own (the phone), made on
@@ -433,6 +464,19 @@ export class OAuthStore {
     return access;
   }
 
+  // A token for one agent held to a board: a card's (agents.lua's, by
+  // app.ts's token) or a fleet session's, a week unless it's revoked.
+  mintBound(b: { scope: "card"; board: string; card: string; agent: string } | { scope: "session"; board: string; spawn: string; agent: string }): { token: string; expires_at: string } {
+    const token = newToken("cbn_");
+    const expires = Date.now() + BOUND_DAYS * 86_400_000;
+    this.change((f) => {
+      const grant: Grant = { id: b64url(random(12)), client: "cli", name: `${b.agent} on ${b.board}`, resource: null, created: Date.now(), expires, ...b };
+      f.grants[grant.id] = grant;
+      f.tokens[sha(token)] = { grant: grant.id, kind: "access", expires };
+    });
+    return { token, expires_at: new Date(expires).toISOString().replace(/\.\d+Z$/, "Z") };
+  }
+
   grants(): (Grant & { tokens: number })[] {
     const f = this.read();
     return Object.values(f.grants).map((g) => ({ ...g, tokens: Object.values(f.tokens).filter((t) => t.grant === g.id).length }));
@@ -444,6 +488,18 @@ export class OAuthStore {
       if (!f.grants[id]) return false;
       delete f.grants[id];
       for (const [k, t] of Object.entries(f.tokens)) if (t.grant === id) delete f.tokens[k];
+      return true;
+    });
+  }
+
+  // A token ended, by itself (agents.lua's, as its agent exits): a grant held
+  // to a board, whose only token it is, with it.
+  revokeToken(token: string): boolean {
+    return this.change((f) => {
+      const row = f.tokens[sha(token)];
+      if (!row) return false;
+      delete f.tokens[sha(token)];
+      if (f.grants[row.grant] && boardBound(f.grants[row.grant])) delete f.grants[row.grant];
       return true;
     });
   }

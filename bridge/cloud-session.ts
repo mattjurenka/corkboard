@@ -148,8 +148,8 @@ export class Session {
   private terminals = new Map<string, WebSocket>();
   // sessions: the fleet view's (away.ts's list, for this Neovim's page).
   constructor(
-    private cloud: Cloud,
-    private listener: Listener,
+    protected cloud: Cloud,
+    protected listener: Listener,
     private sessions: () => unknown[] = () => [],
   ) {}
 

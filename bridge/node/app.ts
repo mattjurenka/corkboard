@@ -13,6 +13,16 @@
 // <state>/node/session-token is the sessions' bearer (an assistant's,
 // minted once), and session-mcp.json their --mcp-config; owner-token is
 // the user's own tools' on this machine (memory-sync.ts's); all 0600.
+//
+// The boards the node keeps are served here too (.agent/plans/local-boards.md,
+// step 2): boards.ts sends a board's operations here when the Worker doesn't
+// have it, and a change to one, from this machine or another device, comes
+// back as the Worker's socket would tell it.
+//
+// A second bridge on the machine (a --dev one beside the app's) finds the
+// node running and uses it: the app's operations on its loopback /app, as
+// the owner, its boards' events on /app/events, and the same files for its
+// sessions.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -20,20 +30,23 @@ import { signedIn } from "../cloud";
 import { localAccount } from "../e2ee";
 import { Keystore } from "../keystore";
 import { goals } from "../../lib/model/goals";
+import type { BoardEvent, Card } from "../../lib/model/cards";
 import { BRAIN_ONLY_KINDS, note as checkNote, noteId } from "../../lib/model/plans";
-import { Invalid, now } from "./data";
-import { NODE_DIR, type StartedNode, startNode } from "./serve";
+import { type Data, type FullCard, Invalid, now } from "./data";
+import { NODE_DIR, NodeRunning, type StartedNode, startNode } from "./serve";
+import { touch } from "./leases";
 
 const TOKEN_FILE = join(NODE_DIR, "session-token");
 const MCP_FILE = join(NODE_DIR, "session-mcp.json");
 export const OWNER_TOKEN_FILE = join(NODE_DIR, "owner-token");
 
 // The Worker's STARTER (corkboard-cloud's brains.ts).
-const STARTER = { title: "Assistant", description: "Your assistant.", account: null, credentials: [], abilities: ["chat"], persona: null, skin: null, default: true };
+const STARTER = { title: "Pepper", description: "Your personal assistant.", account: null, credentials: [], abilities: ["chat"], persona: null, skin: null, default: true };
 const NAME = /^[a-z][a-z0-9-]{0,31}$/;
 const FIELDS = ["title", "description", "account", "credentials", "abilities", "persona", "skin", "default"];
 
-export type AppNode = StartedNode & {
+// The node as the bridge uses it, its own or another bridge's.
+export type AppNode = {
   env: Record<string, string>;
   // A brains_* operation answered here, or undefined for the Worker's.
   brains(op: string, args: any[]): Promise<unknown>;
@@ -43,7 +56,17 @@ export type AppNode = StartedNode & {
   // The default brain's notes, as the Worker's /api/notes and /api/goals
   // were: note_get, note_put (usage.lua's reports) and goals (the day plan's).
   notes(op: string, args: any[]): Promise<unknown>;
+  // A board operation (boards.ts's, as cards/cloud.lua names them), with
+  // the Worker's shapes, on a board the node keeps: see boards() below.
+  boards(op: string, args: any[]): Promise<unknown>;
+  // Each change to the node's boards, as BoardEvents; gives back the way to stop.
+  onBoard(fn: BoardListener): () => void;
+  // A file on a card of a board the node keeps (media.ts), or undefined
+  // when it has no such file: the Worker's, then.
+  media(board: string, card: string, id: string): Promise<Response | undefined>;
 };
+
+export type BoardListener = (key: string, event: BoardEvent) => void;
 
 function kept(n: StartedNode, file: string, name: string, scope: "assistant" | "owner"): string {
   try {
@@ -66,16 +89,106 @@ export async function startAppNode(): Promise<AppNode | undefined> {
     console.error("node: the account key is under a passphrase and CORKBOARD_E2EE_PASSPHRASE isn't set; memory isn't served");
     return;
   }
-  const n = await startNode({ port: 0, host: "127.0.0.1", origin: undefined });
+  const n = await startNode({ port: 0, host: "127.0.0.1", origin: undefined }).catch((e) => {
+    if (e instanceof NodeRunning) return e;
+    throw e;
+  });
+  if (n instanceof NodeRunning) return runningNode(n.pid);
   if (!n.data.brains().length) {
-    await n.addBrain("assistant");
-    await n.data.putBrain("assistant", { ...STARTER, created: now() });
+    await n.addBrain("pepper");
+    await n.data.putBrain("pepper", { ...STARTER, created: now() });
   }
   const token = kept(n, TOKEN_FILE, "corkboard sessions", "assistant");
   kept(n, OWNER_TOKEN_FILE, "corkboard on this machine", "owner");
   writeFileSync(MCP_FILE, JSON.stringify({ mcpServers: { "corkboard-memory": { type: "http", url: `${n.url}/mcp?tools=memory`, headers: { Authorization: `Bearer ${token}` } } } }), { mode: 0o600 });
   console.log(`node on ${n.url}, account ${n.account}${n.online ? "" : " (on this machine only)"}`);
-  return { ...n, env: { CORKBOARD_MEMORY_URL: n.url, CORKBOARD_MEMORY_TOKEN_FILE: TOKEN_FILE, CORKBOARD_MEMORY_MCP_CONFIG: MCP_FILE }, brains: (op, args) => brains(n, op, args), nodes: (op, args) => nodes(n, op, args), notes: (op, args) => notes(n, op, args) };
+  const app: AppNode = {
+    env: env(n.url),
+    brains: (op, args) => brains(n, op, args),
+    nodes: (op, args) => nodes(n, op, args),
+    notes: (op, args) => notes(n, op, args),
+    boards: (op, args) => boards(n, op, args),
+    onBoard: boardEvents(n),
+    media: async (board, card, id) => n.media.serve(board, card, id),
+  };
+  n.serveApp(
+    (op, args) => (op.startsWith("board_") ? app.boards(op.slice("board_".length), args) : (op.startsWith("brains_") ? app.brains : op.startsWith("nodes_") ? app.nodes : app.notes)(op, args)),
+    app.onBoard as (fn: (key: string, event: unknown) => void) => () => void,
+  );
+  return app;
+}
+
+const env = (url: string) => ({ CORKBOARD_MEMORY_URL: url, CORKBOARD_MEMORY_TOKEN_FILE: TOKEN_FILE, CORKBOARD_MEMORY_MCP_CONFIG: MCP_FILE });
+
+// Another bridge's node, at the address its session-mcp.json gives (read
+// each call, as it may have restarted on another port), with the owner's
+// token. One that doesn't answer /app (an older bridge's) isn't used.
+async function runningNode(pid: number): Promise<AppNode | undefined> {
+  const where = () => {
+    const url = JSON.parse(readFileSync(MCP_FILE, "utf8")).mcpServers["corkboard-memory"].url as string;
+    return { url: new URL(url).origin, token: readFileSync(OWNER_TOKEN_FILE, "utf8").trim() };
+  };
+  const call = async (op: string, args: any[]) => {
+    const { url, token } = where();
+    const res = await fetch(`${url}/app`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ op, args }) });
+    const json = (await res.json().catch(() => ({}))) as { value?: unknown; error?: string };
+    if (!res.ok) throw new Error(json.error ?? `the node answered ${res.status}`);
+    return json.value;
+  };
+  try {
+    await call("brains_get", []);
+  } catch (e) {
+    console.error(`node: one is running already (pid ${pid}) and doesn't serve this bridge (${(e as Error).message}); memory isn't served here`);
+    return;
+  }
+  const { url } = where();
+  console.log(`node: using the one running already (pid ${pid}) on ${url}`);
+  const listeners = new Set<BoardListener>();
+  let following = false;
+  // The running node's /app/events, followed while anyone listens; when it
+  // drops, each of its boards is told again whole, for what was missed.
+  const follow = async () => {
+    for (let retry = 1000; listeners.size; retry = Math.min(retry * 2, 60_000)) {
+      try {
+        const { url, token } = where();
+        const res = await fetch(`${url}/app/events`, { headers: { Authorization: `Bearer ${token}` } });
+        if (!res.ok || !res.body) throw new Error(`the node answered ${res.status}`);
+        if (retry > 1000)
+          for (const b of (await call("board_boards", [])) as { key: string }[]) {
+            const event = { type: "snapshot", cards: await call("board_snapshot", [b.key]) } as BoardEvent;
+            for (const fn of listeners) fn(b.key, event);
+          }
+        retry = 1000;
+        let buf = "";
+        for await (const chunk of res.body.pipeThrough(new TextDecoderStream())) {
+          buf += chunk;
+          for (let at = buf.indexOf("\n\n"); at >= 0; at = buf.indexOf("\n\n")) {
+            const msg = buf.slice(0, at);
+            buf = buf.slice(at + 2);
+            if (!msg.startsWith("data: ")) continue;
+            const { key, event } = JSON.parse(msg.slice("data: ".length));
+            for (const fn of listeners) fn(key, event);
+          }
+          if (!listeners.size) break;
+        }
+      } catch (e) {
+        console.error(`node: following its boards: ${(e as Error).message}`);
+      }
+      await Bun.sleep(retry);
+    }
+    following = false;
+  };
+  const onBoard = (fn: BoardListener) => {
+    listeners.add(fn);
+    if (!following) void ((following = true), follow());
+    return () => void listeners.delete(fn);
+  };
+  const media = async (board: string, card: string, id: string) => {
+    const { url, token } = where();
+    const res = await fetch(`${url}/api/node/boards/${encodeURIComponent(board)}/cards/${encodeURIComponent(card)}/media/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${token}` } });
+    return res.status === 404 ? undefined : res;
+  };
+  return { env: env(url), brains: call, nodes: call, notes: call, boards: (op, args) => call(`board_${op}`, args), onBoard, media };
 }
 
 // The account's devices as the relay knows them, this one first, and the
@@ -186,4 +299,134 @@ async function brains(n: StartedNode, op: string, args: any[]): Promise<unknown>
       if (signedIn()) return undefined;
       throw new Invalid("holds are the fleet's, which needs signing in");
   }
+}
+
+// Boards ---------------------------------------------------------------------------
+
+// A board as the Worker's GET /api/boards lists it: Open project's (picker.lua).
+function listed(data: Data, key: string) {
+  const s = data.board(key);
+  return {
+    key,
+    name: typeof s.name === "string" ? s.name : key,
+    root: typeof s.root === "string" ? s.root : null,
+    commit: typeof s.commit === "string" ? s.commit : null,
+    remotes: Array.isArray(s.remotes) ? s.remotes : [],
+    environments: Object.keys(s.roots ?? {}).sort(),
+  };
+}
+
+// Where a project's clone is, as boards.ts finds it: its root on the
+// environment it's on, its first commit, its remotes.
+type Place = { root: string | null; environment: string | null; commit?: string; remotes?: string[] };
+
+// The board's settings for a place (the Worker's PUT /api/boards/:key):
+// its root is the last one opened, and each environment's is kept.
+async function place(n: Pick<StartedNode, "data">, key: string, name: string | undefined, p: Place) {
+  const had = n.data.board(key);
+  const set: Record<string, unknown> = {};
+  if (name || had.name === undefined) set.name = name || key;
+  if (p.root) set.root = p.root;
+  if (p.commit) set.commit = p.commit;
+  if (p.remotes?.length) set.remotes = p.remotes;
+  if (p.environment && p.root) set.roots = { ...(had.roots ?? {}), [p.environment]: p.root };
+  await n.data.putBoard(key, set);
+}
+
+// cards/cloud.lua's operations on a board the node keeps (boards.ts decides
+// which those are), with the Worker's shapes. resolve answers from the
+// node's boards alone, null for none; subscribe and make take the place
+// boards.ts found for the clone, and make (subscribe's, or make's own)
+// keeps a board the node didn't have. update doesn't conflict: fields
+// merge, so a card's version is only for cloud.lua's copy to order by.
+// touch keeps a working card's claim (leases.ts); token is a card grant
+// (oauth.ts) for agents.lua's agent, at this node's /mcp, and revoke ends it.
+// delete lets go of the card's files too.
+export async function boards(n: Pick<StartedNode, "data" | "replicas" | "addBoard" | "oauth" | "url" | "media">, op: string, args: any[]): Promise<unknown> {
+  const { data } = n;
+  const has = (key: string) => n.replicas.get("board", key) !== undefined;
+  if (op === "boards") return data.boards().map((b) => listed(data, b.key)).sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
+  if (op === "resolve") {
+    const [pathKey, commit] = args;
+    const found = data.boards().filter((b) => data.board(b.key).commit === commit).map((b) => b.key);
+    return found.includes(pathKey) ? pathKey : (found[0] ?? null);
+  }
+  const [key] = args;
+  if (typeof key !== "string" || !key) throw new Invalid("no board key");
+  if (op === "subscribe" || op === "make") {
+    const [, name, p, make] = args as [string, string, Place, boolean?];
+    if (!has(key)) {
+      if (op === "subscribe" && !make) return null;
+      await n.addBoard(key);
+    }
+    await place(n, key, op === "make" || make ? name : undefined, p ?? { root: null, environment: null });
+    return op === "make" ? listed(data, key) : data.cards(key);
+  }
+  if (!has(key)) throw new Invalid(`no board ${key} on this node`);
+  const strip = ({ log: _, ...c }: FullCard): Card => c;
+  switch (op) {
+    case "snapshot":
+      return data.cards(key);
+    case "create":
+      return data.createCard(key, args[1] ?? {});
+    case "update":
+      return { card: strip(await data.updateCard(key, String(args[1]), args[3] ?? {})) };
+    case "log":
+      return data.appendLog(key, String(args[1]), String(args[2]), String(args[3] ?? ""));
+    case "archive":
+      return strip(await data.archive(key, String(args[1]), true));
+    case "delete":
+      await data.deleteCard(key, String(args[1]));
+      await n.media.forget(key, String(args[1]));
+      return null;
+    case "touch":
+      return touch(data, key, String(args[1]).toUpperCase(), String(args[2]));
+    case "token": {
+      const [, card, agent] = args;
+      if (typeof agent !== "string" || !agent.trim()) throw new Invalid("agent must be the agent's name");
+      const id = data.card(key, String(card).toUpperCase()).id;
+      return { ...n.oauth.mintBound({ scope: "card", board: key, card: id, agent: agent.trim() }), url: `${n.url}/mcp` };
+    }
+    case "revoke":
+      n.oauth.revokeToken(String(args[1]));
+      return null;
+    default:
+      throw new Invalid(`no board operation ${op}`);
+  }
+}
+
+// The node's boards' changes, as the Worker's board socket tells them
+// (lib/model/cards.ts's BoardEvent): a card changed, a log entry added, a
+// card off the board, and the whole board when one comes back (with its
+// log) or another device's entry lands before ours. Each board as last
+// told, kept while anyone listens.
+export function boardEvents(n: Pick<StartedNode, "data" | "replicas">): (fn: BoardListener) => () => void {
+  const listeners = new Set<BoardListener>();
+  type Told = Map<string, { card: string; log: string[] }>;
+  const told = new Map<string, Told>();
+  const now = (key: string): Told => new Map(n.data.cards(key).map(({ log, ...c }) => [c.id, { card: JSON.stringify(c), log: log.map((e) => JSON.stringify(e)) }]));
+  const tell = (key: string, event: BoardEvent) => {
+    for (const fn of listeners) fn(key, event);
+  };
+  n.replicas.onChange((o) => {
+    if (o.kind !== "board" || !listeners.size) return;
+    const was: Told = told.get(o.name) ?? new Map();
+    const is = now(o.name);
+    told.set(o.name, is);
+    const events: BoardEvent[] = [];
+    for (const id of was.keys()) if (!is.has(id)) events.push({ type: "removed", id });
+    for (const [id, c] of is) {
+      const had = was.get(id);
+      if (!had && c.log.length) return tell(o.name, { type: "snapshot", cards: n.data.cards(o.name) });
+      if (had && had.log.some((e, i) => c.log[i] !== e)) return tell(o.name, { type: "snapshot", cards: n.data.cards(o.name) });
+      if (had?.card !== c.card) events.push({ type: "card", card: JSON.parse(c.card) });
+      for (const e of c.log.slice(had?.log.length ?? 0)) events.push({ type: "log", id, entry: JSON.parse(e) });
+    }
+    for (const e of events) tell(o.name, e);
+  });
+  return (fn) => {
+    if (!listeners.size) for (const o of n.replicas.objects("board")) told.set(o.name, now(o.name));
+    listeners.add(fn);
+    return () => void listeners.delete(fn);
+  };
 }

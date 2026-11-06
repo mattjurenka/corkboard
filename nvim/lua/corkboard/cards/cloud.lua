@@ -271,13 +271,17 @@ end
 
 -- corkboard.cards' functions ---------------------------------------------------------
 
--- As the Worker lists them: by priority, then ordinal, then number.
+-- As the Worker lists them: by priority, then ordinal, then number, or for
+-- the node's TASK-7F3K ids, when it was made.
 local function by_board_order(a, b)
   local rank = require("corkboard.cards").rank
   if rank(a) ~= rank(b) then return rank(a) < rank(b) end
   local oa, ob = tonumber(a.ordinal) or math.huge, tonumber(b.ordinal) or math.huge
   if oa ~= ob then return oa < ob end
-  return tonumber(a.id:match("%d+$")) < tonumber(b.id:match("%d+$"))
+  local na, nb = tonumber(a.id:match("%-(%d+)$")), tonumber(b.id:match("%-(%d+)$"))
+  if na and nb then return na < nb end
+  if (a.created or "") ~= (b.created or "") then return (a.created or "") < (b.created or "") end
+  return a.id < b.id
 end
 
 function M.list()

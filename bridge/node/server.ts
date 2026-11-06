@@ -5,6 +5,7 @@
 //   GET  /health                       { ok }: no token, says nothing about the account
 //   /.well-known/..., /register, /authorize, /token     oauth.ts
 //   POST /mcp                          mcp.ts, with a token
+//   PUT  /upload/:token                a file for attach_file's upload (media.ts); the token is the auth
 //   /api/node/...                      the phone's API, with a token:
 //     GET   status                     which objects are synced, and how far
 //     GET   boards                     [{ key, cards: [summary] }]
@@ -13,6 +14,7 @@
 //     GET   boards/:key/cards/:id
 //     PATCH boards/:key/cards/:id      fields
 //     POST  boards/:key/cards/:id/log  { note, who? }
+//     GET   boards/:key/cards/:id/media/:mid   a file on the card (media.ts)
 //     GET   brains                     each brain's settings and counts
 //     GET   brains/:name/notes         ?q=&kind=&limit=
 //     GET   brains/:name/notes/:id
@@ -36,23 +38,41 @@
 import { BRAIN_ONLY_KINDS, type Plan, blocks as checkBlocks, date as checkDate, note as checkNote, noteId } from "../../lib/model/plans";
 import { waitingOn } from "../../lib/model/cards";
 import { type Data, Invalid } from "./data";
-import { type Caller, type Consent, OAuthError, type OAuthStore, Redirect, SCOPES, deniedUrl } from "./oauth";
+import { type Caller, type Consent, OAuthError, type OAuthStore, Redirect, SCOPES, boardBound, deniedUrl } from "./oauth";
 import { mcp } from "./mcp";
 import type { Search } from "./search";
 import { type CalendarConfig, CalendarError, writePlan } from "./calendar";
 import { type Episodes, TooBig } from "./episodes";
+import type { Media } from "./media";
 
 export type NodeOptions = {
   data: Data;
   search: Search;
   oauth: OAuthStore;
   episodes?: Episodes;
+  media?: Media;
   origin?: string;
   // The calendar's config, read when a plan is written, so a login while
   // the node runs takes effect.
   calendar?: () => CalendarConfig | undefined;
   fetch?: (input: string, init?: RequestInit) => Promise<Response>;
+  // The app's brains_*, nodes_*, notes and board_* operations (app.ts's),
+  // and its boards' events, for another bridge on this machine while this
+  // one's holds the node: loopback only.
+  app?: () => AppCall | undefined;
+  appEvents?: () => AppEvents | undefined;
 };
+
+export type AppCall = (op: string, args: any[]) => Promise<unknown>;
+// Called with each board event (lib/model/cards.ts's BoardEvent) as it
+// happens; gives back the way to stop.
+export type AppEvents = (fn: (key: string, event: unknown) => void) => () => void;
+const APP_OPS = /^(brains_\w+|nodes_\w+|note_get|note_put|goals|board_(resolve|boards|snapshot|subscribe|make|create|update|log|archive|delete|touch))$/;
+
+// What Bun.serve gives a fetch beside the request; a tunnel's and a test's
+// don't, so they're never loopback.
+type Peer = { requestIP(req: Request): { address: string } | null };
+const loopback = (req: Request, peer?: Peer) => !!peer && /^(127\.|::1$|::ffff:127\.)/.test(peer.requestIP(req)?.address ?? "");
 
 const escape = (v: string) => v.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
@@ -185,9 +205,11 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
     resource_name: "corkboard node",
   });
 
-  function caller(req: Request, origin: string): Caller | undefined {
+  // One held to a board (a card's agent, a fleet session) is only /mcp's.
+  function caller(req: Request, origin: string, mcp = false): Caller | undefined {
     const auth = req.headers.get("Authorization");
-    return auth?.startsWith("Bearer ") ? o.oauth.verify(auth.slice(7).trim(), origin) : undefined;
+    const who = auth?.startsWith("Bearer ") ? o.oauth.verify(auth.slice(7).trim(), origin) : undefined;
+    return who && (mcp || !boardBound(who)) ? who : undefined;
   }
   const unauthorized = (origin: string) =>
     new Response(JSON.stringify({ error: "invalid_token", error_description: "sign in to this node" }), {
@@ -234,6 +256,8 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
         if (typeof b.note !== "string") throw new Invalid("note must be a non-empty string");
         return json(await data.appendLog(name, id.toUpperCase(), typeof b.who === "string" && b.who.trim() ? b.who.trim().slice(0, 100) : "phone", b.note), 201);
       }
+      if (sub === "cards" && id && more === "media" && path[5] && !path[6] && m === "GET")
+        return o.media?.serve(name, id.toUpperCase(), path[5]) ?? json({ error: `no file ${path[5]} on ${id}` }, 404);
     }
     if (what === "brains") {
       if (!name && m === "GET") return json(data.brains().map((b) => ({ ...b, default: b.name === data.defaultBrain(), notes: data.notes(b.name).length, entries: data.entries(b.name).length })));
@@ -328,7 +352,7 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
     return json({ error: "not found" }, 404);
   }
 
-  return async function fetch(req: Request): Promise<Response> {
+  return async function fetch(req: Request, peer?: Peer): Promise<Response> {
     const url = new URL(req.url);
     const origin = originOf(req, o.origin);
     const p = url.pathname;
@@ -349,9 +373,51 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       if (p === "/authorize") return await authorize(req, origin);
       if (p === "/token") return await token(req, origin);
       if (p === "/mcp") {
+        const who = caller(req, origin, true);
+        if (!who) return unauthorized(origin);
+        return await mcp(req, { data: o.data, search: o.search, media: o.media, origin }, who);
+      }
+      if (p.startsWith("/upload/")) {
+        if (!o.media) return json({ error: "not found" }, 404);
+        return await o.media.upload(req, p.slice("/upload/".length));
+      }
+      if (p === "/app/events") {
         const who = caller(req, origin);
         if (!who) return unauthorized(origin);
-        return await mcp(req, { data: o.data, search: o.search }, who);
+        const events = o.appEvents?.();
+        if (!events || who.scope !== "owner" || req.method !== "GET" || !loopback(req, peer)) return json({ error: "not found" }, 404);
+        // Server-sent events, one per board event, and a comment every 30s
+        // so the idle timeout doesn't end it.
+        let stop = () => {};
+        const enc = new TextEncoder();
+        const stream = new ReadableStream({
+          start(c) {
+            const send = (s: string) => {
+              try {
+                c.enqueue(enc.encode(s));
+              } catch {
+                stop();
+              }
+            };
+            const beat = setInterval(() => send(": beat\n\n"), 30_000);
+            const off = events((key, event) => send(`data: ${JSON.stringify({ key, event })}\n\n`));
+            stop = () => (clearInterval(beat), off());
+            send(": up\n\n");
+          },
+          cancel: () => stop(),
+        });
+        return new Response(stream, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-store" } });
+      }
+      if (p === "/app") {
+        const who = caller(req, origin);
+        if (!who) return unauthorized(origin);
+        const call = o.app?.();
+        if (!call || who.scope !== "owner" || req.method !== "POST" || !loopback(req, peer)) return json({ error: "not found" }, 404);
+        const { op, args } = ((await req.json().catch(() => ({}))) ?? {}) as { op?: unknown; args?: unknown };
+        if (typeof op !== "string" || !APP_OPS.test(op)) throw new Invalid(`no operation ${op}`);
+        // undefined (the Worker's to answer) has no JSON: it's no value.
+        const value = await call(op, Array.isArray(args) ? args : []);
+        return json(value === undefined ? {} : { value });
       }
       if (p.startsWith("/api/node/")) {
         const who = caller(req, origin);

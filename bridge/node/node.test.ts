@@ -11,17 +11,21 @@ import { Relay } from "../../lib/e2ee/relay";
 import { listObjects, noteRecord } from "./objects";
 import { Replicas } from "./replicas";
 import { Data } from "./data";
+import { isCard, newCardId } from "./board";
 import { Search } from "./search";
 import { Episodes } from "./episodes";
 import { Consolidator } from "./consolidator";
 import { type Blobs, Handoff } from "./handoff";
+import { Media, PIECE } from "./media";
 import { type Embed, LocalEmbedder, dequantize, pieces, quantize } from "./embed";
 import { QUIET } from "../../lib/memory/consolidate";
 import { OAuthStore, type Shared, publicAddress, redirectAllowed, sameRedirect } from "./oauth";
 import type { CardChange } from "../../lib/e2ee/merge";
 import { node, originOf } from "./server";
 import { moveMemory } from "./move";
-import { notes } from "./app";
+import { boardEvents, boards, notes } from "./app";
+import { LEASE_MS, sweep, touch } from "./leases";
+import type { BoardEvent } from "../../lib/model/cards";
 
 // A relay in memory: a log per object, ordered by pos, as the Worker keeps
 // them, with its epoch and snapshot. state.pad is added to what a read
@@ -87,12 +91,25 @@ async function setup() {
   const search = new Search(data);
   const oauth = new OAuthStore(join(dir, "oauth.json"));
   const episodes = new Episodes();
-  const app = node({ data, search, oauth, episodes, origin: ORIGIN });
+  const blobs = memoryBlobs();
+  const media = new Media({ data, blobs, dir: join(dir, "blobs") });
+  const app = node({ data, search, oauth, episodes, media, origin: ORIGIN });
   // Another device of the account: the laptop, on the same relay.
   const board = objects.find((o) => o.kind === "board")!;
   const laptop = await Replica.open({ transport: as(shared, "laptop"), key: board.key, object: board.object, device: "laptop" });
   const call = (path: string, init: RequestInit = {}) => app(new Request(`${ORIGIN}${path}`, init));
-  return { dir, root, replicas, data, search, oauth, episodes, app, call, laptop, stop: () => replicas.stop() };
+  return { dir, root, replicas, data, search, oauth, episodes, media, blobs, app, call, laptop, stop: () => replicas.stop() };
+}
+
+// The relay's blobs, in memory.
+function memoryBlobs(): Blobs & { kept: Map<string, Uint8Array> } {
+  const kept = new Map<string, Uint8Array>();
+  return {
+    kept,
+    putBlob: async (id, b) => (kept.has(id) ? Promise.reject(Object.assign(new Error("that blob exists"), { status: 409 })) : void kept.set(id, b)),
+    getBlob: async (id) => kept.get(id) ?? Promise.reject(Object.assign(new Error("no such blob"), { status: 404 })),
+    deleteBlob: async (id) => void kept.delete(id),
+  };
 }
 
 const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
@@ -313,21 +330,23 @@ describe("the node's MCP tools, over replicas", () => {
     expect(next.status).toBe("doing");
     await tool("log", { board: "proj", id: "task-1", note: "half way" });
     const made = JSON.parse((await tool("create_card", { board: "proj", title: "Follow up", parent: "TASK-1" })).text);
-    expect(made.id).toBe("TASK-2");
+    expect(made.id).toMatch(/^TASK-[0-9A-HJKMNP-TV-Z]{4}$/);
     const read = JSON.parse((await tool("read_card", { board: "proj", id: "TASK-1" })).text);
     expect(read.log).toContain("half way");
-    expect(read.log).toContain("follow-up: TASK-2");
-    const err = await tool("update_card", { board: "proj", id: "TASK-2", agent_state: "working" });
+    expect(read.log).toContain(`follow-up: ${made.id}`);
+    const err = await tool("update_card", { board: "proj", id: made.id, agent_state: "working" });
     expect(err.error).toBe(true);
     expect(err.text).toContain("claim it first");
     expect((await tool("read_card", { board: "proj", id: "TASK-9" })).error).toBe(true);
 
     await n.replicas.settled();
     await n.laptop.pull();
-    const cards = n.laptop.cards();
-    expect(cards.map((c) => c.id)).toEqual(["TASK-1", "TASK-2"]);
-    expect(cards[0].agent).toBe("assistant");
-    expect(cards[0].log.map((e) => e.note)).toEqual(["claimed", "half way", "follow-up: TASK-2"]);
+    // Beside the cards, the claim's lease (leases.ts).
+    const cards = n.laptop.cards().filter((c) => isCard(c.id));
+    expect(cards.map((c) => c.id).sort()).toEqual(["TASK-1", made.id].sort());
+    const first = cards.find((c) => c.id === "TASK-1")!;
+    expect(first.agent).toBe("assistant");
+    expect(first.log.map((e) => e.note)).toEqual(["claimed", "half way", `follow-up: ${made.id}`]);
   });
 
   it("writes and finds notes and memory", async () => {
@@ -359,6 +378,79 @@ describe("the node's MCP tools, over replicas", () => {
   });
 });
 
+describe("a board's own records", () => {
+  it("keeps two devices' extra keys, the board's settings, and ids that don't collide", async () => {
+    const n = await setup();
+    // A card as push-board brought it, with a whole extra.
+    await n.laptop.change({ t: "card", card: "TASK-1", set: { title: "Old", status: "ready", extra: { worktree: "/w" }, created: "2026-11-01T00:00:00Z" } });
+    await n.laptop.push();
+    await n.replicas.syncAll();
+    expect(n.data.card("proj", "TASK-1").extra).toEqual({ worktree: "/w" });
+    // At once: the node sets a branch, the laptop (not having seen it) a media list.
+    await n.data.updateCard("proj", "TASK-1", { extra: { worktree: "/w", branch: "card/task-1" } });
+    await n.laptop.change({ t: "card", card: "TASK-1", set: { "extra.media": [{ id: "m1" }] } });
+    await n.laptop.push();
+    await n.replicas.settled();
+    await n.replicas.syncAll();
+    expect(n.data.card("proj", "TASK-1").extra).toEqual({ worktree: "/w", branch: "card/task-1", media: [{ id: "m1" }] });
+    // Taking a key out.
+    await n.data.updateCard("proj", "TASK-1", { extra: { branch: "card/task-1", media: [{ id: "m1" }] } });
+    expect(n.data.card("proj", "TASK-1").extra).toEqual({ branch: "card/task-1", media: [{ id: "m1" }] });
+
+    await n.data.putBoard("proj", { name: "Project", root: "/home/me/proj", commit: "abc" });
+    expect(n.data.board("proj")).toEqual({ name: "Project", root: "/home/me/proj", commit: "abc" });
+    expect(n.data.boards()).toEqual([{ key: "proj", name: "Project", root: "/home/me/proj", cards: 1 }]);
+    expect(n.data.cards("proj", true).map((c) => c.id)).toEqual(["TASK-1"]);
+
+    const ids = new Set<string>();
+    for (let i = 0; i < 200; i++) ids.add(newCardId([...ids]));
+    expect(ids.size).toBe(200);
+    expect(newCardId(["BUG-1", "BUG-2", "TASK-3"])).toMatch(/^BUG-/);
+    await n.stop();
+  });
+});
+
+describe("the app's operations, for another bridge", () => {
+  it("answers the owner on /app, and nobody else", async () => {
+    const n = await setup();
+    const asked: unknown[] = [];
+    let served = false;
+    const app = node({ data: n.data, search: n.search, oauth: n.oauth, origin: ORIGIN, app: () => (served ? async (op, args) => (asked.push([op, args]), op === "brains_holds" ? undefined : { op }) : undefined) });
+    const as = (token: string, body: unknown, address = "127.0.0.1") =>
+      app(new Request(`${ORIGIN}/app`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) }), { requestIP: () => ({ address }) });
+    const owner = n.oauth.mint("dev bridge", 1, "owner");
+    expect((await as(owner, { op: "brains_get", args: [] })).status).toBe(404);
+    served = true;
+    expect(await (await as(owner, { op: "brains_notes", args: ["assistant"] })).json()).toEqual({ value: { op: "brains_notes" } });
+    expect(await (await as(owner, { op: "brains_holds" })).json()).toEqual({});
+    expect((await as(owner, { op: "boards_get" })).status).toBe(400);
+    expect(await (await as(owner, { op: "board_boards" })).json()).toEqual({ value: { op: "board_boards" } });
+    // Not from another machine, nor through the tunnel (no peer), even the owner.
+    expect((await as(owner, { op: "brains_get" }, "192.168.1.5")).status).toBe(404);
+    expect((await app(new Request(`${ORIGIN}/app`, { method: "POST", headers: { Authorization: `Bearer ${owner}` }, body: "{}" }))).status).toBe(404);
+    expect((await as(n.oauth.mint("session", 1, "assistant"), { op: "brains_get" })).status).toBe(404);
+    expect((await app(new Request(`${ORIGIN}/app`, { method: "POST" }))).status).toBe(401);
+    expect(asked).toEqual([["brains_notes", ["assistant"]], ["brains_holds", []], ["board_boards", []]]);
+    await n.stop();
+  });
+
+  it("streams the boards' events to the owner on loopback", async () => {
+    const n = await setup();
+    const app = node({ data: n.data, search: n.search, oauth: n.oauth, origin: ORIGIN, appEvents: () => boardEvents(n) });
+    const owner = n.oauth.mint("dev bridge", 1, "owner");
+    const get = (address: string) => app(new Request(`${ORIGIN}/app/events`, { headers: { Authorization: `Bearer ${owner}` } }), { requestIP: () => ({ address }) });
+    expect((await get("10.0.0.2")).status).toBe(404);
+    const res = await get("::1");
+    expect(res.headers.get("Content-Type")).toBe("text/event-stream");
+    const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
+    expect((await reader.read()).value).toBe(": up\n\n");
+    const c = await n.data.createCard("proj", { title: "Streamed" });
+    expect(JSON.parse((await reader.read()).value!.replace(/^data: /, ""))).toMatchObject({ key: "proj", event: { type: "card", card: { id: c.id, title: "Streamed" } } });
+    await reader.cancel();
+    await n.stop();
+  });
+});
+
 describe("the phone's API", () => {
   let n: Awaited<ReturnType<typeof setup>>;
   let auth: Record<string, string>;
@@ -380,10 +472,10 @@ describe("the phone's API", () => {
   it("makes, changes and logs cards", async () => {
     const made = await api("POST", "boards/proj/cards", { title: "From the phone", priority: "high" });
     expect(made.status).toBe(201);
-    expect(made.body.id).toBe("TASK-1");
-    expect((await api("PATCH", "boards/proj/cards/task-1", { status: "doing" })).body.status).toBe("doing");
-    expect((await api("PATCH", "boards/proj/cards/TASK-1", { nonsense: 1 })).status).toBe(400);
-    expect((await api("POST", "boards/proj/cards/TASK-1/log", { note: "on the train" })).body.who).toBe("phone");
+    const id = made.body.id;
+    expect((await api("PATCH", `boards/proj/cards/${id.toLowerCase()}`, { status: "doing" })).body.status).toBe("doing");
+    expect((await api("PATCH", `boards/proj/cards/${id}`, { nonsense: 1 })).status).toBe(400);
+    expect((await api("POST", `boards/proj/cards/${id}/log`, { note: "on the train" })).body.who).toBe("phone");
     const boards = (await api("GET", "boards")).body;
     expect(boards[0].key).toBe("proj");
     expect(boards[0].cards[0].title).toBe("From the phone");
@@ -1027,6 +1119,156 @@ describe("the relay's tunnel", () => {
   });
 });
 
+describe("Neovim's boards, on the node", () => {
+  it("answers cards/cloud.lua's operations as the Worker did, and tells of every change", async () => {
+    const n = await setup();
+    const b = { ...n, url: ORIGIN, addBoard: (key: string) => n.replicas.add(listObjects(n.root, { boards: [key], brains: [] })[0]) };
+    const told: [string, BoardEvent][] = [];
+    const stop = boardEvents(n)((key, e) => told.push([key, e]));
+    const place = { root: "/home/me/new", environment: "laptop", commit: "c0ffee", remotes: ["git@example.com:me/new.git"] };
+
+    // A board that isn't there isn't made by opening it; one is by make.
+    expect(await boards(b, "subscribe", ["new", "new", place, false])).toBeNull();
+    expect(await boards(b, "subscribe", ["new", "new", place, true])).toEqual([]);
+    expect(await boards(b, "boards", [])).toContainEqual({ key: "new", name: "new", root: "/home/me/new", commit: "c0ffee", remotes: ["git@example.com:me/new.git"], environments: ["laptop"] });
+    expect(await boards(b, "resolve", ["elsewhere", "c0ffee"])).toBe("new");
+    expect(await boards(b, "resolve", ["elsewhere", "beef"])).toBeNull();
+    // Opened on another environment: that one's root kept too, the name as it was.
+    await boards(b, "subscribe", ["new", "ignored", { root: "/srv/new", environment: "vm" }, false]);
+    expect(n.data.board("new")).toMatchObject({ name: "new", root: "/srv/new", roots: { laptop: "/home/me/new", vm: "/srv/new" } });
+
+    const card = (await boards(b, "create", ["proj", { title: "First", status: "ready" }])) as { id: string; version: number };
+    expect(card.id).toMatch(/^TASK-[0-9A-Z]{4}$/);
+    const { card: after } = (await boards(b, "update", ["proj", card.id, 0, { status: "doing" }])) as { card: { status: string; version: number; log?: unknown } };
+    expect(after.status).toBe("doing");
+    expect(after.version).toBeGreaterThan(card.version);
+    expect(after.log).toBeUndefined();
+    expect(await boards(b, "log", ["proj", card.id, "me", "started"])).toMatchObject({ seq: 1, who: "me", note: "started" });
+    // Another device's change comes as an event too.
+    await n.replicas.settled();
+    await n.laptop.pull();
+    await n.laptop.change({ t: "card", card: card.id, set: { priority: "high" } });
+    await n.laptop.push();
+    await n.replicas.syncAll();
+    expect(((await boards(b, "snapshot", ["proj"])) as { priority: string }[])[0].priority).toBe("high");
+    await boards(b, "archive", ["proj", card.id]);
+    const other = (await boards(b, "create", ["proj", { title: "Second" }])) as { id: string };
+    await boards(b, "delete", ["proj", other.id]);
+    expect(n.data.cards("proj", true).map((c) => c.id)).toEqual([card.id]);
+    expect(await boards(b, "touch", ["proj", card.id, "claude"])).toBeNull();
+    await expect(boards(b, "create", ["nowhere", { title: "x" }])).rejects.toThrow("no board nowhere");
+
+    const proj = told.filter(([k]) => k === "proj").map(([, e]) => (e.type === "card" ? `card ${e.card.status}${e.card.priority ? ` ${e.card.priority}` : ""}` : e.type === "log" ? `log ${e.entry.note}` : e.type === "removed" ? `removed ${e.id === card.id ? "first" : "second"}` : e.type));
+    expect(proj).toEqual(["card ready", "card doing", "log started", "card doing high", "removed first", "card backlog", "removed second"]);
+    // An archived card that comes back, with its log, comes as the whole board.
+    await n.data.archive("proj", card.id, false);
+    expect(told.at(-1)).toEqual(["proj", { type: "snapshot", cards: n.data.cards("proj") }]);
+    stop();
+    await n.data.updateCard("proj", card.id, { title: "Unheard" });
+    expect(told.at(-1)![1].type).toBe("snapshot");
+    await n.stop();
+  });
+});
+
+describe("card grants and leases, on the node", () => {
+  let n: Awaited<ReturnType<typeof setup>>;
+  let b: Awaited<ReturnType<typeof setup>> & { url: string; addBoard: () => Promise<void> };
+  const card = (title: string, set: Record<string, unknown> = {}) => n.data.createCard("proj", { title, status: "ready", ...set });
+  const as = (token: string) => async (name: string, args: Record<string, unknown> = {}) => toolText(await n.call("/mcp", rpc("tools/call", { name, arguments: args }, token)));
+  beforeAll(async () => {
+    n = await setup();
+    b = { ...n, url: ORIGIN, addBoard: async () => {} };
+  });
+  afterAll(() => n.stop());
+
+  it("gives a card's agent its own card to change and the board to read, at /mcp alone, until it's revoked", async () => {
+    const mine = await card("Mine");
+    const other = await card("Someone else's");
+    await expect(boards(b, "token", ["proj", "TASK-NONE", "claude"])).rejects.toThrow("no card TASK-NONE");
+    const grant = (await boards(b, "token", ["proj", mine.id.toLowerCase(), "claude"])) as { token: string; url: string; expires_at: string };
+    expect(grant.url).toBe(`${ORIGIN}/mcp`);
+    expect(Date.parse(grant.expires_at) - Date.now()).toBeGreaterThan(6 * 86_400_000);
+    const tool = as(grant.token);
+
+    const listed = ((await (await n.call("/mcp", rpc("tools/list", {}, grant.token))).json()) as any).result.tools as { name: string; inputSchema: { properties: object } }[];
+    const names = listed.map((t) => t.name);
+    expect(names).toContain("claim_card");
+    expect(names).toContain("create_card");
+    for (const no of ["list_boards", "archive_card", "memory_recall", "note_write"]) expect(names).not.toContain(no);
+    expect(listed.every((t) => !("board" in t.inputSchema.properties))).toBe(true);
+
+    // The next card is its own, though another is in ready too.
+    expect(JSON.parse((await tool("next_card")).text).id).toBe(mine.id);
+    expect(JSON.parse((await tool("read_card", { id: other.id })).text).title).toBe("Someone else's");
+    expect((await tool("log", { id: other.id, note: "x" })).text).toContain(`this session works on ${mine.id}`);
+    expect((await tool("create_card", { title: "Elsewhere", parent: other.id })).text).toContain("only make follow-ups of your own card");
+    expect((await tool("create_card", { title: "Ask", attention: "?" })).text).toContain("request_user_action");
+    expect((await tool("archive_card", { id: mine.id, note: "x" })).text).toBe("unknown tool archive_card");
+    expect((await tool("memory_recall", { query: "x" })).text).toBe("unknown tool memory_recall");
+    // A board named is not the one it works on.
+    await tool("log", { board: "elsewhere", id: mine.id, note: "half way" });
+    await tool("handoff", { text: "the rest" });
+    expect(n.data.card("proj", mine.id).log.map((e) => [e.who, e.note])).toEqual([
+      ["claude", "claimed"],
+      ["claude", "half way"],
+      ["claude", "handoff:\nthe rest"],
+    ]);
+    // Not the phone's API, the app's or memory.
+    for (const p of ["/api/node/boards", "/memory/context"]) expect((await n.call(p, { headers: { Authorization: `Bearer ${grant.token}` } })).status).toBe(401);
+
+    expect(await boards(b, "revoke", ["proj", grant.token])).toBeNull();
+    expect((await n.call("/mcp", rpc("tools/list", {}, grant.token))).status).toBe(401);
+    expect(n.oauth.grants().some((g) => g.card === mine.id)).toBe(false);
+  });
+
+  it("gives a fleet session its board to read and cards to make", async () => {
+    const { token } = n.oauth.mintBound({ scope: "session", board: "proj", spawn: "s1", agent: "fleet" });
+    const listed = ((await (await n.call("/mcp", rpc("tools/list", {}, token))).json()) as any).result.tools.map((t: { name: string }) => t.name);
+    expect(listed.sort()).toEqual(["create_card", "handoff", "list_cards", "read_card"]);
+    const tool = as(token);
+    expect((await tool("claim_card", { id: "TASK-1" })).text).toBe("unknown tool claim_card");
+    expect(JSON.parse((await tool("create_card", { title: "Found work" })).text).title).toBe("Found work");
+    expect((await tool("handoff", { text: "x" })).text).toContain("Handed off");
+  });
+
+  it("keeps a working card's claim while its agent is heard from, and blocks it when it isn't", async () => {
+    const c = await card("Long one");
+    const quiet = await card("Never heard");
+    const { token } = n.oauth.mintBound({ scope: "card", board: "proj", card: c.id, agent: "claude" });
+    await as(token)("claim_card", { id: c.id });
+    await n.data.updateCard("proj", quiet.id, { agent: "other", agent_state: "working", status: "doing" });
+    // The claim made, its lease is written; a word within a minute isn't.
+    const first = n.data.lease("proj", c.id)!;
+    expect(first).toMatchObject({ agent: "claude", lapsed: false });
+    await touch(n.data, "proj", c.id, "claude", first.until - LEASE_MS + 30_000);
+    expect(n.data.lease("proj", c.id)!.until).toBe(first.until);
+    expect(await touch(n.data, "proj", c.id, "someone")).toBeNull();
+
+    expect(await sweep(n.data, first.until - 1000)).not.toContain(`proj:${c.id}`);
+    // Fifteen minutes on: blocked, and the card never heard of is left alone.
+    const swept = await sweep(n.data, first.until + 1000);
+    expect(swept).toContain(`proj:${c.id}`);
+    expect(swept).not.toContain(`proj:${quiet.id}`);
+    const blocked = n.data.card("proj", c.id);
+    expect(blocked).toMatchObject({ agent_state: "blocked", attention: "claude stopped responding; queue it again or release it" });
+    expect(blocked.log.at(-1)!.note).toContain("nothing from claude for 15 minutes");
+    expect(n.data.card("proj", quiet.id).agent_state).toBe("working");
+    // The agent speaks again (any call, a read too): working again.
+    await as(token)("read_card", { id: c.id });
+    expect(n.data.card("proj", c.id)).toMatchObject({ agent_state: "working", attention: null });
+    expect(n.data.card("proj", c.id).log.at(-1)!.note).toBe("claude is responding again, so it's back to working");
+    // A card the user blocked isn't the agent's to undo.
+    await n.data.updateCard("proj", c.id, { agent_state: "blocked" });
+    expect(await touch(n.data, "proj", c.id, "claude")).toBeNull();
+    // Nor is one the budget guard stopped swept.
+    await n.data.updateCard("proj", c.id, { agent_state: "working", extra: { budget_hold: "spent" } });
+    expect(await sweep(n.data, Date.now() + 2 * LEASE_MS)).toEqual([]);
+    // The heartbeat, through the app's touch.
+    await n.data.updateCard("proj", c.id, { extra: {} });
+    expect(((await boards(b, "touch", ["proj", c.id.toLowerCase(), "claude"])) as { until: number }).until).toBeGreaterThan(Date.now());
+  });
+});
+
 describe("the bridge's notes and goals, on the node", () => {
   it("keeps the usage reports and reads the goals out of the goal notes", async () => {
     const n = await setup();
@@ -1037,6 +1279,68 @@ describe("the bridge's notes and goals, on the node", () => {
     await expect(notes(n, "note_put", ["Bad Id", { kind: "review", title: "x", body: "" }])).rejects.toThrow();
     await n.data.putNote("assistant", "goal-fitness", { kind: "goal", title: "Goal: Fitness, get stronger", body: "## Why\nTo feel good.\n\n## This week (week of 2026-11-02)\n- Train 3 times\n" });
     expect(await notes(n, "goals", [])).toMatchObject([{ id: "goal-fitness", name: "Fitness", aim: "get stronger", why: "To feel good.", week: ["Train 3 times"], week_of: "2026-11-02" }]);
+    n.stop();
+  });
+});
+
+describe("cards' files, on the node", () => {
+  it("takes a file inline or by upload, sealed in pieces, and gives it back to the page and another device", async () => {
+    const n = await setup();
+    const b = { ...n, url: ORIGIN, addBoard: async () => {} };
+    const card = await n.data.createCard("proj", { title: "Plot it", status: "ready" });
+    const { token } = n.oauth.mintBound({ scope: "card", board: "proj", card: card.id, agent: "claude" });
+    const tool = async (args: Record<string, unknown>) => toolText(await n.call("/mcp", rpc("tools/call", { name: "attach_file", arguments: { id: card.id, ...args } }, token)));
+    const owner = n.oauth.mint("phone", 1, "owner");
+    const get = (mid: string, on = card.id) => n.call(`/api/node/boards/proj/cards/${on}/media/${mid}`, { headers: { Authorization: `Bearer ${owner}` } });
+
+    // Inline: on the card at once, with a line in its log, and a newer card.
+    const small = await tool({ name: "dir/plot.png", data: Buffer.from("PNG!").toString("base64") });
+    const item = JSON.parse(small.text);
+    expect(item).toMatchObject({ name: "plot.png", type: "image/png", size: 4, who: "claude" });
+    const after = n.data.card("proj", card.id);
+    expect(after.extra.media).toEqual([item]);
+    expect(after.version).toBeGreaterThan(card.version);
+    expect(after.log.at(-1)!.note).toBe("attached plot.png (image/png, 4 B)");
+    const res = await get(item.id);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    expect(await res.text()).toBe("PNG!");
+    expect((await get("000000000000")).status).toBe(404);
+    expect((await tool({ name: "x.png", data: "not base64!" })).text).toBe("data must be base64");
+    expect((await toolText(await n.call("/mcp", rpc("tools/call", { name: "attach_file", arguments: { id: "TASK-ELSE", name: "x.png" } }, token)))).text).toContain(`this session works on ${card.id}`);
+
+    // An upload: three pieces for 40 MB, none of it in the clear on the relay.
+    const offer = JSON.parse((await tool({ name: "run.mp4" })).text) as { upload: string; command: string };
+    expect(offer.upload).toMatch(new RegExp(`^${ORIGIN}/upload/[0-9a-f]{48}$`));
+    expect(offer.command).toBe(`curl -fsS -T <path to run.mp4> ${offer.upload}`);
+    const big = new Uint8Array(40 * 1024 * 1024);
+    for (let i = 0; i < big.length; i++) big[i] = (i * 7) & 255;
+    big.set(new TextEncoder().encode("PLAINTEXT-MARKER"), PIECE + 5);
+    const path = new URL(offer.upload).pathname;
+    expect((await n.call(path, { method: "PUT" })).status).toBe(411);
+    const had = n.blobs.kept.size;
+    const put = await n.call(path, { method: "PUT", body: big, headers: { "Content-Length": String(big.length) } });
+    expect(put.status).toBe(201);
+    const video = (await put.json()) as { id: string; size: number; type: string };
+    expect(video).toMatchObject({ size: big.length, type: "video/mp4" });
+    expect(n.blobs.kept.size - had).toBe(3);
+    for (const s of n.data.media("proj", card.id).find((m) => m.id === video.id)!.blobs) expect(Buffer.from(n.blobs.kept.get(s)!).includes("PLAINTEXT-MARKER")).toBe(false);
+    // Good once.
+    expect((await n.call(path, { method: "PUT", body: "x", headers: { "Content-Length": "1" } })).status).toBe(404);
+    const back = new Uint8Array(await (await get(video.id)).arrayBuffer());
+    expect(back.length).toBe(big.length);
+    expect(Buffer.from(back).equals(Buffer.from(big))).toBe(true);
+    // Another device has none of the pieces here: they come from the relay.
+    const other = new Media({ data: n.data, blobs: n.blobs, dir: join(n.dir, "other") });
+    expect(Buffer.from(await other.serve("proj", card.id, video.id)!.arrayBuffer()).equals(Buffer.from(big))).toBe(true);
+    expect(other.serve("proj", "TASK-ELSE", video.id)).toBeUndefined();
+    // Too big is refused before a byte is kept.
+    const offer2 = JSON.parse((await tool({ name: "huge.bin" })).text) as { upload: string };
+    expect((await n.call(new URL(offer2.upload).pathname, { method: "PUT", body: "x", headers: { "Content-Length": String(101 * 1024 * 1024) } })).status).toBe(413);
+
+    // The card deleted for good: its files and their blobs too.
+    expect(await boards(b, "delete", ["proj", card.id])).toBeNull();
+    expect(n.data.media("proj", card.id)).toEqual([]);
+    expect(n.blobs.kept.size).toBe(had - 1);
     n.stop();
   });
 });

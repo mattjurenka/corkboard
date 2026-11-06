@@ -2,7 +2,7 @@
 // notes and memory, over the node's replicas instead of its Durable Objects.
 // Same names, descriptions and rules, so a client moved from the Worker to
 // the node sees the same tools, less those with nothing on the node yet:
-// attachments, boards made over MCP, day plans, the chat and the fleet.
+// boards made over MCP, day plans, the chat and the fleet.
 //
 // Streamable HTTP, stateless, as the Worker's: each POST is a JSON-RPC
 // message (or a batch) answered with JSON; GET is 405. Every tool here
@@ -10,22 +10,29 @@
 //
 // Every caller is the user's own client: an OAuth token's scope says which
 // (owner or assistant, oauth.ts). An assistant can't write the soul, and
-// neither sees the brains' goals, as on the Worker.
+// neither sees the brains' goals, as on the Worker. Or it's held to one board
+// (oauth.ts's card and session grants), whose tools take no board argument:
+// a card's agent changes only its own card, and a fleet session only reads
+// its board and makes cards (SESSION_TOOLS). Neither has memory tools here.
 
 import { AGENT_STATES, type Card, PRIORITIES, STATUSES, waitingOn } from "../../lib/model/cards";
 import { BRAIN_ONLY_KINDS, NOTE_KINDS, OWNER_ONLY_NOTES, date, note, noteId, slug } from "../../lib/model/plans";
 import { range } from "../../lib/model/dates";
 import { type Data, type FullCard, Invalid } from "./data";
 import type { Search } from "./search";
+import { touch } from "./leases";
+import { MAX_INLINE, type Media, fileName, fileType } from "./media";
+import { type Kind, boardBound } from "./oauth";
 
-export type Caller = { scope: "owner" | "assistant"; agent: string; brain?: string };
+export type Caller = { scope: Kind; agent: string; brain?: string; board?: string; card?: string };
 
 class ToolError extends Error {}
 
 type Draft = FullCard & { logs: string[] };
 const FIELDS = ["title", "status", "agent", "agent_state", "attention", "priority", "ordinal", "labels", "dependencies", "description"] as const;
 
-type Call = { data: Data; search: Search; board: string; me: string; caller: Caller; cards: () => FullCard[] };
+// origin: where the call came in, which an upload's URL is at.
+type Call = { data: Data; search: Search; media?: Media; origin: string; board: string; me: string; caller: Caller; cards: () => FullCard[] };
 
 // Read a card, change a draft of it, write what changed and its log
 // entries. A replica merges per field, so there's no version to retry on.
@@ -64,7 +71,9 @@ function full(c: FullCard) {
   return { ...extra, ...fields, log: logText(log) };
 }
 
-type Tool = { description: string; properties?: Record<string, object>; required?: string[]; run: (a: any, c: Call) => Promise<unknown> | unknown };
+// card: whether a card's agent may call it, and on which card: "own" checks
+// that the id argument is its card.
+type Tool = { description: string; properties?: Record<string, object>; required?: string[]; card?: "any" | "own"; run: (a: any, c: Call) => Promise<unknown> | unknown };
 
 const str = (description: string) => ({ type: "string", description });
 const id = str("Card id, e.g. TASK-4");
@@ -124,6 +133,7 @@ const TOOLS: Record<string, Tool> = {
       agent: str("Only cards held by this agent"),
       mine: { type: "boolean", description: "Only cards held by you" },
     },
+    card: "any",
     run: (a, c) => {
       const cards = c.cards();
       const rank = (x: Card) => ({ high: 0, medium: 1, low: 2 })[x.priority ?? "medium"];
@@ -140,15 +150,18 @@ const TOOLS: Record<string, Tool> = {
     description: "Read a card: its fields, description and log.",
     properties: { id },
     required: ["id"],
+    card: "any",
     run: (a, c) => read(c, a.id),
   },
   next_card: {
     description:
       "Claim the next card to work on and return it: a card queued for you first, else the top unassigned card in ready. Cards still waiting on dependencies are skipped. Returns null when there is nothing to do.",
+    card: "any",
     run: async (_a, c) => {
       const cards = c.cards();
       const candidates = [...cards.filter((x) => x.agent === c.me && x.agent_state === "queued"), ...cards.filter((x) => x.status === "ready" && !x.agent)].filter(
-        (x) => !waitingOn(x, cards).length && !x.extra.budget_hold,
+        // A card's agent works on its own card and nothing else.
+        (x) => !waitingOn(x, cards).length && !x.extra.budget_hold && (c.caller.scope !== "card" || x.id === c.caller.card),
       );
       for (const x of candidates) {
         try {
@@ -163,12 +176,14 @@ const TOOLS: Record<string, Tool> = {
       "Start work on a card: sets status doing, agent to you, agent_state working. Fails if another agent holds it, or if it waits on cards that aren't done (unless force).",
     properties: { id, force: { type: "boolean", description: "Claim it even though its dependencies aren't done" } },
     required: ["id"],
+    card: "own",
     run: async (a, c) => read(c, (await claim(c, a.id, a.force === true)).id),
   },
   release_card: {
     description: "Give up a card you hold without finishing it; it goes back to ready, unassigned. Use it when the user puts the card off for later.",
     properties: { id, note: str("Why you are letting it go") },
     required: ["id", "note"],
+    card: "own",
     run: async (a, c) =>
       brief(
         c,
@@ -186,6 +201,7 @@ const TOOLS: Record<string, Tool> = {
     description: "Append a timestamped entry to the card's implementation notes (its log). Use it for progress, decisions and findings.",
     properties: { id, note: str("The entry; markdown is fine") },
     required: ["id", "note"],
+    card: "own",
     run: async (a, c) => brief(c, await change(c, a.id, (x) => x.logs.push(String(a.note).trim()))),
   },
   block: {
@@ -193,6 +209,7 @@ const TOOLS: Record<string, Tool> = {
       "You need a human decision: marks the card blocked, logs your question and sends the user a desktop notification. Stop working on it until it is answered.",
     properties: { id, question: str("What you need decided, with the options you see. The first line is the notification.") },
     required: ["id", "question"],
+    card: "own",
     run: async (a, c) => brief(c, await change(c, a.id, (x) => ask(x, c.me, String(a.question), true))),
   },
   request_user_action: {
@@ -204,12 +221,14 @@ const TOOLS: Record<string, Tool> = {
       wait: { type: "boolean", description: "Whether you are stopped until they do it (default true)" },
     },
     required: ["id", "message"],
+    card: "own",
     run: async (a, c) => brief(c, await change(c, a.id, (x) => ask(x, c.me, String(a.message), a.wait !== false))),
   },
   submit_for_review: {
     description: "You finished a card: moves it to review. The user reads your summary to decide whether to merge, so keep it short and plain; the diff shows the details.",
     properties: { id, summary: str("What changed, in a few short sentences or bullets. Name anything the user has to do or decide."), verification: str("How you checked it works, in a sentence or two, and what you couldn't check") },
     required: ["id", "summary", "verification"],
+    card: "own",
     run: async (a, c) =>
       brief(
         c,
@@ -227,6 +246,7 @@ const TOOLS: Record<string, Tool> = {
       "Hand your work to a fresh session when your context is nearly full: the goal, what's done and verified, what's left, and what you learned that the next session would otherwise have to find again. On a card, it goes in the card's log. Then end your turn.",
     properties: { id: str("The card you're on, if any"), text: str("The handoff, markdown") },
     required: ["text"],
+    card: "own",
     run: async (a, c) => {
       await c.data.appendLog(c.board, a.id, c.me, `handoff:\n${String(a.text).trim()}`);
       return HANDED_OFF;
@@ -246,6 +266,7 @@ const TOOLS: Record<string, Tool> = {
       agent_state: { type: "string", enum: AGENT_STATES },
     },
     required: ["id"],
+    card: "own",
     run: async (a, c) =>
       brief(
         c,
@@ -271,6 +292,31 @@ const TOOLS: Record<string, Tool> = {
         }),
       ),
   },
+  attach_file: {
+    description:
+      "Attach a file to a card for the user to look at in corkboard, beside your session: a screenshot, plot, recording, audio clip, PDF. Images, video, audio and PDFs play there; anything else can be downloaded. Pass data (base64) for a small file you have in hand; otherwise leave it out and you get an upload URL, good for an hour: run the command it gives (curl -T <path> <url>), and the file is on the card once that succeeds. Up to 100 MB.",
+    properties: {
+      id,
+      name: str("The file's name, like plot.png; its extension gives its type"),
+      type: str("Its MIME type, like video/mp4, if the name doesn't say"),
+      data: str("The file, base64, for one under 4 MB; leave it out to upload it with curl instead"),
+    },
+    required: ["id", "name"],
+    card: "own",
+    run: async (a, c) => {
+      if (!c.media) throw new ToolError("this node doesn't keep files");
+      const name = fileName(a.name);
+      const type = fileType(name, a.type);
+      if (a.data === undefined || a.data === null || a.data === "") {
+        const { url, expires_at } = c.media.offer(c.origin, c.board, a.id, c.me, name, type);
+        return { upload: url, expires_at, command: `curl -fsS -T <path to ${name}> ${url}` };
+      }
+      if (typeof a.data !== "string" || a.data.length > (MAX_INLINE * 4) / 3 + 4) throw new ToolError("data is base64 under 4 MB; upload a larger file with curl");
+      const clean = a.data.replace(/\s+/g, "");
+      if (!/^[A-Za-z0-9+/]*={0,2}$/.test(clean)) throw new ToolError("data must be base64");
+      return c.media.attach(c.board, a.id, c.me, name, type, new Uint8Array(Buffer.from(clean, "base64")));
+    },
+  },
   archive_card: {
     description:
       "Take a card off the board: it leaves the board and list_cards but is kept, and read_card still reads it. For cards that are finished with or no longer wanted. It must not be held by an agent at work.",
@@ -288,6 +334,7 @@ const TOOLS: Record<string, Tool> = {
     description: "Replace a card's description. Its log is kept as it is; add to the log with the log tool.",
     properties: { id, description: str("The new description, markdown") },
     required: ["id", "description"],
+    card: "own",
     run: async (a, c) => brief(c, await change(c, a.id, (x) => (x.description = String(a.description).trim()))),
   },
   create_card: {
@@ -303,8 +350,13 @@ const TOOLS: Record<string, Tool> = {
       attention: str("What you're asking the user about this card, one line; corkboard notifies them. Not for card agents"),
     },
     required: ["title"],
+    card: "any",
     run: async (a, c) => {
       const parent = a.parent ? String(a.parent).toUpperCase() : undefined;
+      if (parent && c.caller.scope === "card" && parent !== c.caller.card) throw new ToolError(`you can only make follow-ups of your own card, ${c.caller.card}`);
+      // A card's agent asks about its own card (block, request_user_action);
+      // this is for Pepper and other clients, which hold no card.
+      if (a.attention !== undefined && c.caller.scope === "card") throw new ToolError("ask about your own card with request_user_action");
       if (parent) c.data.card(c.board, parent);
       if (a.status !== undefined && !STATUSES.includes(a.status)) throw new ToolError(`status must be one of ${STATUSES.join(", ")}`);
       const title = oneLine(a.title ?? "");
@@ -470,9 +522,20 @@ const MEMORY_TOOLS: Record<string, MemoryTool> = {
 
 // Tools and calls ------------------------------------------------------------------------
 
+// A fleet session's (oauth.ts's session grants): it has no card of its own,
+// so it reads its board and makes a card once its work is worth tracking.
+const SESSION_TOOLS = new Set(["list_cards", "read_card", "create_card", "handoff"]);
+
+const reaches = (name: string, caller: Caller) => (caller.scope === "session" ? SESSION_TOOLS.has(name) : caller.scope !== "card" || !!TOOLS[name]?.card);
+
 // memoryOnly: the memory tools alone, for a local session (app.ts), whose
-// board tools are its own board's.
-function toolsFor(hidden: readonly string[], memoryOnly = false) {
+// board tools are its own board's. One held to a board, that board's tools
+// it reaches, with no board argument.
+function toolsFor(caller: Caller, hidden: readonly string[], memoryOnly = false) {
+  if (boardBound(caller))
+    return Object.entries(memoryOnly ? {} : TOOLS)
+      .filter(([name]) => reaches(name, caller))
+      .map(([name, t]) => ({ name, description: t.description, inputSchema: { type: "object", properties: t.properties ?? {}, required: t.required ?? [] } }));
   const ownKinds = (properties: Record<string, object>) =>
     Object.fromEntries(Object.entries(properties).map(([k, p]) => [k, "enum" in p && p.enum === NOTE_KINDS ? { ...p, enum: kinds(hidden) } : p]));
   const memory = Object.entries(MEMORY_TOOLS).map(([name, t]) => ({
@@ -496,32 +559,48 @@ function toolsFor(hidden: readonly string[], memoryOnly = false) {
   ];
 }
 
-export type Node = { data: Data; search: Search };
+export type Node = { data: Data; search: Search; media?: Media; origin: string };
 
 async function callTool(node: Node, caller: Caller, name: string, args: any): Promise<unknown> {
-  const { data, search } = node;
-  if (name === "list_boards") return data.boards().map((b) => ({ key: b.key, name: b.key, root: null, cards: b.cards }));
+  const { data, search, media, origin } = node;
+  const bound = boardBound(caller);
+  if (name === "list_boards" && !bound) return data.boards();
   // A brain's own agent sees its goals; the user's clients don't.
   const hidden = caller.brain ? [] : BRAIN_ONLY_KINDS;
-  if (MEMORY_TOOLS[name]) {
+  if (MEMORY_TOOLS[name] && !bound) {
     const brain = caller.brain ?? data.defaultBrain();
     if (!brain || !data.replicas.get("brain", brain)) throw new ToolError(caller.brain ? `no brain ${brain} on this node` : "there's no brain on this node to remember in; start it with --brain NAME");
     return MEMORY_TOOLS[name].run({ ...args }, { data, search, brain, caller, hidden });
   }
-  if (name === "handoff" && args.id === undefined) return HANDED_OFF;
+  // A handoff off any card is the session's alone, for corkboard to start
+  // the next one from.
+  if (name === "handoff" && args.id === undefined) {
+    if (caller.scope !== "card") return HANDED_OFF;
+    args.id = caller.card;
+  }
   const tool = TOOLS[name];
-  if (!tool) throw new ToolError(`unknown tool ${name}`);
-  const board = String(args.board ?? "");
+  if (!tool || !reaches(name, caller)) throw new ToolError(`unknown tool ${name}`);
+  const board = bound ? caller.board! : String(args.board ?? "");
   if (!board) throw new ToolError("say which board, from list_boards");
-  if (!data.replicas.get("board", board)) throw new ToolError(`no board ${board}; list_boards lists them`);
+  if (!data.replicas.get("board", board)) throw new ToolError(bound ? `no board ${board} on this node` : `no board ${board}; list_boards lists them`);
   if (args.id !== undefined) args.id = String(args.id).toUpperCase();
+  if (caller.scope === "card" && tool.card === "own" && args.id !== caller.card)
+    throw new ToolError(`this session works on ${caller.card}; it can read other cards but not change them`);
+  // Any call from the agent holding a card keeps its claim (leases.ts): a
+  // card agent's for its card, anyone else's for the card named; and after
+  // a claim, the one it made. A card that's gone is the tool's to report.
+  const heard = caller.scope === "card" ? caller.card : args.id;
+  const hear = async () => (typeof heard === "string" && data.cards(board, true).some((c) => c.id === heard) ? touch(data, board, heard, caller.agent) : null);
+  const held = await hear();
   if (!["read_card", "block", "request_user_action", "release_card"].includes(name) && typeof args.id === "string") {
     const extra = data.card(board, args.id).extra;
     if (extra.budget_hold)
       throw new ToolError(`budget reached on ${args.id}: ${extra.budget_hold}. Stop working on it and wait; the user has been told and will answer on the card.`);
   }
   let listed: FullCard[] | undefined;
-  return tool.run(args, { data, search, board, me: caller.agent, caller, cards: () => (listed ??= data.cards(board)) });
+  const out = await tool.run(args, { data, search, media, origin, board, me: caller.agent, caller, cards: () => (listed ??= data.cards(board)) });
+  if (!held) await hear();
+  return out;
 }
 
 type Message = { jsonrpc?: string; id?: string | number | null; method?: string; params?: any };
@@ -540,7 +619,7 @@ async function handle(node: Node, caller: Caller, msg: Message, memoryOnly: bool
     case "ping":
       return reply({});
     case "tools/list":
-      return reply({ tools: toolsFor(BRAIN_ONLY_KINDS, memoryOnly) });
+      return reply({ tools: toolsFor(caller, BRAIN_ONLY_KINDS, memoryOnly) });
     case "tools/call":
       try {
         const name = String(params?.name);

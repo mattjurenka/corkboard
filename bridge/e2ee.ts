@@ -54,7 +54,7 @@ import { join } from "node:path";
 import { CLOUD, signedIn as cloudSignedIn, token as googleToken } from "./cloud";
 import { DATA_DIR } from "./dirs";
 import { Keystore } from "./keystore";
-import { type CardChange, type MergedCard } from "../lib/e2ee/merge";
+import { type PlainCard, changesFor } from "./node/board";
 import { type ObjectKind, accountKeys, newRoot, objectId, objectKey } from "../lib/e2ee/keys";
 import { certify, checkCert, creation, newDevice, revoke, type Device } from "../lib/e2ee/device";
 import { approve, pairNew } from "../lib/e2ee/pairing";
@@ -219,8 +219,6 @@ async function approveCode(args: string[]) {
 }
 
 // A board as the Worker or the card files have it, as cards with their logs.
-type PlainCard = { id: string; log?: { at: string; who: string; note: string }[]; [k: string]: unknown };
-
 async function plainBoard(key: string, local: boolean): Promise<PlainCard[]> {
   if (local) {
     const dir = join(DATA_DIR, "boards", key);
@@ -233,18 +231,6 @@ async function plainBoard(key: string, local: boolean): Promise<PlainCard[]> {
   const json = (await res.json().catch(() => ({}))) as PlainCard[] | { error?: string };
   if (!res.ok || !Array.isArray(json)) throw new Error(`board ${key}: ${(json as { error?: string }).error ?? res.status}`);
   return json;
-}
-
-// What the replica lacks of a card: the fields that differ, and the log
-// entries it doesn't have, so pushing a board twice adds nothing.
-function changesFor(card: PlainCard, had: MergedCard | undefined): CardChange[] {
-  const { id, log = [], version: _v, waiting_on: _w, ...fields } = card;
-  const set: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(fields)) if (JSON.stringify(had?.[k]) !== JSON.stringify(v)) set[k] = v;
-  const seen = new Set((had?.log ?? []).map((e) => JSON.stringify([e.at, e.who, e.note])));
-  const out: CardChange[] = Object.keys(set).length ? [{ t: "card", card: id, set }] : [];
-  for (const e of log) if (!seen.has(JSON.stringify([e.at, e.who, e.note]))) out.push({ t: "log", card: id, entry: { at: e.at, who: e.who, note: e.note } });
-  return out;
 }
 
 type Me = Awaited<ReturnType<typeof signedIn>>;

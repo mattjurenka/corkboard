@@ -20,7 +20,8 @@
 //                          a one-time code to approve a connector with at /authorize
 //
 // <state>/node/ has config.json (boards, brains, origin, port, host,
-// timezone: what the flags add to), oauth.json, calendar.json, and
+// timezone: what the flags add to), oauth.json, calendar.json, blobs/
+// (cards' files, sealed, media.ts), and
 // memory.db (the brains' episodes, episodes.ts, which consolidator.ts
 // turns into their log and memory with `claude -p`, whose vectors embed.ts
 // then makes and shares). Boards
@@ -47,8 +48,10 @@ import { LocalEmbedder } from "./embed";
 import { Episodes } from "./episodes";
 import { Consolidator } from "./consolidator";
 import { Handoff } from "./handoff";
+import { Media } from "./media";
+import { startLeases } from "./leases";
 import { OAuthStore, SCOPES, type Scope, type Shared } from "./oauth";
-import { node } from "./server";
+import { type AppCall, type AppEvents, node } from "./server";
 import { loadCalendar, login, saveCalendar } from "./calendar";
 
 export const NODE_DIR = join(STATE_DIR, "node");
@@ -76,13 +79,18 @@ export const approvalCode = () => oauthStore().newApproval();
 // One node per machine: two over the same replicas, as one device, would
 // make ops with the same clocks. The lock is the running one's pid.
 const LOCK = join(NODE_DIR, "lock");
+export class NodeRunning extends Error {
+  constructor(readonly pid: number) {
+    super(`a node is running already (pid ${pid})`);
+  }
+}
 function lock() {
   mkdirSync(NODE_DIR, { recursive: true, mode: 0o700 });
   try {
     const pid = Number(readFileSync(LOCK, "utf8"));
     if (pid && pid !== process.pid) {
       process.kill(pid, 0);
-      throw new Error(`a node is running already (pid ${pid})`);
+      throw new NodeRunning(pid);
     }
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
@@ -120,11 +128,9 @@ export async function startNode(o: NodeOptions = {}) {
 
     const index = await Replica.open({ transport: relay, key: indexKey(root), object: indexId(root), device: d.device.id, store: store.replica(indexId(root)) });
     if (d.relay) await index.pull().catch((e) => console.error(`node: reading the index: ${(e as Error).message}`));
-    const objects = [
-      ...listObjects(root, { boards: [...(c.boards ?? []), ...(o.boards ?? [])], brains: [...(c.brains ?? []), ...(o.brains ?? [])] }, index),
-      accountObject(root, "oauth", index),
-    ];
-    const replicas = await Replicas.open({ objects, transport: relay, device: d.device.id, store: (o) => store.replica(o), index });
+    const want = { boards: [...(c.boards ?? []), ...(o.boards ?? [])], brains: [...(c.brains ?? []), ...(o.brains ?? [])] };
+    const objects = [...listObjects(root, want, index), accountObject(root, "oauth", index)];
+    const replicas = await Replicas.open({ objects, transport: relay, device: d.device.id, store: (o) => store.replica(o), index, discover: () => listObjects(root, want, index) });
     await replicas.start();
     const data = new Data(replicas, o.timezone ?? c.timezone ?? localZone());
     const search = new Search(data, new LocalEmbedder(data));
@@ -148,6 +154,8 @@ export async function startNode(o: NodeOptions = {}) {
     const handoff = r && new Handoff({ replicas, episodes, blobs: r });
     const consolidator = new Consolidator({ data, episodes, after: (brain) => search.share(brain), leads, handoff });
     consolidator.start();
+    // Working cards whose agents went quiet, blocked by the same node.
+    const stopLeases = startLeases(data, leads);
     const hostname = o.host ?? c.host ?? "127.0.0.1";
     const origin = o.origin ?? c.origin;
     // claude.ai's grants, the same on every node of the account.
@@ -155,8 +163,11 @@ export async function startNode(o: NodeOptions = {}) {
       cards: () => replicas.get("account", "oauth")!.cards(),
       change: (...changes) => void replicas.change("account", "oauth", ...changes).catch((e) => console.error(`node: sharing grants: ${(e as Error).message}`)),
     });
-    const served = { data, search, episodes, oauth, calendar: () => loadCalendar(calendarPath) };
-    const server = Bun.serve({ port: o.port ?? c.port ?? 8787, hostname, idleTimeout: 255, fetch: node({ ...served, origin }) });
+    const media = new Media({ data, blobs: r, dir: join(NODE_DIR, "blobs") });
+    const served = { data, search, episodes, media, oauth, calendar: () => loadCalendar(calendarPath) };
+    let app: AppCall | undefined;
+    let appEvents: AppEvents | undefined;
+    const server = Bun.serve({ port: o.port ?? c.port ?? 8787, hostname, idleTimeout: 255, fetch: node({ ...served, origin, app: () => app, appEvents: () => appEvents }) });
     if (r) {
       const nodes = await r.nodes().catch((e) => void console.error(`node: no tunnel: ${(e as Error).message}`));
       if (nodes) {
@@ -171,6 +182,7 @@ export async function startNode(o: NodeOptions = {}) {
       episodes,
       replicas,
       oauth,
+      media,
       account: d.cert.body.account,
       device: d.device.id,
       online: !!d.relay,
@@ -181,9 +193,15 @@ export async function startNode(o: NodeOptions = {}) {
       relay: r,
       // A brain of this account's that the node doesn't keep yet, kept from now on.
       addBrain: (name: string) => replicas.add(listObjects(root, { boards: [], brains: [name] })[0]),
+      // A board, the same way (a project's, made on this machine).
+      addBoard: (key: string) => replicas.add(listObjects(root, { boards: [key], brains: [] })[0]),
+      // The app's operations on the loopback /app (app.ts's), and its
+      // boards' events on /app/events, not the tunnel's.
+      serveApp: (f: AppCall, events: AppEvents) => void ((app = f), (appEvents = events)),
       async stop() {
         tunnel?.stop();
         server.stop();
+        stopLeases();
         await consolidator.stop();
         await replicas.stop();
         episodes.close();

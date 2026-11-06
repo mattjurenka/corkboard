@@ -15,11 +15,25 @@ import type { CardChange, MergedCard } from "../../lib/e2ee/merge";
 import { b64url } from "../../lib/e2ee/wire";
 import { random } from "../../lib/e2ee/keys";
 import { BRAIN_RECORD, ROLLUP_RECORD, VECTOR_PREFIX, entryRecord, noteRecord, recordOf, vectorRecord } from "./objects";
+import { BOARD_RECORD, type BoardSettings, MEDIA_PREFIX, extraOf, extraSet, isCard, isExtraField, leaseRecord, mediaRecord, newCardId, settingsOf } from "./board";
 import type { Replicas } from "./replicas";
 
 export { Invalid };
 
 export type FullCard = Card & { log: LogEntry[] };
+// until: in milliseconds; lapsed: the leader blocked the card for it (leases.ts).
+export type Lease = { agent: string; until: number; lapsed: boolean };
+// A file on a card, as its extra.media lists it (the Worker's media.ts's).
+export type MediaItem = { id: string; name: string; type: string; size: number; at: string; who: string };
+// Its record (media.ts): the card, and its sealed pieces' blobs in order,
+// under the board's key of epoch.
+export type StoredMedia = MediaItem & { card: string; blobs: string[]; epoch: number };
+
+function storedOf(m: MergedCard): StoredMedia | undefined {
+  if (m.deleted || typeof m.card !== "string" || !Array.isArray(m.blobs) || typeof m.size !== "number") return;
+  return { id: m.id.slice(MEDIA_PREFIX.length), card: m.card, name: String(m.name ?? ""), type: String(m.type ?? "application/octet-stream"), size: m.size, at: String(m.at ?? ""), who: String(m.who ?? ""), blobs: m.blobs as string[], epoch: Number(m.epoch) || 0 };
+}
+const itemOf = ({ card: _, blobs: __, epoch: ___, ...m }: StoredMedia): MediaItem => m;
 export type Entry = { id: string; at: string; day: string; who: string; text: string };
 export type BrainSettings = { name: string; title: string; description: string; default: boolean; [k: string]: unknown };
 
@@ -28,13 +42,15 @@ export const now = () => new Date().toISOString().replace(/\.\d+Z$/, "Z");
 // An imported entry's id (importEntries): its time, and a hash of its id where it came from.
 export const importedEntryId = (from: string, at: string) => `${Date.parse(at).toString(36)}-${createHash("sha256").update(from).digest("base64url").slice(0, 10)}`;
 
-const CARD_FIELDS = ["title", "status", "agent", "agent_state", "attention", "priority", "ordinal", "labels", "dependencies", "description", "extra", "created", "updated", "archived"];
+const CARD_FIELDS = ["title", "status", "agent", "agent_state", "attention", "priority", "ordinal", "labels", "dependencies", "description", "extra", "created", "updated", "archived", "deleted"];
 
-function asCard(m: MergedCard, version: number): FullCard {
+// media: the card's files kept here, after any its extra had from the Worker.
+function asCard(m: MergedCard, version: number, media: MediaItem[] = []): FullCard {
   const s = (k: string) => (typeof m[k] === "string" ? (m[k] as string) : null);
-  const extra = m.extra && typeof m.extra === "object" && !Array.isArray(m.extra) ? (m.extra as Record<string, unknown>) : {};
+  const extra = extraOf(m);
   // Fields the card files had that the Worker's model doesn't name go in extra, as an import puts them.
-  for (const [k, v] of Object.entries(m)) if (k !== "id" && k !== "log" && !CARD_FIELDS.includes(k) && !(k in extra)) extra[k] = v;
+  for (const [k, v] of Object.entries(m)) if (k !== "id" && k !== "log" && !CARD_FIELDS.includes(k) && !isExtraField(k) && !(k in extra)) extra[k] = v;
+  if (media.length) extra.media = [...(Array.isArray(extra.media) ? (extra.media as MediaItem[]).filter((x) => !media.some((y) => y.id === x.id)) : []), ...media];
   return {
     id: m.id,
     title: s("title") ?? m.id,
@@ -56,22 +72,6 @@ function asCard(m: MergedCard, version: number): FullCard {
   };
 }
 
-// A card's ids are a prefix and a number, TASK-12; a new one takes the
-// board's commonest prefix and the next number. Two devices making a card at
-// once can land on the same id and merge into one: the gap the plan names.
-function nextId(ids: string[]): string {
-  const counts = new Map<string, number>();
-  let max = new Map<string, number>();
-  for (const id of ids) {
-    const m = id.match(/^([A-Z]+)-(\d+)$/);
-    if (!m) continue;
-    counts.set(m[1], (counts.get(m[1]) ?? 0) + 1);
-    max.set(m[1], Math.max(max.get(m[1]) ?? 0, Number(m[2])));
-  }
-  const prefix = [...counts].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "TASK";
-  return `${prefix}-${(max.get(prefix) ?? 0) + 1}`;
-}
-
 export class Data {
   constructor(
     readonly replicas: Replicas,
@@ -90,18 +90,72 @@ export class Data {
 
   // Boards ------------------------------------------------------------------------
 
-  boards(): { key: string; cards: number }[] {
-    return this.replicas.objects("board").map((o) => ({ key: o.name, cards: this.cards(o.name).length }));
+  boards(): { key: string; name: string; root: string | null; cards: number }[] {
+    return this.replicas.objects("board").map((o) => {
+      const s = this.board(o.name);
+      return { key: o.name, name: typeof s.name === "string" ? s.name : o.name, root: typeof s.root === "string" ? s.root : null, cards: this.cards(o.name).length };
+    });
   }
 
-  // On the board: not archived. all: those too.
+  // The board's own settings: its name, root, first commit, remotes and
+  // each environment's root (board.ts).
+  board(board: string): BoardSettings {
+    return settingsOf(this.replica("board", board).cards());
+  }
+
+  // The fields given set; null clears one.
+  async putBoard(board: string, set: BoardSettings): Promise<BoardSettings> {
+    const had = this.board(board);
+    const changed = Object.fromEntries(Object.entries(set).filter(([k, v]) => JSON.stringify(had[k] ?? null) !== JSON.stringify(v ?? null)));
+    if (Object.keys(changed).length) await this.replicas.change("board", board, { t: "card", card: BOARD_RECORD, set: changed });
+    return this.board(board);
+  }
+
+  // On the board: not archived. all: those too. A card's version counts
+  // its files' records too, so one attached is a newer card.
   cards(board: string, all = false): FullCard[] {
     const rep = this.replica("board", board);
     const state = rep.state.cards;
-    return rep
-      .cards()
-      .map((m) => asCard(m, Math.max(0, ...Object.values(state[m.id]?.fields ?? {}).map((f) => f.stamp.clock))))
+    const clock = (id: string) => Math.max(0, ...Object.values(state[id]?.fields ?? {}).map((f) => f.stamp.clock));
+    const records = rep.cards();
+    const media = new Map<string, { items: MediaItem[]; clock: number }>();
+    for (const s of this.storedMedia(records)) {
+      const on = media.get(s.card) ?? (media.set(s.card, { items: [], clock: 0 }), media.get(s.card)!);
+      on.items.push(itemOf(s));
+      on.clock = Math.max(on.clock, clock(mediaRecord(s.id)));
+    }
+    return records
+      .filter((m) => isCard(m.id) && !m.deleted)
+      .map((m) => asCard(m, Math.max(clock(m.id), media.get(m.id)?.clock ?? 0), media.get(m.id)?.items))
       .filter((c) => all || !c.archived);
+  }
+
+  // The files kept on the board's cards, oldest first.
+  private storedMedia(records: MergedCard[]): StoredMedia[] {
+    return records
+      .filter((m) => m.id.startsWith(MEDIA_PREFIX))
+      .map(storedOf)
+      .filter((s): s is StoredMedia => !!s)
+      .sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
+  }
+
+  media(board: string, card?: string): StoredMedia[] {
+    return this.storedMedia(this.replica("board", board).cards()).filter((s) => !card || s.card === card);
+  }
+
+  // A file on its card, with a line in the card's log.
+  async addMedia(board: string, s: StoredMedia, note: string): Promise<MediaItem> {
+    this.card(board, s.card);
+    const { id, ...set } = s;
+    await this.replicas.change("board", board, { t: "card", card: mediaRecord(id), set }, { t: "log", card: s.card, entry: { at: now(), who: s.who, note } });
+    return itemOf(s);
+  }
+
+  // A card's files off it, for good (its card deleted): what they were.
+  async dropMedia(board: string, card: string): Promise<StoredMedia[]> {
+    const gone = this.media(board, card);
+    if (gone.length) await this.replicas.change("board", board, ...gone.map((s) => ({ t: "card" as const, card: mediaRecord(s.id), set: { deleted: now() } })));
+    return gone;
   }
 
   card(board: string, id: string): FullCard {
@@ -113,17 +167,21 @@ export class Data {
   async createCard(board: string, input: Fields): Promise<FullCard> {
     const f = checkFields(input);
     if (!f.title) throw new Invalid("a card needs a title");
-    const id = nextId(this.cards(board, true).map((c) => c.id));
+    // Not one a deleted card had.
+    const id = newCardId(this.replica("board", board).cards().filter((m) => isCard(m.id)).map((m) => m.id));
     const t = now();
-    const set = { status: "backlog", agent: null, agent_state: null, attention: null, priority: null, ordinal: null, labels: [], dependencies: [], description: "", extra: {}, ...f, created: t, updated: t, archived: null };
+    const { extra = {}, ...rest } = f;
+    const set = { status: "backlog", agent: null, agent_state: null, attention: null, priority: null, ordinal: null, labels: [], dependencies: [], description: "", ...rest, ...extraSet({}, extra), created: t, updated: t, archived: null };
     await this.replicas.change("board", board, { t: "card", card: id, set });
     return this.card(board, id);
   }
 
+  // A given extra is the card's whole extra; only the keys that changed are written.
   async updateCard(board: string, id: string, input: Fields): Promise<FullCard> {
-    this.card(board, id);
-    const f = checkFields(input);
-    if (Object.keys(f).length) await this.replicas.change("board", board, { t: "card", card: id, set: { ...f, updated: now() } });
+    const had = this.card(board, id);
+    const { extra, ...f } = checkFields(input);
+    const set: Record<string, unknown> = { ...f, ...(extra ? extraSet(had.extra, extra) : {}) };
+    if (Object.keys(set).length) await this.replicas.change("board", board, { t: "card", card: id, set: { ...set, updated: now() } });
     return this.card(board, id);
   }
 
@@ -133,12 +191,31 @@ export class Data {
     return this.card(board, id);
   }
 
+  // Gone for good: the record stays, as merge.ts's records do, marked so
+  // nothing reads it as a card.
+  async deleteCard(board: string, id: string): Promise<void> {
+    this.card(board, id);
+    await this.replicas.change("board", board, { t: "card", card: id, set: { deleted: now() } });
+  }
+
   async appendLog(board: string, id: string, who: string, note: string): Promise<LogEntry> {
     this.card(board, id);
     if (!note.trim()) throw new Invalid("note must be a non-empty string");
     await this.replicas.change("board", board, { t: "log", card: id, entry: { at: now(), who, note: note.trim() } });
     const log = this.card(board, id).log;
     return log[log.length - 1];
+  }
+
+  // The claim on a working card, as leases.ts keeps it.
+  lease(board: string, id: string): Lease | undefined {
+    const m = this.replica("board", board)
+      .cards()
+      .find((c) => c.id === leaseRecord(id));
+    return m && typeof m.agent === "string" && typeof m.until === "number" ? { agent: m.agent, until: m.until, lapsed: m.lapsed === true } : undefined;
+  }
+
+  async setLease(board: string, id: string, lease: Lease): Promise<void> {
+    await this.replicas.change("board", board, { t: "card", card: leaseRecord(id), set: lease });
   }
 
   // Brains ------------------------------------------------------------------------
