@@ -11,10 +11,14 @@
 // (queue.ts) also gets corkboard's MCP server with its spawn token, and is
 // told which card is its own; a brain's, the brain's token, which the
 // guest's memory hooks send (fleet/memory-hooks.nix).
+//
+// A resident that is an assistant gets its token and the phone's chat
+// (assistant.ts).
 
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { coresOf, guestOf, manifest, memoryOf, schedule, SPAWNS, spawns, tokenFor, write, type Manifest, type Spawn } from "./fleet";
+import { assist } from "./assistant";
 import { Queue } from "./queue";
 import { end, message, post, serveSessions } from "./sessions";
 import { CLOUD } from "../../bridge/cloud";
@@ -167,6 +171,12 @@ async function tick() {
 }
 
 console.log("fleetd: watching", SPAWNS);
+// The manifest's assistants as it is now: one added later waits for a restart.
+for (const [name, r] of Object.entries(manifest().residents)) {
+  if (!r.assistant) continue;
+  if (!r.brain) console.error(`${name}: an assistant with no brain, so no token to give it`);
+  else assist(name, r.brain, r.assistant);
+}
 const queue = new Queue();
 queue.start();
 serveSessions();

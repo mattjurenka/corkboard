@@ -1,8 +1,8 @@
 # Pepper's VM on the droplet: one Claude Code session, in tmux, always
 # running, as the guest's `claude`. The droplet's half (fleet/pepper/pepper.nix)
 # boots it, gives it its egress proxy, and reaches it over ssh from the
-# gateway: corkboard-pepperd to write its corkboard token and paste in the
-# phone's chat, and the day plan's window to attach.
+# gateway: fleetd (fleet/fleetd/assistant.ts) to write its corkboard token
+# and paste in the phone's chat, and the day plan's window to attach.
 #
 # As pepper-vm on the laptop (~/nixosconfig/modules/hosts/pepper-vm): no
 # shares, no route and no resolver, only the proxy, which knows the pepper
@@ -356,7 +356,7 @@ in
   environment.etc."claude-code/managed-settings.json".text = builtins.toJSON managedSettings;
   environment.etc."claude-code/managed-mcp.json".text = builtins.toJSON managedMcp;
 
-  # The corkboard token, written by pepperd over ssh.
+  # The corkboard token, written by fleetd over ssh.
   systemd.tmpfiles.rules = [ "d /var/lib/pepper 0700 claude users - -" ];
 
   users.mutableUsers = false;
@@ -368,9 +368,9 @@ in
     group = "users";
     extraGroups = [ "systemd-journal" ];
     openssh.authorizedKeys.keys = [
-      # corkboard-pepperd: the token, the phone's chat, and the host's
+      # fleetd: the token, the phone's chat, and the host's
       # pepper-vm.service asking it to power off.
-      "restrict ${keys.pepperd}"
+      "restrict ${keys.fleetd}"
       # The day plan's window, through the droplet's pepper user.
       ''command="${tmux} attach -t pepper",restrict,pty ${keys.attach}''
     ];

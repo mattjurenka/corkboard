@@ -247,21 +247,18 @@
           version = "0.1.0";
           src = pkgs.lib.fileset.toSource {
             root = ./.;
-            fileset = pkgs.lib.fileset.unions [ ./fleet/fleetd/fleet.ts ./fleet/fleetd/fleetd.ts ./fleet/fleetd/cli.ts ./fleet/fleetd/queue.ts ./fleet/fleetd/sessions.ts ./bridge/cloud.ts ./bridge/dirs.ts ./bridge/host.ts ./bridge/sessions.ts ./bridge/transcript.ts ./fleet/pepper/pepperd.ts ];
+            fileset = pkgs.lib.fileset.unions [ ./fleet/fleetd/fleet.ts ./fleet/fleetd/fleetd.ts ./fleet/fleetd/cli.ts ./fleet/fleetd/queue.ts ./fleet/fleetd/sessions.ts ./bridge/cloud.ts ./bridge/dirs.ts ./bridge/host.ts ./bridge/sessions.ts ./bridge/transcript.ts ./fleet/fleetd/assistant.ts ];
           };
           nativeBuildInputs = [ pkgs.makeWrapper ];
           installPhase = ''
             share=$out/share/corkboard-fleet
-            mkdir -p $share/fleet/fleetd $share/fleet/pepper $share/bridge
+            mkdir -p $share/fleet/fleetd $share/bridge
             cp fleet/fleetd/*.ts $share/fleet/fleetd/
-            cp fleet/pepper/pepperd.ts $share/fleet/pepper/
             cp bridge/cloud.ts bridge/dirs.ts bridge/host.ts bridge/sessions.ts bridge/transcript.ts $share/bridge/
             makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-fleetd \
               --add-flags $share/fleet/fleetd/fleetd.ts
             makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-fleet \
               --add-flags $share/fleet/fleetd/cli.ts
-            makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-pepperd \
-              --add-flags $share/fleet/pepper/pepperd.ts
           '';
           meta = { mainProgram = "corkboard-fleet"; license = pkgs.lib.licenses.agpl3Only; };
         };
@@ -270,7 +267,7 @@
         # droplet's half of it, which installs it there (fleet/pepper/pepper.nix).
         pepper-vm = self.nixosConfigurations.pepper-vm.config.system.build.vm;
         pepper = import ./fleet/pepper/pepper.nix {
-          inherit pkgs fleet;
+          inherit pkgs;
           inherit (pkgs) lib;
           plan = pepperPlan;
           vm = pepper-vm;

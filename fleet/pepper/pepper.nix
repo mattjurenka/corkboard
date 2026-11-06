@@ -1,16 +1,17 @@
 # Pepper, the personal assistant, on the droplet (the fleet's `cloud`
 # environment, see .agent/plans/agent-fleet.md): one Claude Code session that
 # is always running, in a VM of its own (./guest.nix). This is the droplet's
-# half: the VM's network, its filtering proxy and its launcher, and
-# corkboard-pepperd (pepperd.ts), which gives the session its corkboard token
-# and pastes in the phone's chat, over ssh. The day plan's window
+# half: the VM's network, its filtering proxy and its launcher, and the
+# `assistant` its resident has in the fleet's manifest (fleet-resident.json),
+# by which fleetd (fleet/fleetd/assistant.ts) gives the session its corkboard
+# token and pastes in the phone's chat, over ssh. The day plan's window
 # (nvim/lua/corkboard/plan/claude.lua) logs in as the droplet's `pepper`
 # user, whose only command is the ssh into the VM that attaches.
 #
 # The droplet is Ubuntu with Nix, not NixOS, so this is a profile
 # (/nix/var/nix/profiles/corkboard-pepper) plus the files `install` links
 # into /etc, as the cloud-0 slot's were put there.
-{ pkgs, lib, fleet, plan, vm }:
+{ pkgs, lib, plan, vm }:
 let
   vmAddr = plan.guestAddress;
   # The pepper brain's egress (~/nixosconfig modules/features/fleet.nix):
@@ -37,7 +38,7 @@ let
     "-o BatchMode=yes"
     "-o ConnectTimeout=10"
   ] ++ opts ++ [ "claude@${vmAddr}" ]);
-  pepperdSsh = ssh "/var/lib/corkboard" [ ];
+  fleetdSsh = ssh "/var/lib/corkboard" [ ];
 
   # From its tap, the proxy and nothing else; nothing forwarded either way
   # (as fleet/host/host.nix's rulesFor).
@@ -89,7 +90,7 @@ let
   # Asks the guest to power off, so Pepper's session ends as at 4am, then
   # waits for QEMU; systemd kills what's left once this returns.
   stop = pkgs.writeShellScript "pepper-vm-stop" ''
-    ${pepperdSsh} sudo -n /run/current-system/sw/bin/systemctl poweroff || true
+    ${fleetdSsh} sudo -n /run/current-system/sw/bin/systemctl poweroff || true
     for _ in $(seq 90); do
       kill -0 "$MAINPID" 2>/dev/null || exit 0
       sleep 1
@@ -164,32 +165,15 @@ let
       [Install]
       WantedBy=multi-user.target
     '';
-    "corkboard-pepperd.service" = ''
-      [Unit]
-      Description=corkboard: Pepper's token, and the phone's chat into Pepper's session
-      After=network-online.target pepper-vm.service
-      Wants=network-online.target
+  };
 
-      [Service]
-      User=corkboard
-      Group=corkboard
-      Environment=CORKBOARD_CLOUD=https://portal.corkboard.fyi
-      Environment=XDG_STATE_HOME=/var/lib/corkboard/state
-      Environment="PEPPER_SSH=${pepperdSsh}"
-      Environment="PEPPER_TMUX=${pepperdSsh} tmux -S /run/pepper/tmux.sock"
-      ExecStart=${lib.getExe' fleet "corkboard-pepperd"}
-      Restart=always
-      RestartSec=10
-      MemoryMax=256M
-      NoNewPrivileges=yes
-      ProtectSystem=strict
-      ProtectHome=yes
-      ReadWritePaths=/var/lib/corkboard
-      PrivateTmp=yes
-
-      [Install]
-      WantedBy=multi-user.target
-    '';
+  # Its resident's `assistant`, for /etc/corkboard/fleet.json's
+  # residents.pepper-vm, which is written by hand on the droplet.
+  resident = builtins.toJSON {
+    ssh = fleetdSsh;
+    tmuxSocket = "/run/pepper/tmux.sock";
+    tokenFile = "/var/lib/pepper/corkboard-token";
+    chat = true;
   };
 
   # Run as root after `nix-env -p /nix/var/nix/profiles/corkboard-pepper
@@ -207,6 +191,7 @@ pkgs.runCommand "pepper-cloud" { } ''
   mkdir -p $out/bin $out/share/pepper/systemd
   ln -s ${install} $out/bin/pepper-install
   ln -s ${attach} $out/bin/pepper-attach
+  cp ${pkgs.writeText "fleet-resident.json" resident} $out/share/pepper/fleet-resident.json
   ${lib.concatStrings (lib.mapAttrsToList (name: text: ''
     cp ${pkgs.writeText name text} $out/share/pepper/systemd/${name}
   '') units)}

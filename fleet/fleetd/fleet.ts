@@ -20,6 +20,12 @@ export type Network = {
   routedEgress: { reason: string; destinations: string[]; tcpPorts: string[]; udpPorts: string[] }[];
 };
 
+// A resident that is a brain's one session (assistant.ts): the ssh into its
+// guest (a command line, ending at the host), the tmux socket there and its
+// session (the brain's name, if not), where its token goes, and whether it
+// has the phone's chat.
+export type Assistant = { ssh: string; tmuxSocket: string; session?: string; tokenFile: string; chat?: boolean };
+
 export type Manifest = {
   flake: string;
   owner: string;
@@ -32,7 +38,7 @@ export type Manifest = {
   // VMs that are always there: they count against the budget while up.
   residents: Record<
     string,
-    { unit: string; memory: number | null; brain?: string | null; account?: string | null; cores?: number | null; capNames?: string[]; network?: Network }
+    { unit: string; memory: number | null; brain?: string | null; account?: string | null; cores?: number | null; capNames?: string[]; network?: Network; assistant?: Assistant }
   >;
   templates: Record<string, { memory: number; cores: number; needsApproval: boolean; capNames: string[]; credentials?: string[] }>;
   // The brains whose memory this host has, by name: the shares a spawn for
