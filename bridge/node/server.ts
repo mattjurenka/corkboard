@@ -8,8 +8,9 @@
 //   PUT  /upload/:token                a file for attach_file's upload (media.ts); the token is the auth
 //   /api/node/...                      the phone's API, with a token:
 //     GET   status                     which objects are synced, and how far
-//     GET   boards                     [{ key, cards: [summary] }]
+//     GET   boards                     [{ key, name, root, roots, commit, remotes, cards: [summary] }]
 //     GET   boards/:key                its settings (name, root, roots, commit, remotes)
+//     PUT   boards/:key                { name?, remotes? }: the board made, or its settings changed (owner)
 //     GET   boards/:key/cards          ?log=1 with their logs, ?all=1 archived too
 //     POST  boards/:key/cards          fields: a new card
 //     GET   boards/:key/cards/:id
@@ -25,7 +26,13 @@
 //     POST  brains/:name/entries       { entries: [{ day, at, who, text, key }] }: a log written elsewhere
 //                                      (memory-sync.ts's vault), each kept once: { added }
 //     POST  brains/:name/remember      { text, who? }
-//     POST  calendar                   { date, day: { blocks } }: an accepted plan onto the calendar (owner)
+//     GET   plans/:date                the day plan (day.ts)
+//     POST  plans/:date/:change        say { text }, accept, discard or day { blocks, version?,
+//                                      proposal? } (owner); a stale one is 409 with { error, plan }
+//     GET   chat                       ?after=<id>&limit=: the messages, oldest first
+//     POST  chat                       { text, who? }: the user's (owner), or the brain's
+//     PATCH chat/:id, DELETE chat/:id  the user's own, until it's delivered (owner)
+//     POST  chat/:id/delivered         passed on to Pepper (owner)
 //     POST  grants                     { scope: card|session, board, card|spawn, agent }: a token held
 //                                      to the board, for a fleet slot, and the /mcp it's for; or
 //                                      { scope: brain, brain, agent }, a week's, for its memory hooks (owner)
@@ -40,13 +47,13 @@
 // The origin (what tokens, metadata and redirects name) is --origin, or
 // else the request's Host: https unless it's this machine.
 
-import { BRAIN_ONLY_KINDS, type Plan, blocks as checkBlocks, date as checkDate, note as checkNote, noteId } from "../../lib/model/plans";
+import { BRAIN_ONLY_KINDS, blocks as checkBlocks, chatText, date as checkDate, note as checkNote, noteId } from "../../lib/model/plans";
 import { waitingOn } from "../../lib/model/cards";
-import { type Data, Invalid } from "./data";
+import { Conflict, type Data, Invalid } from "./data";
 import { type Caller, type Consent, OAuthError, type OAuthStore, Redirect, SCOPES, boardBound, deniedUrl } from "./oauth";
 import { type Fleet, mcp } from "./mcp";
 import type { Search } from "./search";
-import { type CalendarConfig, CalendarError, writePlan } from "./calendar";
+import type { CalendarConfig } from "./calendar";
 import { type Episodes, TooBig } from "./episodes";
 import type { Media } from "./media";
 
@@ -56,11 +63,11 @@ export type NodeOptions = {
   oauth: OAuthStore;
   episodes?: Episodes;
   media?: Media;
+  // A board the node doesn't keep yet, kept from now on (serve.ts's).
+  addBoard?: (key: string) => Promise<void>;
   origin?: string;
-  // The calendar's config, read when a plan is written, so a login while
-  // the node runs takes effect.
-  calendar?: () => CalendarConfig | undefined;
-  fetch?: (input: string, init?: RequestInit) => Promise<Response>;
+  // The calendar's config, for status: whether one is connected.
+  calendar?: () => Promise<CalendarConfig | undefined> | CalendarConfig | undefined;
   // The Worker's fleet queue while this machine is signed in to it: /mcp's spawn tools.
   fleet?: () => Fleet | undefined;
   // The app's brains_*, nodes_*, notes and board_* operations (app.ts's),
@@ -73,8 +80,12 @@ export type NodeOptions = {
 export type AppCall = (op: string, args: any[]) => Promise<unknown>;
 // Called with each board event (lib/model/cards.ts's BoardEvent) as it
 // happens; gives back the way to stop.
-export type AppEvents = (fn: (key: string, event: unknown) => void) => () => void;
-const APP_OPS = /^(brains_\w+|nodes_\w+|note_get|note_put|goals|board_(resolve|boards|snapshot|subscribe|make|create|update|log|archive|delete|touch))$/;
+// key is null for a day event (a plan or the chat).
+export type AppEvents = (fn: (key: string | null, event: unknown) => void) => () => void;
+// The Worker's (cloud/src/api.ts's): a board's key, and a remote git clones from.
+const BOARD_KEY = /^[A-Za-z0-9._-]{1,128}$/;
+const REMOTE = /^(https?:\/\/|ssh:\/\/|git:\/\/|[\w.-]+@[\w.-]+:)[^\s]{1,500}$/;
+const APP_OPS = /^(brains_\w+|nodes_\w+|note_get|note_put|goals|plan_(get|say|accept|discard|day)|board_(board|resolve|boards|snapshot|subscribe|make|create|update|log|archive|delete|touch))$/;
 
 // What Bun.serve gives a fetch beside the request; a tunnel's and a test's
 // don't, so they're never loopback.
@@ -117,6 +128,30 @@ export function originOf(req: Request, fixed?: string): string {
   const local = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host);
   const proto = req.headers.get("X-Forwarded-Proto") ?? (local ? "http" : "https");
   return `${proto}://${host}`;
+}
+
+// Server-sent events, one per what follow sends, and a comment every 30s so
+// the idle timeout doesn't end it. follow returns the way to stop.
+function sse(follow: (send: (event: unknown) => void) => () => void): Response {
+  let stop = () => {};
+  const enc = new TextEncoder();
+  const stream = new ReadableStream({
+    start(c) {
+      const send = (s: string) => {
+        try {
+          c.enqueue(enc.encode(s));
+        } catch {
+          stop();
+        }
+      };
+      const beat = setInterval(() => send(": beat\n\n"), 30_000);
+      const off = follow((event) => send(`data: ${JSON.stringify(event)}\n\n`));
+      stop = () => (clearInterval(beat), off());
+      send(": up\n\n");
+    },
+    cancel: () => stop(),
+  });
+  return new Response(stream, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-store" } });
 }
 
 export function node(o: NodeOptions) {
@@ -238,15 +273,32 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
     // The goals are the brains' own agents', not the user's clients'.
     const hidden = who.brain && who.brain === name ? [] : BRAIN_ONLY_KINDS;
 
-    if (what === "status" && m === "GET" && !name) return json({ objects: data.replicas.status(), calendar: !!o.calendar?.(), default_brain: data.defaultBrain() ?? null });
+    if (what === "status" && m === "GET" && !name) return json({ objects: data.replicas.status(), calendar: !!(await Promise.resolve(o.calendar?.()).catch(() => undefined)), default_brain: data.defaultBrain() ?? null });
     if (what === "boards") {
       if (!name && m === "GET")
         return json(
           data.boards().map((b) => {
             const cards = data.cards(b.key);
-            return { key: b.key, cards: cards.map(({ log: _, ...c }) => ({ ...c, waiting_on: waitingOn(c, cards) })) };
+            return { key: b.key, ...data.board(b.key), name: b.name, cards: cards.map(({ log: _, ...c }) => ({ ...c, waiting_on: waitingOn(c, cards) })) };
           }),
         );
+      if (name && !sub && m === "PUT") {
+        if (who.scope !== "owner") return json({ error: "only the user's own clients make boards" }, 403);
+        if (!BOARD_KEY.test(name)) throw new Invalid(`bad board key ${name}`);
+        const { name: title, remotes, ...rest } = await body();
+        if (Object.keys(rest).length) throw new Invalid(`unknown field ${Object.keys(rest)[0]}`);
+        if (title !== undefined && (typeof title !== "string" || !title.trim())) throw new Invalid("name must be a non-empty string");
+        if (remotes !== undefined && !(Array.isArray(remotes) && remotes.length <= 8 && remotes.every((r) => typeof r === "string" && REMOTE.test(r))))
+          throw new Invalid("remotes must be a list of up to 8 git URLs");
+        const made = !data.replicas.get("board", name);
+        if (made) {
+          if (!o.addBoard) return json({ error: "this node doesn't make boards" }, 501);
+          await o.addBoard(name);
+        }
+        const had = data.board(name);
+        await data.putBoard(name, { ...((title || had.name === undefined) && { name: title?.trim() || name }), ...(remotes && { remotes }) });
+        return json({ key: name, ...data.board(name) }, made ? 201 : 200);
+      }
       if (!data.replicas.get("board", name)) return json({ error: `no board ${name} on this node` }, 404);
       if (!sub && m === "GET") return json({ key: name, ...data.board(name) });
       if (sub === "cards" && !id && m === "GET") {
@@ -332,19 +384,38 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
         return json(await data.remember(brain, typeof b.who === "string" && b.who.trim() ? b.who.trim().slice(0, 100) : "phone", b.text), 201);
       }
     }
-    if (what === "calendar" && !name && m === "POST") {
-      if (who.scope !== "owner") return json({ error: "only the user's own clients write the calendar" }, 403);
-      const c = o.calendar?.();
-      if (!c) return json({ error: "the calendar isn't connected; corkboard-bridge serve calendar-login" }, 409);
-      const b = await body();
-      const plan = { date: checkDate(b.date), day: { blocks: Array.isArray(b.day?.blocks) ? b.day.blocks : [] } } as Pick<Plan, "date" | "day">;
-      plan.day.blocks = checkBlocks(plan.day.blocks);
-      try {
-        return json({ blocks: await writePlan(c, plan, o.fetch) });
-      } catch (e) {
-        if (e instanceof CalendarError) return json({ error: e.message }, 502);
-        throw e;
+    // Day plans and the chat (day.ts). Only the user's own clients accept,
+    // discard or edit a day, so no agent accepts a plan for itself.
+    if (what === "plans" && name) {
+      const d = checkDate(name);
+      if (m === "GET" && !sub) return json(data.plan(d));
+      if (m === "POST" && sub) {
+        if (who.scope !== "owner") return json({ error: "only the user's own clients change a plan" }, 403);
+        const b = await body();
+        const version = Number.isInteger(b.version) ? (b.version as number) : null;
+        const proposal = typeof b.proposal === "string" ? b.proposal : undefined;
+        if (sub === "say") return json(await data.say(d, typeof b.who === "string" && b.who.trim() ? b.who.trim().slice(0, 100) : "me", chatText(b.text)));
+        if (sub === "accept") return json(await data.accept(d, version, checkBlocks(b.blocks), proposal));
+        if (sub === "discard") return json(await data.discard(d, version, proposal));
+        if (sub === "day") return json(await data.setDay(d, version, checkBlocks(b.blocks)));
       }
+    }
+    // Each change to the day object, as an event with nothing in it: pepperd
+    // reads the chat after one (fleet/fleetd/assistant.ts), not every ten seconds.
+    if (what === "day" && name === "events" && m === "GET") return sse((send) => data.replicas.onChange((x) => x.kind === "day" && send({ kind: "day" })));
+    if (what === "chat") {
+      if (!name && m === "GET") return json(data.chat(q("after"), Math.min(Number(q("limit")) || 100, 500)));
+      // The user's own from the owner's clients; else the brain's.
+      if (!name && m === "POST") {
+        const b = await body();
+        const mine = who.scope === "owner";
+        const by = mine ? (typeof b.who === "string" && b.who.trim() ? b.who.trim().slice(0, 100) : "me") : (who.brain ?? "assistant");
+        return json(await data.post(by, chatText(b.text), mine), 201);
+      }
+      if (name && who.scope !== "owner") return json({ error: "only the user's own clients change a message" }, 403);
+      if (name && !sub && m === "PATCH") return json(await data.edit(name, chatText((await body()).text)));
+      if (name && !sub && m === "DELETE") return (await data.unsay(name), new Response(null, { status: 204 }));
+      if (name && sub === "delivered" && m === "POST") return json(await data.deliver(name));
     }
     return json({ error: "not found" }, 404);
   }
@@ -419,27 +490,7 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
         if (!who) return unauthorized(origin);
         const events = o.appEvents?.();
         if (!events || who.scope !== "owner" || req.method !== "GET" || !loopback(req, peer)) return json({ error: "not found" }, 404);
-        // Server-sent events, one per board event, and a comment every 30s
-        // so the idle timeout doesn't end it.
-        let stop = () => {};
-        const enc = new TextEncoder();
-        const stream = new ReadableStream({
-          start(c) {
-            const send = (s: string) => {
-              try {
-                c.enqueue(enc.encode(s));
-              } catch {
-                stop();
-              }
-            };
-            const beat = setInterval(() => send(": beat\n\n"), 30_000);
-            const off = events((key, event) => send(`data: ${JSON.stringify({ key, event })}\n\n`));
-            stop = () => (clearInterval(beat), off());
-            send(": up\n\n");
-          },
-          cancel: () => stop(),
-        });
-        return new Response(stream, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-store" } });
+        return sse((send) => events((key, event) => send({ key, event })));
       }
       if (p === "/app") {
         const who = caller(req, origin);
@@ -464,7 +515,8 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       }
       return json({ error: "not found" }, 404);
     } catch (e) {
-      if (e instanceof Invalid) return json({ error: e.message }, /^no (card|note|board|brain) /.test(e.message) ? 404 : 400);
+      if (e instanceof Conflict) return json({ error: e.message, ...(e.plan ? { plan: e.plan } : {}) }, 409);
+      if (e instanceof Invalid) return json({ error: e.message }, /^no (card|note|board|brain|message|day) /.test(e.message) ? 404 : 400);
       console.error(`node: ${req.method} ${p}:`, e);
       return json({ error: "the node failed" }, 500);
     }

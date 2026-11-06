@@ -8,9 +8,10 @@ import { entries, indexId, indexKey, remember } from "../../lib/e2ee/sharing";
 import { EpochChanged, type LogTransport, type ReplicaStore, Replica, memoryStore, offline } from "../../lib/e2ee/sync";
 import { type NewOp, type Snapshot, type TunnelRequest, type TunnelResponse, type WireOp, b64url, fromB64url, utf8 } from "../../lib/e2ee/wire";
 import { Relay } from "../../lib/e2ee/relay";
-import { listObjects, noteRecord } from "./objects";
+import { DAY, dayObject, listObjects, noteRecord } from "./objects";
+import { Conflict } from "./day";
 import { Replicas } from "./replicas";
-import { Data } from "./data";
+import { Data, Invalid, now } from "./data";
 import { isCard, newCardId } from "./board";
 import { Search } from "./search";
 import { Episodes } from "./episodes";
@@ -23,9 +24,11 @@ import { OAuthStore, type Shared, publicAddress, redirectAllowed, sameRedirect }
 import type { CardChange } from "../../lib/e2ee/merge";
 import { node, originOf } from "./server";
 import type { Fleet } from "./mcp";
-import { moveMemory } from "./move";
-import { boardEvents, boards, notes } from "./app";
+import { moveBoards, moveMemory, movePlans } from "./move";
+import { type DayEvent, boardEvents, boards, dayEvents, notes, plans } from "./app";
 import { LEASE_MS, sweep, touch } from "./leases";
+import { lentCalendar, startCalendar, writeAccepted } from "./calendar";
+import { type Block, type ChatMessage, type Plan, today } from "../../lib/model/plans";
 import type { BoardEvent } from "../../lib/model/cards";
 
 // A relay in memory: a log per object, ordered by pos, as the Worker keeps
@@ -85,7 +88,7 @@ async function setup(o: { fleet?: Fleet } = {}) {
   dirs.push(dir);
   const root = newRoot();
   const shared = relay();
-  const objects = listObjects(root, { boards: ["proj"], brains: ["assistant"] });
+  const objects = [...listObjects(root, { boards: ["proj"], brains: ["assistant"] }), dayObject(root)];
   const replicas = await Replicas.open({ objects, transport: as(shared, "node"), device: "node" });
   await replicas.start({ live: false });
   const data = new Data(replicas, "UTC");
@@ -99,7 +102,7 @@ async function setup(o: { fleet?: Fleet } = {}) {
   const board = objects.find((o) => o.kind === "board")!;
   const laptop = await Replica.open({ transport: as(shared, "laptop"), key: board.key, object: board.object, device: "laptop" });
   const call = (path: string, init: RequestInit = {}) => app(new Request(`${ORIGIN}${path}`, init));
-  return { dir, root, replicas, data, search, oauth, episodes, media, blobs, app, call, laptop, stop: () => replicas.stop() };
+  return { dir, root, shared, replicas, data, search, oauth, episodes, media, blobs, app, call, laptop, stop: () => replicas.stop() };
 }
 
 // The relay's blobs, in memory.
@@ -485,6 +488,27 @@ describe("the phone's API", () => {
     expect((await api("GET", "boards/nope/cards")).status).toBe(404);
   });
 
+  it("makes a board for the portal's Add project, the owner's alone", async () => {
+    const m = await setup();
+    const app = node({ data: m.data, search: m.search, oauth: m.oauth, origin: ORIGIN, addBoard: (key) => m.replicas.add(listObjects(m.root, { boards: [key], brains: [] })[0]) });
+    const mine = `Bearer ${m.oauth.mint("portal", 1)}`;
+    const call = async (method: string, key: string, body?: unknown, token = mine, to = app) => {
+      const res = await to(new Request(`${ORIGIN}/api/node/boards${key}`, { method, headers: { "Content-Type": "application/json", Authorization: token }, body: body === undefined ? undefined : JSON.stringify(body) }));
+      return { status: res.status, body: (await res.json()) as any };
+    };
+    const remote = "git@github.com:me/thing.git";
+    const other = "https://example.com/me/thing.git";
+    expect(await call("PUT", "/github-me-thing", { name: "thing", remotes: [remote] })).toEqual({ status: 201, body: { key: "github-me-thing", name: "thing", remotes: [remote] } });
+    expect(await call("PUT", "/github-me-thing", { remotes: [remote, other] })).toEqual({ status: 200, body: { key: "github-me-thing", name: "thing", remotes: [remote, other] } });
+    expect((await call("PUT", "/github-me-thing", { remotes: ["/home/me/thing"] })).status).toBe(400);
+    expect((await call("PUT", "/bad%20key", { name: "x" })).status).toBe(400);
+    expect((await call("PUT", "/other", { name: "x" }, `Bearer ${m.oauth.mint("claude.ai", 1, "assistant")}`)).status).toBe(403);
+    expect((await call("GET", "")).body.find((b: { key: string }) => b.key === "github-me-thing")).toMatchObject({ name: "thing", remotes: [remote, other], cards: [] });
+    // Without a way to keep a board, none is made.
+    expect((await call("PUT", "/elsewhere", { name: "x" }, mine, m.app)).status).toBe(501);
+    await m.stop();
+  });
+
   it("reads and writes brains, and searches them", async () => {
     expect((await api("PUT", "brains/assistant/notes/user", { kind: "person", title: "Matthew", body: "Likes monospace." })).status).toBe(200);
     expect((await api("PUT", "brains/assistant/notes/soul", { kind: "memory", title: "Soul", body: "Be kind." })).status).toBe(200);
@@ -495,7 +519,7 @@ describe("the phone's API", () => {
     expect((await api("GET", "brains/assistant/recall?q=dog")).body[0].snippet).toContain("dog");
     expect((await api("GET", "brains/assistant/entries")).body).toHaveLength(1);
     const status = (await api("GET", "status")).body;
-    expect(status.objects.map((o: { kind: string; name: string }) => `${o.kind}/${o.name}`)).toEqual(["board/proj", "brain/assistant"]);
+    expect(status.objects.map((o: { kind: string; name: string }) => `${o.kind}/${o.name}`)).toEqual(["board/proj", "brain/assistant", "day/day"]);
     expect(status.calendar).toBe(false);
   });
 
@@ -507,33 +531,117 @@ describe("the phone's API", () => {
     expect(n.data.entries("assistant", "2030-01-02").map((x) => x.text)).toEqual(["Earlier.", "Moved already.", "First."]);
     expect((await api("POST", "brains/assistant/entries", { entries: [{ ...e("b", "x"), at: "soon" }] })).status).toBe(400);
   });
+});
 
-  it("writes an accepted plan to the calendar when one is connected", async () => {
-    expect((await api("POST", "calendar", { date: "2030-01-02", day: { blocks: [] } })).status).toBe(409);
+describe("the calendar, written by the leader", () => {
+  it("writes each accepted day ahead once, again when it's edited, and keeps Google's refusal", async () => {
+    const n = await setup();
     const calls: { method: string; url: string; body?: any }[] = [];
+    let refuse = false;
     const fake = async (url: string, init?: RequestInit) => {
-      calls.push({ method: init?.method ?? "GET", url, body: init?.body && typeof init.body === "string" && init.body.startsWith("{") ? JSON.parse(init.body) : undefined });
-      if (url.includes("oauth2")) return Response.json({ access_token: "g" });
+      calls.push({ method: init?.method ?? "GET", url, body: typeof init?.body === "string" && init.body.startsWith("{") ? JSON.parse(init.body) : undefined });
+      if (url.includes("oauth2")) return refuse ? Response.json({ error: "invalid_grant" }, { status: 400 }) : Response.json({ access_token: "g" });
       if ((init?.method ?? "GET") === "GET") return Response.json({ items: [{ id: "old" }] });
       return init?.method === "DELETE" ? new Response(null, { status: 204 }) : Response.json({ id: "e" });
     };
-    const app = node({
-      data: n.data,
-      search: n.search,
-      oauth: n.oauth,
-      origin: ORIGIN,
-      fetch: fake,
-      calendar: () => ({ client_id: "c", client_secret: "s", refresh: "r", calendar: "cal@group", timezone: "UTC" }),
-    });
+    const c = { client_id: "c", client_secret: "s", refresh: "r", calendar: "cal@group", timezone: "UTC" };
+    const day = (d: number) => new Date(Date.parse(`${today("UTC")}T12:00:00Z`) + d * 86400_000).toISOString().slice(0, 10);
     const blocks = [
-      { id: "a", start: 540, stop: 600, title: "Deep: the node", kind: "work" },
-      { id: "b", start: 600, stop: 630, title: "Standup", kind: "fixed" },
+      { id: "a", start: 540, stop: 600, title: "Deep: the node", kind: "work" as const },
+      { id: "b", start: 600, stop: 630, title: "Standup", kind: "fixed" as const },
     ];
-    const res = await app(new Request(`${ORIGIN}/api/node/calendar`, { method: "POST", headers: auth, body: JSON.stringify({ date: "2030-01-02", day: { blocks } }) }));
-    expect(await res.json()).toEqual({ blocks: 1 });
-    expect(calls.map((c) => c.method)).toEqual(["POST", "GET", "DELETE", "POST", "POST"]);
+    const accept = async (date: string) => {
+      const p = await n.data.propose(date, { from: 0, blocks, reasons: [], why: {}, made: now(), by: "pepper" });
+      return n.data.accept(date, null, blocks, p.proposal!.id);
+    };
+    await n.data.propose(day(1), { from: 0, blocks, reasons: [], why: {}, made: now(), by: "pepper" });
+    for (const d of [-1, 2, 8]) await accept(day(d));
+    expect(await writeAccepted(n.data, c, fake)).toEqual([day(2)]);
+    expect(calls.map((x) => x.method)).toEqual(["POST", "GET", "DELETE", "POST", "POST"]);
     expect(calls[3].body.summary).toBe("Deep: the node");
-    expect(calls[4].body.summary).toBe("✅ Plan approved");
+    expect(n.data.plan(day(2)).calendar).toMatchObject({ accepted: n.data.plan(day(2)).accepted, blocks: 1 });
+
+    calls.length = 0;
+    expect(await writeAccepted(n.data, c, fake)).toEqual([]);
+    await n.data.setDay(day(2), null, [{ ...blocks[0], title: "Deep: calendar" }]);
+    expect(await writeAccepted(n.data, c, fake)).toEqual([day(2)]);
+    expect(calls.find((x) => x.body?.summary === "Deep: calendar")).toBeTruthy();
+
+    refuse = true;
+    await accept(day(1));
+    expect(await writeAccepted(n.data, c, fake)).toEqual([day(1)]);
+    expect(n.data.plan(day(1)).calendar?.error).toContain("calendar-login");
+    expect(await writeAccepted(n.data, c, fake)).toEqual([]);
+    n.stop();
+  });
+
+  it("writes with the Worker's connection, lent, while its token lasts", async () => {
+    let asked = 0;
+    let answer: () => Response = () => Response.json({ error: "the calendar isn't connected" }, { status: 404 });
+    let signedIn = true;
+    const lent = lentCalendar(() => (signedIn ? (asked++, Promise.resolve(answer())) : undefined));
+    expect(await lent()).toBeUndefined();
+    // None connected is asked again only after a while.
+    expect(await lent()).toBeUndefined();
+    expect(asked).toBe(1);
+
+    const lent2 = lentCalendar(() => (signedIn ? (asked++, Promise.resolve(answer())) : undefined));
+    let expires = new Date(Date.now() + 3600_000).toISOString();
+    answer = () => Response.json({ access_token: "ya29.lent", expires_at: expires, calendar: "cal@group", timezone: "UTC" });
+    expect(await lent2()).toEqual({ calendar: "cal@group", timezone: "UTC", token: "ya29.lent" });
+    expect(await lent2()).toMatchObject({ token: "ya29.lent" });
+    expect(asked).toBe(2);
+
+    // The lent token is the one Google sees; no refresh of the node's own.
+    const n = await setup();
+    const date = today("UTC");
+    const p = await n.data.propose(date, { from: 0, blocks: [], reasons: [], why: {}, made: now(), by: "pepper" });
+    await n.data.accept(date, null, [], p.proposal!.id);
+    const auth: string[] = [];
+    const fake = async (url: string, init?: RequestInit) => {
+      if (url.includes("oauth2")) throw new Error("refreshed");
+      auth.push(String((init?.headers as Record<string, string>).Authorization));
+      return Response.json({ items: [] });
+    };
+    expect(await writeAccepted(n.data, (await lent2())!, fake)).toEqual([date]);
+    expect(new Set(auth)).toEqual(new Set(["Bearer ya29.lent"]));
+
+    // Within a minute of ending, it's asked for again; Google's refusal there is the Worker's message.
+    expires = new Date(Date.now() + 30_000).toISOString();
+    const lent3 = lentCalendar(() => (signedIn ? (asked++, Promise.resolve(answer())) : undefined));
+    await lent3();
+    answer = () => Response.json({ error: "Google no longer takes the calendar's sign-in; connect it again at https://x/calendar/connect" }, { status: 502 });
+    await expect(lent3()).rejects.toThrow("connect it again");
+    signedIn = false;
+    expect(await lent3()).toBeUndefined();
+    n.stop();
+  });
+
+  it("writes only while the node leads and has a calendar", async () => {
+    const n = await setup();
+    let lead = false;
+    let config: Parameters<typeof writeAccepted>[1] | undefined;
+    let posts = 0;
+    const fake = async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && !url.includes("oauth2")) posts++;
+      return url.includes("oauth2") ? Response.json({ access_token: "g" }) : Response.json({ items: [] });
+    };
+    const stop = startCalendar({ data: n.data, replicas: n.replicas, leads: async () => lead, config: () => config, fetch: fake });
+    const date = today("UTC");
+    const p = await n.data.propose(date, { from: 0, blocks: [], reasons: [], why: {}, made: now(), by: "pepper" });
+    await n.data.accept(date, null, [], p.proposal!.id);
+    await Bun.sleep(20);
+    config = { client_id: "c", client_secret: "s", refresh: "r", calendar: "cal", timezone: "UTC" };
+    await n.data.say(date, "me", "nudge");
+    await Bun.sleep(20);
+    expect(n.data.plan(date).calendar).toBeUndefined();
+    lead = true;
+    await n.data.say(date, "me", "nudge");
+    for (let i = 0; i < 50 && !n.data.plan(date).calendar; i++) await Bun.sleep(10);
+    expect(n.data.plan(date).calendar).toMatchObject({ blocks: 0 });
+    expect(posts).toBe(1);
+    stop();
+    n.stop();
   });
 });
 
@@ -565,6 +673,18 @@ describe("a session's hooks", () => {
     expect((await n.call("/memory/context?brain=other", { headers: own })).status).toBe(403);
     const found = await toolText(await n.call("/mcp?tools=memory", rpc("tools/call", { name: "notes_search", arguments: { kind: "goal" } }, own.Authorization.slice(7))));
     expect(JSON.parse(found.text).map((x: { id: string }) => x.id)).toEqual(["goal-ship"]);
+  });
+
+  it("give a session its corkboard server's board tools apart from its memory's", async () => {
+    const token = n.oauth.mint("session", 30, "assistant", "assistant");
+    const names = async (tools: string) => ((await (await n.call(`/mcp?tools=${tools}`, rpc("tools/list", {}, token))).json()) as { result: { tools: { name: string }[] } }).result.tools.map((t) => t.name);
+    const board = await names("board");
+    expect(board).toContain("handoff");
+    expect(board).toContain("list_cards");
+    expect(board).not.toContain("memory_recall");
+    expect(await names("memory")).not.toContain("handoff");
+    expect((await toolText(await n.call("/mcp?tools=board", rpc("tools/call", { name: "handoff", arguments: { text: "next" } }, token)))).text).toContain("Handed off");
+    expect((await toolText(await n.call("/mcp?tools=board", rpc("tools/call", { name: "memory_recall", arguments: { query: "x" } }, token)))).text).toContain("unknown tool");
   });
 
   it("keep a session's transcript once, the newest while it's unread", async () => {
@@ -1367,6 +1487,190 @@ describe("the bridge's notes and goals, on the node", () => {
   });
 });
 
+describe("boards moved off the Worker", () => {
+  // The Worker's board move routes (api.ts), over cards and files kept here, paged a card at a time.
+  type Card = { id: string; n: number; log: { at: string; who: string; note: string }[]; [k: string]: unknown };
+  function worker(boards: { key: string; name: string; root: string | null; roots: Record<string, string>; cards: Card[] }[], files: Record<string, string>) {
+    const calls: string[] = [];
+    const state = { move: null as null | { account: string; state: string }, done: false };
+    const fetch = async (path: string, init: RequestInit = {}) => {
+      const method = init.method ?? "GET";
+      calls.push(`${method} ${path.split("?")[0]}`);
+      const url = new URL(path, "https://worker.test");
+      if (url.pathname === "/api/boards/move" && method === "POST") {
+        state.move = { account: JSON.parse(String(init.body)).account, state: "moving" };
+        return Response.json({ ...state.move, at: "2026-11-05T00:00:00Z", handle: "h", node: "n", boards: boards.map(({ cards: _, ...b }) => b) });
+      }
+      if (url.pathname === "/api/boards/move" && method === "DELETE") return (state.move = null), new Response(null, { status: 204 });
+      if (state.move?.state !== "moving") return new Response("not moving", { status: 409 });
+      if (url.pathname === "/api/boards/move/done") return (state.done = true), (state.move.state = "moved"), Response.json(state.move);
+      const [key, media, , mid] = url.pathname.slice("/api/boards/move/".length).split("/").map(decodeURIComponent);
+      if (media === "media") return files[mid] === undefined ? new Response("no such file", { status: 404 }) : new Response(files[mid]);
+      const after = Number(url.searchParams.get("after"));
+      const all = boards.find((b) => b.key === key)!.cards.filter((c) => c.n > after);
+      return Response.json({ cards: all.slice(0, 1), next: all.length > 1 ? all[0].n : null });
+    };
+    return { fetch, calls, state };
+  }
+  const file = { id: "0123456789ab", name: "plot.png", type: "image/png", size: 4, at: "2026-03-01T12:00:00Z", who: "claude" };
+  const boardsOf = (): Parameters<typeof worker>[0] => [
+    {
+      key: "proj",
+      name: "Project",
+      root: "/src/proj",
+      roots: { droplet: "/home/workspace/src/proj" },
+      cards: [
+        { id: "TASK-1", n: 1, title: "Plot it", status: "done", archived: null, created: "2026-03-01T10:00:00Z", updated: "2026-03-01T12:00:00Z", extra: { media: [file], pr: 7 }, log: [{ at: "2026-03-01T11:00:00Z", who: "claude", note: "plotting" }, { at: "2026-03-01T12:00:00Z", who: "claude", note: "attached plot.png (image/png, 4 B)" }] },
+        { id: "TASK-2", n: 2, title: "Old", status: "done", archived: "2026-02-02T00:00:00Z", created: "2026-02-01T10:00:00Z", updated: "2026-02-01T10:00:00Z", log: [] },
+      ],
+    },
+    { key: "fresh", name: "Fresh", root: null, roots: {}, cards: [{ id: "TASK-1", n: 1, title: "First", status: "ready", archived: null, created: "2026-03-02T10:00:00Z", updated: "2026-03-02T10:00:00Z", log: [] }] },
+  ];
+  const target = (n: Awaited<ReturnType<typeof setup>>) => ({
+    ...n,
+    account: "acct-0123456789abcdefghij",
+    addBoard: (key: string) => n.replicas.add(listObjects(n.root, { boards: [key], brains: [] })[0]),
+  });
+
+  it("copies every board's cards, logs, files and settings, then deletes the Worker's", async () => {
+    const n = await setup();
+    const w = worker(boardsOf(), { [file.id]: "PNG!" });
+    const moved = await moveBoards(target(n), w.fetch, { log: () => {} });
+    expect(moved).toEqual({ proj: { cards: 2, files: 1 }, fresh: { cards: 1, files: 0 } });
+    expect(w.state.done).toBe(true);
+
+    expect(n.data.board("proj")).toMatchObject({ name: "Project", root: "/src/proj", roots: { droplet: "/home/workspace/src/proj" } });
+    expect(n.data.cards("proj").map((c) => c.id)).toEqual(["TASK-1"]);
+    const c = n.data.card("proj", "TASK-1");
+    expect(c).toMatchObject({ title: "Plot it", status: "done", created: "2026-03-01T10:00:00Z" });
+    expect(c.extra.pr).toBe(7);
+    // The file's own record, with the Worker's id and time, and no second log line.
+    expect(c.extra.media).toEqual([file]);
+    expect(c.log.map((e) => e.note)).toEqual(["plotting", "attached plot.png (image/png, 4 B)"]);
+    expect(await n.media.serve("proj", "TASK-1", file.id)!.text()).toBe("PNG!");
+    expect(n.data.cards("proj", true).find((c) => c.id === "TASK-2")).toMatchObject({ title: "Old", archived: "2026-02-02T00:00:00Z" });
+    expect(n.data.cards("fresh").map((c) => c.title)).toEqual(["First"]);
+    await n.stop();
+  });
+
+  it("a dry run leaves the Worker's, and a second run adds nothing", async () => {
+    const n = await setup();
+    const w = worker(boardsOf(), { [file.id]: "PNG!" });
+    await moveBoards(target(n), w.fetch, { dryRun: true, log: () => {} });
+    expect(w.state).toEqual({ move: null, done: false });
+    expect(w.calls.at(-1)).toBe("DELETE /api/boards/move");
+
+    const state = () => JSON.stringify(["proj", "fresh"].map((k) => n.replicas.get("board", k)!.state));
+    const had = state();
+    const kept = n.blobs.kept.size;
+    await moveBoards(target(n), w.fetch, { log: () => {} });
+    expect(state()).toBe(had);
+    expect(n.blobs.kept.size).toBe(kept);
+    expect(n.data.card("proj", "TASK-1").log).toHaveLength(2);
+    expect(w.state.done).toBe(true);
+    await n.stop();
+  });
+
+  it("unfreezes the Worker when a file can't be had", async () => {
+    const n = await setup();
+    const w = worker(boardsOf(), {});
+    await expect(moveBoards(target(n), w.fetch, { log: () => {} })).rejects.toThrow("404");
+    expect(w.state).toEqual({ move: null, done: false });
+    await n.stop();
+  });
+});
+
+describe("day plans and chat moved off the Worker", () => {
+  // The Worker's plan move routes (api.ts), paged one at a time.
+  const block: Block = { id: "a", start: 600, stop: 660, title: "A", kind: "work" };
+  const plansOf = (): Plan[] => [
+    { date: "2026-10-24", version: 3, projects: [{ key: "jobs", name: "Jobs" }], day: { blocks: [block], ranked: [], later: [], inputs: [] }, proposal: null, asked: [], accepted: "2026-10-24T08:00:00Z", calendar: { accepted: "2026-10-24T08:00:00Z", at: "2026-10-24T08:00:01Z", blocks: 1 } },
+    { date: "2026-10-25", version: 2, projects: [], day: { blocks: [], ranked: [], later: [], inputs: [] }, proposal: { from: 0, blocks: [block], reasons: [], why: {}, by: "assistant", answering: [] } as never, asked: ["later please", "and shorter"], accepted: null },
+  ];
+  const messagesOf = (): ChatMessage[] => [
+    { id: 1, at: "2026-10-24T09:00:00.000Z", who: "Me", text: "hi", by_user: true, delivered: "2026-10-24T09:00:05Z" },
+    { id: 2, at: "2026-10-24T09:00:00.000Z", who: "pepper", text: "hello", by_user: false, delivered: null },
+    { id: 10, at: "2026-10-24T09:01:00.000Z", who: "Me", text: "not yet seen", by_user: true, delivered: null },
+  ];
+  function worker(plans: Plan[], messages: ChatMessage[]) {
+    const calls: string[] = [];
+    const state = { move: null as null | { account: string; state: string }, done: false };
+    const fetch = async (path: string, init: RequestInit = {}) => {
+      const method = init.method ?? "GET";
+      calls.push(`${method} ${path.split("?")[0]}`);
+      const url = new URL(path, "https://worker.test");
+      if (url.pathname === "/api/plans/move" && method === "POST") {
+        state.move = { account: JSON.parse(String(init.body)).account, state: "moving" };
+        return Response.json({ ...state.move, at: "2026-11-05T00:00:00Z", calendar: { connected: true, id: "claude@group.calendar.google.com", timezone: "UTC" } });
+      }
+      if (url.pathname === "/api/plans/move" && method === "DELETE") return (state.move = null), new Response(null, { status: 204 });
+      if (state.move?.state !== "moving") return new Response("not moving", { status: 409 });
+      if (url.pathname === "/api/plans/move/done") return (state.done = true), (state.move.state = "moved"), Response.json(state.move);
+      const after = url.searchParams.get("after") ?? "";
+      if (url.pathname === "/api/plans/move/plans") {
+        const all = plans.filter((p) => p.date > after);
+        return Response.json({ plans: all.slice(0, 1), next: all.length > 1 ? all[0].date : null });
+      }
+      const all = messages.filter((m) => m.id > Number(after));
+      return Response.json({ messages: all.slice(0, 1), next: all.length > 1 ? all[0].id : null });
+    };
+    return { fetch, calls, state };
+  }
+  const target = (n: Awaited<ReturnType<typeof setup>>) => ({ ...n, account: "acct-0123456789abcdefghij", calendar: () => undefined });
+
+  it("copies every plan and message, as they were, then deletes the Worker's", async () => {
+    const n = await setup();
+    const w = worker(plansOf(), messagesOf());
+    const moved = await movePlans(target(n), w.fetch, { log: () => {} });
+    expect(moved).toEqual({ plans: 2, messages: 3, calendar: { connected: true, id: "claude@group.calendar.google.com", timezone: "UTC" } });
+    expect(w.state.done).toBe(true);
+
+    // An accepted day, already on the calendar: not written again.
+    expect(n.data.plan("2026-10-24")).toMatchObject({ day: { blocks: [block] }, proposal: null, accepted: "2026-10-24T08:00:00Z", projects: [{ key: "jobs" }], calendar: { blocks: 1 } });
+    // A proposal waiting, and what's been asked since, still open to accept.
+    const waiting = n.data.plan("2026-10-25");
+    expect(waiting).toMatchObject({ proposal: { id: "worker-2", blocks: [block] }, asked: ["later please", "and shorter"] });
+    expect((await n.data.accept("2026-10-25", null, [block], "worker-2")).day.blocks).toEqual([block]);
+
+    // In order, with their times and who passed them on; ids the node's strings.
+    const chat = n.data.chat();
+    expect(chat.map((m) => [m.text, m.at, m.delivered])).toEqual([
+      ["hi", "2026-10-24T09:00:00.000Z", "2026-10-24T09:00:05Z"],
+      ["hello", "2026-10-24T09:00:00.000Z", null],
+      ["not yet seen", "2026-10-24T09:01:00.000Z", null],
+    ]);
+    // What pepperd hadn't passed on is still the user's to change, and newer messages go after.
+    expect((await n.data.edit(chat[2].id, "changed")).text).toBe("changed");
+    expect((await n.data.post("pepper", "after")).id > chat[2].id).toBe(true);
+    await n.stop();
+  });
+
+  it("a dry run leaves the Worker's, and a second run adds nothing", async () => {
+    const n = await setup();
+    const w = worker(plansOf(), messagesOf());
+    await movePlans(target(n), w.fetch, { dryRun: true, log: () => {} });
+    expect(w.state).toEqual({ move: null, done: false });
+    expect(w.calls.at(-1)).toBe("DELETE /api/plans/move");
+
+    const state = () => JSON.stringify(n.replicas.get("day", DAY)!.state);
+    const had = state();
+    await movePlans(target(n), w.fetch, { log: () => {} });
+    expect(state()).toBe(had);
+    expect(n.data.plan("2026-10-25").asked).toHaveLength(2);
+    expect(w.state.done).toBe(true);
+    await n.stop();
+  });
+
+  it("calls the Worker's move off when a page can't be had", async () => {
+    const n = await setup();
+    const w = worker(plansOf(), messagesOf());
+    const broken = async (path: string, init?: RequestInit) => (path.startsWith("/api/plans/move/chat") ? new Response("boom", { status: 500 }) : w.fetch(path, init));
+    await expect(movePlans(target(n), broken, { log: () => {} })).rejects.toThrow("500");
+    expect(w.state).toEqual({ move: null, done: false });
+    await n.stop();
+  });
+});
+
 describe("cards' files, on the node", () => {
   it("takes a file inline or by upload, sealed in pieces, and gives it back to the page and another device", async () => {
     const n = await setup();
@@ -1425,6 +1729,216 @@ describe("cards' files, on the node", () => {
     expect(await boards(b, "delete", ["proj", card.id])).toBeNull();
     expect(n.data.media("proj", card.id)).toEqual([]);
     expect(n.blobs.kept.size).toBe(had - 1);
+    n.stop();
+  });
+});
+
+describe("day plans and chat, on the node", () => {
+  const block = (id: string, start: number, title = id) => ({ id, start, stop: start + 60, title, kind: "work" as const });
+  const proposal = (blocks: ReturnType<typeof block>[]) => ({ from: 0, blocks, reasons: [], why: {}, made: "2026-11-05T08:00:00Z", by: "pepper" });
+  // The phone: another device with the day object, on the same relay.
+  async function phoneOf(n: Awaited<ReturnType<typeof setup>>) {
+    const replicas = await Replicas.open({ objects: [dayObject(n.root)], transport: as(n.shared, "phone"), device: "phone" });
+    await replicas.start({ live: false });
+    return { data: new Data(replicas, "UTC"), replicas };
+  }
+  const sync = async (...all: { replicas: Replicas }[]) => {
+    for (const x of all) await x.replicas.settled();
+    for (const x of all) await x.replicas.syncAll();
+  };
+
+  it("keeps a proposal and an accept made at once, what's asked meanwhile, and refuses a stale accept", async () => {
+    const n = await setup();
+    const phone = await phoneOf(n);
+    const date = "2026-11-05";
+    expect(n.data.plan(date)).toMatchObject({ version: 0, proposal: null, asked: [], accepted: null });
+
+    await phone.data.say(date, "me", "start later");
+    await sync(phone, n);
+    const a = await n.data.propose(date, proposal([block("a", 600)]), [{ key: "proj", name: "Project" }]);
+    expect(a.asked).toEqual([]);
+    expect(a.proposal).toMatchObject({ answering: ["start later"], blocks: [block("a", 600)] });
+    expect(a.projects).toEqual([{ key: "proj", name: "Project" }]);
+    await sync(n, phone);
+
+    // At once: the phone accepts a, and asks for more; the node proposes b.
+    const seen = phone.data.plan(date);
+    await phone.data.accept(date, seen.version, [block("a", 660)], seen.proposal!.id);
+    await phone.data.say(date, "me", "no gym");
+    await n.data.propose(date, proposal([block("b", 700)]));
+    await sync(phone, n, phone);
+    for (const d of [n.data, phone.data]) {
+      const p = d.plan(date);
+      expect(p.day.blocks).toEqual([block("a", 660)]);
+      expect(p.accepted).not.toBeNull();
+      expect(p.proposal?.blocks).toEqual([block("b", 700)]);
+      expect(p.asked).toEqual(["no gym"]);
+    }
+    expect(JSON.stringify(phone.data.plan(date))).toBe(JSON.stringify(n.data.plan(date)));
+
+    // Accepting a again, or at a version gone by: refused, with the plan as it is.
+    const stale = await phone.data.accept(date, null, [block("a", 660)], seen.proposal!.id).catch((e) => e);
+    expect(stale).toBeInstanceOf(Conflict);
+    expect(stale.plan.proposal.blocks).toEqual([block("b", 700)]);
+    expect(await phone.data.accept(date, seen.version, [block("b", 700)]).catch((e) => e)).toBeInstanceOf(Conflict);
+
+    // b discarded; then nothing's open to accept.
+    const now = phone.data.plan(date);
+    expect((await phone.data.discard(date, now.version, now.proposal!.id)).proposal).toBeNull();
+    expect(await phone.data.accept(date, null, []).catch((e) => e.message)).toBe("there's no proposal to accept");
+
+    // The day edited, and the calendar written for the accept that's the plan's.
+    const edited = await phone.data.setDay(date, null, [{ ...block("a", 660), pinned: true }]);
+    expect(edited.day.blocks[0].pinned).toBe(true);
+    expect((await n.data.calendarWritten(date, "2000-01-01T00:00:00Z", "d", { blocks: 1 })).calendar).toBeUndefined();
+    await sync(phone, n);
+    const written = await n.data.calendarWritten(date, n.data.plan(date).accepted!, "d", { blocks: 1 });
+    expect(written.calendar).toMatchObject({ accepted: written.accepted, blocks: 1 });
+    expect(n.data.planDates()).toEqual([date]);
+    await phone.replicas.stop();
+    n.stop();
+  });
+
+  it("keeps two devices' messages in order, and lets the user change one only until it's passed on", async () => {
+    const n = await setup();
+    const phone = await phoneOf(n);
+    const mine = await phone.data.post("Matt", "hi", true);
+    await Bun.sleep(2);
+    const pepper = await n.data.post("pepper", "morning");
+    await sync(phone, n, phone);
+    for (const d of [n.data, phone.data]) expect(d.chat().map((m) => m.text)).toEqual(["hi", "morning"]);
+    expect(n.data.chat(mine.id).map((m) => m.id)).toEqual([pepper.id]);
+    expect(n.data.chat(undefined, 1).map((m) => m.id)).toEqual([pepper.id]);
+
+    expect((await phone.data.edit(mine.id, "hello")).text).toBe("hello");
+    expect(await n.data.edit(pepper.id, "x").catch((e) => e.message)).toBe(`no message ${pepper.id}`);
+    const gone = await phone.data.post("Matt", "oops", true);
+    await phone.data.unsay(gone.id);
+    await sync(phone, n);
+    expect(n.data.chat().map((m) => m.text)).toEqual(["hello", "morning"]);
+
+    const delivered = await n.data.deliver(mine.id);
+    expect(delivered.delivered).not.toBeNull();
+    expect((await n.data.deliver(mine.id)).delivered).toBe(delivered.delivered);
+    await sync(n, phone);
+    expect(await phone.data.edit(mine.id, "too late").catch((e) => e)).toBeInstanceOf(Conflict);
+    expect(await phone.data.unsay(mine.id).catch((e) => e)).toBeInstanceOf(Conflict);
+    await phone.replicas.stop();
+    n.stop();
+  });
+});
+
+describe("day plans and chat over the node's MCP", () => {
+  it("lets the user's clients and brains plan, and only a brain with chat talk", async () => {
+    const n = await setup();
+    const owner = n.oauth.mint("cli", 1, "owner");
+    const pepper = n.oauth.mint("pepper", 1, "assistant", "assistant");
+    const names = async (token: string) => ((await (await n.call("/mcp", rpc("tools/list", {}, token))).json()) as { result: { tools: { name: string }[] } }).result.tools.map((t) => t.name);
+    const tool = async (token: string, name: string, args: Record<string, unknown>) => toolText(await n.call("/mcp", rpc("tools/call", { name, arguments: args }, token)));
+
+    expect(await names(owner)).toContain("plan_propose");
+    expect(await names(owner)).not.toContain("chat_send");
+    expect(await names(pepper)).not.toContain("chat_send");
+    await n.data.putBrain("assistant", { abilities: ["chat"] });
+    expect(await names(pepper)).toContain("chat_send");
+
+    const blocks = [{ id: "a", start: 540, stop: 600, title: "Code: day.ts", kind: "work" }];
+    const proposed = JSON.parse((await tool(pepper, "plan_propose", { date: "2026-11-05", blocks, projects: [{ key: "cb", name: "corkboard" }] })).text);
+    expect(proposed.proposal).toMatchObject({ by: "assistant", blocks });
+    expect(JSON.parse((await tool(owner, "plan_read", { date: "2026-11-05" })).text).proposal.id).toBe(proposed.proposal.id);
+    expect((await tool(pepper, "plan_propose", { blocks: "no" })).text).toBe("blocks must be a list");
+
+    const said = JSON.parse((await tool(pepper, "chat_send", { text: "Morning" })).text);
+    expect(said).toMatchObject({ who: "assistant", text: "Morning", by_user: false });
+    expect(JSON.parse((await tool(pepper, "chat_read", {})).text).map((m: { text: string }) => m.text)).toEqual(["Morning"]);
+    expect((await tool(owner, "chat_send", { text: "x" })).text).toBe("unknown tool chat_send");
+    n.stop();
+  });
+});
+
+describe("Neovim's day plan, on the node", () => {
+  it("answers plan.lua's operations as the Worker's, and tells each change once", async () => {
+    const n = await setup();
+    const date = "2026-11-05";
+    const blocks = [{ id: "a", start: 540, stop: 600, title: "Code: app.ts", kind: "work" as const }];
+    const told: DayEvent[] = [];
+    await n.data.post("pepper", "before");
+    const stop = dayEvents(n)((e) => told.push(e));
+    expect(await plans(n, "plan_get", [date])).toMatchObject({ date, version: 0, proposal: null });
+    expect(((await plans(n, "plan_say", [date, "later"])) as { plan: { asked: string[] } }).plan.asked).toEqual(["later"]);
+    const p = await n.data.propose(date, { from: 0, blocks, reasons: [], why: {}, made: now(), by: "pepper" });
+    expect(await plans(n, "plan_accept", [date, p.version - 1, blocks])).toMatchObject({ conflict: { proposal: { id: p.proposal!.id } } });
+    expect(await plans(n, "plan_accept", [date, p.version, blocks])).toMatchObject({ plan: { proposal: null, day: { blocks } } });
+    const day = (await plans(n, "plan_day", [date, null, [{ ...blocks[0], pinned: true }]])) as { plan: { day: { blocks: { pinned?: boolean }[] } } };
+    expect(day.plan.day.blocks[0].pinned).toBe(true);
+    expect(await plans(n, "plan_get", ["soon"]).catch((e) => e)).toBeInstanceOf(Invalid);
+
+    const m = await n.data.post("Matt", "hi", true);
+    await n.data.unsay(m.id);
+    expect(told.map((e) => e.type)).toEqual(["plan", "plan", "plan", "plan", "chat", "chat-gone"]);
+    stop();
+    await n.data.post("pepper", "after");
+    expect(told).toHaveLength(6);
+    n.stop();
+  });
+
+  it("streams day events to another bridge with no board", async () => {
+    const n = await setup();
+    const app = node({ data: n.data, search: n.search, oauth: n.oauth, origin: ORIGIN, appEvents: () => (fn) => dayEvents(n)((e) => fn(null, e)) });
+    const res = await app(new Request(`${ORIGIN}/app/events`, { headers: { Authorization: `Bearer ${n.oauth.mint("dev bridge", 1, "owner")}` } }), { requestIP: () => ({ address: "127.0.0.1" }) });
+    const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
+    expect((await reader.read()).value).toBe(": up\n\n");
+    await n.data.post("pepper", "morning");
+    expect(JSON.parse((await reader.read()).value!.replace(/^data: /, ""))).toMatchObject({ key: null, event: { type: "chat", message: { text: "morning" } } });
+    await reader.cancel();
+    n.stop();
+  });
+
+  it("tells pepperd the day changed, over the tunnel, until it hangs up", async () => {
+    const n = await setup();
+    const app = node({ data: n.data, search: n.search, oauth: n.oauth, origin: ORIGIN });
+    const res = await app(new Request(`${ORIGIN}/api/node/day/events`, { headers: { Authorization: `Bearer ${n.oauth.mint("pepperd", 1, "assistant", "assistant")}` } }), { requestIP: () => ({ address: "10.0.0.2" }) });
+    expect(res.headers.get("Content-Type")).toBe("text/event-stream");
+    const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
+    expect((await reader.read()).value).toBe(": up\n\n");
+    await n.data.post("Matt", "morning", true);
+    expect((await reader.read()).value).toBe('data: {"kind":"day"}\n\n');
+    await reader.cancel();
+    // Hung up: nothing more is sent to it.
+    await n.data.post("Matt", "again", true);
+    expect((await app(new Request(`${ORIGIN}/api/node/day/events`), { requestIP: () => ({ address: "10.0.0.2" }) })).status).toBe(401);
+    n.stop();
+  });
+});
+
+describe("day plans and chat, the phone's API", () => {
+  it("plans and chats over /api/node, with a 409 for a stale accept", async () => {
+    const n = await setup();
+    const owner = n.oauth.mint("phone", 1, "owner");
+    const pepper = n.oauth.mint("pepper", 1, "assistant", "assistant");
+    const api = async (token: string, method: string, path: string, body?: unknown) => {
+      const res = await n.call(`/api/node/${path}`, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) });
+      return { status: res.status, body: res.status === 204 ? null : await res.json() };
+    };
+    const blocks = [{ id: "a", start: 540, stop: 600, title: "Code: day.ts", kind: "work" as const }];
+    expect((await api(owner, "POST", "plans/2026-11-05/say", { text: "later" })).body.asked).toEqual(["later"]);
+    const p = await n.data.propose("2026-11-05", { from: 0, blocks, reasons: [], why: {}, made: "2026-11-05T08:00:00Z", by: "assistant" });
+    expect((await api(pepper, "POST", "plans/2026-11-05/accept", { blocks })).status).toBe(403);
+    const stale = await api(owner, "POST", "plans/2026-11-05/accept", { blocks, version: p.version - 1 });
+    expect(stale.status).toBe(409);
+    expect(stale.body.plan.proposal.id).toBe(p.proposal!.id);
+    const ok = await api(owner, "POST", "plans/2026-11-05/accept", { blocks, version: p.version, proposal: p.proposal!.id });
+    expect(ok.body).toMatchObject({ proposal: null, day: { blocks } });
+    expect((await api(pepper, "GET", "plans/2026-11-05")).body.accepted).toBe(ok.body.accepted);
+
+    const mine = (await api(owner, "POST", "chat", { text: "hi", who: "Matt" })).body;
+    expect(mine).toMatchObject({ who: "Matt", by_user: true, delivered: null });
+    expect((await api(pepper, "POST", "chat", { text: "hello" })).body).toMatchObject({ who: "assistant", by_user: false });
+    expect((await api(owner, "PATCH", `chat/${mine.id}`, { text: "hey" })).body.text).toBe("hey");
+    expect((await api(owner, "POST", `chat/${mine.id}/delivered`)).body.delivered).not.toBeNull();
+    expect((await api(owner, "DELETE", `chat/${mine.id}`)).status).toBe(409);
+    expect((await api(owner, "GET", `chat?after=${mine.id}`)).body.map((m: { text: string }) => m.text)).toEqual(["hello"]);
+    expect((await api(owner, "DELETE", "chat/nope")).status).toBe(404);
     n.stop();
   });
 });

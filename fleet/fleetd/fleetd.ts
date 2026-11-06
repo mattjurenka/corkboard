@@ -177,7 +177,7 @@ console.log("fleetd: watching", SPAWNS);
 for (const [name, r] of Object.entries(manifest().residents)) {
   if (!r.assistant) continue;
   if (!r.brain) console.error(`${name}: an assistant with no brain, so no token to give it`);
-  else assist(name, r.brain, r.assistant);
+  else assist(name, r.brain, r.assistant, manifest().node);
 }
 const queue = new Queue();
 queue.start();

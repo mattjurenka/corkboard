@@ -40,7 +40,7 @@ import { Keystore } from "../keystore";
 import { Relay } from "../../lib/e2ee/relay";
 import { indexId, indexKey } from "../../lib/e2ee/sharing";
 import { type LogTransport, Replica, offline } from "../../lib/e2ee/sync";
-import { accountObject, listObjects } from "./objects";
+import { accountObject, dayObject, listObjects } from "./objects";
 import { Replicas } from "./replicas";
 import { Data } from "./data";
 import { Search } from "./search";
@@ -52,7 +52,7 @@ import { Media } from "./media";
 import { startLeases } from "./leases";
 import { OAuthStore, SCOPES, type Scope, type Shared } from "./oauth";
 import { type AppCall, type AppEvents, node } from "./server";
-import { loadCalendar, login, saveCalendar } from "./calendar";
+import { lentCalendar, loadCalendar, login, saveCalendar, startCalendar } from "./calendar";
 
 export const NODE_DIR = join(STATE_DIR, "node");
 const oauthStore = (shared?: Shared) => new OAuthStore(join(NODE_DIR, "oauth.json"), shared);
@@ -83,6 +83,10 @@ async function fleetQueue(method: string, path: string, body?: unknown) {
   if (!res.ok) throw new Error(`the fleet: ${json.error ?? `HTTP ${res.status}`}`);
   return json;
 }
+
+// The calendar the node writes: its own (calendar-login), or the Worker's, lent.
+const lent = lentCalendar(() => (signedIn() ? token().then((t) => fetch(`${CLOUD}/api/calendar/token`, { method: "POST", headers: { Authorization: `Bearer ${t}` }, signal: AbortSignal.timeout(30_000) })) : undefined));
+const calendar = async () => loadCalendar(calendarPath) ?? (await lent());
 
 const localZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
@@ -142,7 +146,7 @@ export async function startNode(o: NodeOptions = {}) {
     const index = await Replica.open({ transport: relay, key: indexKey(root), object: indexId(root), device: d.device.id, store: store.replica(indexId(root)) });
     if (d.relay) await index.pull().catch((e) => console.error(`node: reading the index: ${(e as Error).message}`));
     const want = { boards: [...(c.boards ?? []), ...(o.boards ?? [])], brains: [...(c.brains ?? []), ...(o.brains ?? [])] };
-    const objects = [...listObjects(root, want, index), accountObject(root, "oauth", index)];
+    const objects = [...listObjects(root, want, index), accountObject(root, "oauth", index), dayObject(root, index)];
     const replicas = await Replicas.open({ objects, transport: relay, device: d.device.id, store: (o) => store.replica(o), index, discover: () => listObjects(root, want, index) });
     await replicas.start();
     const data = new Data(replicas, o.timezone ?? c.timezone ?? localZone());
@@ -169,6 +173,8 @@ export async function startNode(o: NodeOptions = {}) {
     consolidator.start();
     // Working cards whose agents went quiet, blocked by the same node.
     const stopLeases = startLeases(data, leads);
+    // Accepted days onto the calendar, by the same node.
+    const stopCalendar = startCalendar({ data, replicas, leads, config: calendar });
     const hostname = o.host ?? c.host ?? "127.0.0.1";
     const origin = o.origin ?? c.origin;
     // claude.ai's grants, the same on every node of the account.
@@ -177,7 +183,8 @@ export async function startNode(o: NodeOptions = {}) {
       change: (...changes) => void replicas.change("account", "oauth", ...changes).catch((e) => console.error(`node: sharing grants: ${(e as Error).message}`)),
     });
     const media = new Media({ data, blobs: r, dir: join(NODE_DIR, "blobs") });
-    const served = { data, search, episodes, media, oauth, fleet: () => (signedIn() ? fleetQueue : undefined), calendar: () => loadCalendar(calendarPath) };
+    const addBoard = (key: string) => replicas.add(listObjects(root, { boards: [key], brains: [] })[0]);
+    const served = { data, search, episodes, media, oauth, addBoard, fleet: () => (signedIn() ? fleetQueue : undefined), calendar };
     let app: AppCall | undefined;
     let appEvents: AppEvents | undefined;
     const server = Bun.serve({ port: o.port ?? c.port ?? 8787, hostname, idleTimeout: 255, fetch: node({ ...served, origin, app: () => app, appEvents: () => appEvents }) });
@@ -207,7 +214,9 @@ export async function startNode(o: NodeOptions = {}) {
       // A brain of this account's that the node doesn't keep yet, kept from now on.
       addBrain: (name: string) => replicas.add(listObjects(root, { boards: [], brains: [name] })[0]),
       // A board, the same way (a project's, made on this machine).
-      addBoard: (key: string) => replicas.add(listObjects(root, { boards: [key], brains: [] })[0]),
+      addBoard,
+      // The calendar the node writes accepted days to, if it has one.
+      calendar,
       // The app's operations on the loopback /app (app.ts's), and its
       // boards' events on /app/events, not the tunnel's.
       serveApp: (f: AppCall, events: AppEvents) => void ((app = f), (appEvents = events)),
@@ -215,6 +224,7 @@ export async function startNode(o: NodeOptions = {}) {
         tunnel?.stop();
         server.stop();
         stopLeases();
+        stopCalendar();
         await consolidator.stop();
         await replicas.stop();
         episodes.close();
@@ -238,7 +248,7 @@ async function run(args: string[]) {
     brains: options(args, "--brain"),
     timezone: option(args, "--timezone"),
   });
-  if (!n.replicas.objects().some((o) => o.kind !== "account")) console.error("node: the index lists no boards or brains, and none were given (--board KEY, --brain NAME, or config.json); serving nothing");
+  if (!n.replicas.objects().some((o) => o.kind !== "account" && o.kind !== "day")) console.error("node: the index lists no boards or brains, and none were given (--board KEY, --brain NAME, or config.json); serving nothing");
   for (const s of n.replicas.status()) console.log(`${s.kind.padEnd(5)} ${s.name.padEnd(30)} ${String(s.records).padStart(5)} records  ${!n.online ? `${s.pending} kept here` : (s.error ?? "synced")}`);
   console.log(`\nnode on ${n.url}${n.origin ? `, as ${n.origin}` : ""}${n.tunnel ? `, and at ${n.tunnel.url}` : ""}, account ${n.account}${n.online ? "" : " (on this machine only)"}`);
   console.log(`approval code (10 minutes, once): ${approvalCode()}`);

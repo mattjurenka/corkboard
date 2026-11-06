@@ -9,7 +9,12 @@
 // `corkboard-bridge serve calendar-login` makes it: Google's consent for a
 // desktop OAuth client of the user's own (its id and secret given as flags or
 // GOOGLE_CLIENT_ID/SECRET), back to a loopback port, and a "Claude" calendar
-// made if none is named. `--file` takes one made elsewhere.
+// made if none is named. `--file` takes one made elsewhere. Without one, the
+// node writes with the Worker's connection, the one the user consented to
+// there: it lends access tokens (its /api/calendar/token, lentCalendar).
+//
+// The node that leads writes a day when it's accepted (startCalendar),
+// whichever device accepted it.
 
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -17,6 +22,8 @@ import { dirname } from "node:path";
 import { DAY_STARTS_HOUR, type Plan, today } from "../../lib/model/plans";
 import { random } from "../../lib/e2ee/keys";
 import { b64url } from "../../lib/e2ee/wire";
+import type { Data } from "./data";
+import type { Replicas } from "./replicas";
 
 const GOOGLE_AUTHORIZE = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN = "https://oauth2.googleapis.com/token";
@@ -24,13 +31,13 @@ const API = "https://www.googleapis.com/calendar/v3";
 const SCOPES = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.app.created";
 const APPROVAL = "✅ Plan approved";
 
-export type CalendarConfig = { client_id: string; client_secret: string; refresh: string; calendar: string; timezone: string };
+export type CalendarConfig = { calendar: string; timezone: string } & ({ client_id: string; client_secret: string; refresh: string } | { token: string });
 
 export class CalendarError extends Error {}
 
 export function loadCalendar(path: string): CalendarConfig | undefined {
   try {
-    const c = JSON.parse(readFileSync(path, "utf8")) as CalendarConfig;
+    const c = JSON.parse(readFileSync(path, "utf8")) as CalendarConfig & { refresh?: string };
     return c.refresh && c.calendar ? c : undefined;
   } catch {
     return undefined;
@@ -46,7 +53,30 @@ export function saveCalendar(path: string, c: CalendarConfig) {
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 
+// The Worker's connection, lent: an access token until it ends, and the
+// calendar and zone the Worker's settings name. ask is the signed-in POST
+// to /api/calendar/token, undefined while the node isn't signed in. None
+// connected there (404) is asked again in a minute.
+type Lent = { access_token: string; expires_at: string; calendar: string; timezone: string };
+export function lentCalendar(ask: () => Promise<Response> | undefined): () => Promise<CalendarConfig | undefined> {
+  let lent: Lent | undefined;
+  let none = 0;
+  return async () => {
+    if (lent && Date.parse(lent.expires_at) - 60_000 > Date.now()) return { calendar: lent.calendar, timezone: lent.timezone, token: lent.access_token };
+    if (Date.now() < none) return undefined;
+    const res = await ask();
+    if (!res) return undefined;
+    const body = (await res.json().catch(() => ({}))) as Partial<Lent> & { error?: string };
+    lent = undefined;
+    if (res.status === 404) return void (none = Date.now() + 60_000);
+    if (!res.ok || !body.access_token || !body.calendar) throw new CalendarError(body.error ?? `the Worker lent no calendar token (HTTP ${res.status})`);
+    lent = body as Lent;
+    return { calendar: lent.calendar, timezone: lent.timezone, token: lent.access_token };
+  };
+}
+
 async function accessToken(c: CalendarConfig, f: Fetch): Promise<string> {
+  if ("token" in c) return c.token;
   const res = await f(GOOGLE_TOKEN, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -117,6 +147,72 @@ export async function writePlan(c: CalendarConfig, plan: Pick<Plan, "date" | "da
     reminders: { useDefault: false, overrides: [] },
   });
   return blocks.length;
+}
+
+// The blocks an accept put on the calendar, as a plan's `calendar.day`
+// names them: an accepted day edited is written again, as the Worker did.
+export const dayDigest = (blocks: Plan["day"]["blocks"]) => b64url(createHash("sha256").update(JSON.stringify(blocks)).digest()).slice(0, 16);
+
+// The Worker's CALENDAR_DAYS: how far ahead an accepted day is written.
+const DAYS_AHEAD = 7;
+
+// Each accepted plan from today through the next week that isn't on the
+// calendar as it is now, written, and how it went kept on the plan (where
+// another node sees it, so it isn't written twice). Google refusing is kept
+// as the plan's error; anything else (no network) throws, to try again
+// later. The dates written.
+export async function writeAccepted(data: Data, c: CalendarConfig, f: Fetch = fetch): Promise<string[]> {
+  const from = Date.parse(today(c.timezone));
+  const written: string[] = [];
+  for (const date of data.planDates()) {
+    const ahead = (Date.parse(date) - from) / 86400_000;
+    if (!(ahead >= 0 && ahead <= DAYS_AHEAD)) continue;
+    const p = data.plan(date);
+    if (!p.accepted) continue;
+    const day = dayDigest(p.day.blocks);
+    if (p.calendar?.accepted === p.accepted && (p.calendar.day ?? day) === day) continue;
+    let result: { blocks: number } | { error: string };
+    try {
+      result = { blocks: await writePlan(c, p, f) };
+    } catch (e) {
+      if (!(e instanceof CalendarError)) throw e;
+      console.error(`node: the calendar for ${date}: ${e.message}`);
+      result = { error: e.message };
+    }
+    await data.calendarWritten(date, p.accepted, day, result);
+    written.push(date);
+  }
+  return written;
+}
+
+// Accepted plans onto the calendar while the node leads (serve.ts's leads)
+// and has one connected: as the day object changes, and each minute for
+// what failed or was accepted while another node led. The way to stop.
+export function startCalendar(o: { data: Data; replicas: Pick<Replicas, "onChange">; leads: () => Promise<boolean>; config: () => Promise<CalendarConfig | undefined> | CalendarConfig | undefined; fetch?: Fetch }): () => void {
+  let busy = false;
+  let again = false;
+  let stopped = false;
+  const run = async () => {
+    if (stopped) return;
+    if (busy) return void (again = true);
+    busy = true;
+    try {
+      do {
+        again = false;
+        if (!(await o.leads())) continue;
+        const c = await o.config();
+        if (c) await writeAccepted(o.data, c, o.fetch);
+      } while (again && !stopped);
+    } catch (e) {
+      console.error(`node: the calendar: ${(e as Error).message}`);
+    } finally {
+      busy = false;
+    }
+  };
+  o.replicas.onChange((x) => void (x.kind === "day" && run()));
+  const timer = setInterval(run, 60_000);
+  void run();
+  return () => void ((stopped = true), clearInterval(timer));
 }
 
 // Google's consent in the browser, back to a port on this machine; then the

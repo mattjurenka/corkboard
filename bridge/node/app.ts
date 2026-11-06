@@ -19,6 +19,10 @@
 // have it, and a change to one, from this machine or another device, comes
 // back as the Worker's socket would tell it.
 //
+// The day plan is served here too (.agent/plans/local-plans.md, step 2):
+// plan.lua's plan_* when the Worker has no plans (boards.ts decides), and
+// each change to a plan or the chat as the Worker's user socket tells it.
+//
 // A second bridge on the machine (a --dev one beside the app's) finds the
 // node running and uses it: the app's operations on its loopback /app, as
 // the owner, its boards' events on /app/events, and the same files for its
@@ -31,8 +35,10 @@ import { localAccount } from "../e2ee";
 import { Keystore } from "../keystore";
 import { goals } from "../../lib/model/goals";
 import type { BoardEvent, Card } from "../../lib/model/cards";
-import { BRAIN_ONLY_KINDS, note as checkNote, noteId } from "../../lib/model/plans";
+import { BRAIN_ONLY_KINDS, type Plan, blocks as checkBlocks, chatText, date as checkDate, note as checkNote, noteId } from "../../lib/model/plans";
 import { type Data, type FullCard, Invalid, now } from "./data";
+import { Conflict, type Message } from "./day";
+import { DAY } from "./objects";
 import { NODE_DIR, NodeRunning, type StartedNode, startNode } from "./serve";
 import { touch } from "./leases";
 
@@ -61,12 +67,18 @@ export type AppNode = {
   boards(op: string, args: any[]): Promise<unknown>;
   // Each change to the node's boards, as BoardEvents; gives back the way to stop.
   onBoard(fn: BoardListener): () => void;
+  // plan.lua's plan_* operations (plans() below).
+  plans(op: string, args: any[]): Promise<unknown>;
+  // Each change to a plan or the chat, as the Worker's user socket tells it.
+  onDay(fn: DayListener): () => void;
   // A file on a card of a board the node keeps (media.ts), or undefined
   // when it has no such file: the Worker's, then.
   media(board: string, card: string, id: string): Promise<Response | undefined>;
 };
 
 export type BoardListener = (key: string, event: BoardEvent) => void;
+export type DayEvent = { type: "plan"; plan: Plan } | { type: "chat"; message: Message } | { type: "chat-gone"; id: string };
+export type DayListener = (event: DayEvent) => void;
 
 function kept(n: StartedNode, file: string, name: string, scope: "assistant" | "owner"): string {
   try {
@@ -100,7 +112,12 @@ export async function startAppNode(): Promise<AppNode | undefined> {
   }
   const token = kept(n, TOKEN_FILE, "corkboard sessions", "assistant");
   kept(n, OWNER_TOKEN_FILE, "corkboard on this machine", "owner");
-  writeFileSync(MCP_FILE, JSON.stringify({ mcpServers: { "corkboard-memory": { type: "http", url: `${n.url}/mcp?tools=memory`, headers: { Authorization: `Bearer ${token}` } } } }), { mode: 0o600 });
+  // And, once the boards are the node's (the Worker answers for none of
+  // them), its board tools as the session's corkboard server, over the
+  // project's .mcp.json one: handoff, cards and spawns.
+  const server = (tools: string) => ({ type: "http", url: `${n.url}/mcp?tools=${tools}`, headers: { Authorization: `Bearer ${token}` } });
+  const hasBoards = n.replicas.objects("board").length > 0;
+  writeFileSync(MCP_FILE, JSON.stringify({ mcpServers: { "corkboard-memory": server("memory"), ...(hasBoards && { corkboard: server("board") }) } }), { mode: 0o600 });
   console.log(`node on ${n.url}, account ${n.account}${n.online ? "" : " (on this machine only)"}`);
   const app: AppNode = {
     env: env(n.url),
@@ -109,11 +126,19 @@ export async function startAppNode(): Promise<AppNode | undefined> {
     notes: (op, args) => notes(n, op, args),
     boards: (op, args) => boards(n, op, args),
     onBoard: boardEvents(n),
+    plans: (op, args) => plans(n, op, args),
+    onDay: dayEvents(n),
     media: async (board, card, id) => n.media.serve(board, card, id),
   };
   n.serveApp(
-    (op, args) => (op.startsWith("board_") ? app.boards(op.slice("board_".length), args) : (op.startsWith("brains_") ? app.brains : op.startsWith("nodes_") ? app.nodes : app.notes)(op, args)),
-    app.onBoard as (fn: (key: string, event: unknown) => void) => () => void,
+    (op, args) =>
+      op.startsWith("board_") ? app.boards(op.slice("board_".length), args) : (op.startsWith("brains_") ? app.brains : op.startsWith("nodes_") ? app.nodes : op.startsWith("plan_") ? app.plans : app.notes)(op, args),
+    // A day event is sent with no board: { key: null, event }.
+    (fn) => {
+      const boards = app.onBoard(fn);
+      const day = app.onDay((event) => fn(null, event));
+      return () => (boards(), day());
+    },
   );
   return app;
 }
@@ -144,11 +169,13 @@ async function runningNode(pid: number): Promise<AppNode | undefined> {
   const { url } = where();
   console.log(`node: using the one running already (pid ${pid}) on ${url}`);
   const listeners = new Set<BoardListener>();
+  const dayListeners = new Set<DayListener>();
+  const listened = () => listeners.size + dayListeners.size;
   let following = false;
   // The running node's /app/events, followed while anyone listens; when it
   // drops, each of its boards is told again whole, for what was missed.
   const follow = async () => {
-    for (let retry = 1000; listeners.size; retry = Math.min(retry * 2, 60_000)) {
+    for (let retry = 1000; listened(); retry = Math.min(retry * 2, 60_000)) {
       try {
         const { url, token } = where();
         const res = await fetch(`${url}/app/events`, { headers: { Authorization: `Bearer ${token}` } });
@@ -167,9 +194,10 @@ async function runningNode(pid: number): Promise<AppNode | undefined> {
             buf = buf.slice(at + 2);
             if (!msg.startsWith("data: ")) continue;
             const { key, event } = JSON.parse(msg.slice("data: ".length));
-            for (const fn of listeners) fn(key, event);
+            if (key === null) for (const fn of dayListeners) fn(event);
+            else for (const fn of listeners) fn(key, event);
           }
-          if (!listeners.size) break;
+          if (!listened()) break;
         }
       } catch (e) {
         console.error(`node: following its boards: ${(e as Error).message}`);
@@ -178,17 +206,27 @@ async function runningNode(pid: number): Promise<AppNode | undefined> {
     }
     following = false;
   };
-  const onBoard = (fn: BoardListener) => {
-    listeners.add(fn);
+  const listen = <T>(set: Set<T>, fn: T) => {
+    set.add(fn);
     if (!following) void ((following = true), follow());
-    return () => void listeners.delete(fn);
+    return () => void set.delete(fn);
   };
   const media = async (board: string, card: string, id: string) => {
     const { url, token } = where();
     const res = await fetch(`${url}/api/node/boards/${encodeURIComponent(board)}/cards/${encodeURIComponent(card)}/media/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${token}` } });
     return res.status === 404 ? undefined : res;
   };
-  return { env: env(url), brains: call, nodes: call, notes: call, boards: (op, args) => call(`board_${op}`, args), onBoard, media };
+  return {
+    env: env(url),
+    brains: call,
+    nodes: call,
+    notes: call,
+    boards: (op, args) => call(`board_${op}`, args),
+    onBoard: (fn) => listen(listeners, fn),
+    plans: call,
+    onDay: (fn) => listen(dayListeners, fn),
+    media,
+  };
 }
 
 // The account's devices as the relay knows them, this one first, and the
@@ -362,6 +400,8 @@ export async function boards(n: Pick<StartedNode, "data" | "replicas" | "addBoar
     await place(n, key, op === "make" || make ? name : undefined, p ?? { root: null, environment: null });
     return op === "make" ? listed(data, key) : data.cards(key);
   }
+  // Its settings, each environment's root among them (server.ts's /open).
+  if (op === "board") return has(key) ? data.board(key) : null;
   if (!has(key)) throw new Invalid(`no board ${key} on this node`);
   const strip = ({ log: _, ...c }: FullCard): Card => c;
   switch (op) {
@@ -426,6 +466,79 @@ export function boardEvents(n: Pick<StartedNode, "data" | "replicas">): (fn: Boa
   });
   return (fn) => {
     if (!listeners.size) for (const o of n.replicas.objects("board")) told.set(o.name, now(o.name));
+    listeners.add(fn);
+    return () => void listeners.delete(fn);
+  };
+}
+
+// Day plans --------------------------------------------------------------------------
+
+// plan.lua's operations, with cloud-session.ts's shapes: plan_get the plan;
+// the rest { plan }, or { conflict } with the plan as it is when the version
+// given is gone by. plan_subscribe and plan_boards are boards.ts's.
+export async function plans(n: Pick<StartedNode, "data">, op: string, args: any[]): Promise<unknown> {
+  const [date, ...rest] = args;
+  const d = checkDate(date);
+  const version = (v: unknown) => (Number.isInteger(v) ? (v as number) : null);
+  const settle = async (p: Promise<Plan>) => {
+    try {
+      return { plan: await p };
+    } catch (e) {
+      if (e instanceof Conflict && e.plan) return { conflict: e.plan };
+      throw e;
+    }
+  };
+  switch (op) {
+    case "plan_get":
+      return n.data.plan(d);
+    case "plan_say":
+      return settle(n.data.say(d, "me", chatText(rest[0])));
+    case "plan_accept":
+      return settle(n.data.accept(d, version(rest[0]), checkBlocks(rest[1]), typeof rest[2] === "string" ? rest[2] : undefined));
+    case "plan_discard":
+      return settle(n.data.discard(d, version(rest[0]), typeof rest[1] === "string" ? rest[1] : undefined));
+    case "plan_day":
+      return settle(n.data.setDay(d, version(rest[0]), checkBlocks(rest[1])));
+    default:
+      throw new Invalid(`no plan operation ${op}`);
+  }
+}
+
+// The day object's changes as the Worker's user socket tells them: a plan
+// that changed, whole; a message new or changed; one taken back. Each as
+// last told, kept while anyone listens.
+export function dayEvents(n: Pick<StartedNode, "data" | "replicas">): (fn: DayListener) => () => void {
+  const listeners = new Set<DayListener>();
+  const plans = new Map<string, string>();
+  const messages = new Map<string, string>();
+  const look = (tell: (e: DayEvent) => void) => {
+    for (const date of n.data.planDates()) {
+      const plan = n.data.plan(date);
+      const s = JSON.stringify(plan);
+      if (plans.get(date) === s) continue;
+      plans.set(date, s);
+      tell({ type: "plan", plan });
+    }
+    const now = new Map(n.data.chat(undefined, Number.MAX_SAFE_INTEGER).map((m) => [m.id, m] as const));
+    for (const id of [...messages.keys()].filter((id) => !now.has(id))) {
+      messages.delete(id);
+      tell({ type: "chat-gone", id });
+    }
+    for (const [id, message] of now) {
+      const s = JSON.stringify(message);
+      if (messages.get(id) === s) continue;
+      messages.set(id, s);
+      tell({ type: "chat", message });
+    }
+  };
+  n.replicas.onChange((o) => {
+    if (o.kind !== "day" || !listeners.size) return;
+    look((e) => {
+      for (const fn of listeners) fn(e);
+    });
+  });
+  return (fn) => {
+    if (!listeners.size && n.replicas.get("day", DAY)) look(() => {});
     listeners.add(fn);
     return () => void listeners.delete(fn);
   };

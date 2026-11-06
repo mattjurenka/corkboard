@@ -173,6 +173,7 @@ let
     ssh = fleetdSsh;
     tmuxSocket = "/run/pepper/tmux.sock";
     tokenFile = "/var/lib/pepper/corkboard-token";
+    memoryTokenFile = "/var/lib/pepper/memory-token";
     chat = true;
   };
 

@@ -32,6 +32,9 @@ type Line = Record<string, unknown>;
 export type Day = { blocks: Block[]; ranked: Line[]; later: Line[]; inputs: Line[] };
 
 export type Proposal = {
+  // Which proposal it is, for an accept to name (the node's; the Worker's
+  // have none, and its version check stands in).
+  id?: string;
   from: number;
   blocks: Block[];
   reasons: { text: string; source?: string; tone?: string }[];
@@ -57,8 +60,9 @@ export type Plan = {
   asked: string[];
   accepted: string | null;
   // How writing the Claude calendar went for that accept:
-  // how many blocks it got, or why it got none.
-  calendar?: { accepted: string; at: string; blocks?: number; error?: string };
+  // how many blocks it got, or why it got none. day names the blocks it
+  // wrote (the node's), so an edit to an accepted day is written again.
+  calendar?: { accepted: string; at: string; day?: string; blocks?: number; error?: string };
 };
 
 export const emptyPlan = (date: string): Plan => ({

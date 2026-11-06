@@ -8,12 +8,12 @@
 # shares, no route and no resolver, only the proxy, which knows the pepper
 # brain's allowlist. Its code and settings are this closure, so Pepper can't
 # edit its own instructions. What it keeps between boots (the Claude token,
-# ~/.claude, the corkboard token, the memory token) is on its disk.
+# ~/.claude, the corkboard tokens) is on its disk.
 #
 # Its memory is on the user's node, not the Worker: the hooks and the
 # corkboard-memory MCP server reach the leader through the relay's tunnel,
-# with a token for the pepper brain minted there (`corkboard-bridge serve
-# token --scope assistant --brain pepper`) and copied in by hand.
+# with a token for the pepper brain minted there by fleetd each day (its
+# resident's memoryTokenFile, assistant.ts).
 { plan, memoryHooks }:
 { config, pkgs, lib, modulesPath, ... }:
 let

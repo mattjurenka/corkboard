@@ -169,7 +169,7 @@ const GRANT = /^\/e2ee\/grants\/([^/]+)\/([^/]+)$/;
 const mailbox = (env: RelayEnv, code: string) => env.MAILBOX.get(env.MAILBOX.idFromName(code));
 // An account's log of an object: its own, or the owner's it's shared.
 const logOf = (env: RelayEnv, owner: string, object: string) => env.LOG.get(env.LOG.idFromName(`${owner}/${object}`));
-const blobKey = (who: Who, id: string) => `e2ee/${who.account}/${id}`;
+const blobKey = (who: Pick<Who, "account">, id: string) => `e2ee/${who.account}/${id}`;
 const nodesOf = (env: RelayEnv, handle: string) => env.NODES.get(env.NODES.idFromName(handle));
 
 // The tunnel to an account's nodes (nodes.ts), for whoever its node lets
@@ -463,7 +463,18 @@ export async function e2ee(request: Request, env: RelayEnv, r: Accounts): Promis
   if (blob) {
     const id = blob[1];
     if (!OPAQUE.test(id)) return error(400, "a blob id is 16 to 64 base64url characters");
-    const key = blobKey(who, id);
+    // Another account's, a file on an object it shares with this one. The
+    // blob isn't known to be that object's, but it's sealed with that
+    // object's key: a member of another of the owner's objects can't open it.
+    const owner = url.searchParams.get("owner");
+    if (owner !== null) {
+      if (!KEY.test(owner)) return error(400, "?owner= must be an account id");
+      const object = url.searchParams.get("object") ?? "";
+      if (!OPAQUE.test(object)) return error(400, "?object= must be the shared object's id");
+      if (method !== "GET") return error(403, "only the owner writes or deletes its blobs");
+      if (!(await r.grantRole(owner, object, who.account))) return error(403, "that object isn't shared with this account");
+    }
+    const key = blobKey(owner ? { account: owner } : who, id);
     if (method === "GET") {
       const o = await env.MEDIA.get(key);
       return o ? new Response(o.body, { headers: { "Content-Type": "application/octet-stream", "Content-Length": String(o.size) } }) : error(404, "no such blob");

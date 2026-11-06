@@ -134,8 +134,10 @@ export class Media {
   }
 
   // The bytes, as they come, in pieces sealed and kept one at a time; then
-  // the file on its card. Pieces kept before a failure are let go of.
-  private async keep(board: string, card: string, who: string, name: string, type: string, bytes: AsyncIterable<Uint8Array>): Promise<MediaItem> {
+  // the file on its card. Pieces kept before a failure are let go of. as:
+  // the file as the Worker had it, with its id and time, put on its card
+  // with no line in the log (move.ts).
+  private async keep(board: string, card: string, who: string, name: string, type: string, bytes: AsyncIterable<Uint8Array>, as?: { id: string; at: string }): Promise<MediaItem> {
     const { key, epoch } = await this.key(board);
     const blobs: string[] = [];
     let total = 0;
@@ -161,8 +163,8 @@ export class Media {
         }
       }
       if (at || !blobs.length) await seal(buf.subarray(0, at));
-      const s: StoredMedia = { id: hex(random(6)), card, name, type, size: total, at: now(), who, blobs, epoch };
-      return await this.o.data.addMedia(board, s, `attached ${name} (${type}, ${size(total)})`);
+      const s: StoredMedia = { id: as?.id ?? hex(random(6)), card, name, type, size: total, at: as?.at ?? now(), who, blobs, epoch };
+      return await this.o.data.addMedia(board, s, as ? null : `attached ${name} (${type}, ${size(total)})`);
     } catch (e) {
       await this.drop(blobs);
       throw e;
@@ -176,6 +178,16 @@ export class Media {
     return this.keep(board, card, who, name, type, (async function* () {
       yield bytes;
     })());
+  }
+
+  // A file the Worker kept, by its id, time and who attached it. One the
+  // board has by that id already is left as it is.
+  async restore(board: string, m: MediaItem & { card: string }, bytes: AsyncIterable<Uint8Array>): Promise<MediaItem> {
+    if (!MEDIA_ID.test(m.id)) throw new Invalid(`${m.id} isn't a file's id`);
+    const had = this.o.data.media(board, m.card).find((s) => s.id === m.id);
+    if (had) return { id: had.id, name: had.name, type: had.type, size: had.size, at: had.at, who: had.who };
+    this.o.data.card(board, m.card);
+    return this.keep(board, m.card, m.who, fileName(m.name), fileType(m.name, m.type), bytes, { id: m.id, at: m.at });
   }
 
   // An upload for later: the URL, at origin, to PUT the file to.

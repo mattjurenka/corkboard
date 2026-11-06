@@ -270,8 +270,14 @@ async function open(ticket: string): Promise<Response> {
   } catch (err: any) {
     return plain(503, `couldn't reach ${CLOUD}: ${err.message}`);
   }
-  const board = (await res.json().catch(() => ({}))) as { error?: string; key: string; name: string; root: string | null; remotes: string[] };
+  const board = (await res.json().catch(() => ({}))) as { error?: string; key: string; name: string | null; root: string | null; remotes: string[]; node?: boolean };
   if (!res.ok) return plain(res.status, board.error ?? `HTTP ${res.status}`);
+  // A board the Worker doesn't keep (moved to the node): this machine's node says where it is.
+  if (board.node) {
+    const s = (await NODE?.boards("board", [board.key]).catch(() => null)) as { name?: string; root?: string | null; roots?: Record<string, string>; remotes?: string[] } | null | undefined;
+    if (!s) return plain(404, `this machine's node doesn't have the board ${board.key}`);
+    Object.assign(board, { name: s.name ?? board.key, root: s.roots?.[boards.ENVIRONMENT] ?? s.root ?? null, remotes: s.remotes ?? [] });
+  }
   let cwd = board.root && isDir(board.root) ? board.root : undefined;
   if (!cwd) {
     cwd = join(homedir(), "src", (board.name || board.key).replace(/[^\w.-]+/g, "-").replace(/^[.-]+/, "") || board.key);

@@ -44,6 +44,12 @@
 //                              this sign-in's memory off the Worker and into the account's
 //                              brains, the account made or published first if it must be;
 //                              --dry-run copies it and leaves the Worker's (node/move.ts)
+//   corkboard-bridge e2ee move-boards [--dry-run] [--passphrase]
+//                              this sign-in's boards off the Worker, cards, logs and files,
+//                              into the account's board replicas, the same way
+//   corkboard-bridge e2ee move-plans [--dry-run] [--passphrase]
+//                              the day plans and the chat into the account's day
+//                              object; the calendar stays the Worker's, lent to the node
 //
 // The relay is the server the bridge uses (cloud.ts). The passphrase, when there is
 // one, is CORKBOARD_E2EE_PASSPHRASE or asked for.
@@ -65,7 +71,7 @@ import { Replica, memoryStore } from "../lib/e2ee/sync";
 import { type DeviceCert, type Role, type Signed, ROLES, normalizeCode, showCode } from "../lib/e2ee/wire";
 
 const USAGE =
-  "usage: corkboard-bridge e2ee init|publish|recover|pair|approve CODE|push-board KEY|pull-board KEY|share KIND NAME ACCOUNT [ROLE]|unshare KIND NAME ACCOUNT|shared|compact [KIND NAME]|rotate|rotated|status|phrase|revoke DEVICE|nodes|leader [this|DEVICE|none]|approve-connector|move-memory [--dry-run]";
+  "usage: corkboard-bridge e2ee init|publish|recover|pair|approve CODE|push-board KEY|pull-board KEY|share KIND NAME ACCOUNT [ROLE]|unshare KIND NAME ACCOUNT|shared|compact [KIND NAME]|rotate|rotated|status|phrase|revoke DEVICE|nodes|leader [this|DEVICE|none]|approve-connector|move-memory [--dry-run]|move-boards [--dry-run]|move-plans [--dry-run]";
 
 function option(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -452,25 +458,28 @@ async function revokeDevice(args: string[]) {
 
 // The bridge mustn't be serving a node meanwhile (serve.ts's lock), and is
 // restarted after, to serve this one.
-async function moveMemoryOff(args: string[]) {
+async function moveOff(args: string[], what: "memory" | "boards" | "plans") {
   if (!cloudSignedIn()) throw new Error("not signed in: corkboard-bridge login");
   const d = store.device();
   if (!d || !store.exists()) await init(args);
   else if (d.relay === null) await publish(args);
   if (store.needsPassphrase() && !process.env.CORKBOARD_E2EE_PASSPHRASE) process.env.CORKBOARD_E2EE_PASSPHRASE = passphrase(args, false);
   const { startNode } = await import("./node/serve");
-  const { moveMemory } = await import("./node/move");
+  const { moveBoards, moveMemory, movePlans } = await import("./node/move");
   const n = await startNode({ port: 0, host: "127.0.0.1", origin: undefined });
   const dryRun = args.includes("--dry-run");
+  const worker = async (path: string, init: RequestInit = {}) =>
+    fetch(`${CLOUD}${path}`, { ...init, headers: { ...(init.headers as Record<string, string>), Authorization: `Bearer ${await googleToken()}` } });
   try {
-    await moveMemory(n, async (path, init = {}) => fetch(`${CLOUD}${path}`, { ...init, headers: { ...(init.headers as Record<string, string>), Authorization: `Bearer ${await googleToken()}` } }), { dryRun });
+    await (what === "memory" ? moveMemory(n, worker, { dryRun }) : what === "boards" ? moveBoards(n, worker, { dryRun }) : movePlans(n, worker, { dryRun }));
   } finally {
     await n.stop();
   }
+  const It = what === "memory" ? "Memory is" : what === "boards" ? "The boards are" : "The day plans and chat are";
   console.log(
     dryRun
-      ? `\nCopied into the account ${n.account}; the Worker keeps its memory (a dry run).`
-      : `\nMemory is in the account ${n.account} now, and gone from ${CLOUD}. Restart the bridge to serve it.`,
+      ? `\nCopied into the account ${n.account}; the Worker keeps its ${what} (a dry run).`
+      : `\n${It} in the account ${n.account} now, and gone from ${CLOUD}. Restart the bridge to serve ${what === "memory" ? "it" : "them"}.`,
   );
 }
 
@@ -492,7 +501,9 @@ export async function cli(args: string[]) {
     status,
     phrase,
     revoke: revokeDevice,
-    "move-memory": moveMemoryOff,
+    "move-memory": (a) => moveOff(a, "memory"),
+    "move-boards": (a) => moveOff(a, "boards"),
+    "move-plans": (a) => moveOff(a, "plans"),
     nodes: listNodes,
     leader: setLeader,
     "approve-connector": async () => console.log((await import("./node/serve")).approvalCode()),

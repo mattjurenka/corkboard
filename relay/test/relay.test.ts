@@ -485,6 +485,17 @@ describe("sharing", () => {
     const live = (t: string) => worker(`/e2ee/log/${rep.object}/live?owner=${a.keys.id}`, { headers: { Upgrade: "websocket", "Sec-WebSocket-Protocol": `corkboard, corkboard.bearer.${b64url(utf8(t))}` } });
     expect((await live(bt)).status).toBe(101);
     expect((await live(await c.relay.token())).status).toBe(403);
+
+    // The object's files, likewise, read only.
+    const id = b64url(crypto.getRandomValues(new Uint8Array(16)));
+    const sealed = sealBlob(objects[0].key, id, utf8("a file"));
+    await a.relay.putBlob(id, sealed);
+    const of = { owner: a.keys.id, object: rep.object };
+    expect(new TextDecoder().decode(openBlob(objects[0].key, id, await b.relay.getBlob(id, of)))).toBe("a file");
+    await expect(b.relay.getBlob(id)).rejects.toMatchObject({ status: 404 });
+    await expect(c.relay.getBlob(id, of)).rejects.toMatchObject({ status: 403 });
+    await expect(b.relay.getBlob(id, { ...of, object: b64url(crypto.getRandomValues(new Uint8Array(16))) })).rejects.toMatchObject({ status: 403 });
+    expect((await worker(`/e2ee/blob/${id}?owner=${a.keys.id}&object=${rep.object}`, { method: "DELETE", headers: auth })).status).toBe(403);
   });
 
   it("are listed for the owner and to the member, and checked as they're made", async () => {

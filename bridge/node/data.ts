@@ -10,15 +10,16 @@
 
 import { type AgentState, type Card, type Fields, type LogEntry, type Priority, type Status, Invalid, fields as checkFields } from "../../lib/model/cards";
 import { createHash } from "node:crypto";
-import { DAY_STARTS_HOUR, type Note, type NoteInput, today } from "../../lib/model/plans";
+import { type Block, type ChatMessage, DAY_STARTS_HOUR, type Note, type NoteInput, type Plan, type Proposal, today } from "../../lib/model/plans";
 import type { CardChange, MergedCard } from "../../lib/e2ee/merge";
 import { b64url } from "../../lib/e2ee/wire";
 import { random } from "../../lib/e2ee/keys";
-import { BRAIN_RECORD, ROLLUP_RECORD, VECTOR_PREFIX, entryRecord, noteRecord, recordOf, vectorRecord } from "./objects";
+import { BRAIN_RECORD, DAY, ROLLUP_RECORD, VECTOR_PREFIX, entryRecord, noteRecord, recordOf, vectorRecord } from "./objects";
+import { CHAT_PREFIX, Conflict, type Message, PLAN_PREFIX, askKey, chatRecord, importedMessageId, messageOf, planOf, planRecord, versionOf } from "./day";
 import { BOARD_RECORD, type BoardSettings, MEDIA_PREFIX, extraOf, extraSet, isCard, isExtraField, leaseRecord, mediaRecord, newCardId, settingsOf } from "./board";
 import type { Replicas } from "./replicas";
 
-export { Invalid };
+export { Conflict, Invalid };
 
 export type FullCard = Card & { log: LogEntry[] };
 // until: in milliseconds; lapsed: the leader blocked the card for it (leases.ts).
@@ -82,7 +83,7 @@ export class Data {
     return today(this.timeZone);
   }
 
-  private replica(kind: "board" | "brain", name: string) {
+  private replica(kind: "board" | "brain" | "day", name: string) {
     const r = this.replicas.get(kind, name);
     if (!r) throw new Invalid(`no ${kind} ${name} on this node`);
     return r;
@@ -143,11 +144,12 @@ export class Data {
     return this.storedMedia(this.replica("board", board).cards()).filter((s) => !card || s.card === card);
   }
 
-  // A file on its card, with a line in the card's log.
-  async addMedia(board: string, s: StoredMedia, note: string): Promise<MediaItem> {
+  // A file on its card, with a line in the card's log; null, none (one
+  // moved from the Worker, whose log has the line already).
+  async addMedia(board: string, s: StoredMedia, note: string | null): Promise<MediaItem> {
     this.card(board, s.card);
     const { id, ...set } = s;
-    await this.replicas.change("board", board, { t: "card", card: mediaRecord(id), set }, { t: "log", card: s.card, entry: { at: now(), who: s.who, note } });
+    await this.replicas.change("board", board, { t: "card", card: mediaRecord(id), set }, ...(note === null ? [] : [{ t: "log" as const, card: s.card, entry: { at: now(), who: s.who, note } }]));
     return itemOf(s);
   }
 
@@ -387,15 +389,189 @@ export class Data {
     if (changes.length) await this.replicas.change("brain", brain, ...changes);
   }
 
-  // An entry's id sorts by when it was made (two in one millisecond in
-  // the order they were made), and is random past that, so two devices
-  // never make the same one.
+  // An entry's (or a message's) id sorts by when it was made (two in one
+  // millisecond in the order they were made), and is random past that, so
+  // two devices never make the same one.
   private made = 0;
+  private timeId() {
+    this.made = Math.max(Date.now(), this.made + 1);
+    return `${this.made.toString(36)}-${b64url(random(6))}`;
+  }
+
   async remember(brain: string, who: string, text: string): Promise<Entry> {
     const e = { at: now(), day: this.today(), who, text: text.trim() };
-    this.made = Math.max(Date.now(), this.made + 1);
-    const id = `${this.made.toString(36)}-${b64url(random(6))}`;
+    const id = this.timeId();
     await this.replicas.change("brain", brain, { t: "card", card: entryRecord(id), set: e });
     return { id, ...e };
+  }
+
+  // Day plans (day.ts) ------------------------------------------------------------
+
+  private planRecord(date: string): MergedCard | undefined {
+    const id = planRecord(date);
+    return this.replica("day", DAY)
+      .cards()
+      .find((c) => c.id === id);
+  }
+
+  plan(date: string): Plan {
+    return planOf(date, this.planRecord(date), versionOf(this.replica("day", DAY).state, planRecord(date)));
+  }
+
+  // The dates that have a plan, oldest first.
+  planDates(): string[] {
+    return this.replica("day", DAY)
+      .cards()
+      .filter((c) => c.id.startsWith(PLAN_PREFIX))
+      .map((c) => c.id.slice(PLAN_PREFIX.length));
+  }
+
+  // With a version, only over that one, as the Worker's plans were; it
+  // holds on this node only. A write from elsewhere merges per field.
+  private async changePlan(date: string, version: number | null, set: Record<string, unknown>, said?: { who: string; text: string }): Promise<Plan> {
+    const was = this.plan(date);
+    if (version !== null && was.version !== version) throw new Conflict(`the plan for ${date} is at version ${was.version}, not ${version}`, was);
+    await this.replicas.change("day", DAY, ...(Object.keys(set).length ? [{ t: "card" as const, card: planRecord(date), set }] : []), ...(said ? [{ t: "log" as const, card: planRecord(date), entry: { at: now(), who: said.who, note: said.text } }] : []));
+    return this.plan(date);
+  }
+
+  // The assistant's, over the last; it answers what's been asked so far.
+  async propose(date: string, proposal: Omit<Proposal, "answering" | "id">, projects?: Plan["projects"]): Promise<Plan> {
+    const m = this.planRecord(date);
+    const answered = Array.isArray(m?.answered) ? (m!.answered as string[]) : [];
+    const asking = (m?.log ?? []).filter((e) => !answered.includes(askKey(e)));
+    const set: Record<string, unknown> = { proposal: { ...proposal, id: b64url(random(9)), answering: asking.map((e) => e.note) }, answered: [...answered, ...asking.map(askKey)] };
+    if (projects) set.projects = projects;
+    return this.changePlan(date, null, set);
+  }
+
+  say(date: string, who: string, text: string): Promise<Plan> {
+    return this.changePlan(date, null, {}, { who, text });
+  }
+
+  // The proposal (the one named, when it's named), as the user left it
+  // after undoing what they didn't want, becomes the day.
+  async accept(date: string, version: number | null, blocks: Block[], proposal?: string): Promise<Plan> {
+    const p = this.plan(date);
+    const open = this.open(p, proposal, "accept");
+    return this.changePlan(date, version, {
+      day: { blocks, ranked: open.ranked ?? p.day.ranked, later: open.later ?? p.day.later, inputs: open.inputs ?? p.day.inputs },
+      accepted: { at: now(), proposal: open.id ?? null },
+      // One from before proposals had ids is closed only by clearing it.
+      ...(open.id ? {} : { proposal: null }),
+    });
+  }
+
+  async discard(date: string, version: number | null, proposal?: string): Promise<Plan> {
+    const open = this.open(this.plan(date), proposal, "discard");
+    return this.changePlan(date, version, open.id ? { discarded: open.id } : { proposal: null });
+  }
+
+  private open(p: Plan, id: string | undefined, what: string): Proposal {
+    if (!p.proposal) throw new Conflict(`there's no proposal to ${what}`, p);
+    if (id !== undefined && p.proposal.id !== id) throw new Conflict(`that proposal isn't the plan's any more: there's a newer one`, p);
+    return p.proposal;
+  }
+
+  // The day itself edited (a block retitled or pinned in the plan window).
+  setDay(date: string, version: number | null, blocks: Block[]): Promise<Plan> {
+    return this.changePlan(date, version, { day: { ...this.plan(date).day, blocks } });
+  }
+
+  // How writing the calendar went for an accept and the day it wrote
+  // (calendar.ts's dayDigest), if it's still the plan's.
+  async calendarWritten(date: string, accepted: string, day: string, result: { blocks: number } | { error: string }): Promise<Plan> {
+    const p = this.plan(date);
+    if (p.accepted !== accepted) return p;
+    return this.changePlan(date, null, { calendar: { accepted, at: now(), day, ...result } });
+  }
+
+  // A plan from the Worker (move.ts), as it is there: its open proposal
+  // named from its version, what's asked as entries of that day, an accept
+  // that names no proposal. Only what differs is written, so a second move
+  // writes nothing.
+  async importPlan(p: Plan): Promise<boolean> {
+    const m = this.planRecord(p.date);
+    const want: Record<string, unknown> = {
+      day: p.day,
+      projects: p.projects,
+      proposal: p.proposal && { ...p.proposal, id: `worker-${p.version}` },
+      accepted: p.accepted && { at: p.accepted, proposal: null },
+      ...(p.calendar && { calendar: p.calendar }),
+    };
+    const set = Object.fromEntries(Object.entries(want).filter(([k, v]) => JSON.stringify(m?.[k] ?? null) !== JSON.stringify(v ?? null)));
+    const had = new Set((m?.log ?? []).map(askKey));
+    const asked = p.asked
+      .map((note, i) => ({ at: `${p.date}T00:00:00.${String(i).padStart(3, "0")}Z`, who: "user", note }))
+      .filter((e) => !had.has(askKey(e)));
+    const changes = [...(Object.keys(set).length ? [{ t: "card" as const, card: planRecord(p.date), set }] : []), ...asked.map((entry) => ({ t: "log" as const, card: planRecord(p.date), entry }))];
+    if (changes.length) await this.replicas.change("day", DAY, ...changes);
+    return changes.length > 0;
+  }
+
+  // Chat (day.ts) -------------------------------------------------------------------
+
+  private messages(): Message[] {
+    return this.replica("day", DAY)
+      .cards()
+      .filter((c) => c.id.startsWith(CHAT_PREFIX))
+      .map(messageOf)
+      .filter((m): m is Message => !!m);
+  }
+
+  // The messages after an id, oldest first; with none, the newest `limit`.
+  chat(after?: string, limit = 50): Message[] {
+    const all = this.messages();
+    return after ? all.filter((m) => m.id > after).slice(0, limit) : all.slice(-limit);
+  }
+
+  message(id: string): Message | undefined {
+    return this.messages().find((m) => m.id === id);
+  }
+
+  // byUser: the user's own, from the phone; else a brain's.
+  async post(who: string, text: string, byUser = false): Promise<Message> {
+    const id = this.timeId();
+    await this.replicas.change("day", DAY, { t: "card", card: chatRecord(id), set: { at: now(), who, text, by_user: byUser, delivered: null } });
+    return this.message(id)!;
+  }
+
+  // The user's own message, changed or taken back before it's passed on.
+  private pending(id: string): Message {
+    const m = this.message(id);
+    if (!m || !m.by_user) throw new Invalid(`no message ${id}`);
+    if (m.delivered) throw new Conflict("Pepper has it already");
+    return m;
+  }
+
+  async edit(id: string, text: string): Promise<Message> {
+    this.pending(id);
+    await this.replicas.change("day", DAY, { t: "card", card: chatRecord(id), set: { text } });
+    return this.message(id)!;
+  }
+
+  async unsay(id: string): Promise<void> {
+    this.pending(id);
+    await this.replicas.change("day", DAY, { t: "card", card: chatRecord(id), set: { deleted: now() } });
+  }
+
+  // pepperd passes it on: from now it's as it was said. Again, it's as it was.
+  async deliver(id: string): Promise<Message> {
+    const m = this.message(id);
+    if (!m || !m.by_user) throw new Invalid(`no message ${id}`);
+    if (!m.delivered) await this.replicas.change("day", DAY, { t: "card", card: chatRecord(id), set: { delivered: now() } });
+    return this.message(id)!;
+  }
+
+  // The Worker's messages (move.ts), with their times, each once. Their
+  // ids here are day.ts's importedMessageId.
+  async importChat(messages: ChatMessage[]): Promise<number> {
+    const have = new Set(this.messages().map((m) => m.id));
+    const changes = messages
+      .map((m) => ({ id: importedMessageId(m.id, m.at), m }))
+      .filter(({ id }) => !have.has(id))
+      .map(({ id, m }) => ({ t: "card" as const, card: chatRecord(id), set: { at: m.at, who: m.who, text: m.text, by_user: m.by_user, delivered: m.delivered } }));
+    if (changes.length) await this.replicas.change("day", DAY, ...changes);
+    return changes.length;
   }
 }

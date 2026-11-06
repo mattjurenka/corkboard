@@ -134,12 +134,50 @@ phone ── relay directly (Encrypted.kt), as a paired device
 6. **The portal and the phone.** The portal's board list, Add project and `/open` tickets,
    which need a board's name, root and remotes; the phone's plain board screens (NewSession's
    picker, Media) read the encrypted replica its pairing gives it.
+   **Built 2026-11-05.** The portal (corkboard-cloud's portal/) signs in to the node with
+   OAuth (lib/node.ts: DCR at `/n/<handle>/register`, PKCE, owner scope, the approve-connector
+   code; tokens in localStorage under `corkboard.portal.node`), lists the node's boards in
+   components/boards.tsx, and Add project sends `PUT /api/node/boards/:key`. The phone's
+   Encrypted.kt reads a board replica's records as board.ts writes them (`isCard`, `extraOf`,
+   `boardCards`, `boardInfo`, the `media:<id>` records), lists the account's boards from their
+   replicas for NewSession's picker, and Media.kt fetches a file's pieces from the relay and
+   opens them. Tests: BoardRecordsTest.kt. Not yet: neither was run for real (the portal
+   against a real tunnel, the phone on a phone); boards shared from another account aren't
+   listed on the phone and their files can't be fetched (the relay keeps the blobs under the
+   owner's account); listing pulls each replica one after another, slow with many boards.
+   **Shared boards on the phone (2026-11-05).** The relay's `GET /e2ee/blob/:id?owner=&object=`
+   reads another account's blob when that object is shared with this one (PUT and DELETE with
+   an owner are 403); lib/e2ee/relay.ts's `getBlob(id, {owner, object})`, Relay.kt's
+   `getBlob(id, owner, obj)`. Encrypted.kt's `allBoards` adds the boards shared with the
+   account to its own, for `boardInfos` and `listedBoard`; `download` reads a shared board's
+   pieces through its owner; `boardInfos` pulls the replicas at once, and calls refused together
+   catch up on a rotation once. Tests: relay 26/26, testDebugUnitTest. Not yet: the relay
+   deployed with it; tried on a phone.
 7. **Moving off the Worker**, as move.ts does memory: `POST /api/boards/move` freezes the
    account's boards (Board DO lookups throw `Moved`, routes 410), `GET .../move/:board` pages
    out `cards`, `log`, `meta` and the R2 media, the node writes them into replicas with their
    own times and checks nothing is missing, waits for `settled()`, then `.../done` destroys each
    Board DO, forgets the R2 prefix and the `card-token:*` KV entries, and clears the User DO's
    board rows. `e2ee move-boards [--dry-run]`.
+   **Built 2026-11-05.** The Worker: board.ts's `frozen` table and `freeze(on)` (every write
+   answers FROZEN, a 410, and alarm() does nothing), `page(after)` (cards in n order, archived
+   ones too, each with its log); user.ts's `board_move` row; api.ts's `boardMoveRoutes()`
+   (`GET`/`POST`/`DELETE /api/boards/move`, `GET .../:board?after=`, `.../:board/media/:card/:mid`,
+   `POST .../done`, which destroys each board, forgets its media and User DO row and the boards'
+   `card-token:*` entries), refused to a machine token. While a move exists `GET /api/boards`
+   is [], the rest of /api/boards is 410, the MCP's list_boards is [] and its board tools
+   throw, the brain card tools are off, and workspace tickets go to the node. The node:
+   move.ts's `moveBoards()` adds a missing board's replica, puts its settings (roots too),
+   applies the cards with `changesFor` (extra.media left out), restores each file through
+   media.ts's `restore()` with the Worker's id, time and author and no new log line, checks
+   every card, log entry and file is here, waits for `settled()`, then done (or DELETE on a
+   failure or a dry run); e2ee.ts's `moveOff(args, "memory"|"boards")`. Tests: the Worker's
+   boardmove.test.ts (264/264), node.test.ts's "boards moved off the Worker" (89/90, the one
+   failing "episodes handed to the leader" test fails on a clean HEAD too). Not yet: run
+   against the live Worker; leases stay behind, and agents holding Worker card tokens lose
+   them at done (they claim again on the node); the Worker serves step 5's card tools to brain
+   grants only while no move exists; claude.ai's connector at `/n/<handle>/mcp` is the user's
+   to add.
 
 ## Decide
 

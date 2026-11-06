@@ -17,9 +17,10 @@
 // its board and makes cards (SESSION_TOOLS). Neither has memory tools here.
 
 import { AGENT_STATES, type Card, PRIORITIES, STATUSES, waitingOn } from "../../lib/model/cards";
-import { BRAIN_ONLY_KINDS, NOTE_KINDS, OWNER_ONLY_NOTES, date, note, noteId, slug } from "../../lib/model/plans";
+import { BRAIN_ONLY_KINDS, NOTE_KINDS, OWNER_ONLY_NOTES, chatText, date, note, noteId, projects, proposal, slug } from "../../lib/model/plans";
+import { DAY } from "./objects";
 import { range } from "../../lib/model/dates";
-import { type Data, type FullCard, Invalid } from "./data";
+import { Conflict, type Data, type FullCard, Invalid } from "./data";
 import type { Search } from "./search";
 import { touch } from "./leases";
 import { MAX_INLINE, type Media, fileName, fileType } from "./media";
@@ -616,6 +617,91 @@ const MEMORY_TOOLS: Record<string, MemoryTool> = {
   },
 };
 
+// Day plans and the chat (day.ts) ------------------------------------------------------
+
+type DayCall = { data: Data; caller: Caller };
+// ability: only for a brain whose abilities have it; to anyone else the
+// tool doesn't exist.
+type DayTool = { description: string; properties?: Record<string, object>; required?: string[]; ability?: "chat"; run: (a: any, c: DayCall) => Promise<unknown> | unknown };
+
+const day = str("YYYY-MM-DD; today, where the user is, if left out");
+const lineList = (description: string) => ({ type: "array", items: { type: "object" }, description });
+const blockSchema = {
+  type: "array",
+  description:
+    "The blocks, minutes since midnight. kind: work (planned), fixed (a calendar event, not yours to move) or off (meals, free time). title: 'Prefix: concrete action'. desc: the first physical step, which is what the block's notification says. project: a key from projects. card and board: the corkboard card it's for.",
+  items: {
+    type: "object",
+    properties: {
+      id: str("Unique within the plan; keep a block's id when you move it"),
+      start: { type: "integer" },
+      stop: { type: "integer" },
+      title: str("One line"),
+      kind: { type: "string", enum: ["work", "fixed", "off"] },
+      desc: str("The first physical step"),
+      project: str("Project key"),
+      tag: str("Short label: deep, review, due Wed"),
+      card: str("Card id"),
+      board: str("Board key"),
+      pinned: { type: "boolean" },
+    },
+    required: ["id", "start", "stop", "title", "kind"],
+  },
+};
+
+const DAY_TOOLS: Record<string, DayTool> = {
+  plan_read: {
+    description:
+      "Read a day's plan: the day as accepted (its blocks, the ranked work, what's not today), any proposal waiting for the user, and asked: what the user has said to change since your last proposal.",
+    properties: { date: day },
+    run: (a, c) => c.data.plan(a.date ? date(a.date) : c.data.today()),
+  },
+  plan_propose: {
+    description:
+      "Propose a day plan, or a re-plan of the rest of one, for the user to accept in corkboard's day plan window; it replaces any proposal still waiting. blocks are the whole day as you'd have it (keep the ids of blocks you don't change, so the user sees only what changed). from: the time the re-plan starts. Accepting writes it to their calendar, which only the user can do. What they asked is answered by this proposal.",
+    properties: {
+      date: day,
+      from: { type: "integer", description: "Minutes since midnight; changes before it aren't shown" },
+      blocks: blockSchema,
+      reasons: lineList("Why a re-plan, now: [{ text, source, tone }]"),
+      why: { type: "object", description: "Block id to why it was added, moved or dropped" },
+      ranked: lineList("The work you ranked, most important first: [{ title, project, est, why, block }]"),
+      later: lineList("What's not today and when: [{ title, project, why }]"),
+      inputs: lineList("What you looked at: [{ label, value, tone }]"),
+      projects: lineList("The projects blocks refer to: [{ key, name, color }]; color is accent, review, working or special"),
+    },
+    required: ["blocks"],
+    run: (a, c) => {
+      const { answering: _, ...made } = proposal(a, c.caller.agent, []);
+      return c.data.propose(a.date ? date(a.date) : c.data.today(), made, a.projects === undefined ? undefined : projects(a.projects));
+    },
+  },
+  chat_read: {
+    description:
+      "Read your chat with the user, oldest first: what they said to you from their phone and what you answered. after: only messages after this id; without it, the newest 100.",
+    properties: { after: str("A message id") },
+    ability: "chat",
+    run: (a, c) => c.data.chat(a.after ? String(a.after) : undefined, 100),
+  },
+  chat_send: {
+    description: "Say something to the user in your chat; it reaches their phone at once. Plain text, no markdown.",
+    properties: { text: str("What to say") },
+    required: ["text"],
+    ability: "chat",
+    run: (a, c) => c.data.post(c.caller.brain ?? "assistant", chatText(a.text)),
+  },
+};
+
+// Not to one held to a board, nor with no day object; a tool of an
+// ability, only to a brain that has it (its settings, read each call).
+function dayReaches(t: DayTool, caller: Caller, data: Data) {
+  if (boardBound(caller) || !data.replicas.get("day", DAY)) return false;
+  if (!t.ability) return true;
+  if (!caller.brain || !data.replicas.get("brain", caller.brain)) return false;
+  const abilities = data.brain(caller.brain).abilities;
+  return Array.isArray(abilities) && abilities.includes(t.ability);
+}
+
 // Tools and calls ------------------------------------------------------------------------
 
 // A fleet session's (oauth.ts's session grants): it has no card of its own,
@@ -627,7 +713,7 @@ const reaches = (name: string, caller: Caller) => (caller.scope === "session" ? 
 // memoryOnly: the memory tools alone, for a local session (app.ts), whose
 // board tools are its own board's. One held to a board, that board's tools
 // it reaches, with no board argument.
-function toolsFor(caller: Caller, hidden: readonly string[], memoryOnly = false, fleet?: Fleet) {
+function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryOnly = false, fleet?: Fleet) {
   if (boardBound(caller))
     return Object.entries(memoryOnly ? {} : TOOLS)
       .filter(([name]) => reaches(name, caller))
@@ -652,6 +738,9 @@ function toolsFor(caller: Caller, hidden: readonly string[], memoryOnly = false,
       inputSchema: { type: "object", properties: { board: str("The board's key, from list_boards"), ...t.properties }, required: ["board", ...(t.required ?? [])] },
     })),
     ...memory,
+    ...Object.entries(DAY_TOOLS)
+      .filter(([, t]) => dayReaches(t, caller, data))
+      .map(([name, t]) => ({ name, description: t.description, inputSchema: { type: "object", properties: t.properties ?? {}, required: t.required ?? [] } })),
     ...Object.entries(spawns(caller, fleet) ? FLEET_TOOLS : {}).map(([name, t]) => ({
       name,
       description: t.description,
@@ -670,6 +759,7 @@ async function callTool(node: Node, caller: Caller, name: string, args: any): Pr
     return FLEET_TOOLS[name].run({ ...args }, { data, fleet: node.fleet!, me: caller.agent }).catch((e) => {
       throw e instanceof Invalid || e instanceof ToolError ? e : new ToolError((e as Error).message);
     });
+  if (DAY_TOOLS[name] && dayReaches(DAY_TOOLS[name], caller, data)) return DAY_TOOLS[name].run({ ...args }, { data, caller });
   // A brain's own agent sees its goals; the user's clients don't.
   const hidden = caller.brain ? [] : BRAIN_ONLY_KINDS;
   if (MEMORY_TOOLS[name] && !bound) {
@@ -710,7 +800,9 @@ async function callTool(node: Node, caller: Caller, name: string, args: any): Pr
 
 type Message = { jsonrpc?: string; id?: string | number | null; method?: string; params?: any };
 
-async function handle(node: Node, caller: Caller, msg: Message, memoryOnly: boolean): Promise<object | undefined> {
+// boardOnly: the rest, for a local session's corkboard server once its
+// boards are the node's (app.ts), beside corkboard-memory.
+async function handle(node: Node, caller: Caller, msg: Message, memoryOnly: boolean, boardOnly = false): Promise<object | undefined> {
   const { id, method, params } = msg ?? {};
   const reply = (result: unknown) => ({ jsonrpc: "2.0", id, result });
   switch (method) {
@@ -724,15 +816,15 @@ async function handle(node: Node, caller: Caller, msg: Message, memoryOnly: bool
     case "ping":
       return reply({});
     case "tools/list":
-      return reply({ tools: toolsFor(caller, BRAIN_ONLY_KINDS, memoryOnly, node.fleet) });
+      return reply({ tools: toolsFor(node.data, caller, BRAIN_ONLY_KINDS, memoryOnly, node.fleet).filter((t) => !boardOnly || !MEMORY_TOOLS[t.name]) });
     case "tools/call":
       try {
         const name = String(params?.name);
-        if (memoryOnly && !MEMORY_TOOLS[name]) throw new ToolError(`unknown tool ${name}`);
+        if ((memoryOnly && !MEMORY_TOOLS[name]) || (boardOnly && MEMORY_TOOLS[name])) throw new ToolError(`unknown tool ${name}`);
         const out = await callTool(node, caller, name, { ...(params?.arguments ?? {}) });
         return reply({ content: [{ type: "text", text: typeof out === "string" ? out : JSON.stringify(out, null, 2) }] });
       } catch (e) {
-        if (e instanceof ToolError || e instanceof Invalid) return reply({ content: [{ type: "text", text: e.message }], isError: true });
+        if (e instanceof ToolError || e instanceof Invalid || e instanceof Conflict) return reply({ content: [{ type: "text", text: e.message }], isError: true });
         throw e;
       }
     default:
@@ -749,8 +841,9 @@ export async function mcp(request: Request, node: Node, caller: Caller): Promise
     return Response.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } }, { status: 400 });
   }
   const memoryOnly = new URL(request.url).searchParams.get("tools") === "memory";
+  const boardOnly = new URL(request.url).searchParams.get("tools") === "board";
   const batch = Array.isArray(body);
-  const answers = (await Promise.all((batch ? (body as unknown[]) : [body]).map((m) => handle(node, caller, m as Message, memoryOnly)))).filter(Boolean);
+  const answers = (await Promise.all((batch ? (body as unknown[]) : [body]).map((m) => handle(node, caller, m as Message, memoryOnly, boardOnly)))).filter(Boolean);
   if (!answers.length) return new Response(null, { status: 202 });
   return Response.json(batch ? answers : answers[0]);
 }

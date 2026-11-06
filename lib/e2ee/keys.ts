@@ -52,9 +52,10 @@ export function accountKeys(root: Uint8Array): AccountKeys {
 }
 
 // account: what the account's nodes share among themselves, by name
-// (bridge/node's "oauth": claude.ai's grants, so they fail over).
-export type ObjectKind = "board" | "brain" | "memory" | "index" | "account";
-export const KINDS: ObjectKind[] = ["board", "brain", "memory", "index", "account"];
+// (bridge/node's "oauth": claude.ai's grants, so they fail over). day: the
+// account's day plans and chat, one object named "day" (bridge/node/day.ts).
+export type ObjectKind = "board" | "brain" | "memory" | "index" | "account" | "day";
+export const KINDS: ObjectKind[] = ["board", "brain", "memory", "index", "account", "day"];
 
 // An object's name (a board's key, a brain's name) goes in neither the
 // relay's view nor its ids: both are HKDF outputs.

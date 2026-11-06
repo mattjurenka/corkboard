@@ -22,9 +22,9 @@ export type Network = {
 
 // A resident that is a brain's one session (assistant.ts): the ssh into its
 // guest (a command line, ending at the host), the tmux socket there and its
-// session (the brain's name, if not), where its token goes, and whether it
-// has the phone's chat.
-export type Assistant = { ssh: string; tmuxSocket: string; session?: string; tokenFile: string; chat?: boolean };
+// session (the brain's name, if not), where its token goes (and its token on
+// the manifest's node, for its memory), and whether it has the phone's chat.
+export type Assistant = { ssh: string; tmuxSocket: string; session?: string; tokenFile: string; memoryTokenFile?: string; chat?: boolean };
 
 export type Manifest = {
   flake: string;

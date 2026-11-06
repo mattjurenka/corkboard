@@ -11,7 +11,8 @@
 // brain's are `brain` (its settings), `note:<id>`, `entry:<id>`, and
 // `vector:<hash>` (a text's embedding, embed.ts's, made once for every device).
 // The account's "oauth" object (accountObject) is oauth.ts's: its clients,
-// grants and lasting tokens, kept the same on every node.
+// grants and lasting tokens, kept the same on every node. Its "day" object
+// (dayObject) holds the day plans and the chat (day.ts).
 
 import { type BoardState, type Op, apply, empty } from "../../lib/e2ee/merge";
 import { objectId, objectKey } from "../../lib/e2ee/keys";
@@ -19,7 +20,7 @@ import { type IndexEntry, entries, keyOf } from "../../lib/e2ee/sharing";
 import type { Replica } from "../../lib/e2ee/sync";
 
 export type NodeObject = {
-  kind: "board" | "brain" | "account";
+  kind: "board" | "brain" | "account" | "day";
   // A board's key, a brain's name.
   name: string;
   // Its log's id on the relay.
@@ -62,12 +63,16 @@ export function listObjects(root: Uint8Array, want: Wanted, index?: Replica): No
 // The account's own object of that name, as the index has it (moved onto a
 // new key with the rest), else derived; it goes into the index the first
 // time the node writes it, as a brain does.
-export function accountObject(root: Uint8Array, name: string, index?: Replica): NodeObject {
-  const e = index && entries(index).find((x) => x.kind === "account" && x.name === name);
+export function accountObject(root: Uint8Array, name: string, index?: Replica, kind: "account" | "day" = "account"): NodeObject {
+  const e = index && entries(index).find((x) => x.kind === kind && x.name === name);
   return e
-    ? { kind: "account", name, object: e.object, key: keyOf(root, e), epoch: e.epoch, keyOf: indexKeys(root, index!, e.object) }
-    : { kind: "account", name, object: objectId(root, "account", name), key: objectKey(root, "account", name), epoch: 0 };
+    ? { kind, name, object: e.object, key: keyOf(root, e), epoch: e.epoch, keyOf: indexKeys(root, index!, e.object) }
+    : { kind, name, object: objectId(root, kind, name), key: objectKey(root, kind, name), epoch: 0 };
 }
+
+// The account's one day object, the same way.
+export const DAY = "day";
+export const dayObject = (root: Uint8Array, index?: Replica) => accountObject(root, DAY, index, "day");
 
 // A record id is `[\w.:-]{1,64}` once main's merge.ts has it; until then
 // the colon isn't one of them, and `note.<id>` stands in for `note:<id>`.

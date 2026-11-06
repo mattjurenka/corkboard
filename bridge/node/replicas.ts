@@ -104,8 +104,10 @@ export class Replicas {
   }
 
   // Called with the object after any change to it, ours or another device's.
-  onChange(fn: (o: NodeObject) => void) {
+  // The way to stop.
+  onChange(fn: (o: NodeObject) => void): () => void {
     this.listeners.push(fn);
+    return () => void (this.listeners = this.listeners.filter((f) => f !== fn));
   }
 
   private changed(k: Kept) {

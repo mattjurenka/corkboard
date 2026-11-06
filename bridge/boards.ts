@@ -13,9 +13,13 @@
 // boards), its events from the node's replica. One the node has a copy of
 // that the Worker still has too (e2ee push-board's) stays the Worker's, so
 // the two don't part, until it's moved (.agent/plans/local-boards.md, step 7).
+//
+// The day plan (plan.lua's plan_*) is the node's the same way: signed out,
+// or once the Worker's plans have moved (it answers 410), and its events
+// come from the node's day object as the Worker's user socket's would.
 
 import { hostname } from "node:os";
-import { Cloud, Session as CloudSession, type Listener } from "./cloud-session";
+import { Cloud, Session as CloudSession, type Listener, USER } from "./cloud-session";
 import { CLOUD, signedIn, token } from "./cloud";
 import { host } from "./host";
 import * as remote from "./remote";
@@ -31,7 +35,7 @@ type Listed = { key: string; name: string; commit?: string | null };
 const nodeBoards = (n: AppNode) => (n.boards("boards", []) as Promise<Listed[]>).catch(() => [] as Listed[]);
 
 // The environment this machine is, as its fleetd names it (fleet/fleetd/queue.ts).
-const ENVIRONMENT = process.env.CORKBOARD_FLEET_ENVIRONMENT ?? hostname();
+export const ENVIRONMENT = process.env.CORKBOARD_FLEET_ENVIRONMENT ?? hostname();
 
 // A clone's remotes, origin first, as URLs another machine can clone from: no
 // local paths, and no credentials in them.
@@ -74,6 +78,10 @@ export class Session extends CloudSession {
   // The node's boards this session follows, and the way to stop.
   private following = new Set<string>();
   private unfollow?: () => void;
+  // Whether the day plan is the node's, and when that was asked; the
+  // node's day events this session follows.
+  private dayNodes?: { at: number; is: Promise<boolean> };
+  private unfollowDay?: () => void;
 
   constructor(listener: Listener, sessions?: () => unknown[]) {
     super(cloud, listener, sessions);
@@ -84,6 +92,14 @@ export class Session extends CloudSession {
     // A session on the node's board: queued with node: true, its grant the node's.
     if (node && op === "fleet_session" && args[2] && signedIn() && (await this.nodes(node, args[2]))) return super.call(op, [...args.slice(0, 3), true]);
     if (node && (op === "note_get" || op === "note_put" || op === "goals")) return node.notes(op, args);
+    if (node && op.startsWith("plan_") && (await this.dayIsNodes())) {
+      if (op === "plan_subscribe") {
+        this.unfollowDay ??= node.onDay((event) => this.listener(USER, event));
+        return null;
+      }
+      if (op === "plan_boards") return this.board(node, "boards", []);
+      return node.plans(op, args);
+    }
     if (node && BOARD_OPS.has(op)) {
       const answer = await this.board(node, op, args);
       if (answer !== undefined) return answer;
@@ -106,6 +122,22 @@ export class Session extends CloudSession {
     p.then((v) => v || this.theNodes.delete(key), () => this.theNodes.delete(key));
     this.theNodes.set(key, p);
     return p;
+  }
+
+  // Signed in, the node's once the Worker's plans answer 410 (moved); asked
+  // again after five minutes while they don't, and not kept on an error.
+  private dayIsNodes(): Promise<boolean> {
+    if (!signedIn()) return Promise.resolve(true);
+    if (this.dayNodes && Date.now() - this.dayNodes.at < 5 * 60_000) return this.dayNodes.is;
+    const is = (async () => {
+      const date = new Date().toISOString().slice(0, 10);
+      const res = await fetch(`${CLOUD}/api/plans/${date}`, { headers: { Authorization: `Bearer ${await token()}` }, signal: AbortSignal.timeout(10_000) });
+      return res.status === 410;
+    })();
+    const asked = { at: Date.now(), is };
+    is.then((v) => v && (asked.at = Infinity), () => this.dayNodes === asked && (this.dayNodes = undefined));
+    this.dayNodes = asked;
+    return is;
   }
 
   // A board operation answered by the node, or undefined for the Worker's.
@@ -146,5 +178,6 @@ export class Session extends CloudSession {
   override close() {
     super.close();
     this.unfollow?.();
+    this.unfollowDay?.();
   }
 }

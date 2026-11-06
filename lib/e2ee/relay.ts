@@ -18,7 +18,8 @@
 //   ?owner=<account id> on any of the log's: a log shared with this account by its owner
 //   POST /e2ee/grants             { grant, sealed }; DELETE /e2ee/grants/:object/:member
 //   GET  /e2ee/grants?object=     an object's grants (the owner's); GET /e2ee/shared, those to me
-//   PUT  /e2ee/blob/:id           an encrypted attachment; GET it back
+//   PUT  /e2ee/blob/:id           an encrypted attachment; GET it back (?owner=&object=:
+//                                 another account's, on an object it shares with this one)
 //   GET  /e2ee/nodes              the account's connected nodes and its leader (NodesView), its handle and url
 //   PUT  /e2ee/nodes/leader       { device | null }
 //   GET  /e2ee/nodes/live         WebSocket: this device as a node, answering the tunnel's
@@ -268,8 +269,10 @@ export class Relay implements PairTransport, LogTransport {
     if (!res.ok) throw new RelayError(res.status, `PUT blob: ${((await res.json().catch(() => ({}))) as { error?: string }).error ?? res.status}`);
   }
 
-  async getBlob(id: string): Promise<Uint8Array> {
-    const res = await this.f(`${this.origin}/e2ee/blob/${id}`, { headers: { Authorization: `Bearer ${await this.token()}` } });
+  // shared: another account's, on the object of its that it shares.
+  async getBlob(id: string, shared?: { owner: string; object: string }): Promise<Uint8Array> {
+    const q = shared ? `?owner=${shared.owner}&object=${shared.object}` : "";
+    const res = await this.f(`${this.origin}/e2ee/blob/${id}${q}`, { headers: { Authorization: `Bearer ${await this.token()}` } });
     if (!res.ok) throw new RelayError(res.status, `GET blob: ${res.status}`);
     return new Uint8Array(await res.arrayBuffer());
   }
