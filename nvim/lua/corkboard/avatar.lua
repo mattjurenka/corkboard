@@ -73,6 +73,10 @@ local function skin(src)
   return vim.b[src].corkboard_skin
 end
 
+-- The phone's face is the same one (away.lua).
+M.persona = persona
+M.skin = skin
+
 local function push(src)
   local a = panels[src]
   if not a then return end

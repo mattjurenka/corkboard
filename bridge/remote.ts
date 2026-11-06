@@ -10,6 +10,7 @@
 
 import { hostname } from "node:os";
 import * as away from "./away";
+import { say, sentence } from "./speech";
 import { bridgeId, serve, type Hosted, type Peer } from "./sessions";
 
 // This machine's, as fleetd names it (fleet/fleetd/queue.ts).
@@ -67,6 +68,19 @@ export function start(port: number) {
       ),
     screen: (key) => away.ask(at(key)[0], "screen", at(key)[1]),
     say: (key, text, keys) => away.ask(at(key)[0], "say", at(key)[1], text, keys),
+    speech: async (asked) => {
+      const s = sentence(asked);
+      if (typeof s === "string") return { error: `bad ${s}` };
+      try {
+        const { audio, rate, phonemes, frames } = await say(s);
+        // As 16-bit samples, half the floats' size, over the phone's network.
+        const pcm = new Int16Array(audio.length);
+        for (let i = 0; i < audio.length; i++) pcm[i] = Math.max(-1, Math.min(1, audio[i])) * 0x7fff;
+        return { rate, audio: Buffer.from(pcm.buffer).toString("base64"), ...(phonemes && frames && { phonemes, frames }) };
+      } catch (err) {
+        return { error: `speech: ${err instanceof Error ? err.message : err}` };
+      }
+    },
     terminals: (to) => {
       // Each stream's page, which its Neovim is in.
       const pages = new Map<string, number>();

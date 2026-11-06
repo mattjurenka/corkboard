@@ -36,6 +36,9 @@ type Reported = {
   context?: number;
   // Its log (corkboard/agents.lua), which the phone draws the conversation from.
   transcript?: string;
+  // Its face on the phone: its persona (avatar/personas.ts), and her skin.
+  persona?: string;
+  skin?: string;
 };
 // working, background and starting are busy; asking and permission need
 // you; ready and idle are done.
@@ -173,7 +176,7 @@ export function closed(page: Page) {
 // one, the VM it runs in if any, and whether it's in to's own Neovim.
 export function list(to?: Page) {
   return [...sessions].flatMap(([page, bufs]) =>
-    [...bufs.values()].map(({ buf, project, name, state, since, detail, typed, vm, role, card, session, context, transcript }) => ({
+    [...bufs.values()].map(({ buf, project, name, state, since, detail, typed, vm, role, card, session, context, transcript, persona, skin }) => ({
       page: ids.get(page),
       buf,
       project,
@@ -189,6 +192,8 @@ export function list(to?: Page) {
       session,
       context,
       transcript,
+      persona,
+      skin,
       mine: page === to,
     })),
   );

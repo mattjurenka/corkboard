@@ -10,6 +10,7 @@ import { defineConfig } from "vite";
 // said ahead of time and the anime voice's recordings. Each persona has a
 // copy of the page at meet/<id> (meet/shirtless.html, served for
 // meet/shirtless), which opens on her; at /meet/ only, its files from there.
+// meet/phone.html is the phone app's face for a session (src/phone).
 const CAST = ["tsundere", "bikini", "businesswoman", "nerd", "businessman", "shirtless", "alien", "diva", "valkyrie"];
 const root = fileURLToPath(new URL(".", import.meta.url));
 const out = `${root}dist-meet`;
@@ -39,5 +40,5 @@ export default defineConfig({
     },
   ],
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
-  build: { outDir: out, emptyOutDir: true, target: "es2022", rollupOptions: { input: `${root}meet.html` } },
+  build: { outDir: out, emptyOutDir: true, target: "es2022", rollupOptions: { input: [`${root}meet.html`, `${root}phone.html`] } },
 });

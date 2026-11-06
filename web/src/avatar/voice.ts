@@ -171,6 +171,10 @@ let asked = 0;
 const waiting = new Map<number, (r: Synth) => void>();
 // Whether the bridge says sentences; until one it can't, it's asked.
 let bridged = true;
+// Whether a sentence the bridge can't say is made in the page. The phone's
+// isn't (src/phone): it's said only as subtitles, and the bridge asked again.
+let inPage = true;
+export const noVoiceInPage = () => (inPage = false);
 let context: AudioContext | undefined;
 
 function audio() {
@@ -189,8 +193,10 @@ async function synth(text: string, voice: string, speed: number, mood: Mood | un
       if (res.ok) {
         const phonemes = res.headers.get("x-phonemes");
         const frames = res.headers.get("x-frames");
+        // The phone's are 16-bit, from the Worker.
+        const body = await res.arrayBuffer();
         return {
-          samples: new Float32Array(await res.arrayBuffer()),
+          samples: res.headers.get("x-format") === "s16" ? Float32Array.from(new Int16Array(body), (v) => v / 0x7fff) : new Float32Array(body),
           rate: Number(res.headers.get("x-sample-rate")),
           ...(phonemes && frames && { phonemes: decodeURIComponent(phonemes), frames: frames.split(",").map(Number) }),
         };
@@ -199,8 +205,10 @@ async function synth(text: string, voice: string, speed: number, mood: Mood | un
     } catch (err) {
       console.warn("speech:", err);
     }
+    if (!inPage) return { error: "the bridge didn't say it" };
     bridged = false;
   }
+  if (!inPage) return { error: "no voice" };
   if (!worker) {
     worker = new Worker(new URL("./kokoro.worker.ts", import.meta.url), { type: "module" });
     worker.onmessage = (e) => {

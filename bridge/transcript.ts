@@ -5,7 +5,9 @@
 //
 // Each item has the id of the record it came from (and the block's index),
 // so a log read again gives the same ids; a tool's result is an item of its
-// own that names the call, which the phone puts under it.
+// own that names the call, which the phone puts under it. What Claude says
+// with the mod's say tool, or does with emote, comes whole, for the
+// phone's face to say or do (corkboard/avatar.lua's panel, there).
 
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 
@@ -14,8 +16,13 @@ export type Question = { question: string; header: string; multiSelect: boolean;
 
 export type Item =
   | { id: string; at: string; kind: "you" | "claude"; text: string }
-  | { id: string; at: string; kind: "tool"; tool: string; call: string; detail: string; options?: string[][]; questions?: Question[] }
+  | { id: string; at: string; kind: "tool"; tool: string; call: string; detail: string; options?: string[][]; questions?: Question[]; said?: Said }
   | { id: string; at: string; kind: "result"; call: string; text: string; error: boolean };
+
+// A say call's words and mood, or an emote's act.
+export type Said = { text?: string; mood?: string; emote?: string };
+const SAY = "mcp__corkboard-ui__say";
+const EMOTE = "mcp__corkboard-ui__emote";
 
 const TEXT = 6000;
 const RESULT = 600;
@@ -71,7 +78,12 @@ export function items(r: any): Item[] {
             }))
           : undefined;
       const options = questions?.map((q) => q.options.map((o) => o.label));
-      return [{ id, at, kind: "tool", tool: String(b.name), call: String(b.id), detail: cut(detail(String(b.name), input), 300), ...(questions && { options, questions }) }];
+      const str = (v: unknown, n: number) => (typeof v === "string" ? v.slice(0, n) : undefined);
+      const said: Said | undefined =
+        b.name === SAY && typeof input.text === "string" ? { text: cut(input.text, TEXT), mood: str(input.mood, 32) } : b.name === EMOTE ? { emote: str(input.emote, 32) } : undefined;
+      return [
+        { id, at, kind: "tool", tool: String(b.name), call: String(b.id), detail: cut(detail(String(b.name), input), 300), ...(questions && { options, questions }), ...(said && { said }) },
+      ];
     }
     if (b?.type === "tool_result") {
       return [{ id, at, kind: "result", call: String(b.tool_use_id), text: cut(resultText(b.content).trim(), RESULT), error: b.is_error === true }];

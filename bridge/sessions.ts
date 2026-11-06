@@ -1,7 +1,8 @@
 // Serving Claude Code sessions to the phone and the fleet view, through the
 // Worker (its user.ts): following the user's live socket as a bridge
 // (?bridge=), saying what sessions there are whenever that changes, and
-// answering what's asked of one: its screen, something typed into it, and
+// answering what's asked of one: its screen, something typed into it, its
+// face's voice saying a sentence (the phone's avatar), and
 // its conversation as it goes, read from its log (transcript.ts), or its
 // terminal itself, mirrored both ways where the source has one. The
 // bridge serves its pages' sessions (remote.ts), fleetd its VMs'
@@ -28,6 +29,9 @@ export type Hosted = {
   context?: number;
   spawn?: string;
   transcript?: string;
+  // Its face on the phone: its persona, and her skin.
+  persona?: string;
+  skin?: string;
 };
 
 export type Answer = Record<string, unknown>;
@@ -38,6 +42,8 @@ export type Source = {
   watch(fn: () => void): void;
   say(key: string, text: string, keys: string[]): Promise<Answer>;
   screen?(key: string): Promise<Answer>;
+  // A sentence said in its face's voice: { rate, audio } (16-bit samples, base64).
+  speech?(sentence: unknown): Promise<Answer>;
   // Its terminal, mirrored: given where its bytes go, what to do with a
   // stream's opening, keys (base64), size and closing.
   terminals?(to: TerminalOut): Terminals;
@@ -89,7 +95,11 @@ export function serve(id: string, environment: string, source: Source) {
         ? source.screen
           ? await source.screen(q.key)
           : { error: "that session has no screen here" }
-        : await source.say(q.key, typeof q.text === "string" ? q.text : "", Array.isArray(q.keys) ? q.keys : []);
+        : q.type === "speech"
+          ? source.speech
+            ? await source.speech(q.sentence)
+            : { error: "no voice here" }
+          : await source.say(q.key, typeof q.text === "string" ? q.text : "", Array.isArray(q.keys) ? q.keys : []);
     send({ ...a, type: "answer", ask: q.ask });
   };
 
@@ -186,7 +196,7 @@ export function serve(id: string, environment: string, source: Source) {
         } catch {
           return;
         }
-        if ((m.type === "screen" || m.type === "say") && typeof m.ask === "number") answer(m);
+        if ((m.type === "screen" || m.type === "say" || m.type === "speech") && typeof m.ask === "number") answer(m);
         else if (m.type === "attach" && typeof m.stream === "string" && typeof m.key === "string") (m.terminal ? mirror : attach)(m.stream, m.key);
         else if (m.type === "detach" && typeof m.stream === "string") end(m.stream);
         else if (m.type === "in" && mirrored.has(m.stream) && typeof m.data === "string") terminals?.input(m.stream, m.data);

@@ -42,6 +42,7 @@ end
 
 local function sessions()
   local agents = require("corkboard.agents")
+  local avatar = require("corkboard.avatar")
   local project = vim.fs.basename(require("corkboard.util").project_root(vim.fn.getcwd(-1, -1)))
   local list = {}
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
@@ -64,6 +65,9 @@ local function sessions()
         context = vim.b[buf].corkboard_context,
         -- Its log, which the phone draws the conversation from (bridge/remote.ts).
         transcript = vim.b[buf].corkboard_claude_transcript,
+        -- Its face on the phone (corkboard/avatar.lua's).
+        persona = avatar.persona(buf),
+        skin = avatar.skin(buf),
       })
     end
   end

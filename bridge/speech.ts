@@ -161,15 +161,20 @@ async function load(): Promise<Tts> {
   return timed(ownVoices(new KokoroTTS(model as never, await tokenizer), Tensor, voiceFile)) as Tts;
 }
 
-export async function speech(req: Request): Promise<Response> {
-  if (req.method !== "POST") return new Response("not found", { status: 404 });
-  // Not a form's content type, so a page elsewhere needs a preflight.
-  if (req.headers.get("content-type") !== "application/json") return new Response("json", { status: 415 });
-  const { text, voice, speed = 1, mood } = (await req.json()) as { text?: unknown; voice?: unknown; speed?: unknown; mood?: unknown };
-  if (typeof text !== "string" || !text.trim() || text.length > 1000) return new Response("text", { status: 400 });
-  if (typeof voice !== "string" || !/^[a-z]{2}_[a-z]+$/.test(voice)) return new Response("voice", { status: 400 });
-  if (typeof speed !== "number" || !(speed >= 0.5 && speed <= 2)) return new Response("speed", { status: 400 });
-  if (mood !== undefined && (typeof mood !== "string" || !/^[a-z]+$/.test(mood))) return new Response("mood", { status: 400 });
+// A sentence to say, as the page asks: what's wrong with it, else it.
+export type Sentence = { text: string; voice: string; speed: number; mood?: string };
+export function sentence(v: unknown): Sentence | string {
+  const { text, voice, speed = 1, mood } = (v ?? {}) as { text?: unknown; voice?: unknown; speed?: unknown; mood?: unknown };
+  if (typeof text !== "string" || !text.trim() || text.length > 1000) return "text";
+  if (typeof voice !== "string" || !/^[a-z]{2}_[a-z]+$/.test(voice)) return "voice";
+  if (typeof speed !== "number" || !(speed >= 0.5 && speed <= 2)) return "speed";
+  if (mood !== undefined && (typeof mood !== "string" || !/^[a-z]+$/.test(mood))) return "mood";
+  return { text, voice, speed, mood };
+}
+
+// It said, and when each of its phonemes is, where Kokoro said it. The
+// avatar panel's, by /speech; the phone's, through the Worker (remote.ts).
+export async function say({ text, voice, speed, mood }: Sentence): Promise<{ audio: Float32Array; rate: number; phonemes?: string; frames?: number[] }> {
   const python = await chatterbox;
   const made = last.then(async (): Promise<Said> => {
     const ref = python && (await reference(voice, mood));
@@ -187,13 +192,23 @@ export async function speech(req: Request): Promise<Response> {
     return (await tts).generate(text, { voice, speed });
   });
   last = made.catch(() => {});
+  const { audio, sampling_rate } = await made;
+  const t = timing(audio);
+  return { audio, rate: sampling_rate, ...(t && { phonemes: t.phonemes, frames: t.frames }) };
+}
+
+export async function speech(req: Request): Promise<Response> {
+  if (req.method !== "POST") return new Response("not found", { status: 404 });
+  // Not a form's content type, so a page elsewhere needs a preflight.
+  if (req.headers.get("content-type") !== "application/json") return new Response("json", { status: 415 });
+  const s = sentence(await req.json());
+  if (typeof s === "string") return new Response(s, { status: 400 });
   try {
-    const { audio, sampling_rate } = await made;
-    const headers: Record<string, string> = { "content-type": "application/octet-stream", "x-sample-rate": String(sampling_rate) };
-    const t = timing(audio);
-    if (t) {
-      headers["x-phonemes"] = encodeURIComponent(t.phonemes);
-      headers["x-frames"] = t.frames.join(",");
+    const { audio, rate, phonemes, frames } = await say(s);
+    const headers: Record<string, string> = { "content-type": "application/octet-stream", "x-sample-rate": String(rate) };
+    if (phonemes && frames) {
+      headers["x-phonemes"] = encodeURIComponent(phonemes);
+      headers["x-frames"] = frames.join(",");
     }
     return new Response(audio, { headers });
   } catch (err) {
