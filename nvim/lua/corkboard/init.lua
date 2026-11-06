@@ -309,7 +309,8 @@ end
 
 -- The panels' accent colours, from highlight groups every colorscheme sets
 -- (background and text come with the grid's default colours). Optionally a
--- font: vim.g.corkboard_font = { family = ..., size = ... }. Each color can be
+-- font: vim.g.corkboard_font = { family = ..., size = ... }, at vim.g.corkboard_zoom
+-- percent (Ctrl+= and Ctrl+-, settings.lua). Each color can be
 -- set instead: vim.g.corkboard_colors = { focus = "#rrggbb", ... } (the
 -- Settings tab's). colorscheme: the colorscheme's alone.
 function M.theme(colorscheme)
@@ -346,7 +347,7 @@ function M.theme(colorscheme)
 end
 
 function M.push_theme()
-  M.notify("corkboard.theme", vim.tbl_extend("force", M.theme(), { font = vim.g.corkboard_font }))
+  M.notify("corkboard.theme", vim.tbl_extend("force", M.theme(), { font = vim.g.corkboard_font, zoom = vim.g.corkboard_zoom }))
 end
 
 -- The cwd and the current window's file, for the sidebar, the project

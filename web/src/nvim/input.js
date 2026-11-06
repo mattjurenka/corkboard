@@ -44,7 +44,7 @@ const MAC_EDIT = {
 };
 // The key a code is on, unshifted, for a Cmd chord: e.key there may be
 // the layout's, or Shift's ("{" for Cmd+Shift+[).
-const ON_CODE = { BracketLeft: "[", BracketRight: "]" };
+const ON_CODE = { BracketLeft: "[", BracketRight: "]", Equal: "=", Minus: "-", Numpad0: "k0" };
 
 // KeyboardEvent to Neovim key notation, or null when the key is not ours
 // (a lone modifier, a dead key, composition, a Cmd chord corkboard doesn't
@@ -56,7 +56,8 @@ export function toNvimKey(e, any = false) {
   // layout puts on Alt+digit, so read the key.
   const digit = /^Digit(\d)$/.exec(e.code);
   if (digit && e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) return `<A-${digit[1]}>`;
-  let key = SPECIAL[e.key];
+  // A chord on the numpad's 0 is its own key (reset zoom, settings.lua).
+  let key = SPECIAL[e.key] ?? ((e.ctrlKey || e.metaKey) && e.code === "Numpad0" ? "k0" : undefined);
   const special = key !== undefined;
   if (!special) {
     key = e.key === "Unidentified" ? fromCode(e.code) : e.key;

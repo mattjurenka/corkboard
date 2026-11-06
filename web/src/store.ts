@@ -174,6 +174,8 @@ export type State = {
   features: { fleet: boolean; assistant: boolean };
   // Whether Neovim has Vim's keys or an editor's (corkboard.vim).
   vim: boolean;
+  // The page's zoom, in percent (corkboard.theme).
+  zoom: number;
 };
 
 let state: State = {
@@ -211,6 +213,7 @@ let state: State = {
   toasts: [],
   features: { fleet: false, assistant: false },
   vim: false,
+  zoom: 100,
 };
 
 // localStorage can be missing or refuse (a private window).

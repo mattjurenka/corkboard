@@ -274,7 +274,10 @@ rpc.on("corkboard.theme", async ([theme]: any[]) => {
   pageFont ??= { family: grid.fontFamily, px: grid.fontSize };
   const family = font?.family ? `"${font.family}", "Symbols Nerd Font Mono", monospace` : pageFont.family;
   // Sizes come in points, as stylix and terminals give them.
-  const px = font?.size ? Math.round((font.size * 4) / 3) : pageFont.px;
+  // At the zoom, a percent.
+  const zoom = theme.zoom ?? 100;
+  store.set({ zoom });
+  const px = Math.round(((font?.size ? (font.size * 4) / 3 : pageFont.px) * zoom) / 100);
   if (family === grid.fontFamily && px === grid.fontSize) return;
   style.setProperty("--font", family);
   style.setProperty("--font-size", `${px}px`);

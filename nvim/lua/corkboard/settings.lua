@@ -78,6 +78,9 @@ local function feature(name)
   }
 end
 
+-- The page's zoom, in percent of its font size, stepped as a browser does.
+local ZOOM = { 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300 }
+
 -- type: text, number, bool, color, enum (options: values, or { value,
 -- label }s, or a function returning them), list (of text) or keys (of
 -- key sequences, in Neovim's notation). A setting
@@ -98,6 +101,7 @@ M.SCHEMA = {
       },
       vim.tbl_extend("error", { key = "font.family", label = "Font", type = "text", placeholder = "monospace" }, font("family")),
       vim.tbl_extend("error", { key = "font.size", label = "Font size", type = "number", min = 8, max = 32, step = 1, unit = "pt", placeholder = "13" }, font("size")),
+      { key = "zoom", label = "Zoom", type = "number", min = ZOOM[1], max = ZOOM[#ZOOM], step = 10, unit = "%", placeholder = "100", g = "corkboard_zoom", theme = true },
       color("focus", "Focus color"),
       color("accent", "Accent color"),
       color("selection", "Selection color"),
@@ -549,6 +553,29 @@ function M.keys()
   end
 end
 
+-- The zoom a step in (dir 1) or out (-1) from where it is, or 100% (0).
+function M.zoom(dir)
+  local now, to = vim.g.corkboard_zoom or 100, 100
+  if dir > 0 then
+    to = ZOOM[#ZOOM]
+    for _, z in ipairs(ZOOM) do
+      if z > now then
+        to = z
+        break
+      end
+    end
+  elseif dir < 0 then
+    to = ZOOM[1]
+    for i = #ZOOM, 1, -1 do
+      if ZOOM[i] < now then
+        to = ZOOM[i]
+        break
+      end
+    end
+  end
+  M.set("zoom", to ~= 100 and to or nil)
+end
+
 -- For a channel that just attached, or the colorscheme changing.
 function M.push_all()
   push()
@@ -567,6 +594,18 @@ function M.setup()
   vim.api.nvim_create_user_command("AgentSettings", M.open, { desc = "corkboard: settings" })
   vim.keymap.set({ "n", "i", "t" }, "<C-,>", M.open, { desc = "corkboard: settings" })
   vim.keymap.set({ "n", "i", "t" }, "<D-,>", M.open, { desc = "corkboard: settings" })
+  -- VS Code's zoom keys, its numpad ones too.
+  local modes = { "n", "i", "t", "x", "c" }
+  local zoom = {
+    { 1, "zoom in", { "<C-=>", "<C-+>", "<D-=>", "<D-S-=>" } },
+    { -1, "zoom out", { "<C-->", "<D-->" } },
+    { 0, "reset zoom", { "<C-k0>", "<D-k0>" } },
+  }
+  for _, z in ipairs(zoom) do
+    for _, lhs in ipairs(z[3]) do
+      vim.keymap.set(modes, lhs, function() M.zoom(z[1]) end, { desc = "corkboard: " .. z[2] })
+    end
+  end
 end
 
 return M

@@ -13,6 +13,7 @@ const MODS: Record<string, [mac: string, other: string]> = {
 const NAMES: Record<string, string> = {
   CR: "Enter", Esc: "Esc", BS: "Backspace", Del: "Delete", Space: "Space", Tab: "Tab",
   lt: "<", Bslash: "\\", Bar: "|", Left: "←", Right: "→", Up: "↑", Down: "↓",
+  k0: "Numpad0",
 };
 
 function chord(token: string, leader: string): string {

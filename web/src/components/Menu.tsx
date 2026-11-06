@@ -24,6 +24,7 @@ const cmd = (c: string) => (nvim: Nvim) => void nvim.lua("pcall(vim.cmd, ...) vi
 // Typed, from whatever mode Neovim is in, as if by hand.
 const typed = (keys: string) => (nvim: Nvim) => nvim.notify("nvim_input", `<C-\\><C-n>${keys}`);
 const tab = (n: number) => cmd(`silent! ${n}tabnext`);
+const zoom = (dir: number) => (nvim: Nvim) => void nvim.lua("require('corkboard.settings').zoom(...)", dir);
 
 function menus(leader: string, files: boolean, { fleet, assistant }: Features, vim: boolean): [string, Item[]][] {
   // Brains is fourth among the tabs without the fleet (corkboard.features).
@@ -90,6 +91,10 @@ function menus(leader: string, files: boolean, { fleet, assistant }: Features, v
         "-",
         { label: "Next tab", bind: "next tab", run: cmd("tabnext") },
         { label: "Previous tab", bind: "previous tab", run: cmd("tabprevious") },
+        "-",
+        { label: "Zoom in", bind: "zoom in", run: zoom(1) },
+        { label: "Zoom out", bind: "zoom out", run: zoom(-1) },
+        { label: "Reset zoom", bind: "reset zoom", run: zoom(0) },
       ],
     ],
   ];
@@ -101,6 +106,7 @@ export function Menu() {
   const features = useStore((s) => s.features);
   const bound = useStore((s) => s.keys);
   const vim = useStore((s) => s.vim);
+  const zoomed = useStore((s) => s.zoom);
   const none = useStore((s) => !!s.context?.none);
   const [open, setOpen] = useState<string | null>(null);
   const [leader, setLeader] = useState("\\");
@@ -181,6 +187,20 @@ export function Menu() {
       ))}
       <button
         type="button"
+        role="menuitem"
+        onClick={() => {
+          zoom(0)(nvim);
+          nvim.refocus();
+        }}
+        className={cn(
+          "ml-auto h-full cursor-pointer px-ch whitespace-pre hover:text-foreground [-webkit-app-region:no-drag] [app-region:no-drag]",
+          zoomed === 100 ? "text-muted-foreground" : "text-focus",
+        )}
+      >
+        {`${zoomed}%`.padStart(4)}
+      </button>
+      <button
+        type="button"
         role="menuitemcheckbox"
         aria-checked={vim}
         onClick={() => {
@@ -189,7 +209,7 @@ export function Menu() {
         }}
         // Clear of the window's own buttons, where the title bar has them.
         style={{ marginRight: "calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw))" }}
-        className="ml-auto h-full cursor-pointer px-ch whitespace-pre text-muted-foreground hover:text-foreground [-webkit-app-region:no-drag] [app-region:no-drag]"
+        className="h-full cursor-pointer px-ch whitespace-pre text-muted-foreground hover:text-foreground [-webkit-app-region:no-drag] [app-region:no-drag]"
       >
         [<span className="text-focus">{vim ? "✓" : " "}</span>] vim
       </button>
