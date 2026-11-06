@@ -482,6 +482,7 @@ local function host() return vim.uv.os_gethostname() end
 
 local function board_list()
   if boards and vim.uv.now() - boards.at < 3600 * 1000 then return boards.list end
+  if not require("corkboard.cards.cloud").enabled() then return end
   local ok, list = pcall(require("corkboard.cards.cloud").boards)
   if not ok or type(list) ~= "table" then return boards and boards.list end
   boards, board_at, claimed = { at = vim.uv.now(), list = list }, {}, {}

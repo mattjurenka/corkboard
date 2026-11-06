@@ -87,9 +87,11 @@ end
 -- listed. Within each, the projects opened most recently first.
 function M.account_projects()
   local util = require("corkboard.util")
-  local ok, boards = pcall(require("corkboard.cards.cloud").boards)
+  local cloud = require("corkboard.cards.cloud")
   -- Where a new one named rather than given a path goes.
   local dir = vim.fn.fnamemodify(vim.fn.expand(dev_dirs()[1]), ":~")
+  if not cloud.enabled() then return { projects = {}, dir = dir } end
+  local ok, boards = pcall(cloud.boards)
   if not ok then return { error = tostring(boards), dir = dir } end
   local recent = require("corkboard").recent_projects()
   local rank = {}
