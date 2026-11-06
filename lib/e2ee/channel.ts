@@ -156,7 +156,7 @@ async function handshake(link: Link, ms: number, run: () => Promise<Channel>): P
     link.close(e instanceof ChannelError ? e.message : "the handshake failed");
     throw e;
   } finally {
-    clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 

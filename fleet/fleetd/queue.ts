@@ -14,6 +14,13 @@
 // grant, its repo (the board's root here) and its brain's memory come from
 // the node's API (Manifest.node, node.ts), and how it goes is
 // written on its card there, as the Worker writes on its own boards' cards.
+//
+// With a device of its own on the node (Manifest.node.device, a sealed
+// channel: .agent/plans/ciphertext-relay.md, step 4), the environment is
+// sealed: its whole manifest goes to the node's fleet object and the Worker
+// has only its templates and offer, and a sealed spawn's task, shell and
+// the secrets it holds are read from the node at its claim, its result and
+// error written back there; the Worker hears only its state.
 
 import { existsSync } from "node:fs";
 import { hostname } from "node:os";
@@ -45,6 +52,7 @@ type Remote = {
   card?: string | null;
   agent?: string;
   node?: true;
+  sealed?: true;
   created?: string;
 };
 
@@ -122,6 +130,10 @@ export class Queue {
   // uptime is told at once.
   private running?: Occupancy & { host?: Host };
   private told?: string;
+  // What the node was last told of this environment, sealed.
+  private nodeTold?: string;
+  // Sealed spawns whose words the node hasn't given yet, said once each.
+  private unopened = new Set<string>();
 
   start() {
     void this.connect();
@@ -188,7 +200,7 @@ export class Queue {
     const running = this.running;
     // As the manifest has them: one still a brain's (a manifest from before
     // brains were spawns') the Worker won't offer.
-    await ok("PUT", `/api/fleet/environments/${ENVIRONMENT}`, {
+    const said = {
       templates: m.templates,
       offer: m.offer ?? { memory: m.memoryBudget && m.memoryBudget - OVERHEAD, cores: null },
       egress: egressOf(m),
@@ -196,7 +208,19 @@ export class Queue {
       // What its guests run instead of an agent (fleet/guest/slot.nix).
       jobs: ["consolidate"],
       running,
-    });
+    };
+    const sealed = !!m.node?.device;
+    if (sealed) {
+      // Each change but its load's, as the Worker broadcast them: the node
+      // keeps every one.
+      const kept = JSON.stringify({ ...said, running: running && { ...running, host: steady(running.host) } });
+      if (kept !== this.nodeTold) {
+        await nodeApi(m, "PUT", `/fleet/environments/${ENVIRONMENT}`, { manifest: said });
+        this.nodeTold = kept;
+      }
+    }
+    const { egress, running: _, ...open } = said;
+    await ok("PUT", `/api/fleet/environments/${ENVIRONMENT}`, sealed ? { ...open, sealed: true } : said);
     this.told = running && told(running);
     const listed = (await ok("GET", `/api/spawns?environment=${ENVIRONMENT}&state=queued,running,stopped&limit=100`)) as Remote[];
     for (const r of listed) {
@@ -221,13 +245,32 @@ export class Queue {
     // Taken already, or no longer queued: nothing to do.
     if (c.status === 409) return;
     if (c.status >= 400) throw new Error(`claiming ${r.id}: ${c.json.error ?? c.status}`);
-    const { spawn, token: cardToken, repo, brainToken, secrets } = c.json as {
+    const { spawn, token: cardToken, repo, brainToken, holds } = c.json as {
       spawn: Remote & { board: string | null; card: string | null; agent: string; interactive?: boolean; node?: true } & Pick<Spawn, "shell" | "memory" | "cores" | "job">;
       token: string | null;
       repo: string | null;
       brainToken?: string;
       secrets?: Record<string, string>;
+      holds?: string[];
     };
+    let { secrets } = c.json as { secrets?: Record<string, string> };
+    // Its words, from the node. One the node can't give yet stays claimed
+    // and unwritten here, and is claimed again at the next look.
+    if (spawn.sealed) {
+      let words: { task: string; shell: Spawn["shell"] | null; secrets?: Record<string, string> };
+      try {
+        words = await nodeApi(m, "GET", `/fleet/spawns/${spawn.id}${holds?.length ? `?holds=${holds.map(encodeURIComponent).join(",")}` : ""}`);
+      } catch (e) {
+        if (!this.unopened.has(spawn.id)) console.error(`${spawn.id}: its words: ${(e as Error).message}`);
+        this.unopened.add(spawn.id);
+        return;
+      }
+      this.unopened.delete(spawn.id);
+      spawn.task = words.task;
+      if (words.shell) spawn.shell = words.shell;
+      else delete spawn.shell;
+      secrets = words.secrets && Object.keys(words.secrets).length ? words.secrets : undefined;
+    }
     const s: Spawn = {
       id: spawn.id,
       template: spawn.template,
@@ -238,7 +281,7 @@ export class Queue {
       account: "",
       state: "queued",
       created: now(),
-      remote: { board: spawn.board, card: spawn.card, agent: spawn.agent, token: cardToken, ...(brainToken && { brainToken }), ...(secrets && { secrets }) },
+      remote: { board: spawn.board, card: spawn.card, agent: spawn.agent, token: cardToken, ...(brainToken && { brainToken }), ...(secrets && { secrets }), ...(spawn.sealed && { sealed: true as const }) },
       ...(spawn.interactive && { interactive: true }),
       ...(spawn.shell && { shell: spawn.shell }),
       ...(spawn.memory && { memory: spawn.memory }),
@@ -246,6 +289,9 @@ export class Queue {
       ...(spawn.job && { job: spawn.job }),
     };
     try {
+      // The Worker's rule, which it can't see on a sealed spawn: a shell of the
+      // spawner's never goes beside a brain's memory.
+      if (spawn.sealed && s.shell && s.brain) throw new Error(`a shell of your own never goes beside the ${s.brain} brain's memory`);
       if (spawn.node) await this.equip(m, s, spawn);
       s.account = accountFor(m, spawn.account);
       write(s);
@@ -301,12 +347,13 @@ export class Queue {
         await cardSays(manifest(), s, result.trim());
         write({ ...read(s.id)!, carded: s.state });
       }
+      const words = { error: s.error, result: result.trim() || undefined };
+      if (s.remote.sealed && (words.error || words.result)) await nodeApi(manifest(), "PUT", `/fleet/spawns/${s.id}`, words);
       const r = await api("POST", `/api/spawns/${s.id}/report`, {
         state: s.state,
         slot: s.slot,
         exit: s.exit,
-        error: s.error,
-        result: result.trim() || undefined,
+        ...(!s.remote.sealed && words),
       });
       if (r.status >= 400 && r.status !== 409) throw new Error(`reporting ${s.id}: ${r.json.error ?? r.status}`);
       const { secrets: _, ...kept } = s.remote;

@@ -55,6 +55,9 @@
 //   corkboard-bridge e2ee move-plans [--dry-run] [--passphrase]
 //                              the day plans and the chat into the account's day
 //                              object; the calendar stays the Worker's, lent to the node
+//   corkboard-bridge e2ee move-holds [--dry-run] [--passphrase]
+//                              the holds and their secrets into the fleet object; the
+//                              brains go on holding their names
 //
 // The relay is the server the bridge uses (cloud.ts). The passphrase, when there is
 // one, is CORKBOARD_E2EE_PASSPHRASE or asked for.
@@ -523,24 +526,25 @@ async function relayDevice(args: string[]) {
 
 // The bridge mustn't be serving a node meanwhile (serve.ts's lock), and is
 // restarted after, to serve this one.
-async function moveOff(args: string[], what: "memory" | "boards" | "plans") {
+async function moveOff(args: string[], what: "memory" | "boards" | "plans" | "holds") {
   if (!cloudSignedIn()) throw new Error("not signed in: corkboard-bridge login");
   const d = store.device();
   if (!d || !store.exists()) await init(args);
   else if (d.relay === null) await publish(args);
   if (store.needsPassphrase() && !process.env.CORKBOARD_E2EE_PASSPHRASE) process.env.CORKBOARD_E2EE_PASSPHRASE = passphrase(args, false);
   const { startNode } = await import("./node/serve");
-  const { moveBoards, moveMemory, movePlans } = await import("./node/move");
+  const { moveBoards, moveHolds, moveMemory, movePlans } = await import("./node/move");
   const n = await startNode({ port: 0, host: "127.0.0.1", origin: undefined });
   const dryRun = args.includes("--dry-run");
   const worker = async (path: string, init: RequestInit = {}) =>
     fetch(`${CLOUD}${path}`, { ...init, headers: { ...(init.headers as Record<string, string>), Authorization: `Bearer ${await googleToken()}` } });
   try {
-    await (what === "memory" ? moveMemory(n, worker, { dryRun }) : what === "boards" ? moveBoards(n, worker, { dryRun }) : movePlans(n, worker, { dryRun }));
+    const move = { memory: moveMemory, boards: moveBoards, plans: movePlans, holds: moveHolds }[what];
+    await move(n, worker, { dryRun });
   } finally {
     await n.stop();
   }
-  const It = what === "memory" ? "Memory is" : what === "boards" ? "The boards are" : "The day plans and chat are";
+  const It = { memory: "Memory is", boards: "The boards are", plans: "The day plans and chat are", holds: "The holds are" }[what];
   console.log(
     dryRun
       ? `\nCopied into the account ${n.account}; the Worker keeps its ${what} (a dry run).`
@@ -570,6 +574,7 @@ export async function cli(args: string[]) {
     "move-memory": (a) => moveOff(a, "memory"),
     "move-boards": (a) => moveOff(a, "boards"),
     "move-plans": (a) => moveOff(a, "plans"),
+    "move-holds": (a) => moveOff(a, "holds"),
     nodes: listNodes,
     leader: setLeader,
     "approve-connector": async () => console.log((await import("./node/serve")).approvalCode()),

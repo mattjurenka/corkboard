@@ -8,6 +8,7 @@ import { type Data, importedEntryId } from "./data";
 import type { Episodes } from "./episodes";
 import type { Media } from "./media";
 import type { Replicas } from "./replicas";
+import type { FleetRecords, Hold } from "./fleet";
 import { importedMessageId } from "./day";
 import type { ChatMessage, Note, Plan } from "../../lib/model/plans";
 
@@ -249,4 +250,30 @@ export async function movePlans(n: PlansTarget, worker: Worker, o: { dryRun?: bo
   if (o.dryRun) await call(worker, "/api/plans/move", { method: "DELETE" });
   else await call(worker, "/api/plans/move/done", post({ account: n.account }));
   return moved;
+}
+
+// The holds off the Worker too (ciphertext-relay.md step 4), into the fleet
+// object with their secrets. The brains go on holding their names there, as
+// the node's holds now; a hold here already is this node's, and stays.
+export type HoldsTarget = { sealed: FleetRecords; replicas: Replicas };
+export type HoldsMoved = { holds: string[]; kept: string[] };
+
+export async function moveHolds(n: HoldsTarget, worker: Worker, o: { dryRun?: boolean; log?: (line: string) => void } = {}): Promise<HoldsMoved> {
+  const log = o.log ?? console.log;
+  if (!n.sealed.has()) throw new Error("this node has no fleet object yet: restart the bridge on its new version first");
+  const d = await call<{ records: Record<string, Omit<Hold, "name">>; secrets: Record<string, string> }>(worker, "/api/holds?move");
+  const names = Object.keys(d.records ?? {});
+  const holds = await n.sealed.importHolds(d);
+  const kept = names.filter((h) => !holds.includes(h));
+
+  const here = n.sealed.secrets(holds);
+  const missing = holds.filter((h) => (d.secrets[h] ?? null) !== (here[h] ?? null));
+  if (missing.length) throw new Error(`not copied: ${missing.join(", ")}`);
+  log(`holds ${holds.length}${kept.length ? `; ${kept.join(", ")} already here, kept as they are` : ""}`);
+
+  await n.replicas.settled();
+  const unsent = n.replicas.status().filter((s) => s.kind === "fleet" && (s.pending > 0 || s.error));
+  if (unsent.length) throw new Error(`not on the relay yet: ${unsent.map((s) => s.error ?? `${s.pending} changes`).join(", ")}`);
+  if (!o.dryRun && names.length) await call(worker, "/api/holds", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ names }) });
+  return { holds, kept };
 }

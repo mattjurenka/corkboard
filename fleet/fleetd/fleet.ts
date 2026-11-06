@@ -97,6 +97,8 @@ export type Spawn = {
     node?: true;
     mcp?: string;
     memory?: string;
+    // Its words are the node's (queue.ts): its result and error go there.
+    sealed?: true;
   };
   // A session you talk to rather than a task (sessions.ts); when it was
   // asked to finish, if it has been.

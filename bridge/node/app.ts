@@ -38,6 +38,7 @@ import type { BoardEvent, Card } from "../../lib/model/cards";
 import { BRAIN_ONLY_KINDS, type Plan, blocks as checkBlocks, chatText, date as checkDate, note as checkNote, noteId } from "../../lib/model/plans";
 import { type Data, type FullCard, Invalid, now } from "./data";
 import { Conflict, type Message } from "./day";
+import { Conflict as HoldConflict } from "./fleet";
 import { DAY } from "./objects";
 import { NODE_DIR, NodeRunning, type StartedNode, startNode } from "./serve";
 import { touch } from "./leases";
@@ -74,6 +75,8 @@ export type AppNode = {
   plans(op: string, args: any[]): Promise<unknown>;
   // Each change to a plan or the chat, as the Worker's user socket tells it.
   onDay(fn: DayListener): () => void;
+  // A fleet_* operation answered here (fleet() below), or undefined for the Worker's.
+  fleet(op: string, args: any[]): Promise<unknown>;
   // A file on a card of a board the node keeps (media.ts), or undefined
   // when it has no such file: the Worker's, then.
   media(board: string, card: string, id: string): Promise<Response | undefined>;
@@ -135,13 +138,14 @@ export async function startAppNode(): Promise<AppNode | undefined> {
     onBoard: boardEvents(n),
     plans: (op, args) => plans(n, op, args),
     onDay: dayEvents(n),
+    fleet: (op, args) => fleet(n, op, args),
     media: async (board, card, id) => n.media.serve(board, card, id),
     sessions: joinHub(n.hub),
     reach: n.reach,
   };
   n.serveApp(
     (op, args) =>
-      op.startsWith("board_") ? app.boards(op.slice("board_".length), args) : (op.startsWith("brains_") ? app.brains : op.startsWith("nodes_") ? app.nodes : op.startsWith("plan_") ? app.plans : app.notes)(op, args),
+      op.startsWith("board_") ? app.boards(op.slice("board_".length), args) : (op.startsWith("brains_") ? app.brains : op.startsWith("nodes_") ? app.nodes : op.startsWith("plan_") ? app.plans : op.startsWith("fleet_") ? app.fleet : app.notes)(op, args),
     // A day event is sent with no board: { key: null, event }.
     (fn) => {
       const boards = app.onBoard(fn);
@@ -292,6 +296,7 @@ async function runningNode(pid: number): Promise<AppNode | undefined> {
     onBoard: (fn) => listen(listeners, fn),
     plans: call,
     onDay: (fn) => listen(dayListeners, fn),
+    fleet: call,
     media,
     sessions,
     reach,
@@ -399,12 +404,65 @@ async function brains(n: StartedNode, op: string, args: any[]): Promise<unknown>
     }
     case "brains_recall":
       return search.recall(brain, String(args[1] ?? ""), 15, BRAIN_ONLY_KINDS);
-    case "brains_holds":
-      // Holds are the fleet's, which is the Worker's.
-      return signedIn() ? undefined : { holds: [], waiting: [] };
+    case "brains_holds": {
+      // Holds are the fleet's: the node's once it's sealed, else the Worker's.
+      if (!n.sealed.inUse()) return signedIn() ? undefined : { holds: [], waiting: [] };
+      const [list, waiting] = await Promise.all([n.sealed.holdRoute("GET", undefined, async () => ({})), n.fleet()?.("GET", "/spawns?state=pending-approval&limit=50") ?? []]);
+      return { holds: list.body, waiting: (waiting as any[]).map((s) => n.sealed.open(s)) };
+    }
+    case "brains_hold_create":
+    case "brains_hold_update":
+    case "brains_hold_delete": {
+      if (!n.sealed.inUse()) {
+        if (signedIn()) return undefined;
+        throw new Invalid("holds are the fleet's, which needs signing in");
+      }
+      const [method, name, input] = op === "brains_hold_create" ? ["POST", undefined, args[0]] : op === "brains_hold_update" ? ["PATCH", String(args[0]), args[1]] : ["DELETE", String(args[0]), {}];
+      try {
+        const r = await n.sealed.holdRoute(method, name, async () => input ?? {});
+        if (r.status >= 400) throw new Invalid((r.body as { error?: string })?.error ?? `HTTP ${r.status}`);
+        return r.body;
+      } catch (e) {
+        // A stale edit answers with the hold as it is, as the Worker's did.
+        if (e instanceof HoldConflict) {
+          if (e.hold) return { stale: e.hold, error: e.message };
+          throw new Invalid(e.message);
+        }
+        throw e;
+      }
+    }
     default:
       if (signedIn()) return undefined;
       throw new Invalid("holds are the fleet's, which needs signing in");
+  }
+}
+
+// The fleet view's operations (fleet.lua) the node answers once the fleet's
+// sealed here (fleet.ts's inUse): a session queued with its words kept here,
+// and the Worker's answer to fleet_get with each environment's manifest and
+// each spawn's words put back. undefined for the Worker's own.
+async function fleet(n: StartedNode, op: string, args: any[]): Promise<unknown> {
+  const f = n.sealed;
+  if (!f.inUse()) return undefined;
+  switch (op) {
+    case "fleet_session": {
+      const [environment, template, board, onNode] = args as [string, string, string?, boolean?];
+      return f.queue({ environment, template, interactive: true, ...(board && { board }), ...(onNode && { node: true }) });
+    }
+    case "fleet_open": {
+      const [got] = args as [{ environments: { name: string }[]; spawns: { id: string }[] }];
+      const manifests = new Map(f.environments().map((m) => [m.name as string, m]));
+      return {
+        ...got,
+        environments: got.environments.map((e) => {
+          const m = manifests.get(e.name);
+          return m ? { ...m, ...e, running: m.running, egress: m.egress } : e;
+        }),
+        spawns: got.spawns.map((s) => f.open(s)),
+      };
+    }
+    default:
+      return undefined;
   }
 }
 

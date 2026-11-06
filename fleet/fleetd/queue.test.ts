@@ -2,7 +2,7 @@
 // claims, what it passes on, and what it reports; and, against a stand-in
 // node, what it asks the node for and writes on its cards.   bun test fleet/fleetd
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,6 +20,8 @@ type Remote = {
   agent: string;
   stopRequested?: boolean;
   node?: true;
+  sealed?: true;
+  shell?: unknown;
 };
 
 const dir = mkdtempSync(join(tmpdir(), "fleet-queue-"));
@@ -41,14 +43,18 @@ const server = Bun.serve({
     const m = url.pathname.match(/^\/api\/spawns\/(\w+)\/(claim|report)$/);
     const s = remote.find((x) => x.id === m?.[1]);
     if (!s) return Response.json({ error: "no" }, { status: 404 });
+    if (m![2] === "claim" && s.sealed) return Response.json({ spawn: s, token: null, repo: null, holds: ["google"] });
     if (m![2] === "claim") return Response.json({ spawn: s, token: s.board && !s.node ? `cbc_${s.id}` : null, repo: s.board === "proj" ? repo : null, ...(s.brain && { brainToken: `cbb_${s.id}`, secrets: { github: "ghp_x" } }) });
     s.state = body.state;
     return Response.json(s);
   },
 });
 
-// The node: its cards, the grants it hands out, and those ended.
+// The node: its cards, the grants it hands out, and those ended; and its
+// fleet object's sealed spawns and manifests.
 const cards: Record<string, any> = {};
+const words: Record<string, any> = {};
+const manifests: Record<string, any> = {};
 const grants: any[] = [];
 const revoked: string[] = [];
 const nodeCalls: { method: string; path: string; body: any }[] = [];
@@ -66,6 +72,15 @@ const node = Bun.serve({
       return Response.json(body.scope === "brain" ? { token, url: url.origin } : { token, expires_at: "x", url: `${url.origin}/mcp` });
     }
     if (p === "/grants" && req.method === "DELETE") return Response.json({ revoked: revoked.push(body.token) > 0 });
+    const f = p.match(/^\/fleet\/(spawns|environments)\/(\w+)$/);
+    if (f?.[1] === "environments" && req.method === "PUT") return Response.json((manifests[f[2]] = body.manifest), { status: 200 });
+    if (f?.[1] === "spawns" && req.method === "PUT") return Response.json(Object.assign(words[f[2]], body));
+    if (f?.[1] === "spawns") {
+      const w = words[f[2]];
+      if (!w) return Response.json({ error: "no spawn here" }, { status: 404 });
+      const holds = url.searchParams.get("holds")?.split(",") ?? [];
+      return Response.json({ ...w, ...(holds.includes("google") && { secrets: { google: "refresh" } }) });
+    }
     if (p === "/boards/mine") return Response.json({ key: "mine", root: "/nowhere", roots: { local: repo } });
     const m = p.match(/^\/boards\/mine\/cards\/([\w-]+)(\/log)?$/);
     const c = m && cards[m[1]];
@@ -254,4 +269,65 @@ test("equips one on the node's board from the node, and writes how it goes on it
   fleet.write({ ...fleet.read("bbbbbb3")!, state: "stopped" });
   await queue.step();
   expect(cards["TASK-7"]).toMatchObject({ status: "doing", agent: null, agent_state: null, log: ["stopped"] });
+});
+
+test("with a device on the node, keeps the environment and a sealed spawn's words there", async () => {
+  // fleetd's relay-only device, whose channel here is the stand-in node's
+  // HTTP as its owner.
+  const { certify, newDevice } = await import("../../lib/e2ee/device");
+  const { accountKeys, newRoot } = await import("../../lib/e2ee/keys");
+  const { makeDevice, setOpener, storeCert } = await import("./node");
+  const keys = accountKeys(newRoot());
+  const file = join(dir, "fleet-device.json");
+  const d = makeDevice(file);
+  storeCert(file, certify(keys, d, "fleetd", Date.now(), "relay"));
+  setOpener(file, {
+    nodes: async () => ({ leader: "n", connected: [{ device: "n", since: 0 }], handle: "h", url: "" }),
+    channel: async () =>
+      ({
+        open: true,
+        closed: new Promise(() => {}),
+        fetch: (path: string, init: RequestInit = {}) => {
+          const headers = new Headers(init.headers);
+          headers.set("Authorization", "Bearer nodeowner");
+          return fetch(`http://localhost:${node.port}${path}`, { ...init, headers });
+        },
+      }) as any,
+  });
+  const m = JSON.parse(readFileSync(process.env.CORKBOARD_FLEET_MANIFEST!, "utf8"));
+  writeFileSync(process.env.CORKBOARD_FLEET_MANIFEST!, JSON.stringify({ ...m, node: { url: "", device: file } }));
+
+  // One whose words the node hasn't got yet stays claimed there, unwritten here.
+  add({ id: "cccccc1", task: "", board: null, card: null, sealed: true });
+  add({ id: "cccccc2", task: "", board: null, card: null, sealed: true, brain: "work" });
+  (queue as any).dirty = true;
+  await queue.step(new Set());
+  // The Worker has the templates but not the egress or what runs; the node has it all.
+  expect(environment).toMatchObject({ sealed: true, templates: { coding: expect.anything() }, bindings: ["work"] });
+  expect(environment.egress).toBeUndefined();
+  expect(environment.running).toBeUndefined();
+  expect(manifests.local).toMatchObject({ egress: { open: false, domains: ["api.anthropic.com"] }, running: { slots: [{ name: "agent-0" }] } });
+  expect(fleet.read("cccccc1")).toBeUndefined();
+
+  // Once it has them: the task, the shell and the secrets of what it holds.
+  words.cccccc1 = { task: "read the mail", shell: { packages: ["jq"] }, result: null, error: null };
+  words.cccccc2 = { task: "x", shell: { flake: ".#dev" }, result: null, error: null };
+  (queue as any).dirty = true;
+  await queue.step();
+  expect(fleet.read("cccccc1")).toMatchObject({ task: "read the mail", shell: { packages: ["jq"] }, remote: { sealed: true, secrets: { google: "refresh" } } });
+  // A shell beside a brain, which the Worker couldn't see, is refused here.
+  expect(fleet.read("cccccc2")).toMatchObject({ state: "failed", error: expect.stringContaining("never goes beside the work brain's memory") });
+
+  // Its answer goes to the node; the Worker hears its state only.
+  mkdirSync(join(fleet.SPAWNS, "cccccc1"), { recursive: true });
+  writeFileSync(join(fleet.SPAWNS, "cccccc1/result.json"), JSON.stringify({ result: "Three replies sent." }));
+  fleet.write({ ...fleet.read("cccccc1")!, state: "done", exit: 0 });
+  calls.length = 0;
+  await queue.step();
+  const report = calls.find((c) => c.path === "/api/spawns/cccccc1/report")!;
+  expect(report.body).toEqual({ state: "done", exit: 0 });
+  expect(words.cccccc1.result).toBe("Three replies sent.");
+  expect(fleet.read("cccccc1")!.remote!.secrets).toBeUndefined();
+  expect(calls.find((c) => c.path === "/api/spawns/cccccc2/report")!.body).toEqual({ state: "failed" });
+  expect(words.cccccc2.error).toContain("never goes beside");
 });

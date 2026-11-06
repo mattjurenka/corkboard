@@ -146,8 +146,18 @@ phone / page / Neovim ──wss /e2ee/channel──▶ relay ──node's socket
      the Worker's events for a bridge the hubs have. `fleet_follow`, `fleet_terminal` and
      `fleet_say` go over the channel when the hubs have that bridge. Away mode's peers merge the
      same way (remote.ts, sessions.ts's `sealed`). A page with no machine still uses the Worker.
-   - **Still to do:** Android's channel client (a Kotlin port of channel.ts, with TS/Kotlin
-     vectors), then Sessions.kt, Avatar.kt's speech and Cloud.kt. After those and the portal's
+   - **Android** (corkboard-cloud's android/): e2ee/Channel.kt is channel.ts's port, as the
+     initiator only, since incoming OPENs are reset. android/e2ee-vectors.ts records a channel's
+     ephemeral keys and frames, and ChannelTest checks them byte for byte both ways, plus a
+     refused OPEN, a changed frame and the wrong device. Relay.kt's `channel(to)` opens the
+     relay socket and checks certs against revocations cached for 60 s. Hubs.kt is peers.ts for
+     the phone: every 30 s it lists `/e2ee/nodes`' connected devices other than itself, follows
+     each one's `/api/sessions?follow`, and keeps a device's bridges while its channel is down.
+     Cloud.kt's `bridges()`, `terminal()`, `type()`, `speech()` and `attach()` ask the hub when
+     it has the bridge. Attach reads the ndjson stream, with the Worker's socket as the fallback.
+     App.kt starts Hubs while `Encrypted.me` is set and drops the Worker's `bridge` events for
+     the hubs' bridges. Avatar.kt and Away.kt go through Cloud, so they needed no changes.
+   - **Still to do:** after the portal's
      replacement (its account and boards pages, and the Worker's workspace tickets read the
      bridge registry), the cutover: bridges stop telling the User DO, and `/api/sessions*`
      answers 410.
@@ -156,6 +166,32 @@ phone / page / Neovim ──wss /e2ee/channel──▶ relay ──node's socket
    Environments' manifests move into an encrypted `fleet` object. Holds are sealed on the
    device that made them and opened by fleetd at the claim; `HOLDS_KEY` is gone for the account.
    fleetd stops sending `result` to the Worker.
+
+   As designed (2026-11-06): **the node keeps what's sealed, and fleetd asks it over its
+   channel**, the way it already equips a node board's spawn. So nothing is sealed to fleetd's
+   box, its cert needn't be published, and the relay-only device still reads no object: the
+   node hands it one spawn's task and secrets at a time, as a node grant.
+   - **The `fleet` object** (a new ObjectKind, also in Keys.kt), the account's one, named
+     "fleet", kept like "day": records `spawn:<id>` (task, shell, result, error), `hold:<name>`
+     (its secret), `env:<name>` (the whole manifest: hosts, slots, VM addresses, egress lists,
+     what's running). Every paired device has a replica, so the phone reads results, holds'
+     names and manifests from it.
+   - **The Worker keeps the queue**: id, template, environment, brain, by, state, board and
+     card ids, sizes, slot, exit, times, and `sealed: true`. It never gets the task, shell,
+     result or error of a sealed spawn. Of a manifest it keeps what placement and the rule
+     read: templates (capability names, sizes, needsApproval, the holds' names), the offer,
+     jobs and bindings. Not egress, not `running`.
+   - **Spawning**: the node's spawn tools write `spawn:<id>` and queue `sealed: true`; Neovim's
+     fleet_session and holds go through the node; the phone's new session and holds go to the
+     node on its channel. The Worker refuses a plaintext spawn or hold for an account whose
+     fleet is sealed (its environments' fleetd said so), and its `HOLDS_KEY` holds are moved
+     into the object once (`e2ee move-holds`) and dropped.
+   - **fleetd**, with `node.device`: at the claim of a sealed spawn, `GET /api/node/fleet/
+     spawns/:id` gives the task, the shell and the secrets of the holds it names; the result
+     and error go to `PUT /api/node/fleet/spawns/:id`, and only the state and exit to the
+     Worker. look() PUTs the whole manifest to `/api/node/fleet/environments/:name` and the
+     queue's part to the Worker.
+   - A sealed spawn waits for the node: none is claimed while no node is connected.
 5. **The TLS relay, and the plaintext tunnel gone.** relay-tls/ (SNI routing, the nodes'
    reverse connections, the node's ACME client and its TLS listener in serve.ts), deployed on
    the droplet in front of Caddy. claude.ai's connector moves to `<label>.n.corkboard.fyi`.

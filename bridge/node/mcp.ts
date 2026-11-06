@@ -19,6 +19,7 @@
 import { AGENT_STATES, type Card, PRIORITIES, STATUSES, waitingOn } from "../../lib/model/cards";
 import { BRAIN_ONLY_KINDS, NOTE_KINDS, OWNER_ONLY_NOTES, chatText, date, note, noteId, projects, proposal, slug } from "../../lib/model/plans";
 import { DAY } from "./objects";
+import type { FleetRecords } from "./fleet";
 import { range } from "../../lib/model/dates";
 import { Conflict, type Data, type FullCard, Invalid } from "./data";
 import type { Search } from "./search";
@@ -397,7 +398,7 @@ const MEMORY_INSTRUCTIONS = "Your memory, kept encrypted on the user's machines:
 // signed in to it; it throws the Worker's error.
 export type Fleet = (method: string, path: string, body?: unknown) => Promise<any>;
 
-type FleetCall = { data: Data; fleet: Fleet; me: string };
+type FleetCall = { data: Data; fleet: Fleet; me: string; sealed?: FleetRecords };
 type FleetTool = { description: string; properties?: Record<string, object>; required?: string[]; run: (a: any, c: FleetCall) => Promise<unknown> };
 
 // What a spawn brings to its VM: its tools, and its size.
@@ -413,16 +414,19 @@ const VM = {
 // board's key and card's id alone (node: true); the card is checked and
 // marked here, as the Worker marks its own boards' (its fleet.ts's spawn),
 // and fleetd writes how it goes. Any other board is still the Worker's.
+// With the fleet object, its words are kept there and the Worker never has
+// them (fleet.ts).
 async function queue(c: FleetCall, a: Record<string, unknown>) {
+  const send = (b: Record<string, unknown>) => (c.sealed?.has() ? c.sealed.queue(b) : c.fleet("POST", "/spawns", b));
   const board = typeof a.board === "string" && a.board ? a.board : null;
-  if (!board || !c.data.replicas.get("board", board)) return c.fleet("POST", "/spawns", a);
+  if (!board || !c.data.replicas.get("board", board)) return send(a);
   const id = typeof a.card === "string" && a.card ? a.card.toUpperCase() : null;
   if (id) {
     const card = c.data.card(board, id);
     if (card.archived) throw new ToolError(`${id} is archived`);
     if (card.agent && card.agent_state && card.agent_state !== "done") throw new ToolError(`${id} is ${card.agent_state} with ${card.agent}`);
   }
-  const s = await c.fleet("POST", "/spawns", { ...a, board, ...(id && { card: id }), node: true });
+  const s = await send({ ...a, board, ...(id && { card: id }), node: true });
   if (!id) return s;
   const what = `${s.template}${s.brain ? ` for the ${s.brain} brain` : ""}`;
   const shell = s.shell ? `, with ${"flake" in s.shell ? s.shell.flake : s.shell.packages.join(" ")}` : "";
@@ -472,7 +476,11 @@ const FLEET_TOOLS: Record<string, FleetTool> = {
   spawn_status: {
     description: "One spawned agent: its state, its card (a session has none), and its answer when done. Without an id, the newest spawns, and the templates each environment can run.",
     properties: { id: str("The spawn's id") },
-    run: (a, c) => c.fleet("GET", `/fleet/status${a.id ? `?id=${encodeURIComponent(String(a.id))}` : ""}`),
+    run: async (a, c) => {
+      const s = await c.fleet("GET", `/fleet/status${a.id ? `?id=${encodeURIComponent(String(a.id))}` : ""}`);
+      if (!c.sealed?.has()) return s;
+      return a.id ? c.sealed.open(s) : { ...s, ...(Array.isArray(s?.spawns) && { spawns: s.spawns.map((x: { id?: unknown }) => (({ task, ...o }) => ({ ...o, task: String(task ?? "").slice(0, 200) }))(c.sealed!.open(x) as { task?: unknown })) }) };
+    },
   },
   spawn_stop: {
     description: "Stop a spawned agent: before it runs it never will; while it runs its VM is stopped.",
@@ -481,6 +489,36 @@ const FLEET_TOOLS: Record<string, FleetTool> = {
     run: (a, c) => c.fleet("POST", `/spawns/${encodeURIComponent(String(a.id))}/stop`),
   },
 };
+
+// Pairing ------------------------------------------------------------------------------
+
+// A new device let into the account from chat, as :AgentPair does
+// (bridge/e2ee.ts): the owner's own clients only.
+type PairTool = { description: string; properties?: Record<string, object>; required?: string[]; run: (a: any) => Promise<unknown> };
+const PAIR_TOOLS: Record<string, PairTool> = {
+  pair_device: {
+    description:
+      "Let a new device (a phone, another computer) into the user's encrypted account. Only with a code the user gave you in this conversation: it's the ten characters the new device shows (case, dashes and spaces don't matter). Answers once the device has joined, with six digits: show them to the user and ask whether the new device shows the same, then call pair_confirm with their answer. Never guess the answer.",
+    properties: { code: str("The code the new device shows, as the user typed it") },
+    required: ["code"],
+    run: async (a) => {
+      const { pairApprove } = await import("../e2ee");
+      const got = await pairApprove(String(a.code ?? ""));
+      return { id: got.id, device: got.name, digits: `${got.sas.slice(0, 3)} ${got.sas.slice(3)}` };
+    },
+  },
+  pair_confirm: {
+    description: "The user's answer to pair_device's six digits: match true lets the device in, false turns it away. Only what the user said, after they compared the digits on the new device.",
+    properties: { id: str("pair_device's id"), match: { type: "boolean", description: "Whether the user said the digits match" } },
+    required: ["id", "match"],
+    run: async (a) => {
+      const { pairConfirm } = await import("../e2ee");
+      const { name } = await pairConfirm(String(a.id ?? ""), a.match === true);
+      return { paired: name };
+    },
+  },
+};
+const pairs = (caller: Caller) => caller.scope === "owner" && !caller.brain && !boardBound(caller);
 
 // The user's own clients spawn, as on the Worker: not a brain's token, nor
 // one held to a board.
@@ -746,18 +784,27 @@ function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryO
       description: t.description,
       inputSchema: { type: "object", properties: t.properties ?? {}, required: t.required ?? [] },
     })),
+    ...Object.entries(pairs(caller) ? PAIR_TOOLS : {}).map(([name, t]) => ({
+      name,
+      description: t.description,
+      inputSchema: { type: "object", properties: t.properties ?? {}, required: t.required ?? [] },
+    })),
   ];
 }
 
-export type Node = { data: Data; search: Search; media?: Media; origin: string; fleet?: Fleet };
+export type Node = { data: Data; search: Search; media?: Media; origin: string; fleet?: Fleet; sealed?: FleetRecords };
 
 async function callTool(node: Node, caller: Caller, name: string, args: any): Promise<unknown> {
   const { data, search, media, origin } = node;
   const bound = boardBound(caller);
   if (name === "list_boards" && !bound) return data.boards();
   if (FLEET_TOOLS[name] && spawns(caller, node.fleet))
-    return FLEET_TOOLS[name].run({ ...args }, { data, fleet: node.fleet!, me: caller.agent }).catch((e) => {
+    return FLEET_TOOLS[name].run({ ...args }, { data, fleet: node.fleet!, me: caller.agent, sealed: node.sealed }).catch((e) => {
       throw e instanceof Invalid || e instanceof ToolError ? e : new ToolError((e as Error).message);
+    });
+  if (PAIR_TOOLS[name] && pairs(caller))
+    return PAIR_TOOLS[name].run({ ...args }).catch((e) => {
+      throw e instanceof ToolError ? e : new ToolError((e as Error).message);
     });
   if (DAY_TOOLS[name] && dayReaches(DAY_TOOLS[name], caller, data)) return DAY_TOOLS[name].run({ ...args }, { data, caller });
   // A brain's own agent sees its goals; the user's clients don't.

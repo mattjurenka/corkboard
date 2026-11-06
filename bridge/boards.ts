@@ -94,8 +94,18 @@ export class Session extends CloudSession {
 
   override async call(op: string, args: any[]): Promise<unknown> {
     if (op.startsWith("nodes_")) return node ? node.nodes(op, args) : null;
-    // A session on the node's board: queued with node: true, its grant the node's.
-    if (node && op === "fleet_session" && args[2] && signedIn() && (await this.nodes(node, args[2]))) return super.call(op, [...args.slice(0, 3), true]);
+    // A session on the node's board: queued with node: true, its grant the
+    // node's; and, once the fleet's sealed on the node, queued by the node.
+    if (node && op === "fleet_session") {
+      const onNode = !!args[2] && signedIn() && (await this.nodes(node, args[2]));
+      const asked = onNode ? [...args.slice(0, 3), true] : args;
+      return (await node.fleet(op, asked)) ?? super.call(op, asked);
+    }
+    // The fleet view's, with what the node keeps sealed put back.
+    if (node && op === "fleet_get") {
+      const got = await super.call(op, args);
+      return (await node.fleet("fleet_open", [got])) ?? got;
+    }
     if (node && (op === "note_get" || op === "note_put" || op === "goals")) return node.notes(op, args);
     if (node && op.startsWith("plan_") && (await this.dayIsNodes())) {
       if (op === "plan_subscribe") {

@@ -52,6 +52,7 @@ import { waitingOn } from "../../lib/model/cards";
 import { Conflict, type Data, Invalid } from "./data";
 import { type Caller, type Consent, OAuthError, type OAuthStore, Redirect, SCOPES, boardBound, deniedUrl } from "./oauth";
 import { type Fleet, mcp } from "./mcp";
+import { Conflict as HoldConflict, type FleetRecords, SPAWN_ID } from "./fleet";
 import type { Search } from "./search";
 import type { CalendarConfig } from "./calendar";
 import { type Episodes, TooBig } from "./episodes";
@@ -73,6 +74,8 @@ export type NodeOptions = {
   calendar?: () => Promise<CalendarConfig | undefined> | CalendarConfig | undefined;
   // The Worker's fleet queue while this machine is signed in to it: /mcp's spawn tools.
   fleet?: () => Fleet | undefined;
+  // What the fleet keeps sealed from the Worker (fleet.ts): /api/node/fleet.
+  sealed?: FleetRecords;
   // The app's brains_*, nodes_*, notes and board_* operations (app.ts's),
   // and its boards' events, for another bridge on this machine while this
   // one's holds the node: loopback only.
@@ -273,7 +276,8 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       headers: { "Content-Type": "application/json", "WWW-Authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource", scope="assistant"` },
     });
 
-  async function api(req: Request, path: string[], who: Caller, origin: string): Promise<Response> {
+  // sealed: it came on a channel or on loopback, never the plaintext tunnel.
+  async function api(req: Request, path: string[], who: Caller, origin: string, sealed: boolean): Promise<Response> {
     const { data, search } = o;
     const url = new URL(req.url);
     const q = (k: string) => url.searchParams.get(k) ?? undefined;
@@ -431,6 +435,33 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       if (name && !sub && m === "DELETE") return (await data.unsay(name), new Response(null, { status: 204 }));
       if (name && sub === "delivered" && m === "POST") return json(await data.deliver(name));
     }
+    // The fleet's sealed part (fleet.ts): the user's own clients and fleetd's
+    // device, never an agent's grant, and only on a channel or loopback.
+    if (what === "fleet" && o.sealed?.has()) {
+      if (who.scope !== "owner" || !sealed) return json({ error: "not found" }, 404);
+      const f = o.sealed;
+      try {
+        if (name === "spawns" && !sub && m === "POST") return json(await f.queue(await body()), 201);
+        if (name === "spawns" && sub && SPAWN_ID.test(sub)) {
+          const s = f.spawn(sub);
+          if (m === "GET") {
+            if (!s) return json({ error: `no spawn ${sub} here` }, 404);
+            const holds = q("holds")?.split(",").filter(Boolean) ?? [];
+            return json({ ...s, ...(holds.length && { secrets: f.secrets(holds) }) });
+          }
+          if (m === "PUT") return json(await f.report(sub, await body()));
+        }
+        if (name === "environments" && !sub && m === "GET") return json(f.environments());
+        if (name === "environments" && sub && m === "PUT") return (await f.putEnvironment(sub, (await body()).manifest), json({}));
+        if (name === "holds" && !id) {
+          const r = await f.holdRoute(m, sub, body);
+          return r.status === 204 ? new Response(null, { status: 204 }) : json(r.body, r.status);
+        }
+      } catch (e) {
+        if (e instanceof HoldConflict) return json({ error: e.message, ...(e.hold && { hold: e.hold }) }, 409);
+        throw e;
+      }
+    }
     return json({ error: "not found" }, 404);
   }
 
@@ -494,7 +525,7 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       if (p === "/mcp") {
         const who = caller(req, origin, from, true);
         if (!who) return unauthorized(origin);
-        return await mcp(req, { data: o.data, search: o.search, media: o.media, origin, fleet: o.fleet?.() }, who);
+        return await mcp(req, { data: o.data, search: o.search, media: o.media, origin, fleet: o.fleet?.(), sealed: o.sealed }, who);
       }
       if (p.startsWith("/upload/")) {
         if (!o.media) return json({ error: "not found" }, 404);
@@ -570,7 +601,7 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       if (p.startsWith("/api/node/")) {
         const who = caller(req, origin, from);
         if (!who) return unauthorized(origin);
-        return await api(req, p.slice("/api/node/".length).split("/").filter(Boolean).map(decodeURIComponent), who, origin);
+        return await api(req, p.slice("/api/node/".length).split("/").filter(Boolean).map(decodeURIComponent), who, origin, !!from || loopback(req, peer));
       }
       if (p.startsWith("/memory/")) {
         const who = caller(req, origin, from);

@@ -10,7 +10,8 @@ import { type NewOp, type Snapshot, type TunnelRequest, type TunnelResponse, typ
 import { Relay } from "../../lib/e2ee/relay";
 import { type Identity, initiate, pipe, respond } from "../../lib/e2ee/channel";
 import { certify, checkCert, newDevice } from "../../lib/e2ee/device";
-import { DAY, dayObject, listObjects, noteRecord } from "./objects";
+import { DAY, dayObject, fleetObject, listObjects, noteRecord } from "./objects";
+import { FleetRecords } from "./fleet";
 import { Conflict } from "./day";
 import { Replicas } from "./replicas";
 import { Data, Invalid, now } from "./data";
@@ -29,7 +30,7 @@ import { Hub, joinHub } from "../hub";
 import { type Hosted, type TerminalOut, serve } from "../sessions";
 import { type PeerEvent, type Reach, Peers } from "../peers";
 import type { Fleet } from "./mcp";
-import { moveBoards, moveMemory, movePlans } from "./move";
+import { moveBoards, moveHolds, moveMemory, movePlans } from "./move";
 import { type DayEvent, boardEvents, boards, dayEvents, notes, plans } from "./app";
 import { LEASE_MS, sweep, touch } from "./leases";
 import { lentCalendar, startCalendar, writeAccepted } from "./calendar";
@@ -88,12 +89,12 @@ const ORIGIN = "https://node.test";
 const dirs: string[] = [];
 afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
-async function setup(o: { fleet?: Fleet } = {}) {
+async function setup(o: { fleet?: Fleet; sealed?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "corkboard-node-"));
   dirs.push(dir);
   const root = newRoot();
   const shared = relay();
-  const objects = [...listObjects(root, { boards: ["proj"], brains: ["assistant"] }), dayObject(root)];
+  const objects = [...listObjects(root, { boards: ["proj"], brains: ["assistant"] }), dayObject(root), ...(o.sealed ? [fleetObject(root)] : [])];
   const replicas = await Replicas.open({ objects, transport: as(shared, "node"), device: "node" });
   await replicas.start({ live: false });
   const data = new Data(replicas, "UTC");
@@ -102,12 +103,13 @@ async function setup(o: { fleet?: Fleet } = {}) {
   const episodes = new Episodes();
   const blobs = memoryBlobs();
   const media = new Media({ data, blobs, dir: join(dir, "blobs") });
-  const app = node({ data, search, oauth, episodes, media, origin: ORIGIN, fleet: () => o.fleet });
+  const sealed = o.sealed ? new FleetRecords(replicas, () => o.fleet) : undefined;
+  const app = node({ data, search, oauth, episodes, media, origin: ORIGIN, fleet: () => o.fleet, sealed });
   // Another device of the account: the laptop, on the same relay.
   const board = objects.find((o) => o.kind === "board")!;
   const laptop = await Replica.open({ transport: as(shared, "laptop"), key: board.key, object: board.object, device: "laptop" });
   const call = (path: string, init: RequestInit = {}) => app(new Request(`${ORIGIN}${path}`, init));
-  return { dir, root, shared, replicas, data, search, oauth, episodes, media, blobs, app, call, laptop, stop: () => replicas.stop() };
+  return { dir, root, shared, replicas, data, search, oauth, episodes, media, blobs, sealed, app, call, laptop, stop: () => replicas.stop() };
 }
 
 // The relay's blobs, in memory.
@@ -1502,6 +1504,91 @@ describe("the fleet's spawns, from the node", () => {
       expect(await names(t)).not.toContain("spawn_agent");
       expect((await as(t)("spawn_agent", { task: "x" })).text).toBe("unknown tool spawn_agent");
     }
+  });
+});
+
+describe("the fleet sealed, on the node", () => {
+  let n: Awaited<ReturnType<typeof setup>>;
+  const asked: { method: string; path: string; body?: any }[] = [];
+  let refuse = false;
+  const fleet: Fleet = async (method, path, body?: any) => {
+    asked.push({ method, path, body });
+    if (path === "/spawns") {
+      if (refuse) throw new Error("the fleet: no environment");
+      return { id: body.id, template: "coding", environment: "droplet", agent: `coding-${body.id}`, state: "queued", task: "", sealed: true };
+    }
+    if (path.startsWith("/fleet/status?id=")) return { id: path.slice("/fleet/status?id=".length), state: "done", task: "" };
+    if (path.startsWith("/brains")) return [{ name: "pepper", credentials: ["google"], updated: "t" }];
+    return {};
+  };
+  const owner = () => ({ Authorization: `Bearer ${n.oauth.mint("phone", 1)}`, "Content-Type": "application/json" });
+  const local = (path: string, init: RequestInit = {}) => n.app(new Request(`${ORIGIN}${path}`, { ...init, headers: { ...owner(), ...(init.headers as object) } }), { requestIP: () => ({ address: "127.0.0.1" }) });
+  const tool = async (name: string, args: Record<string, unknown>) => toolText(await n.call("/mcp", rpc("tools/call", { name, arguments: args }, n.oauth.mint("phone", 1))));
+  beforeAll(async () => void (n = await setup({ fleet, sealed: true })));
+  afterAll(() => n.stop());
+
+  it("keeps a spawn's words in the fleet object and queues only the rest", async () => {
+    const s = JSON.parse((await tool("spawn_agent", { task: " fix it ", packages: ["jq"], board: "elsewhere" })).text);
+    const sent = asked.at(-1)!.body;
+    expect(sent).toEqual({ board: "elsewhere", id: s.id, sealed: true });
+    expect(s).toMatchObject({ task: "fix it", shell: { packages: ["jq"] } });
+    // fleetd's read, on loopback; and its result back.
+    const got = await (await local(`/api/node/fleet/spawns/${s.id}`)).json();
+    expect(got).toMatchObject({ id: s.id, task: "fix it", shell: { packages: ["jq"] }, result: null });
+    await local(`/api/node/fleet/spawns/${s.id}`, { method: "PUT", body: JSON.stringify({ result: "done it" }) });
+    expect(JSON.parse((await tool("spawn_status", { id: s.id })).text)).toMatchObject({ state: "done", task: "fix it", result: "done it" });
+  });
+
+  it("drops the words of a spawn the Worker refuses", async () => {
+    refuse = true;
+    expect((await tool("spawn_agent", { task: "nope" })).error).toBe(true);
+    refuse = false;
+    const id = asked.at(-1)!.body.id;
+    expect((await local(`/api/node/fleet/spawns/${id}`)).status).toBe(404);
+  });
+
+  it("keeps holds as the Worker did, their secrets only to a claim", async () => {
+    const made = await local("/api/node/fleet/holds", { method: "POST", body: JSON.stringify({ name: "github", about: "a PAT", secret: "ghp_x" }) });
+    expect(made.status).toBe(201);
+    const h = await made.json();
+    expect(h).toMatchObject({ name: "github", about: "a PAT", recorded: true });
+    expect(typeof h.secret).toBe("string");
+    expect(JSON.stringify(h)).not.toContain("ghp_x");
+    const all = await (await local("/api/node/fleet/holds")).json();
+    expect(all.map((x: { name: string; recorded: boolean }) => [x.name, x.recorded])).toEqual([["github", true], ["google", false]]);
+    expect(JSON.stringify(all)).not.toContain("ghp_x");
+    const stale = await local("/api/node/fleet/holds/github", { method: "PATCH", body: JSON.stringify({ updated: "old", about: "x" }) });
+    expect(stale.status).toBe(409);
+    const s = JSON.parse((await tool("spawn_agent", { task: "use it" })).text);
+    expect((await (await local(`/api/node/fleet/spawns/${s.id}?holds=github,google`)).json()).secrets).toEqual({ github: "ghp_x" });
+    expect((await local("/api/node/fleet/holds/github", { method: "DELETE" })).status).toBe(204);
+    expect((await (await local(`/api/node/fleet/spawns/${s.id}?holds=github`)).json()).secrets).toEqual({});
+  });
+
+  it("keeps the manifests, and answers none of it on the plaintext tunnel or to an agent", async () => {
+    await local("/api/node/fleet/environments/droplet", { method: "PUT", body: JSON.stringify({ manifest: { egress: { open: false } } }) });
+    expect(await (await local("/api/node/fleet/environments")).json()).toEqual([{ egress: { open: false }, name: "droplet" }]);
+    expect((await n.call("/api/node/fleet/environments", { headers: owner() })).status).toBe(404);
+    const agent = n.oauth.mint("pepper", 1, "assistant", "assistant");
+    expect((await n.app(new Request(`${ORIGIN}/api/node/fleet/holds`, { headers: { Authorization: `Bearer ${agent}` } }), { requestIP: () => ({ address: "127.0.0.1" }) })).status).toBe(404);
+  });
+
+  it("takes the Worker's holds with their secrets, keeps its own, and forgets them there only after", async () => {
+    await local("/api/node/fleet/holds", { method: "POST", body: JSON.stringify({ name: "mine", secret: "here" }) });
+    const records = {
+      github: { about: "a PAT", where: null, secret: "2026-11-01T00:00:00Z", created: "2026-11-01T00:00:00Z", updated: "2026-11-01T00:00:00Z" },
+      mine: { about: "the Worker's", where: null, secret: "2026-11-01T00:00:00Z", created: "2026-11-01T00:00:00Z", updated: "2026-11-01T00:00:00Z" },
+    };
+    const calls: string[] = [];
+    const worker = async (path: string, init: RequestInit = {}) => {
+      calls.push(`${init.method ?? "GET"} ${path} ${init.body ?? ""}`.trim());
+      return init.method === "DELETE" ? new Response(null, { status: 204 }) : Response.json({ records, secrets: { github: "ghp_w", mine: "there" } });
+    };
+    expect(await moveHolds({ ...n, sealed: n.sealed! }, worker, { dryRun: true, log: () => {} })).toEqual({ holds: ["github"], kept: ["mine"] });
+    expect(calls).toEqual(["GET /api/holds?move"]);
+    expect(n.sealed!.secrets(["github", "mine"])).toEqual({ github: "ghp_w", mine: "here" });
+    expect(await moveHolds({ ...n, sealed: n.sealed! }, worker, { log: () => {} })).toEqual({ holds: [], kept: ["github", "mine"] });
+    expect(calls.at(-1)).toBe(`DELETE /api/holds ${JSON.stringify({ names: ["github", "mine"] })}`);
   });
 });
 

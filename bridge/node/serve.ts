@@ -41,7 +41,8 @@ import { Keystore } from "../keystore";
 import { Relay } from "../../lib/e2ee/relay";
 import { indexId, indexKey } from "../../lib/e2ee/sharing";
 import { type LogTransport, Replica, offline } from "../../lib/e2ee/sync";
-import { accountObject, dayObject, listObjects } from "./objects";
+import { accountObject, dayObject, fleetObject, listObjects } from "./objects";
+import { FleetRecords } from "./fleet";
 import { Replicas } from "./replicas";
 import { Data } from "./data";
 import { Search } from "./search";
@@ -150,7 +151,7 @@ export async function startNode(o: NodeOptions = {}) {
     const index = await Replica.open({ transport: relay, key: indexKey(root), object: indexId(root), device: d.device.id, store: store.replica(indexId(root)) });
     if (d.relay) await index.pull().catch((e) => console.error(`node: reading the index: ${(e as Error).message}`));
     const want = { boards: [...(c.boards ?? []), ...(o.boards ?? [])], brains: [...(c.brains ?? []), ...(o.brains ?? [])] };
-    const objects = [...listObjects(root, want, index), accountObject(root, "oauth", index), dayObject(root, index)];
+    const objects = [...listObjects(root, want, index), accountObject(root, "oauth", index), dayObject(root, index), fleetObject(root, index)];
     const replicas = await Replicas.open({ objects, transport: relay, device: d.device.id, store: (o) => store.replica(o), index, discover: () => listObjects(root, want, index) });
     await replicas.start();
     const data = new Data(replicas, o.timezone ?? c.timezone ?? localZone());
@@ -191,7 +192,10 @@ export async function startNode(o: NodeOptions = {}) {
     const addBoard = (key: string) => replicas.add(listObjects(root, { boards: [key], brains: [] })[0]);
     // This machine's sessions, which its bridges join (ciphertext-relay.md step 3).
     const hub = new Hub();
-    const served = { data, search, episodes, media, oauth, addBoard, fleet: () => (signedIn() ? fleetQueue : undefined), calendar, hub };
+    const fleet = () => (signedIn() ? fleetQueue : undefined);
+    // What the fleet keeps sealed from the Worker (fleet.ts).
+    const sealed = new FleetRecords(replicas, fleet);
+    const served = { data, search, episodes, media, oauth, addBoard, fleet, sealed, calendar, hub };
     // Every hub of the account's (this one, and each connected device's on a
     // channel to it), for this machine's bridges to watch (peers.ts).
     const channels = new Map<string, Promise<Channel>>();
@@ -255,6 +259,9 @@ export async function startNode(o: NodeOptions = {}) {
       addBoard,
       // The calendar the node writes accepted days to, if it has one.
       calendar,
+      // The Worker's fleet queue while signed in, and what the fleet keeps sealed here.
+      fleet,
+      sealed,
       // This machine's sessions, for an in-process bridge to join.
       hub,
       reach,
