@@ -170,16 +170,18 @@ export async function startNode(o: NodeOptions = {}) {
     // connected; the account's nodes asked once a minute. Another node
     // leading, this one's episodes are handed to it. The relay also says
     // when it changes (the tunnel's onLeader, below).
-    let led: { at: number; leads: boolean } | undefined;
-    const leads = async () => {
-      if (!r || !tunnel) return true;
-      if (led && Date.now() - led.at < 60_000) return led.leads;
+    let led: { at: number; to: string } | undefined;
+    // The node that leads: its device's id.
+    const leader = async () => {
+      if (!r || !tunnel) return d.device.id;
+      if (led && Date.now() - led.at < 60_000) return led.to;
       const v = await r.nodes();
       const nodes = v.connected.filter((c) => c.tunnel !== false);
       const to = nodes.find((c) => c.device === v.leader) ?? nodes.sort((a, b) => b.since - a.since)[0];
-      led = { at: Date.now(), leads: !to || to.device === d.device.id };
-      return led.leads;
+      led = { at: Date.now(), to: to?.device ?? d.device.id };
+      return led.to;
     };
+    const leads = async () => (await leader()) === d.device.id;
     const handoff = r && new Handoff({ replicas, episodes, blobs: r });
     const consolidator = new Consolidator({ data, episodes, after: (brain) => search.share(brain), leads, handoff });
     consolidator.start();
@@ -239,9 +241,17 @@ export async function startNode(o: NodeOptions = {}) {
         return ch.fetch(path, init);
       },
     };
+    // A request to the account's forge, on the leader's channel (its
+    // /forge/), or served here when this node leads: for this machine's
+    // bridges, on loopback (/app/forge/...). path is Forgejo's.
+    const toForge = async (path: string, init: RequestInit = {}) => {
+      const to = await leader();
+      if (to === d.device.id) return forgejo(new Request(`http://node.invalid/forge${path}`, { ...init, ...(init.body != null && { duplex: "half" }) } as RequestInit), d.cert);
+      return reach.fetch(to, `/forge${path}`, init);
+    };
     let app: AppCall | undefined;
     let appEvents: AppEvents | undefined;
-    const server = Bun.serve({ port: o.port ?? c.port ?? 8787, hostname, idleTimeout: 255, fetch: node({ ...served, origin, app: () => app, appEvents: () => appEvents, reach }) });
+    const server = Bun.serve({ port: o.port ?? c.port ?? 8787, hostname, idleTimeout: 255, fetch: node({ ...served, origin, app: () => app, appEvents: () => appEvents, reach, toForge }) });
     if (r) {
       const nodes = await r.nodes().catch((e) => void console.error(`node: no tunnel: ${(e as Error).message}`));
       if (nodes) {
@@ -253,7 +263,7 @@ export async function startNode(o: NodeOptions = {}) {
         const tunneled = node({ ...served, origin: nodes.url });
         // The relay says when the leader may have changed, so a move takes
         // effect at once rather than at the next minute's look.
-        const told = (to: string | null) => (led = { at: Date.now(), leads: !to || to === d.device.id });
+        const told = (to: string | null) => (led = { at: Date.now(), to: to ?? d.device.id });
         t.stop = r.serveTunnel(tunneled, { name: d.cert.body.name, onState: (up) => (t.connected = up), onLeader: told, channels: (req, ch) => tunneled(req, undefined, ch.peer) });
         tunnel = t;
       }
@@ -286,6 +296,7 @@ export async function startNode(o: NodeOptions = {}) {
       // This machine's sessions, for an in-process bridge to join.
       hub,
       reach,
+      toForge,
       // The app's operations on the loopback /app (app.ts's), and its
       // boards' events on /app/events, not the tunnel's.
       serveApp: (f: AppCall, events: AppEvents) => void ((app = f), (appEvents = events)),

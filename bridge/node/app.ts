@@ -84,6 +84,9 @@ export type AppNode = {
   sessions: HubJoin;
   // Every hub of the account's, for watching its sessions (peers.ts).
   reach: Reach;
+  // A request to the account's forge, wherever it leads (serve.ts's
+  // toForge): path is Forgejo's.
+  forge(path: string, init?: RequestInit): Promise<Response>;
 };
 
 export type BoardListener = (key: string, event: BoardEvent) => void;
@@ -142,6 +145,7 @@ export async function startAppNode(): Promise<AppNode | undefined> {
     media: async (board, card, id) => n.media.serve(board, card, id),
     sessions: joinHub(n.hub),
     reach: n.reach,
+    forge: n.toForge,
   };
   n.serveApp(
     (op, args) =>
@@ -310,6 +314,12 @@ async function runningNode(pid: number): Promise<AppNode | undefined> {
     media,
     sessions,
     reach,
+    forge: async (path, init = {}) => {
+      const { url, token } = where();
+      const headers = new Headers(init.headers);
+      headers.set("Authorization", `Bearer ${token}`);
+      return fetch(`${url}/app/forge${path}`, { ...init, headers, ...(init.body != null && { duplex: "half" }) } as RequestInit);
+    },
   };
 }
 

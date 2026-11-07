@@ -1,4 +1,11 @@
 import { afterAll, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type Identity, initiate, pipe, respond } from "../../lib/e2ee/channel";
+import { checkCert } from "../../lib/e2ee/device";
+import { OAuthStore } from "./oauth";
+import { node } from "./server";
 import { certify, newDevice, revoke } from "../../lib/e2ee/device";
 import { type GrantRevocation, forgeGrantHash, grantForge, revokeForgeGrant } from "../../lib/e2ee/forge";
 import { accountKeys, newRoot } from "../../lib/e2ee/keys";
@@ -6,13 +13,15 @@ import { type Revocation, type Signed, b64url, utf8 } from "../../lib/e2ee/wire"
 import { ANSWER_HEADER, CHAIN_HEADER, channelAnswer, forgeHandler } from "./forge";
 
 const HEADER = "X-Forge-User";
-type Seen = { method: string; path: string; user: string | null; chain: string | null };
+type Seen = { method: string; path: string; user: string | null; chain: string | null; type?: string | null; body?: string };
 const seen: Seen[] = [];
 const forgejo = Bun.serve({
   port: 0,
   async fetch(req) {
     const url = new URL(req.url);
-    seen.push({ method: req.method, path: url.pathname + url.search, user: req.headers.get(HEADER), chain: req.headers.get(CHAIN_HEADER) });
+    const body = req.method === "POST" ? await req.text() : undefined;
+    seen.push({ method: req.method, path: url.pathname + url.search, user: req.headers.get(HEADER), chain: req.headers.get(CHAIN_HEADER), type: req.headers.get("content-type"), body });
+    if (url.pathname.endsWith("/git-upload-pack")) return new Response("PACK", { headers: { "content-type": "application/x-git-upload-pack-result" } });
     return Response.json({ ok: true });
   },
 });
@@ -105,5 +114,36 @@ describe("the node's forge", () => {
 
   it("refuses a chain that isn't one", async () => {
     expect((await call("/forge/api/v1/user", fleetdCert, { headers: { [CHAIN_HEADER]: "%%%" } })).status).toBe(400);
+  });
+
+  it("is this machine's bridges', on loopback, on the channel to the leader", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "forge-"));
+    const oauth = new OAuthStore(join(dir, "oauth.json"));
+    const none = {} as any;
+    // The leader, serving its forge on the channel.
+    const leader = node({ data: none, search: none, oauth: new OAuthStore(join(dir, "leader.json")), origin: "http://leader.invalid", forge });
+    const me: Identity = { device: laptop, cert: laptopCert, trust: (c) => checkCert(keys.id, c, []) };
+    const there = newDevice();
+    const them: Identity = { device: there, cert: certify(keys, there, "droplet"), trust: (c) => checkCert(keys.id, c, []) };
+    let a: ReturnType<typeof pipe>, b: ReturnType<typeof pipe>;
+    a = pipe((m) => queueMicrotask(() => b.deliver(m)), (r) => b.end(r));
+    b = pipe((m) => queueMicrotask(() => a.deliver(m)), (r) => a.end(r));
+    const [ch] = await Promise.all([initiate(a.link, me, there.id), respond(b.link, them, { serve: (req, c) => leader(req, undefined, c.peer) })]);
+    const app = node({ data: none, search: none, oauth, origin: "http://127.0.0.1:1", toForge: (path, init) => ch.fetch(`/forge${path}`, init) });
+    const owner = oauth.mint("dev bridge", 1, "owner");
+    const local = { requestIP: () => ({ address: "127.0.0.1" }) };
+    const ask = (path: string, init: RequestInit = {}, peer = local) => app(new Request(`http://127.0.0.1:1${path}`, { ...init, headers: { Authorization: `Bearer ${owner}`, ...init.headers } }), peer);
+    const res = await ask("/app/forge/matt/corkboard.git/git-upload-pack", { method: "POST", headers: { "content-type": "application/x-git-upload-pack-request", [HEADER]: "someone" }, body: "0032want" });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/x-git-upload-pack-result");
+    expect(await res.text()).toBe("PACK");
+    expect(last()).toMatchObject({ method: "POST", path: "/matt/corkboard.git/git-upload-pack", user: "matt", type: "application/x-git-upload-pack-request", body: "0032want" });
+    // Not off loopback, nor with an assistant's token, nor on a channel.
+    expect((await ask("/app/forge/api/v1/user", {}, { requestIP: () => ({ address: "10.0.0.2" }) })).status).toBe(404);
+    const assistant = oauth.mint("session", 1, "assistant");
+    expect((await app(new Request("http://127.0.0.1:1/app/forge/api/v1/user", { headers: { Authorization: `Bearer ${assistant}` } }), local)).status).toBe(404);
+    expect((await app(new Request("http://127.0.0.1:1/app/forge/api/v1/user"), undefined, laptopCert)).status).toBe(404);
+    ch.close();
+    rmSync(dir, { recursive: true });
   });
 });

@@ -89,6 +89,9 @@ export type NodeOptions = {
   reach?: Reach;
   // The account's forge (forge.ts), on channels under /forge/.
   forge?: (req: Request, from: Signed<DeviceCert>) => Promise<Response>;
+  // A request to it wherever it is (serve.ts's toForge): for this machine's
+  // bridges, on loopback (/app/forge/...).
+  toForge?: (path: string, init?: RequestInit) => Promise<Response>;
 };
 
 export type AppCall = (op: string, args: any[]) => Promise<unknown>;
@@ -105,6 +108,9 @@ const APP_OPS = /^(brains_\w+|nodes_\w+|note_get|note_put|goals|fleet_(session|o
 // don't, so they're never loopback.
 type Peer = { requestIP(req: Request): { address: string } | null };
 const loopback = (req: Request, peer?: Peer) => !!peer && /^(127\.|::1$|::ffff:127\.)/.test(peer.requestIP(req)?.address ?? "");
+
+// What a git client's request to the forge keeps on its way to the leader.
+const FORGE_HEADERS = ["content-type", "accept", "git-protocol", "content-encoding"];
 
 const escape = (v: string) => v.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
@@ -592,6 +598,18 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
         const type = req.headers.get("content-type");
         const hasBody = !/^(GET|HEAD)$/i.test(req.method);
         return await reach.fetch(device, rest + new URL(req.url).search, { method: req.method, headers: type ? { "content-type": type } : {}, ...(hasBody && { body: req.body }), signal: req.signal });
+      }
+      if (p.startsWith("/app/forge/")) {
+        const who = caller(req, origin, from);
+        if (!who) return unauthorized(origin);
+        if (!o.toForge || who.scope !== "owner" || !loopback(req, peer)) return json({ error: "not found" }, 404);
+        const headers = new Headers();
+        for (const h of FORGE_HEADERS) {
+          const v = req.headers.get(h);
+          if (v) headers.set(h, v);
+        }
+        const hasBody = !/^(GET|HEAD)$/i.test(req.method);
+        return await o.toForge(p.slice("/app/forge".length) + new URL(req.url).search, { method: req.method, headers, ...(hasBody && { body: req.body }), signal: req.signal });
       }
       if (p === "/app/events") {
         const who = caller(req, origin, from);

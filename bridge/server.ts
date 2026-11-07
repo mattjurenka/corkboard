@@ -627,6 +627,28 @@ async function gitProxy(req: Request, url: URL): Promise<Response> {
   return new Response(res.body, { status: res.status, headers: { "content-type": res.headers.get("content-type") ?? "application/octet-stream", "cache-control": "no-store" } });
 }
 
+// /forge/: the account's forge, for git on this machine, on the node's
+// channel to the leader (http://127.0.0.1:<port>/forge/<owner>/<repo>.git).
+// Never a page's: a browser sends Origin. With a token, git gives it as its
+// password (or x-corkboard-token).
+async function forgeProxy(req: Request, url: URL): Promise<Response> {
+  if (!NODE) return new Response("this machine has no node", { status: 404 });
+  if (req.headers.has("origin")) return new Response("not from a page", { status: 403 });
+  if (LOCAL && !isLoopback(new URL(`http://${req.headers.get("host") ?? ""}`).hostname)) return new Response("wrong host", { status: 403 });
+  if (TOKEN) {
+    const basic = /^Basic (.+)$/i.exec(req.headers.get("authorization") ?? "")?.[1];
+    const given = req.headers.get("x-corkboard-token") ?? (basic ? Buffer.from(basic, "base64").toString().split(":").slice(1).join(":") : "");
+    if (!sameToken(given)) return new Response("wrong token", { status: 401, headers: { "www-authenticate": 'Basic realm="corkboard"' } });
+  }
+  const headers = new Headers();
+  for (const h of ["Content-Type", "Accept", "Git-Protocol", "Content-Encoding"]) {
+    const v = req.headers.get(h);
+    if (v) headers.set(h, v);
+  }
+  const hasBody = !/^(GET|HEAD)$/i.test(req.method);
+  return NODE.forge(url.pathname.slice("/forge".length) + url.search, { method: req.method, headers, ...(hasBody && { body: req.body }), signal: req.signal });
+}
+
 // The pages whose Neovim is theirs, by the id their worker calls /host with.
 const hosts = new Map<string, wasm.Host>();
 
@@ -793,6 +815,7 @@ Bun.serve<Session, {}>({
     if (url.pathname === "/wasm/manifest") return wasmManifest(req);
     if (url.pathname.startsWith("/wasm/plugins/")) return wasmPlugins(req, url);
     if (url.pathname.startsWith("/api/git/")) return gitProxy(req, url);
+    if (url.pathname.startsWith("/forge/")) return forgeProxy(req, url);
     if (url.pathname.startsWith("/media/")) return media(req, url);
     if (url.pathname === "/auth") return auth(req, url);
     if (url.pathname === "/speech") {
