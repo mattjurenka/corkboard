@@ -22,7 +22,9 @@
 //
 // The account's Forgejo, on channels under /forge/ (forge.ts), is at
 // CORKBOARD_FORGE_UNIX (a unix socket; default <state>/node/forge/forgejo.sock),
-// trusting the user header CORKBOARD_FORGE_USER_HEADER names.
+// trusting the user header CORKBOARD_FORGE_USER_HEADER names. With
+// CORKBOARD_FORGEJO, the node runs it there while it's the account's
+// leader (forgejo.ts), state in <state>/node/forge/.
 //
 // <state>/node/ has config.json (boards, brains, origin, port, host,
 // timezone: what the flags add to), oauth.json, calendar.json, blobs/
@@ -48,6 +50,7 @@ import { type LogTransport, Replica, offline } from "../../lib/e2ee/sync";
 import { accountObject, dayObject, fleetObject, listObjects } from "./objects";
 import { FleetRecords, FORGE_GATE } from "./fleet";
 import { ForgeRecords, forgeHandler } from "./forge";
+import { Forgejo } from "./forgejo";
 import { Replicas } from "./replicas";
 import { Data } from "./data";
 import { Search } from "./search";
@@ -206,10 +209,12 @@ export async function startNode(o: NodeOptions = {}) {
     const forge = () => (r?.account && d.cert.body.role !== "relay" ? { account: r.account, device: { id: d.device.id, sign: d.device.sign }, cert: d.cert, gate: FORGE_GATE } : undefined);
     const sealed = new FleetRecords(replicas, fleet, forge);
     const forgeRecords = new ForgeRecords(replicas);
+    const forgeUnix = process.env.CORKBOARD_FORGE_UNIX ?? join(NODE_DIR, "forge", "forgejo.sock");
+    const forgeHeader = process.env.CORKBOARD_FORGE_USER_HEADER ?? "X-Corkboard-Forge-User";
     const forgejo = forgeHandler({
       upstream: "http://forgejo.invalid",
-      unix: process.env.CORKBOARD_FORGE_UNIX ?? join(NODE_DIR, "forge", "forgejo.sock"),
-      userHeader: process.env.CORKBOARD_FORGE_USER_HEADER ?? "X-Corkboard-Forge-User",
+      unix: forgeUnix,
+      userHeader: forgeHeader,
       records: forgeRecords,
       account: () => (r?.account ? { id: r.account, key: d.cert.body.account } : undefined),
       revocations: () => (r ? r.revoked() : Promise.resolve([])),
@@ -264,10 +269,32 @@ export async function startNode(o: NodeOptions = {}) {
         // The relay says when the leader may have changed, so a move takes
         // effect at once rather than at the next minute's look.
         const told = (to: string | null) => (led = { at: Date.now(), to: to ?? d.device.id });
-        t.stop = r.serveTunnel(tunneled, { name: d.cert.body.name, onState: (up) => (t.connected = up), onLeader: told, channels: (req, ch) => tunneled(req, undefined, ch.peer) });
+        t.stop = r.serveTunnel(tunneled, { name: d.cert.body.name, onState: (up) => (t.connected = up), onLeader: (to) => (told(to), void keepForge()), channels: (req, ch) => tunneled(req, undefined, ch.peer) });
         tunnel = t;
       }
     }
+    // Forgejo runs on the leader the account names, so a blip in its socket
+    // (the tunnel going to another node meanwhile) doesn't stop it; with
+    // none named, on the node the tunnel goes to. A failed look changes nothing.
+    const forgeBin = process.env.CORKBOARD_FORGEJO;
+    const forgeProcess = forgeBin ? new Forgejo({ bin: forgeBin, static: process.env.CORKBOARD_FORGEJO_STATIC, dir: join(NODE_DIR, "forge"), unix: forgeUnix, userHeader: forgeHeader }) : undefined;
+    const keepForge = async () => {
+      if (!forgeProcess) return;
+      try {
+        const named = r && tunnel ? (await r.nodes()).leader : null;
+        if (!(named ? named === d.device.id : await leads())) return await forgeProcess.stop();
+        await forgeProcess.start();
+        // A forge moved in with no login recorded is its one admin's.
+        if (!forgeRecords.user()) {
+          const admins = await forgeProcess.admins();
+          if (admins.length === 1) await forgeRecords.setUser(admins[0]);
+        }
+      } catch (e) {
+        console.error(`node: the forge: ${(e as Error).message}`);
+      }
+    };
+    void keepForge();
+    const keepingForge = forgeProcess && setInterval(keepForge, 60_000);
     return {
       data,
       search,
@@ -305,6 +332,8 @@ export async function startNode(o: NodeOptions = {}) {
         server.stop();
         stopLeases();
         stopCalendar();
+        clearInterval(keepingForge);
+        await forgeProcess?.stop();
         await consolidator.stop();
         await replicas.stop();
         episodes.close();

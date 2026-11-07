@@ -102,3 +102,10 @@ browser ── HTTPS ──▶ own domain ──▶ node's public port          
   droplet`, `concurrency`, `id-token: write`, actions/checkout from code.forgejo.org) passed in
   11s of job time. Not yet checked: what the job sees of `id-token` (its step logs), and two jobs
   queued at once. Left: port baum's and stable's workflows.
+- 2026-11-07: piece 1's code. With CORKBOARD_FORGEJO (and CORKBOARD_FORGEJO_STATIC), the node runs
+  Forgejo as its child (bridge/node/forgejo.ts) while it's the named leader (or, with none named,
+  the node the tunnel goes to), state in `<state>/node/forge/`. app.ini is kept, with the node's
+  paths, socket, header and user set on each start and the repos' hooks regenerated, so
+  `/var/lib/forgejo` moves in as it is. A forge with no login recorded takes its one admin's. No
+  SSH on the node's forge. Not deployed: the cut-over (the laptop's SSH `origin`, the hosted gate
+  fronting the node's socket meanwhile) is still to settle.
