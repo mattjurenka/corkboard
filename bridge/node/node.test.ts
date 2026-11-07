@@ -11,7 +11,8 @@ import { Relay } from "../../lib/e2ee/relay";
 import { type Identity, initiate, pipe, respond } from "../../lib/e2ee/channel";
 import { certify, checkCert, newDevice } from "../../lib/e2ee/device";
 import { DAY, dayObject, fleetObject, listObjects, noteRecord } from "./objects";
-import { FleetRecords } from "./fleet";
+import { type ForgeSigner, FleetRecords } from "./fleet";
+import { checkChain } from "../../lib/e2ee/forge";
 import { Conflict } from "./day";
 import { Replicas } from "./replicas";
 import { Data, Invalid, now } from "./data";
@@ -89,7 +90,7 @@ const ORIGIN = "https://node.test";
 const dirs: string[] = [];
 afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
-async function setup(o: { fleet?: Fleet; sealed?: boolean } = {}) {
+async function setup(o: { fleet?: Fleet; sealed?: boolean; forge?: () => ForgeSigner | undefined } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "corkboard-node-"));
   dirs.push(dir);
   const root = newRoot();
@@ -103,7 +104,7 @@ async function setup(o: { fleet?: Fleet; sealed?: boolean } = {}) {
   const episodes = new Episodes();
   const blobs = memoryBlobs();
   const media = new Media({ data, blobs, dir: join(dir, "blobs") });
-  const sealed = o.sealed ? new FleetRecords(replicas, () => o.fleet) : undefined;
+  const sealed = o.sealed ? new FleetRecords(replicas, () => o.fleet, o.forge) : undefined;
   const app = node({ data, search, oauth, episodes, media, origin: ORIGIN, fleet: () => o.fleet, sealed });
   // Another device of the account: the laptop, on the same relay.
   const board = objects.find((o) => o.kind === "board")!;
@@ -1524,8 +1525,16 @@ describe("the fleet sealed, on the node", () => {
   const owner = () => ({ Authorization: `Bearer ${n.oauth.mint("phone", 1)}`, "Content-Type": "application/json" });
   const local = (path: string, init: RequestInit = {}) => n.app(new Request(`${ORIGIN}${path}`, { ...init, headers: { ...owner(), ...(init.headers as object) } }), { requestIP: () => ({ address: "127.0.0.1" }) });
   const tool = async (name: string, args: Record<string, unknown>) => toolText(await n.call("/mcp", rpc("tools/call", { name, arguments: args }, n.oauth.mint("phone", 1))));
-  beforeAll(async () => void (n = await setup({ fleet, sealed: true })));
-  afterAll(() => n.stop());
+  // The node as a device of an account, which signs a spawn's git grant;
+  // the gate, which hears of it taken back.
+  const keys = accountKeys(newRoot());
+  const device = newDevice();
+  const cert = certify(keys, device, "node");
+  const revoked: any[] = [];
+  const gate = Bun.serve({ port: 0, fetch: async (req) => (revoked.push(await req.json()), Response.json({ ok: true })) });
+  const signer: ForgeSigner = { account: keys.id, device, cert, gate: gate.url.origin };
+  beforeAll(async () => void (n = await setup({ fleet, sealed: true, forge: () => signer })));
+  afterAll(() => (n.stop(), gate.stop(true)));
 
   it("keeps a spawn's words in the fleet object and queues only the rest", async () => {
     const s = JSON.parse((await tool("spawn_agent", { task: " fix it ", packages: ["jq"], board: "elsewhere" })).text);
@@ -1589,6 +1598,31 @@ describe("the fleet sealed, on the node", () => {
     expect(n.sealed!.secrets(["github", "mine"])).toEqual({ github: "ghp_w", mine: "here" });
     expect(await moveHolds({ ...n, sealed: n.sealed! }, worker, { log: () => {} })).toEqual({ holds: [], kept: ["github", "mine"] });
     expect(calls.at(-1)).toBe(`DELETE /api/holds ${JSON.stringify({ names: ["github", "mine"] })}`);
+  });
+
+  it("signs a spawn's key what its template's git says, at its claim, and takes it back at the gate", async () => {
+    const git = { repos: ["matt/corkboard"], permissions: { contents: "write", issues: "read" }, refs: ["agent/*"] };
+    await local("/api/node/fleet/environments/droplet", { method: "PUT", body: JSON.stringify({ manifest: { templates: { coding: { git } } } }) });
+    const s = JSON.parse((await tool("spawn_agent", { task: "push it" })).text);
+    const vm = newDevice();
+    expect((await (await local(`/api/node/fleet/spawns/${s.id}`)).json()).git).toBeUndefined();
+    expect((await local(`/api/node/fleet/spawns/${s.id}?git=${vm.id}&environment=elsewhere`)).status).toBe(400);
+    const got = await (await local(`/api/node/fleet/spawns/${s.id}?git=${vm.id}&environment=droplet`)).json();
+    expect(got.git).toMatchObject({ account: keys.id, gate: gate.url.origin });
+    const c = checkChain(keys.id, keys.id, got.git.chain, { devices: [], grant: () => false });
+    expect(c).toMatchObject({ holder: vm.id, scope: { repos: ["matt/corkboard"], perms: { contents: "write", issues: "read" }, refs: ["refs/heads/agent/*"] } });
+    // Asked again (its grant nearly over): another, and the one before taken back.
+    const again = await (await local(`/api/node/fleet/spawns/${s.id}?git=${vm.id}&environment=droplet`)).json();
+    const c2 = checkChain(keys.id, keys.id, again.git.chain, { devices: [], grant: () => false }) as any;
+    expect(c2.holder).toBe(vm.id);
+    expect(c2.grants[0]).not.toBe((c as any).grants[0]);
+    expect(revoked).toMatchObject([{ account: keys.id, grant: { body: { grant: (c as any).grants[0], by: device.id } } }]);
+    expect((await local(`/api/node/fleet/spawns/${s.id}/git`, { method: "DELETE" })).status).toBe(204);
+    expect(revoked.at(-1)).toMatchObject({ grant: { body: { grant: c2.grants[0] } } });
+    // Once is all, and none after.
+    await local(`/api/node/fleet/spawns/${s.id}/git`, { method: "DELETE" });
+    expect(revoked.length).toBe(2);
+    expect((await local(`/api/node/fleet/spawns/${s.id}?git=${vm.id}&environment=droplet`)).status).toBe(400);
   });
 });
 

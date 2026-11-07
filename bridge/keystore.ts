@@ -22,6 +22,7 @@ import { STATE_DIR } from "./dirs";
 import { type Device, fromSecrets } from "../lib/e2ee/device";
 import { random } from "../lib/e2ee/keys";
 import { open, seal } from "../lib/e2ee/record";
+import type { Chain } from "../lib/e2ee/forge";
 import type { ReplicaStore } from "../lib/e2ee/sync";
 import { ReplicaDb } from "./replicadb";
 import type { Token } from "../lib/e2ee/relay";
@@ -56,6 +57,13 @@ const readJson = <T>(path: string): T | undefined => {
 };
 
 type RootFile = { v: 1; kek: "keychain" | "scrypt"; keychain?: string; salt?: string; nonce: string; ciphertext: string };
+export type ForgeFile = {
+  v: 1;
+  gate: string;
+  account: string;
+  user?: string;
+  grants: { hash: string; name: string; holder: string; expires: number; chain: Chain }[];
+};
 type DeviceFile = { v: 1; relay: string | null; name: string; sign: string; box: string; cert: Signed<DeviceCert> };
 
 // scrypt's cost: 64 MB and about a second.
@@ -134,6 +142,17 @@ export class Keystore {
   saveToken(t: Token) {
     this.ensure();
     write(join(this.dir, "token.json"), JSON.stringify(t) + "\n");
+  }
+
+  // The forge gate this account is bound at, and the git access given from
+  // here (e2ee.ts's forge*).
+  forge(): ForgeFile | undefined {
+    return readJson<ForgeFile>(join(this.dir, "forge.json"));
+  }
+
+  saveForge(f: ForgeFile) {
+    this.ensure();
+    write(join(this.dir, "forge.json"), JSON.stringify(f, null, 2) + "\n");
   }
 
   replica(object: string): ReplicaStore {

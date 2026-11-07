@@ -57,6 +57,7 @@ const words: Record<string, any> = {};
 const manifests: Record<string, any> = {};
 const grants: any[] = [];
 const revoked: string[] = [];
+const gitRevoked: string[] = [];
 const nodeCalls: { method: string; path: string; body: any }[] = [];
 const node = Bun.serve({
   port: 0,
@@ -72,6 +73,8 @@ const node = Bun.serve({
       return Response.json(body.scope === "brain" ? { token, url: url.origin } : { token, expires_at: "x", url: `${url.origin}/mcp` });
     }
     if (p === "/grants" && req.method === "DELETE") return Response.json({ revoked: revoked.push(body.token) > 0 });
+    const ungit = p.match(/^\/fleet\/spawns\/(\w+)\/git$/);
+    if (ungit && req.method === "DELETE") return (gitRevoked.push(ungit[1]), new Response(null, { status: 204 }));
     const f = p.match(/^\/fleet\/(spawns|environments)\/(\w+)$/);
     if (f?.[1] === "environments" && req.method === "PUT") return Response.json((manifests[f[2]] = body.manifest), { status: 200 });
     if (f?.[1] === "spawns" && req.method === "PUT") return Response.json(Object.assign(words[f[2]], body));
@@ -79,7 +82,9 @@ const node = Bun.serve({
       const w = words[f[2]];
       if (!w) return Response.json({ error: "no spawn here" }, { status: 404 });
       const holds = url.searchParams.get("holds")?.split(",") ?? [];
-      return Response.json({ ...w, ...(holds.includes("google") && { secrets: { google: "refresh" } }) });
+      const key = url.searchParams.get("git");
+      const git = key && { account: "acct", gate: "https://git.test", chain: { cert: {}, grants: [{ body: { holder: key, repos: "matt/corkboard", perms: "contents:write", refs: null } }] }, environment: url.searchParams.get("environment") === "local" ? undefined : "wrong" };
+      return Response.json({ ...w, ...(holds.includes("google") && { secrets: { google: "refresh" } }), ...(git && { git }) });
     }
     if (p === "/boards/mine") return Response.json({ key: "mine", root: "/nowhere", roots: { local: repo } });
     const m = p.match(/^\/boards\/mine\/cards\/([\w-]+)(\/log)?$/);
@@ -330,4 +335,26 @@ test("with a device on the node, keeps the environment and a sealed spawn's word
   expect(fleet.read("cccccc1")!.remote!.secrets).toBeUndefined();
   expect(calls.find((c) => c.path === "/api/spawns/cccccc2/report")!.body).toEqual({ state: "failed" });
   expect(words.cccccc2.error).toContain("never goes beside");
+});
+
+test("a template that names repos gets a key of its own, which the node signs a grant to, taken back at the end", async () => {
+  const m = JSON.parse(readFileSync(process.env.CORKBOARD_FLEET_MANIFEST!, "utf8"));
+  m.templates.pusher = { memory: 1024, cores: 1, needsApproval: true, capNames: [], git: { repos: ["matt/corkboard"], permissions: { contents: "write" } } };
+  writeFileSync(process.env.CORKBOARD_FLEET_MANIFEST!, JSON.stringify(m));
+  add({ id: "dddddd1", template: "pusher", task: "", board: null, card: null, sealed: true });
+  add({ id: "dddddd2", task: "", board: null, card: null, sealed: true });
+  words.dddddd1 = { task: "push it", shell: null, result: null, error: null };
+  words.dddddd2 = { task: "don't", shell: null, result: null, error: null };
+  (queue as any).dirty = true;
+  await queue.step();
+  const git = fleet.read("dddddd1")!.remote!.git!;
+  const { signerOf } = await import("./forge");
+  expect(git.chain.grants![0].body.holder).toBe(signerOf(git).id);
+  // Asked for this environment.
+  expect((git as any).environment).toBeUndefined();
+  expect(fleet.read("dddddd2")!.remote!.git).toBeUndefined();
+  fleet.write({ ...fleet.read("dddddd1")!, state: "done", exit: 0 });
+  await queue.step();
+  expect(gitRevoked).toEqual(["dddddd1"]);
+  expect(fleet.read("dddddd1")!.remote!.git).toBeUndefined();
 });

@@ -10,6 +10,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { Git } from "./forge";
 import type { NodeLink } from "./node";
 
 // Where a VM is and what it may reach, as host.nix configures it.
@@ -41,7 +42,9 @@ export type Manifest = {
     string,
     { unit: string; memory: number | null; brain?: string | null; account?: string | null; cores?: number | null; capNames?: string[]; network?: Network; assistant?: Assistant }
   >;
-  templates: Record<string, { memory: number; cores: number; needsApproval: boolean; capNames: string[]; credentials?: string[] }>;
+  // git: what its spawns may do on the forge, granted at each one's claim
+  // (forge.ts), as fleet/lib.nix's template git says.
+  templates: Record<string, { memory: number; cores: number; needsApproval: boolean; capNames: string[]; credentials?: string[]; git?: GitTerms | null }>;
   // The brains whose memory this host has, by name: the shares a spawn for
   // one mounts, in the guest `<template>+<brain>`. A brain with none runs
   // here in its template's own guest. Absent from a manifest written before
@@ -57,6 +60,8 @@ export type Manifest = {
   // given for its /mcp.
   node?: NodeLink;
 };
+
+export type GitTerms = { repos: string[]; permissions: Record<string, "read" | "write">; refs?: string[] | null; delete?: boolean };
 
 export type State = "queued" | "running" | "done" | "failed" | "stopped";
 
@@ -99,6 +104,8 @@ export type Spawn = {
     memory?: string;
     // Its words are the node's (queue.ts): its result and error go there.
     sealed?: true;
+    // Its grant on the forge and the key it's to (forge.ts), dropped at the end.
+    git?: Git;
   };
   // A session you talk to rather than a task (sessions.ts); when it was
   // asked to finish, if it has been.

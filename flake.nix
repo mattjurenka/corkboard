@@ -247,7 +247,7 @@
           version = "0.1.0";
           src = pkgs.lib.fileset.toSource {
             root = ./.;
-            fileset = pkgs.lib.fileset.unions [ ./fleet/fleetd/fleet.ts ./fleet/fleetd/fleetd.ts ./fleet/fleetd/cli.ts ./fleet/fleetd/queue.ts ./fleet/fleetd/sessions.ts ./bridge/cloud.ts ./bridge/dirs.ts ./bridge/host.ts ./bridge/sessions.ts ./bridge/transcript.ts ./fleet/fleetd/assistant.ts ./fleet/fleetd/node.ts ./bridge/hub.ts ./lib/e2ee ];
+            fileset = pkgs.lib.fileset.unions [ ./fleet/fleetd/fleet.ts ./fleet/fleetd/fleetd.ts ./fleet/fleetd/cli.ts ./fleet/fleetd/queue.ts ./fleet/fleetd/sessions.ts ./bridge/cloud.ts ./bridge/dirs.ts ./bridge/host.ts ./bridge/sessions.ts ./bridge/transcript.ts ./fleet/fleetd/assistant.ts ./fleet/fleetd/node.ts ./fleet/fleetd/forge.ts ./bridge/hub.ts ./lib/e2ee ];
           };
           # The channel's cryptography (lib/e2ee), as the bridge has it.
           crypto = [ "@noble/ciphers" "@noble/curves" "@noble/hashes" ];
@@ -268,6 +268,33 @@
               --add-flags $share/fleet/fleetd/cli.ts
           '';
           meta = { mainProgram = "corkboard-fleet"; license = pkgs.lib.licenses.agpl3Only; };
+        };
+
+        # The forge gate (forge/gate), in front of Forgejo on the droplet:
+        # run by bun, laid out as in the repo, with lib/e2ee's cryptography.
+        forge-gate = pkgs.stdenvNoCC.mkDerivation {
+          pname = "corkboard-forge-gate";
+          version = "0.1.0";
+          src = pkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = pkgs.lib.fileset.unions [ ./forge/gate/gate.ts ./forge/gate/main.ts ./forge/gate/push.ts ./forge/gate/routes.ts ./forge/gate/ssh.ts ./forge/gate/store.ts ./lib/e2ee ];
+          };
+          crypto = [ "@noble/ciphers" "@noble/curves" "@noble/hashes" ];
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          installPhase = ''
+            share=$out/share/corkboard-forge-gate
+            mkdir -p $share/forge/gate $share/lib
+            cp forge/gate/*.ts $share/forge/gate/
+            cp -r lib/e2ee $share/lib/
+            for p in $crypto; do
+              mkdir -p $share/node_modules/$(dirname $p)
+              cp -r ${webDeps}/$p $share/node_modules/$p
+            done
+            makeWrapper ${pkgs.lib.getExe pkgs.bun} $out/bin/corkboard-forge-gate \
+              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh ]} \
+              --add-flags $share/forge/gate/main.ts
+          '';
+          meta = { mainProgram = "corkboard-forge-gate"; license = pkgs.lib.licenses.agpl3Only; };
         };
 
         # Pepper's VM on the droplet (fleet/pepper/guest.nix), and the

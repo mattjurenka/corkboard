@@ -71,6 +71,8 @@ import { Keystore } from "./keystore";
 import { type PlainCard, changesFor } from "./node/board";
 import { type ObjectKind, accountKeys, newRoot, objectId, objectKey } from "../lib/e2ee/keys";
 import { certify, checkCert, creation, newDevice, revoke, type Device } from "../lib/e2ee/device";
+import { type Chain, type GrantTerms, type Permission, FORGE_BIND_SSH, PERMISSIONS, bindForgeAsDevice, forgeBindBytes, forgeGrantHash, grantForge, revokeForgeGrant, scopeOf } from "../lib/e2ee/forge";
+import { sendRevocationToGate } from "../lib/e2ee/forge-client";
 import { approve, pairNew } from "../lib/e2ee/pairing";
 import { fromPhrase, toPhrase } from "../lib/e2ee/phrase";
 import { type Nodes, Relay } from "../lib/e2ee/relay";
@@ -281,6 +283,135 @@ export async function pairConfirm(id: string, ok: boolean): Promise<{ name: stri
   approving.delete(id);
   p.answer(ok);
   return { name: (await p.done).body.name };
+}
+
+// Git through the forge gate (.agent/plans/forge-keys.md), from the editor
+// (boards.ts's forge_*, corkboard/forge.lua). A full device is the account
+// there; the account is bound to its Forgejo user by the first of its
+// devices to start with an SSH key Forgejo has (forgeBound), and grants from
+// this device (Give git access) are for agents.
+export const FORGE_GATE = process.env.CORKBOARD_FORGE_GATE || "https://git.corkboard.fyi";
+
+// The account's id, as accountId; no root needed.
+async function accountOf(device: Device, cert: Signed<DeviceCert>) {
+  const relay = relayFor(device, cert);
+  await relay.token();
+  return relay.account!;
+}
+
+export function forgeStatus() {
+  const f = store.forge();
+  return { ...pairStatus(), gate: FORGE_GATE, user: f?.gate === FORGE_GATE ? (f.user ?? null) : null, grants: f?.grants.length ?? 0 };
+}
+
+const run = async (cmd: string[], stdin?: Uint8Array) => {
+  const p = Bun.spawn(cmd, { stdin: stdin ?? "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, SSH_ASKPASS_REQUIRE: "never" } });
+  const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+  return { out, err, code };
+};
+
+// Who this machine's SSH key is on the forge, as Forgejo greets it.
+async function sshUser(host: string): Promise<string | null> {
+  const hello = await run(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", `git@${host}`]);
+  return /Hi there,? ([\w.-]+)!/.exec(hello.out + hello.err)?.[1] ?? null;
+}
+
+// Signatures over bytes by each key ssh would try for host, through the
+// agent or unencrypted on disk.
+async function sshSigs(host: string, bytes: Uint8Array): Promise<string[]> {
+  const files = (await run(["ssh", "-G", host])).out
+    .split("\n")
+    .filter((l) => l.startsWith("identityfile "))
+    .map((l) => l.slice(13).replace(/^~/, process.env.HOME ?? "~"))
+    .filter((p) => existsSync(p));
+  const sigs: string[] = [];
+  for (const key of files) {
+    for (const f of existsSync(key + ".pub") ? [key + ".pub", key] : [key]) {
+      const r = await run(["ssh-keygen", "-Y", "sign", "-q", "-n", FORGE_BIND_SSH, "-f", f], bytes);
+      if (r.code === 0 && r.out.includes("BEGIN SSH SIGNATURE")) {
+        sigs.push(r.out);
+        break;
+      }
+    }
+  }
+  return sigs;
+}
+
+// The account bound to its Forgejo user at the gate, if it isn't yet: by a
+// full device of this machine's, shown by its SSH key. Null where it can't be.
+export async function forgeBound(): Promise<string | null> {
+  const d = store.device();
+  if (!d || !store.exists() || d.relay !== CLOUD || d.cert.body.role === "relay") return null;
+  const f = store.forge();
+  if (f?.gate === FORGE_GATE && f.user) return f.user;
+  const relay = relayFor(d.device, d.cert);
+  await relay.token();
+  const account = relay.account!;
+  const view = await relay.accountView(account);
+  const origin = new URL(FORGE_GATE).origin;
+  const host = new URL(FORGE_GATE).host;
+  const user = await sshUser(host);
+  if (!user) return null;
+  const bind = bindForgeAsDevice(d.device, view.id, view.key, origin, user);
+  const sigs = await sshSigs(host, forgeBindBytes(bind.body));
+  if (!sigs.length) return null;
+  const res = await fetch(new URL("/gate/bind", FORGE_GATE), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ view, bind, cert: d.cert, ssh: sigs }) });
+  const got = (await res.json().catch(() => ({}))) as { user?: string; error?: string };
+  if (!res.ok || !got.user) throw new Error(`forge gate: ${got.error ?? res.status}`);
+  store.saveForge({ v: 1, gate: FORGE_GATE, account, user: got.user, grants: f?.gate === FORGE_GATE ? f.grants : [] });
+  return got.user;
+}
+
+export type ForgeAsk = { holder: string; name: string; repos: string; perms: string; refs: string; days: number };
+
+// A grant from this device to holder's key: what the holder shows the gate
+// (its chain), kept here too so it can be taken back.
+export async function forgeGrant(a: ForgeAsk): Promise<{ hash: string; name: string; expires: number; chain: Chain; account: string }> {
+  const holder = a.holder.trim();
+  if (!KEY.test(holder)) throw new Error("the holder is a key: a device's id");
+  const d = store.device();
+  if (!d || !store.exists() || d.relay !== CLOUD) throw new Error("this machine isn't in an encrypted account");
+  if (d.cert.body.role === "relay") throw new Error("this machine holds grants; it can't give them");
+  // What the grant is for needs the account bound; it is by now, where it can be.
+  await forgeBound().catch(() => null);
+  const account = store.forge()?.account ?? (await accountOf(d.device, d.cert));
+  const perms: GrantTerms["perms"] = {};
+  for (const p of a.perms.split(/[\s,]+/).filter(Boolean)) {
+    const [name, level = "read"] = p.split(":");
+    if (!PERMISSIONS.includes(name as Permission) || (level !== "read" && level !== "write")) throw new Error(`not a permission: ${p}`);
+    perms[name as Permission] = level;
+  }
+  const refs = a.refs.split(/[\s,]+/).filter(Boolean);
+  const days = Number(a.days);
+  if (!(days > 0 && days <= 366)) throw new Error("expires in 1 to 366 days");
+  const terms: GrantTerms = { name: a.name.trim() || "git", repos: a.repos.split(/[\s,]+/).filter(Boolean), perms, refs: refs.length ? refs : null, expires: Date.now() + days * 86400_000 };
+  const grant = grantForge(d.device, account, holder, terms);
+  const scope = scopeOf(grant.body);
+  if (typeof scope === "string") throw new Error(scope);
+  const out = { hash: forgeGrantHash(grant.body), name: grant.body.name, expires: grant.body.expires, chain: { cert: d.cert, grants: [grant] }, account };
+  const f = store.forge();
+  const kept = f?.gate === FORGE_GATE ? f : { v: 1 as const, gate: FORGE_GATE, account, grants: [] };
+  kept.grants = [...kept.grants.filter((g) => g.expires > Date.now()), { hash: out.hash, name: out.name, holder, expires: out.expires, chain: out.chain }];
+  store.saveForge(kept);
+  return out;
+}
+
+// The grants given from here that haven't run out, for Take back git access.
+export function forgeGrants() {
+  const f = store.forge();
+  if (f?.gate !== FORGE_GATE) return [];
+  return f.grants.filter((g) => g.expires > Date.now()).map(({ hash, name, holder, expires }) => ({ hash, name, holder, expires }));
+}
+
+// A grant taken back at the gate: its sessions end, and any grant under it.
+export async function forgeRevoke(hash: string) {
+  const d = store.device();
+  const f = store.forge();
+  const g = f?.gate === FORGE_GATE ? f.grants.find((x) => x.hash === hash) : undefined;
+  if (!d || !f || !g) throw new Error("no such grant from this machine");
+  await sendRevocationToGate(FORGE_GATE, f.account, { grant: revokeForgeGrant(d.device, f.account, hash) });
+  store.saveForge({ ...f, grants: f.grants.filter((x) => x.hash !== hash) });
+  return { name: g.name };
 }
 
 // A board as the Worker or the card files have it, as cards with their logs.
@@ -511,7 +642,10 @@ async function revokeDevice(args: string[]) {
   if (!device) throw new Error("revoke takes a device's id (status shows this one's)");
   const me = await signedIn(args);
   if (device === me.device.id && !yes("That's this machine. Revoke it anyway?")) return;
-  await me.relay.revoke(revoke(accountKeys(me.root), device));
+  const r = revoke(accountKeys(me.root), device);
+  await me.relay.revoke(r);
+  // The gate keeps its own list: the device's sessions and grants end there too.
+  await sendRevocationToGate(FORGE_GATE, me.relay.account!, { revocation: r }).catch((e) => console.error(`The forge gate didn't take it: ${e instanceof Error ? e.message : e}`));
   console.log(`Revoked ${device}.`);
 }
 

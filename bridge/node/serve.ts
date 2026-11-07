@@ -42,7 +42,7 @@ import { Relay } from "../../lib/e2ee/relay";
 import { indexId, indexKey } from "../../lib/e2ee/sharing";
 import { type LogTransport, Replica, offline } from "../../lib/e2ee/sync";
 import { accountObject, dayObject, fleetObject, listObjects } from "./objects";
-import { FleetRecords } from "./fleet";
+import { FleetRecords, FORGE_GATE } from "./fleet";
 import { Replicas } from "./replicas";
 import { Data } from "./data";
 import { Search } from "./search";
@@ -194,7 +194,9 @@ export async function startNode(o: NodeOptions = {}) {
     const hub = new Hub();
     const fleet = () => (signedIn() ? fleetQueue : undefined);
     // What the fleet keeps sealed from the Worker (fleet.ts).
-    const sealed = new FleetRecords(replicas, fleet);
+    // This machine signs the fleet's git grants (forge-keys.md), as a device of the account's.
+    const forge = () => (r?.account && d.cert.body.role !== "relay" ? { account: r.account, device: { id: d.device.id, sign: d.device.sign }, cert: d.cert, gate: FORGE_GATE } : undefined);
+    const sealed = new FleetRecords(replicas, fleet, forge);
     const served = { data, search, episodes, media, oauth, addBoard, fleet, sealed, calendar, hub };
     // Every hub of the account's (this one, and each connected device's on a
     // channel to it), for this machine's bridges to watch (peers.ts).

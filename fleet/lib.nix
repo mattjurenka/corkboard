@@ -109,9 +109,15 @@ let
           # Started on demand in a slot, rather than a VM of its own.
           spawnable = t.spawnable or false;
           egress = unique (concatMap (c: c.egress) cs);
-          # The approval rule: a template with no credentials runs whoever
-          # asks; one with any needs the user's yes when a brain asks.
-          needsApproval = credentials != [ ];
+          # What its spawns may do on the forge (git.corkboard.fyi), granted
+          # to each at its claim (.agent/plans/forge-keys.md), or null:
+          # { repos = [ "owner/name" "owner/*" ]; permissions = { contents =
+          # "write"; pull_requests = "read"; ... }; refs ? [ "agent/*" ];
+          # delete ? false; }. Only a sealed fleet (its node a device) signs one.
+          git = t.git or null;
+          # The approval rule: a template with no credentials (nor git) runs
+          # whoever asks; one with any needs the user's yes when a brain asks.
+          needsApproval = credentials != [ ] || (t.git or null) != null;
           # Where it can be built: every capability has to agree.
           targets = foldl' (acc: c: builtins.filter (k: elem k c.targets) acc) [ "vm" "oci" ] cs;
           # The template's own modules first (a guest's base: its machine,
@@ -198,6 +204,7 @@ let
       egress = [
         "cache.nixos.org"
         "channels.nixos.org"
+        "git.corkboard.fyi"
         "github.com"
         "api.github.com"
         "codeload.github.com"

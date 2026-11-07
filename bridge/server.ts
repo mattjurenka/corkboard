@@ -923,3 +923,9 @@ if (PEERS) {
   boards.usePeers(PEERS);
 }
 remote.start(PORT, NODE?.sessions, PEERS);
+
+// The account bound to its Forgejo user at the forge gate, where this
+// machine can be the one to (e2ee.ts's forgeBound).
+import("./e2ee")
+  .then((m) => m.forgeBound())
+  .catch((e) => console.error(`forge gate: ${(e as Error).message}`));

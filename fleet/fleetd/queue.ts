@@ -27,6 +27,7 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { CLOUD, token } from "../../bridge/cloud";
 import { host, steady, type Host } from "../../bridge/host";
+import { type Git, newHolder } from "./forge";
 import { nodeFetch } from "./node";
 import { accountFor, answer, egressOf, manifest, occupancy, OVERHEAD, read, SPAWNS, spawns, write, type Manifest, type Occupancy, type Spawn, type State } from "./fleet";
 
@@ -75,7 +76,7 @@ async function ok(method: string, path: string, body?: unknown) {
 }
 
 // The node's API, as its owner (node.ts).
-async function nodeApi(m: Manifest, method: string, path: string, body?: unknown): Promise<any> {
+export async function nodeApi(m: Manifest, method: string, path: string, body?: unknown): Promise<any> {
   if (!m.node) throw new Error("its board is the node's, and this host's manifest names no node");
   const res = await nodeFetch(m.node, `/api/node${path}`, {
     method,
@@ -256,10 +257,17 @@ export class Queue {
     let { secrets } = c.json as { secrets?: Record<string, string> };
     // Its words, from the node. One the node can't give yet stays claimed
     // and unwritten here, and is claimed again at the next look.
+    // A template that names repos gets a key of its own, which the node
+    // signs a grant to (forge.ts).
+    let git: Git | undefined;
     if (spawn.sealed) {
-      let words: { task: string; shell: Spawn["shell"] | null; secrets?: Record<string, string> };
+      let words: { task: string; shell: Spawn["shell"] | null; secrets?: Record<string, string>; git?: Omit<Git, "key"> };
+      const holder = m.templates[spawn.template]?.git ? newHolder() : undefined;
+      const q = new URLSearchParams();
+      if (holds?.length) q.set("holds", holds.join(","));
+      if (holder) q.set("git", holder.id), q.set("environment", ENVIRONMENT);
       try {
-        words = await nodeApi(m, "GET", `/fleet/spawns/${spawn.id}${holds?.length ? `?holds=${holds.map(encodeURIComponent).join(",")}` : ""}`);
+        words = await nodeApi(m, "GET", `/fleet/spawns/${spawn.id}${q.size ? `?${q}` : ""}`);
       } catch (e) {
         if (!this.unopened.has(spawn.id)) console.error(`${spawn.id}: its words: ${(e as Error).message}`);
         this.unopened.add(spawn.id);
@@ -270,6 +278,7 @@ export class Queue {
       if (words.shell) spawn.shell = words.shell;
       else delete spawn.shell;
       secrets = words.secrets && Object.keys(words.secrets).length ? words.secrets : undefined;
+      if (holder && words.git) git = { ...words.git, key: holder.key };
     }
     const s: Spawn = {
       id: spawn.id,
@@ -281,7 +290,7 @@ export class Queue {
       account: "",
       state: "queued",
       created: now(),
-      remote: { board: spawn.board, card: spawn.card, agent: spawn.agent, token: cardToken, ...(brainToken && { brainToken }), ...(secrets && { secrets }), ...(spawn.sealed && { sealed: true as const }) },
+      remote: { board: spawn.board, card: spawn.card, agent: spawn.agent, token: cardToken, ...(brainToken && { brainToken }), ...(secrets && { secrets }), ...(git && { git }), ...(spawn.sealed && { sealed: true as const }) },
       ...(spawn.interactive && { interactive: true }),
       ...(spawn.shell && { shell: spawn.shell }),
       ...(spawn.memory && { memory: spawn.memory }),
@@ -356,7 +365,8 @@ export class Queue {
         ...(!s.remote.sealed && words),
       });
       if (r.status >= 400 && r.status !== 409) throw new Error(`reporting ${s.id}: ${r.json.error ?? r.status}`);
-      const { secrets: _, ...kept } = s.remote;
+      if (over && s.remote.git) await nodeApi(manifest(), "DELETE", `/fleet/spawns/${s.id}/git`).catch((e) => console.error(`${s.id}: its git grant: ${(e as Error).message}`));
+      const { secrets: _, git: __, ...kept } = s.remote;
       const remote = over ? { ...kept, token: null, ...(s.remote.brainToken !== undefined && { brainToken: "" }) } : s.remote;
       if (over)
         for (const [t, node] of [

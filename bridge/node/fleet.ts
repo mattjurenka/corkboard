@@ -16,17 +16,31 @@
 //   POST   /spawns                 a spawn, as the Worker's POST /api/spawns: sealed here, queued there
 //   GET    /spawns/:id[?holds=a,b] its sealed part; with holds, their secrets, on a channel or loopback
 //   PUT    /spawns/:id             { result?, error? }: fleetd's, at the end
+//   GET    /spawns/:id?git=KEY     with a git grant to KEY, signed here, if its template names repos
+//   DELETE /spawns/:id/git         its git grant taken back, at the gate
 //   GET    /environments           the manifests
 //   PUT    /environments/:name     { manifest }: fleetd's
 //   /holds[/:name]                 as the Worker's /api/holds (holds.ts)
 
 import { Invalid } from "../../lib/model/cards";
+import { type Chain, type Level, type Permission, type Signer, PERMISSIONS, forgeGrantHash, grantForge, revokeForgeGrant, scopeOf } from "../../lib/e2ee/forge";
+import { sendRevocationToGate } from "../../lib/e2ee/forge-client";
+import { type DeviceCert, type Signed, KEY } from "../../lib/e2ee/wire";
 import type { MergedCard } from "../../lib/e2ee/merge";
 import { FLEET, environmentRecord, holdRecord, spawnRecord } from "./objects";
 import type { Replicas } from "./replicas";
 
 export type Shell = { packages: string[] } | { flake: string };
 export type SealedSpawn = { id: string; task: string; shell: Shell | null; result: string | null; error: string | null; at: string };
+// What a template's spawns may do on the forge (fleet/lib.nix's git):
+// a grant's terms, signed here at the claim to the key fleetd makes it.
+export type GitTerms = { repos: string[]; permissions: Partial<Record<Permission, Level>>; refs?: string[] | null; delete?: boolean };
+// This node as a device of the account, which signs those (forge-keys.md):
+// account is the account's id, gate the forge gate's origin.
+export type ForgeSigner = { account: string; device: Signer; cert: Signed<DeviceCert>; gate: string };
+// How long a spawn's grant lasts: fleetd takes it back sooner, at its end.
+export const GIT_GRANT_MS = 24 * 3600_000;
+export const FORGE_GATE = process.env.CORKBOARD_FORGE_GATE ?? "https://git.corkboard.fyi";
 export type Hold = { name: string; about: string; where: string | null; secret: string | null; created: string; updated: string };
 // Who holds a name: the brains (from the Worker's brain records, until they
 // move) and each environment's templates, as "<environment>/<template>".
@@ -66,6 +80,7 @@ export class FleetRecords {
   constructor(
     private replicas: Replicas,
     private worker?: () => Worker | undefined,
+    private forge?: () => ForgeSigner | undefined,
   ) {}
 
   has() {
@@ -137,11 +152,52 @@ export class FleetRecords {
     const id = newSpawnId();
     await this.seal(id, words, shell);
     try {
-      return this.open(await w("POST", "/spawns", { ...rest, id, sealed: true }));
+      const s = await w("POST", "/spawns", { ...rest, id, sealed: true });
+      // Where the Worker put it: what its git grant, if any, is for.
+      if (typeof s?.template === "string") await this.set(spawnRecord(id), { template: s.template, environment: str(s.environment) });
+      return this.open(s);
     } catch (e) {
       await this.replicas.change("fleet", FLEET, { t: "card", card: spawnRecord(id), set: { deleted: now() } });
       throw e;
     }
+  }
+
+  // Git -------------------------------------------------------------------------------
+
+  // A grant to holder (a key fleetd made for the spawn) of what its
+  // template's git says, for its environment's manifest; none if it says nothing.
+  // Asked again (a claim retried, or the last nearly run out), it signs
+  // another and takes back the one before; not once the spawn's is over.
+  async gitGrant(id: string, holder: string, environment: string): Promise<{ account: string; gate: string; chain: Chain } | undefined> {
+    const m = this.record(spawnRecord(id));
+    if (!m || typeof m.task !== "string") throw new Invalid(`no spawn ${id} here`);
+    if (!KEY.test(holder)) throw new Invalid("git must be the holder's key");
+    if (typeof m.environment === "string" && m.environment !== environment) throw new Invalid(`${id} is ${m.environment}'s, not ${environment}'s`);
+    const template = str(m.template);
+    const env = this.environments().find((e) => e.name === environment);
+    const terms = template ? ((env?.templates as Record<string, { git?: GitTerms }> | undefined)?.[template]?.git ?? null) : null;
+    if (!terms) return;
+    if (m.gitOver) throw new Invalid(`${id}'s git access is over`);
+    const f = this.forge?.();
+    if (!f) throw new Invalid(`${template} names repos, and this node can't sign for the forge`);
+    const perms = Object.fromEntries(Object.entries(terms.permissions ?? {}).filter(([p]) => PERMISSIONS.includes(p as Permission)));
+    const g = grantForge(f.device, f.account, holder, { name: `fleet ${id} (${template})`, repos: terms.repos ?? [], perms, refs: terms.refs ?? null, del: terms.delete === true, expires: Date.now() + GIT_GRANT_MS });
+    const bad = scopeOf(g.body);
+    if (typeof bad === "string") throw new Invalid(`${template}'s git: ${bad}`);
+    const was = str(m.git);
+    await this.set(spawnRecord(id), { git: forgeGrantHash(g.body) });
+    if (was) await sendRevocationToGate(f.gate, f.account, { grant: revokeForgeGrant(f.device, f.account, was) }).catch((e) => console.error(`${id}: its last git grant: ${(e as Error).message}`));
+    return { account: f.account, gate: f.gate, chain: { cert: f.cert, grants: [g] } };
+  }
+
+  // Its grant taken back at the gate, once it's over.
+  async revokeGit(id: string) {
+    const m = this.record(spawnRecord(id));
+    const hash = str(m?.git);
+    const f = this.forge?.();
+    if (!hash || !f) return;
+    await sendRevocationToGate(f.gate, f.account, { grant: revokeForgeGrant(f.device, f.account, hash) });
+    await this.set(spawnRecord(id), { git: null, gitOver: true });
   }
 
   // Environments ---------------------------------------------------------------------

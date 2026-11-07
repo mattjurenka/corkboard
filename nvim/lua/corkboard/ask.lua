@@ -17,8 +17,13 @@ end
 
 function M.input(opts, on_confirm)
   opts = opts or {}
-  if not require("corkboard").attached() then return cmdline.input(opts, on_confirm) end
-  show({ prompt = opts.prompt, default = opts.default or "" }, on_confirm)
+  if not require("corkboard").attached() then
+    if not opts.secret then return cmdline.input(opts, on_confirm) end
+    -- What a secret is typed into isn't shown, nor kept in the history.
+    local ok, v = pcall(vim.fn.inputsecret, opts.prompt or "")
+    return on_confirm(ok and v or nil)
+  end
+  show({ prompt = opts.prompt, default = opts.default or "", secret = opts.secret or nil }, on_confirm)
 end
 
 function M.select(items, opts, on_choice)

@@ -15,12 +15,14 @@ export function Ask() {
   const [at, setAt] = useState(0);
   const field = useRef<HTMLTextAreaElement>(null);
   const list = useRef<HTMLFormElement>(null);
+  const secret = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!ask) return;
     setText(ask.default);
     setAt(0);
     if (ask.choices) return list.current?.focus();
+    if (ask.secret) return secret.current?.focus();
     const f = field.current;
     f?.focus();
     f?.setSelectionRange(ask.default.length, ask.default.length);
@@ -87,6 +89,16 @@ export function Ask() {
               </li>
             ))}
           </ul>
+        ) : ask.secret ? (
+          <input
+            ref={secret}
+            type="password"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            className="mt-half min-w-0 flex-none border bg-muted px-ch outline-none focus:border-primary"
+          />
         ) : (
           <textarea
             ref={field}

@@ -14,3 +14,5 @@ export * from "./sync";
 export * from "./relay";
 export * from "./sharing";
 export * from "./channel";
+export * from "./forge";
+export * from "./forge-client";

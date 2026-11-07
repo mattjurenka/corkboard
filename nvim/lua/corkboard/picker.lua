@@ -242,6 +242,8 @@ local tools = {
   { text = "Claude Code", hint = "<C-.>", project = true, run = function() require("corkboard.claude").open() end },
   { text = "Away mode", hint = "<leader>a", run = function() require("corkboard.away").enter() end },
   { text = "Pair a device", hint = "", run = function() require("corkboard.pair").start() end },
+  { text = "Give git access", hint = "", run = function() require("corkboard.forge").grant() end },
+  { text = "Take back git access", hint = "", run = function() require("corkboard.forge").revoke() end },
   { text = "Terminal", hint = "", project = true, run = function() require("corkboard.terminal").tab() end },
   { text = "Reload window", hint = "F5", run = function() require("corkboard.restore").reload() end },
 }

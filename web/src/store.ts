@@ -157,7 +157,7 @@ export type State = {
   holdForm: { hold: HoldFields | null } | null;
   // A question (corkboard.ask), while it's open: text to type
   // (vim.ui.input), or one of its choices (vim.ui.select).
-  ask: { id: number; prompt: string; default: string; choices?: string[] } | null;
+  ask: { id: number; prompt: string; default: string; choices?: string[]; secret?: boolean } | null;
   // Pairing a device (corkboard.pair), while it's open.
   pair: {
     step: "code" | "waiting" | "sas" | "done" | "error";

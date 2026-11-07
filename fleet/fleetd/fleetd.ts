@@ -20,11 +20,18 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync,
 import { join } from "node:path";
 import { coresOf, guestOf, manifest, memoryOf, schedule, SPAWNS, spawns, tokenFor, write, type Manifest, type Spawn } from "./fleet";
 import { assist } from "./assistant";
-import { Queue } from "./queue";
+import { GitSessions, gitNote } from "./forge";
+import { ENVIRONMENT, Queue, nodeApi } from "./queue";
 import { end, message, post, serveSessions } from "./sessions";
 import { CLOUD } from "../../bridge/cloud";
 
 const now = () => new Date().toISOString();
+// A spawn's next grant is the node's, as its first was (queue.ts's claim).
+const git = new GitSessions(
+  undefined,
+  async (s, holder) => (await nodeApi(manifest(), "GET", `/fleet/spawns/${s.id}?${new URLSearchParams({ git: holder, environment: ENVIRONMENT })}`)).git,
+  write,
+);
 
 async function run(cmd: string[]): Promise<{ ok: boolean; out: string }> {
   const p = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe" });
@@ -71,6 +78,8 @@ async function start(m: Manifest, s: Spawn, slot: string) {
     const b = await run(["git", "-C", s.repo, "bundle", "create", join(sl.shareDir, "repo.bundle"), "HEAD", "--branches"]);
     if (!b.ok) throw new Error(`couldn't bundle ${s.repo}: ${b.out}`);
   }
+  // A token for the forge, if its template names repos; renewed as it runs.
+  await git.keep(sl.shareDir, s);
   if (s.shell) writeFileSync(join(sl.shareDir, "shell.json"), JSON.stringify(s.shell) + "\n");
   if (s.job) writeFileSync(join(sl.shareDir, "job"), s.job + "\n");
   writeFileSync(join(sl.stateDir, "template"), guestOf(m, s) + "\n");
@@ -85,7 +94,7 @@ async function start(m: Manifest, s: Spawn, slot: string) {
 // What's said after the task, under a rule, or nothing when there's
 // nothing to say (a spawn on no board, holding no secrets).
 const note = (said: string, s: Spawn) => {
-  const all = (said + secretsNote(s)).trim();
+  const all = (said + secretsNote(s) + gitNote(s)).trim();
   return all ? `\n\n---\n${all}\n` : "";
 };
 
@@ -111,7 +120,7 @@ const taskNote = (s: Spawn) =>
 const cardNote = (s: Spawn) => `
 
 ---
-This task is corkboard card ${s.remote!.card} on the ${s.remote!.board} board, and you are its agent, ${s.remote!.agent}. The corkboard MCP server is connected for it: claim_card it first, log progress there as you go, use block or request_user_action if you need the user, and submit_for_review when you're done. Your final answer is posted to the card too.${secretsNote(s)}
+This task is corkboard card ${s.remote!.card} on the ${s.remote!.board} board, and you are its agent, ${s.remote!.agent}. The corkboard MCP server is connected for it: claim_card it first, log progress there as you go, use block or request_user_action if you need the user, and submit_for_review when you're done. Your final answer is posted to the card too.${secretsNote(s)}${gitNote(s)}
 `;
 
 const secretsNote = (s: Spawn) => {
@@ -153,6 +162,8 @@ async function tick() {
     write({ ...s, state, exit, ended: now(), error: exit === undefined && !s.stopRequested ? "the slot stopped without finishing the task (journalctl -u " + unit + ")" : s.error });
     s.state = state;
   }
+
+  await git.step(m, spawns());
 
   const plan = schedule(m, spawns(), await activeUnits(m));
   for (const f of plan.fail) {

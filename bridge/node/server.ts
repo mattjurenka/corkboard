@@ -442,14 +442,20 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       const f = o.sealed;
       try {
         if (name === "spawns" && !sub && m === "POST") return json(await f.queue(await body()), 201);
-        if (name === "spawns" && sub && SPAWN_ID.test(sub)) {
+        if (name === "spawns" && sub && SPAWN_ID.test(sub) && !id) {
           const s = f.spawn(sub);
           if (m === "GET") {
             if (!s) return json({ error: `no spawn ${sub} here` }, 404);
             const holds = q("holds")?.split(",").filter(Boolean) ?? [];
-            return json({ ...s, ...(holds.length && { secrets: f.secrets(holds) }) });
+            const key = q("git");
+            const git = key ? await f.gitGrant(sub, key, q("environment") ?? "") : undefined;
+            return json({ ...s, ...(holds.length && { secrets: f.secrets(holds) }), ...(git && { git }) });
           }
           if (m === "PUT") return json(await f.report(sub, await body()));
+        }
+        if (name === "spawns" && sub && SPAWN_ID.test(sub) && id === "git" && m === "DELETE") {
+          await f.revokeGit(sub);
+          return new Response(null, { status: 204 });
         }
         if (name === "environments" && !sub && m === "GET") return json(f.environments());
         if (name === "environments" && sub && m === "PUT") return (await f.putEnvironment(sub, (await body()).manifest), json({}));

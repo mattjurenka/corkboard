@@ -32,6 +32,11 @@
 #   /mnt/share/secrets/      optional: a file per hold the spawn has (its
 #                            brain's and its template's) whose secret is
 #                            kept in corkboard (the hosted Worker's holds.ts)
+#   /mnt/share/git-token     optional: a session's token at the forge gate
+#                            (forgeHost), for the repos its template's git
+#                            names; fleetd puts a new one here before the
+#                            last runs out, and git's credential helper
+#                            hands it over (fleet/fleetd/forge.ts)
 #   /mnt/share/shell.json    optional: the tools the spawner brought, built
 #                            here and run in: { "packages": [...] } from this
 #                            guest's nixpkgs, or { "flake": ref }'s devShell
@@ -60,7 +65,7 @@
 #
 # Egress is the public internet, routed and NATed by the host, whose
 # firewall keeps everything private (its LAN, the host itself) out of reach.
-{ template, ownerUid ? null, brain ? null, shares ? { }, corkboardHost ? "portal.corkboard.fyi" }:
+{ template, ownerUid ? null, brain ? null, shares ? { }, corkboardHost ? "portal.corkboard.fyi", forgeHost ? "git.corkboard.fyi" }:
 { config, pkgs, lib, modulesPath, ... }:
 let
   memory = toString config.virtualisation.memorySize;
@@ -75,6 +80,14 @@ let
   };
 
   env = claudeCodeEnv;
+
+  # The forge gate's session token as the password, read each time, since
+  # fleetd renews it as the spawn runs.
+  gitCredential = pkgs.writeShellScript "fleet-git-credential" ''
+    [ "$1" = get ] && [ -r /mnt/share/git-token ] || exit 0
+    echo username=fleet
+    echo "password=$(tr -d '\n' < /mnt/share/git-token)"
+  '';
 
   url = "https://${corkboardHost}";
 
@@ -443,6 +456,7 @@ in
   programs.git = {
     enable = true;
     config.user = { name = "corkboard fleet (${template.name})"; email = "fleet@corkboard.invalid"; };
+    config.credential."https://${forgeHost}".helper = "${gitCredential}";
   };
 
   users.mutableUsers = false;

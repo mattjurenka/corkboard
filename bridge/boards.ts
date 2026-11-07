@@ -98,6 +98,11 @@ export class Session extends CloudSession {
     if (op === "pair_status") return (await import("./e2ee")).pairStatus();
     if (op === "pair_approve") return (await import("./e2ee")).pairApprove(args[0], args[1]);
     if (op === "pair_confirm") return (await import("./e2ee")).pairConfirm(args[0], !!args[1]);
+    // Git through the forge gate (Give git access).
+    if (op === "forge_status") return (await import("./e2ee")).forgeStatus();
+    if (op === "forge_grant") return (await import("./e2ee")).forgeGrant(args[0]);
+    if (op === "forge_grants") return (await import("./e2ee")).forgeGrants();
+    if (op === "forge_revoke") return (await import("./e2ee")).forgeRevoke(args[0]);
     // A session on the node's board: queued with node: true, its grant the
     // node's; and, once the fleet's sealed on the node, queued by the node.
     if (node && op === "fleet_session") {
