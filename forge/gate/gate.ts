@@ -24,25 +24,18 @@ import {
   type ForgeBind,
   type ForgeChallenge,
   type GrantRevocation,
-  type Level,
-  type Permission,
-  type Scope,
-  atLeast,
   checkAnswer,
   checkBind,
   checkChain,
   checkGrantRevocation,
   FORGE_BIND_SSH,
   forgeBindBytes,
-  refAllowed,
-  repoAllowed,
 } from "../../lib/e2ee/forge";
 import { currentKey } from "../../lib/e2ee/sharing";
 import { checkCert, verify } from "../../lib/e2ee/device";
 import { sshSigned } from "./ssh";
 import { type AccountView, type DeviceCert, type Revocation, type Signed, KEY, b64url, isRevocation, revocationBytes } from "../../lib/e2ee/wire";
-import { PushError, isDelete, readCommands } from "./push";
-import { type Need, type Rule, OPEN_API, apiRule, gitRoute } from "./routes";
+import { forgeProxy } from "./proxy";
 import type { Store } from "./store";
 
 export type GateConfig = {
@@ -63,12 +56,8 @@ const TOKEN = "cbg_";
 const NONCE_MS = 2 * 60_000;
 const SESSION_MS = 3600_000;
 const MAX_NONCES = 10_000;
-// An API write's body, held to read its refs.
-const MAX_BODY = 64 * 1024 * 1024;
 
 type Session = { account: string; user: string; checked: Checked; expires: number };
-
-const HOP = ["connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "proxy-authorization", "proxy-authenticate", "host", "content-length"];
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const error = (status: number, message: string) => json({ error: message }, status);
@@ -97,10 +86,7 @@ export function createGate(config: GateConfig) {
   const nonces = new Map<string, number>();
   const sessions = new Map<string, Session>();
 
-  const upstream = (path: string, init: RequestInit & { headers: Headers }) => {
-    init.headers.set("accept-encoding", "identity");
-    return fetch(new URL(path, config.upstream), { ...init, redirect: "manual", ...(config.unix && { unix: config.unix }), ...(init.body && { duplex: "half" }) } as RequestInit);
-  };
+  const { upstream, allow, forward } = forgeProxy(config);
 
   const cors = (req: Request, res: Response) => {
     const o = req.headers.get("origin");
@@ -263,108 +249,6 @@ export function createGate(config: GateConfig) {
     return error(404, "not found");
   }
 
-  // A grant's request ------------------------------------------------------------
-
-  type Verdict = { ok: true; body?: BodyInit | null; dropEncoding?: boolean } | { ok: false; status: number; error: string };
-  const no = (status: number, e: string): Verdict => ({ ok: false, status, error: e });
-
-  async function allow(req: Request, url: URL, s: Session, scope: Scope): Promise<Verdict> {
-    const method = req.method;
-    const raw = url.pathname;
-    if (/%2f|%5c|\/\.\.?(\/|$)|\/\//i.test(raw)) return no(400, "not a path a grant takes");
-    if (OPEN_API.has(`${method} ${raw}`)) return { ok: true, body: req.body };
-
-    const git = gitRoute(method, raw, url.searchParams.get("service"));
-    if (git) {
-      if (!repoAllowed(scope, git.owner, git.repo)) return no(403, `the grant doesn't cover ${git.owner}/${git.repo}`);
-      const perm: Permission = git.wiki ? "wiki" : "contents";
-      const level: Level = git.push ? "write" : "read";
-      if (!atLeast(scope, perm, level)) return no(403, `the grant doesn't give ${perm}:${level}`);
-      if (!git.push || git.advertise || !req.body) return { ok: true, body: req.body };
-      let stream = req.body as ReadableStream<Uint8Array>;
-      const enc = req.headers.get("content-encoding");
-      if (enc === "gzip") stream = stream.pipeThrough(new DecompressionStream("gzip") as any);
-      else if (enc && enc !== "identity") return no(415, `content-encoding ${enc}`);
-      try {
-        const { commands, body } = await readCommands(stream);
-        if (!git.wiki) for (const c of commands) if (!refAllowed(scope, c.ref)) return no(403, `the grant doesn't let it ${isDelete(c) ? "delete" : "push"} ${c.ref}`);
-        return { ok: true, body, dropEncoding: !!enc && enc !== "identity" };
-      } catch (e) {
-        if (e instanceof PushError) return no(400, e.message);
-        throw e;
-      }
-    }
-
-    const m = raw.match(/^\/api\/v1\/repos\/([\w.-]+)\/([\w.-]+)(\/.*)?$/);
-    if (!m) return no(403, "a grant reaches a repository's API and git, and nothing else");
-    const [, owner, repo, restRaw = ""] = m;
-    if (!repoAllowed(scope, owner, repo)) return no(403, `the grant doesn't cover ${owner}/${repo}`);
-    let rest: string;
-    try {
-      rest = decodeURIComponent(restRaw);
-    } catch {
-      return no(400, "not a path a grant takes");
-    }
-    const found = apiRule(method, rest);
-    if (!found) return no(403, `a grant can't ${method} ${rest || "/"}`);
-    const { rule, params } = found;
-
-    const base = `/api/v1/repos/${owner}/${repo}`;
-    const get = async (p: string) => {
-      const res = await upstream(base + p, { headers: new Headers({ [config.userHeader]: s.user, accept: "application/json" }) });
-      return res.ok ? res.json() : null;
-    };
-
-    let needs: Need[] = rule.needs;
-    if (rule.issue) {
-      const isPull = rule.issue === "n" ? !!(await get(`/issues/${params.n}`))?.pull_request : !!(await get(`/issues/comments/${params.c}`))?.pull_request_url;
-      if (isPull) needs = needs.map((n) => (n.perm === "issues" ? { ...n, perm: "pull_requests" as const } : n));
-    }
-    for (const n of needs) if (!atLeast(scope, n.perm, n.level)) return no(403, `the grant doesn't give ${n.perm}:${n.level}`);
-    if (rule.del && !scope.del) return no(403, "the grant doesn't let it delete or give away the repository");
-
-    let forward: BodyInit | null = req.body;
-    if (scope.refs !== null && rule.refs) {
-      let parsed: any = null;
-      if (rule.body && req.body) {
-        const bytes = new Uint8Array(await req.arrayBuffer());
-        if (bytes.length > MAX_BODY) return no(413, "too large");
-        forward = bytes;
-        try {
-          parsed = bytes.length ? JSON.parse(new TextDecoder().decode(bytes)) : null;
-        } catch {
-          parsed = null;
-        }
-      }
-      const refs = await rule.refs({ params, body: parsed, get });
-      for (const ref of refs) if (!refAllowed(scope, ref)) return no(403, `the grant doesn't let it move ${ref}`);
-    }
-    return { ok: true, body: forward };
-  }
-
-  // Forwarding -------------------------------------------------------------------
-
-  async function forward(req: Request, url: URL, user: string | null, body: BodyInit | null | undefined, dropEncoding = false): Promise<Response> {
-    const headers = new Headers();
-    req.headers.forEach((v, k) => {
-      if (!HOP.includes(k)) headers.set(k, v);
-    });
-    headers.delete(config.userHeader);
-    if (user) {
-      headers.set(config.userHeader, user);
-      headers.delete("authorization");
-      headers.delete("cookie");
-    }
-    if (dropEncoding) headers.delete("content-encoding");
-    const hasBody = req.method !== "GET" && req.method !== "HEAD";
-    const res = await upstream(url.pathname + url.search, { method: req.method, headers, body: hasBody ? (body ?? null) : undefined });
-    const out = new Headers();
-    res.headers.forEach((v, k) => {
-      if (!HOP.includes(k) && k !== "content-encoding") out.append(k, v);
-    });
-    return new Response(res.body, { status: res.status, statusText: res.statusText, headers: out });
-  }
-
   async function fetch_(req: Request): Promise<Response> {
     const url = new URL(req.url);
     if (req.method === "OPTIONS" && req.headers.get("origin") && config.corsOrigins.includes(req.headers.get("origin")!)) {
@@ -384,7 +268,7 @@ export function createGate(config: GateConfig) {
     if (s === "none") return forward(req, url, null, req.body);
     if (!s) return cors(req, new Response(JSON.stringify({ error: "the session is over; ask for another" }), { status: 401, headers: { "content-type": "application/json", "www-authenticate": 'Basic realm="corkboard"' } }));
     if (!s.checked.scope) return cors(req, await forward(req, url, s.user, req.body));
-    const v = await allow(req, url, s, s.checked.scope);
+    const v = await allow(req, url, s.user, s.checked.scope);
     if (!v.ok) return cors(req, error(v.status, v.error));
     return cors(req, await forward(req, url, s.user, v.body, v.dropEncoding));
   }

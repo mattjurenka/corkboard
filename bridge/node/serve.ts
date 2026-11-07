@@ -20,6 +20,10 @@
 //   corkboard-bridge e2ee approve-connector
 //                          a one-time code to approve a connector with at /authorize
 //
+// The account's Forgejo, on channels under /forge/ (forge.ts), is at
+// CORKBOARD_FORGE_UNIX (a unix socket; default <state>/node/forge/forgejo.sock),
+// trusting the user header CORKBOARD_FORGE_USER_HEADER names.
+//
 // <state>/node/ has config.json (boards, brains, origin, port, host,
 // timezone: what the flags add to), oauth.json, calendar.json, blobs/
 // (cards' files, sealed, media.ts), and
@@ -43,6 +47,7 @@ import { indexId, indexKey } from "../../lib/e2ee/sharing";
 import { type LogTransport, Replica, offline } from "../../lib/e2ee/sync";
 import { accountObject, dayObject, fleetObject, listObjects } from "./objects";
 import { FleetRecords, FORGE_GATE } from "./fleet";
+import { ForgeRecords, forgeHandler } from "./forge";
 import { Replicas } from "./replicas";
 import { Data } from "./data";
 import { Search } from "./search";
@@ -198,7 +203,16 @@ export async function startNode(o: NodeOptions = {}) {
     // This machine signs the fleet's git grants (forge-keys.md), as a device of the account's.
     const forge = () => (r?.account && d.cert.body.role !== "relay" ? { account: r.account, device: { id: d.device.id, sign: d.device.sign }, cert: d.cert, gate: FORGE_GATE } : undefined);
     const sealed = new FleetRecords(replicas, fleet, forge);
-    const served = { data, search, episodes, media, oauth, addBoard, fleet, sealed, calendar, hub };
+    const forgeRecords = new ForgeRecords(replicas);
+    const forgejo = forgeHandler({
+      upstream: "http://forgejo.invalid",
+      unix: process.env.CORKBOARD_FORGE_UNIX ?? join(NODE_DIR, "forge", "forgejo.sock"),
+      userHeader: process.env.CORKBOARD_FORGE_USER_HEADER ?? "X-Corkboard-Forge-User",
+      records: forgeRecords,
+      account: () => (r?.account ? { id: r.account, key: d.cert.body.account } : undefined),
+      revocations: () => (r ? r.revoked() : Promise.resolve([])),
+    });
+    const served = { data, search, episodes, media, oauth, addBoard, fleet, sealed, calendar, hub, forge: forgejo };
     // Every hub of the account's (this one, and each connected device's on a
     // channel to it), for this machine's bridges to watch (peers.ts).
     const channels = new Map<string, Promise<Channel>>();
@@ -268,6 +282,7 @@ export async function startNode(o: NodeOptions = {}) {
       // The Worker's fleet queue while signed in, and what the fleet keeps sealed here.
       fleet,
       sealed,
+      forge: forgeRecords,
       // This machine's sessions, for an in-process bridge to join.
       hub,
       reach,

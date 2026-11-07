@@ -17,7 +17,7 @@
 //   GET    /spawns/:id[?holds=a,b] its sealed part; with holds, their secrets, on a channel or loopback
 //   PUT    /spawns/:id             { result?, error? }: fleetd's, at the end
 //   GET    /spawns/:id?git=KEY     with a git grant to KEY, signed here, if its template names repos
-//   DELETE /spawns/:id/git         its git grant taken back, at the gate
+//   DELETE /spawns/:id/git         its git grant taken back (forge.ts's revoked:, and the gate)
 //   GET    /environments           the manifests
 //   PUT    /environments/:name     { manifest }: fleetd's
 //   /holds[/:name]                 as the Worker's /api/holds (holds.ts)
@@ -28,6 +28,7 @@ import { sendRevocationToGate } from "../../lib/e2ee/forge-client";
 import { type DeviceCert, type Signed, KEY } from "../../lib/e2ee/wire";
 import type { MergedCard } from "../../lib/e2ee/merge";
 import { FLEET, environmentRecord, holdRecord, spawnRecord } from "./objects";
+import { ForgeRecords } from "./forge";
 import type { Replicas } from "./replicas";
 
 export type Shell = { packages: string[] } | { flake: string };
@@ -186,7 +187,7 @@ export class FleetRecords {
     if (typeof bad === "string") throw new Invalid(`${template}'s git: ${bad}`);
     const was = str(m.git);
     await this.set(spawnRecord(id), { git: forgeGrantHash(g.body) });
-    if (was) await sendRevocationToGate(f.gate, f.account, { grant: revokeForgeGrant(f.device, f.account, was) }).catch((e) => console.error(`${id}: its last git grant: ${(e as Error).message}`));
+    if (was) await this.takeBack(f, was).catch((e) => console.error(`${id}: its last git grant: ${(e as Error).message}`));
     return { account: f.account, gate: f.gate, chain: { cert: f.cert, grants: [g] } };
   }
 
@@ -196,8 +197,16 @@ export class FleetRecords {
     const hash = str(m?.git);
     const f = this.forge?.();
     if (!hash || !f) return;
-    await sendRevocationToGate(f.gate, f.account, { grant: revokeForgeGrant(f.device, f.account, hash) });
+    await this.takeBack(f, hash);
     await this.set(spawnRecord(id), { git: null, gitOver: true });
+  }
+
+  // A grant revoked in the account's fleet object, for the node's forge
+  // wherever it leads (forge.ts), and at the hosted gate while there is one.
+  private async takeBack(f: ForgeSigner, hash: string) {
+    const r = revokeForgeGrant(f.device, f.account, hash);
+    await new ForgeRecords(this.replicas).revoke(r);
+    await sendRevocationToGate(f.gate, f.account, { grant: r });
   }
 
   // Environments ---------------------------------------------------------------------

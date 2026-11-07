@@ -87,6 +87,8 @@ export type NodeOptions = {
   // Every hub of the account's, the account's devices' on channels: for
   // this machine's bridges, on loopback (/app/peers, /app/peer/:device/...).
   reach?: Reach;
+  // The account's forge (forge.ts), on channels under /forge/.
+  forge?: (req: Request, from: Signed<DeviceCert>) => Promise<Response>;
 };
 
 export type AppCall = (op: string, args: any[]) => Promise<unknown>;
@@ -536,6 +538,11 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       if (p.startsWith("/upload/")) {
         if (!o.media) return json({ error: "not found" }, 404);
         return await o.media.upload(req, p.slice("/upload/".length));
+      }
+      if (p === "/forge" || p.startsWith("/forge/")) {
+        // Sealed only: the channel shows who's asking.
+        if (!o.forge || !from) return json({ error: "not found" }, 404);
+        return await o.forge(req, from);
       }
       if (p === "/api/sessions" || p.startsWith("/api/sessions/")) {
         // Sealed, never the tunnel's: on a channel, from a device that's

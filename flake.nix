@@ -155,7 +155,8 @@
           version = "0.1.0";
           src = pkgs.lib.fileset.toSource {
             root = ./.;
-            fileset = pkgs.lib.fileset.unions [ ./bridge ./lib ./nvim ./mcp ];
+            # forge/gate: what the node shares with the hosted gate (bridge/node/forge.ts).
+            fileset = pkgs.lib.fileset.unions [ ./bridge ./lib ./nvim ./mcp ./forge/gate ];
           };
           # The bridge's only dependency, and it has none of its own, so it is fetched
           # straight from the registry with bun.lock's integrity hash instead
@@ -179,7 +180,7 @@
           installPhase = ''
             share=$out/share/corkboard
             mkdir -p $share/node_modules/@msgpack/msgpack
-            cp -r bridge lib nvim mcp $share/
+            cp -r bridge lib nvim mcp forge $share/
             echo ${rev} > $share/bridge/rev
             echo ${rev} > $share/nvim/rev
             mkdir -p $share/web && cp -r ${web} $share/web/dist
@@ -277,7 +278,7 @@
           version = "0.1.0";
           src = pkgs.lib.fileset.toSource {
             root = ./.;
-            fileset = pkgs.lib.fileset.unions [ ./forge/gate/gate.ts ./forge/gate/main.ts ./forge/gate/push.ts ./forge/gate/routes.ts ./forge/gate/ssh.ts ./forge/gate/store.ts ./lib/e2ee ];
+            fileset = pkgs.lib.fileset.unions [ ./forge/gate/gate.ts ./forge/gate/main.ts ./forge/gate/proxy.ts ./forge/gate/push.ts ./forge/gate/routes.ts ./forge/gate/ssh.ts ./forge/gate/store.ts ./lib/e2ee ];
           };
           crypto = [ "@noble/ciphers" "@noble/curves" "@noble/hashes" ];
           nativeBuildInputs = [ pkgs.makeWrapper ];
