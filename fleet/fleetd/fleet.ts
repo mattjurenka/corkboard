@@ -59,6 +59,10 @@ export type Manifest = {
   // (queue.ts), and a brain's spawn its memory. url is still what spawns are
   // given for its /mcp.
   node?: NodeLink;
+  // Forgejo Actions, a VM per job (actions.ts): the instance, a file holding
+  // its user's token (write:user), the labels this host runs jobs for (in
+  // host mode, in the VM), and the template the job's VM is.
+  actions?: { url: string; tokenFile: string; labels: string[]; template: string };
 };
 
 export type GitTerms = { repos: string[]; permissions: Record<string, "read" | "write">; refs?: string[] | null; delete?: boolean };
@@ -122,9 +126,13 @@ export type Spawn = {
   shell?: { packages: string[] } | { flake: string };
   memory?: number;
   cores?: number;
-  // A job of the Worker's that the guest runs instead of an agent:
-  // "consolidate", a brain's consolidator (fleet/guest/slot.nix).
-  job?: "consolidate";
+  // A job the guest runs instead of an agent:
+  // "consolidate", a brain's consolidator (fleet/guest/slot.nix), or
+  // "actions", a Forgejo Actions job (actions.ts).
+  job?: "consolidate" | "actions";
+  // An Actions job's: its handle, ids, and the ephemeral runner it's run
+  // by, whose token is dropped once the runner's gone.
+  actions?: { handle: string; job: number; run: number; runner: number; uuid: string; token?: string; gone?: true };
 };
 
 // The MiB a spawn's VM is given, and what it costs the budget.

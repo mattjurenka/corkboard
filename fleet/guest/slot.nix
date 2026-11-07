@@ -42,8 +42,9 @@
 #                            guest's nixpkgs, or { "flake": ref }'s devShell
 #                            ("." is the repo's). Only ever evaluated in the
 #                            guest, so a shell can't reach the host's secrets
-#   /mnt/share/job           for a job of the Worker's rather than an agent:
-#                            "consolidate", the brain's consolidator (below)
+#   /mnt/share/job           for a job rather than an agent: "consolidate",
+#                            the brain's consolidator (below), or "actions",
+#                            a Forgejo Actions job (fleet/caps/actions.nix)
 #   /mnt/share/session       for a session you talk to rather than a task:
 #                            Claude Code keeps going, reading each message
 #                            fleetd puts in /mnt/share/inbox/ (a file a stream-
@@ -186,8 +187,11 @@ let
       out=/mnt/outbox
       rm -rf "''${out:?}"/*
 
-      CLAUDE_CODE_OAUTH_TOKEN=$(cat /mnt/share/claude-token)
-      export CLAUDE_CODE_OAUTH_TOKEN
+      # None for an Actions job, which runs no agent.
+      if [ -f /mnt/share/claude-token ]; then
+        CLAUDE_CODE_OAUTH_TOKEN=$(cat /mnt/share/claude-token)
+        export CLAUDE_CODE_OAUTH_TOKEN
+      fi
 
       work=$HOME/work
       rm -rf "$work"
@@ -221,7 +225,10 @@ let
       fi
 
       status=0
-      if [ -f /mnt/share/job ]; then
+      if [ "$(cat /mnt/share/job 2>/dev/null)" = actions ]; then
+        # The actions capability's (fleet/caps/actions.nix).
+        fleet-actions-job "$out" || status=$?
+      elif [ -f /mnt/share/job ]; then
         ${lib.getExe consolidate} "$out" || status=$?
       elif [ -f /mnt/share/session ]; then
         # Its logs where fleetd can follow them.

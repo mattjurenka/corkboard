@@ -216,6 +216,13 @@ let
       ];
       targets = [ "vm" "oci" ];
     };
+    # One Forgejo Actions job per VM (fleet/fleetd/actions.ts).
+    actions = {
+      modules = [ ./caps/actions.nix ];
+      memory = 1536;
+      cores = 2;
+      disk = 16384;
+    };
   };
 in
 {

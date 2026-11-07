@@ -18,7 +18,8 @@
 
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { coresOf, guestOf, manifest, memoryOf, schedule, SPAWNS, spawns, tokenFor, write, type Manifest, type Spawn } from "./fleet";
+import { coresOf, guestOf, manifest, memoryOf, newId, schedule, SPAWNS, spawns, tokenFor, write, type Manifest, type Spawn } from "./fleet";
+import { Actions, forgejo } from "./actions";
 import { assist } from "./assistant";
 import { GitSessions, gitNote } from "./forge";
 import { ENVIRONMENT, Queue, nodeApi } from "./queue";
@@ -32,6 +33,8 @@ const git = new GitSessions(
   async (s, holder) => (await nodeApi(manifest(), "GET", `/fleet/spawns/${s.id}?${new URLSearchParams({ git: holder, environment: ENVIRONMENT })}`)).git,
   write,
 );
+// Forgejo Actions jobs, each a spawn (actions.ts).
+const actions = new Actions(forgejo, write, newId);
 
 async function run(cmd: string[]): Promise<{ ok: boolean; out: string }> {
   const p = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe" });
@@ -54,8 +57,9 @@ function empty(dir: string) {
 
 async function start(m: Manifest, s: Spawn, slot: string) {
   const sl = m.slots[slot];
-  const token = tokenFor(s.account);
-  if (!existsSync(token)) throw new Error(`no token for the ${s.account} account at ${token} (claude setup-token, signed in as it, then save it there)`);
+  // An Actions job runs no agent, so has no account.
+  const token = s.job === "actions" ? undefined : tokenFor(s.account);
+  if (token && !existsSync(token)) throw new Error(`no token for the ${s.account} account at ${token} (claude setup-token, signed in as it, then save it there)`);
   empty(sl.shareDir);
   empty(sl.outboxDir);
   writeFileSync(join(sl.shareDir, "task.md"), s.remote ? s.task + (s.remote.card ? cardNote(s) : s.interactive ? sessionNote(s) : taskNote(s)) : s.task);
@@ -63,7 +67,13 @@ async function start(m: Manifest, s: Spawn, slot: string) {
     writeFileSync(join(sl.shareDir, "session"), "");
     if (s.task) post(sl.shareDir, message(s.task + (s.remote ? sessionNote(s) : "")));
   }
-  copyFileSync(token, join(sl.shareDir, "claude-token"));
+  if (token) copyFileSync(token, join(sl.shareDir, "claude-token"));
+  if (s.actions) {
+    const a = m.actions;
+    if (!a || !s.actions.token) throw new Error("an Actions job, and no Actions here (or its runner's gone)");
+    writeFileSync(join(sl.shareDir, "actions.json"), JSON.stringify({ url: a.url, uuid: s.actions.uuid, handle: s.actions.handle, labels: a.labels }) + "\n");
+    writeFileSync(join(sl.shareDir, "runner-token"), s.actions.token + "\n", { mode: 0o600 });
+  }
   if (s.remote?.token) {
     const mcp = { mcpServers: { corkboard: { type: "http", url: s.remote.mcp ?? `${CLOUD}/mcp`, headers: { Authorization: `Bearer ${s.remote.token}` } } } };
     writeFileSync(join(sl.shareDir, "mcp.json"), JSON.stringify(mcp, null, 2) + "\n", { mode: 0o600 });
@@ -164,14 +174,17 @@ async function tick() {
   }
 
   await git.step(m, spawns());
+  await actions.step(m, spawns());
 
-  const plan = schedule(m, spawns(), await activeUnits(m));
+  // Again, with what the steps wrote (an Actions job's new spawn).
+  const queued = spawns();
+  const plan = schedule(m, queued, await activeUnits(m));
   for (const f of plan.fail) {
-    const s = all.find((x) => x.id === f.id)!;
+    const s = queued.find((x) => x.id === f.id)!;
     write({ ...s, state: "failed", error: f.error, ended: now() });
   }
   for (const { id, slot } of plan.start) {
-    const s = all.find((x) => x.id === id)!;
+    const s = queued.find((x) => x.id === id)!;
     try {
       await start(m, s, slot);
       write({ ...s, state: "running", slot, started: now() });
