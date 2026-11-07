@@ -109,3 +109,11 @@ browser ── HTTPS ──▶ own domain ──▶ node's public port          
   `/var/lib/forgejo` moves in as it is. A forge with no login recorded takes its one admin's. No
   SSH on the node's forge. Not deployed: the cut-over (the laptop's SSH `origin`, the hosted gate
   fronting the node's socket meanwhile) is still to settle.
+- 2026-11-07: deployed on the droplet. Its node (build 3mqv743x) runs Forgejo from
+  `/var/lib/corkboard-node/.local/state/corkboard/node/forge/` on `/run/forgejo/forgejo.sock`
+  (tmpfiles: corkboard-node:forgegate 2770), so the hosted gate, the portal and the Actions poller
+  are unchanged; env in /etc/corkboard-node/env, drop-in `forge.conf` (MemoryMax 1300M).
+  forgejo.service is disabled; the old state is `/var/lib/forgejo.moved-2026-11-07`. Checked: repos
+  listed through the socket as mattjurenka, hooks name the new app.ini, the GitHub push mirror
+  syncs. SSH to git@git.corkboard.fyi is gone; the laptop's `origin` moves to the bridge's
+  loopback /forge/ once a bridge runs 5073722.
