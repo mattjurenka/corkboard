@@ -163,7 +163,8 @@ export async function startNode(o: NodeOptions = {}) {
     // Rollups on the node the tunnel goes to (the leader if it's connected,
     // else the newest), or on this one offline, with no tunnel or none
     // connected; the account's nodes asked once a minute. Another node
-    // leading, this one's episodes are handed to it.
+    // leading, this one's episodes are handed to it. The relay also says
+    // when it changes (the tunnel's onLeader, below).
     let led: { at: number; leads: boolean } | undefined;
     const leads = async () => {
       if (!r || !tunnel) return true;
@@ -236,7 +237,10 @@ export async function startNode(o: NodeOptions = {}) {
         // phone's tokens work on either; never loopback. One with no
         // token is its device's, the owner (fleetd's relay-only one).
         const tunneled = node({ ...served, origin: nodes.url });
-        t.stop = r.serveTunnel(tunneled, { name: d.cert.body.name, onState: (up) => (t.connected = up), channels: (req, ch) => tunneled(req, undefined, ch.peer) });
+        // The relay says when the leader may have changed, so a move takes
+        // effect at once rather than at the next minute's look.
+        const told = (to: string | null) => (led = { at: Date.now(), leads: !to || to === d.device.id });
+        t.stop = r.serveTunnel(tunneled, { name: d.cert.body.name, onState: (up) => (t.connected = up), onLeader: told, channels: (req, ch) => tunneled(req, undefined, ch.peer) });
         tunnel = t;
       }
     }

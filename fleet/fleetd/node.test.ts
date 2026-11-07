@@ -9,7 +9,7 @@ import { type Channel, type Identity, initiate, pipe, respond } from "../../lib/
 import { certify, checkCert, newDevice } from "../../lib/e2ee/device";
 import { accountKeys, newRoot } from "../../lib/e2ee/keys";
 import { b64url } from "../../lib/e2ee/wire";
-import { type Opener, makeDevice, nodeFetch, readDevice, setOpener, storeCert } from "./node";
+import { type Opener, answerChannels, makeDevice, nodeFetch, readDevice, setOpener, storeCert } from "./node";
 
 const keys = accountKeys(newRoot());
 const dir = mkdtempSync(join(tmpdir(), "fleet-node-"));
@@ -37,7 +37,9 @@ test("asks the leader over a channel, or the newest node, and opens another once
   let view = { leader: leader.device.id, connected: [old, leader, newest].map((n, i) => ({ device: n.device.id, since: i })) };
   const opened: string[] = [];
   const chans: Channel[] = [];
+  let told: ((to: string | null) => void) | undefined;
   const fake: Opener = {
+    serveTunnel: (_h, o) => ((told = o?.onLeader), () => {}),
     nodes: async () => ({ ...view, handle: "h", url: "https://relay/n/h" }),
     async channel(to) {
       opened.push(to);
@@ -61,15 +63,29 @@ test("asks the leader over a channel, or the newest node, and opens another once
   await nodeFetch(link, "/api/node/boards");
   expect(opened).toEqual([leader.device.id]);
 
+  // The leader moved, the old one still up: the relay says, and the next
+  // request goes to the new one.
+  answerChannels(link, async () => new Response(null));
+  view = { leader: old.device.id, connected: view.connected };
+  told!(old.device.id);
+  await Bun.sleep(0);
+  expect(((await (await nodeFetch(link, "/api/node/boards")).json()) as { at: string }).at).toBe("old");
+  expect(opened).toEqual([leader.device.id, old.device.id]);
+  // Told it's the one it has: kept.
+  told!(old.device.id);
+  await Bun.sleep(0);
+  await nodeFetch(link, "/api/node/boards");
+  expect(opened).toEqual([leader.device.id, old.device.id]);
+
   // The leader gone: the next is to the newest of those left.
   view = { leader: leader.device.id, connected: [old, newest].map((n, i) => ({ device: n.device.id, since: i })) };
-  chans[0].close("the node went");
+  chans[1].close("the node went");
   expect(((await (await nodeFetch(link, "/api/node/boards")).json()) as { at: string }).at).toBe("newest");
-  expect(opened).toEqual([leader.device.id, newest.device.id]);
+  expect(opened).toEqual([leader.device.id, old.device.id, newest.device.id]);
 
   view = { leader: null as unknown as string, connected: [] };
-  chans[1].close("the node went");
-  await chans[1].closed;
+  chans[2].close("the node went");
+  await chans[2].closed;
   await expect(nodeFetch(link, "/api/node/boards")).rejects.toThrow("none of the account's nodes is connected");
 });
 

@@ -347,7 +347,10 @@ export class Relay implements PairTransport, LogTransport {
   //
   // tunnel: false, channels only: the tunnel never comes here, and handler
   // isn't asked (fleetd's sessions, ciphertext-relay.md step 3).
-  serveTunnel(handler: (req: Request) => Promise<Response>, o: { name?: string; tunnel?: false; onState?(connected: boolean): void; channels?: Handler; onChannel?(ch: Channel): void } = {}): () => void {
+  //
+  // onLeader: the node the tunnel goes to (the leader if it's connected, else
+  // the newest), told on connecting and whenever it may have changed.
+  serveTunnel(handler: (req: Request) => Promise<Response>, o: { name?: string; tunnel?: false; onState?(connected: boolean): void; onLeader?(device: string | null): void; channels?: Handler; onChannel?(ch: Channel): void } = {}): () => void {
     let stopped = false;
     let ws: WebSocket | undefined;
     const links = new Map<string, ReturnType<typeof pipe>>();
@@ -407,6 +410,11 @@ export class Relay implements PairTransport, LogTransport {
       sock.addEventListener("message", (e: MessageEvent) => {
         if (typeof e.data !== "string") return onChannel(new Uint8Array(e.data as ArrayBuffer));
         if (e.data === "pong") return;
+        // The node the tunnel goes to, whenever it may have changed (relay/src/nodes.ts's tell).
+        if (String(e.data).startsWith("leader ")) {
+          const to = String(e.data).slice(7);
+          return o.onLeader?.(to === "-" ? null : to);
+        }
         let r: TunnelRequest;
         try {
           r = JSON.parse(String(e.data)) as TunnelRequest;

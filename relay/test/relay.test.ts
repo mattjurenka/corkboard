@@ -703,8 +703,11 @@ describe("nodes and the tunnel", () => {
     const t = await relay.token();
     const res = await worker(`/e2ee/nodes/live?name=${name}`, { headers: { Upgrade: "websocket", "Sec-WebSocket-Protocol": `corkboard, corkboard.bearer.${b64url(utf8(t))}` } });
     expect(res.status).toBe(101);
-    const ws = res.webSocket!;
+    const ws = res.webSocket! as WebSocket & { told: (string | null)[] };
+    ws.told = [];
     ws.addEventListener("message", (e) => {
+      // Which node the tunnel goes to, said whenever it may have changed.
+      if (String(e.data).startsWith("leader ")) return void ws.told.push(String(e.data).slice(7) === "-" ? null : String(e.data).slice(7));
       const r = JSON.parse(e.data as string) as TunnelRequest;
       const got = { name, method: r.method, path: r.path, headers: Object.fromEntries(r.headers), body: r.body ? new TextDecoder().decode(fromB64url(r.body)) : null };
       ws.send(JSON.stringify({ id: r.id, status: 200, headers: [["content-type", "application/json"], ["x-node", name]], body: b64url(utf8(JSON.stringify(got))) } satisfies TunnelResponse));
@@ -741,12 +744,16 @@ describe("nodes and the tunnel", () => {
     await vi.waitUntil(async () => (await a.relay.nodes()).connected.length === 2);
     expect((await a.relay.nodes()).known!.map((k) => [k.device, k.name])).toEqual([[phone.id, "phone"], [a.device.id, "laptop"]]);
     expect((await worker(`/n/${handle}/x`)).headers.get("x-node")).toBe("phone");
+    await vi.waitUntil(() => phoneWs.told.at(-1) === phone.id && laptop.told.at(-1) === phone.id);
     expect((await phoneRelay.setLeader(a.device.id)).leader).toBe(a.device.id);
     expect((await worker(`/n/${handle}/x`)).headers.get("x-node")).toBe("laptop");
+    // Each told at once that the laptop leads now.
+    await vi.waitUntil(() => phoneWs.told.at(-1) === a.device.id && laptop.told.at(-1) === a.device.id);
     // The leader away: the rest still answer.
     laptop.close();
     await vi.waitUntil(async () => (await a.relay.nodes()).connected.length === 1);
     expect((await worker(`/n/${handle}/x`)).headers.get("x-node")).toBe("phone");
+    await vi.waitUntil(() => phoneWs.told.at(-1) === phone.id);
     phoneWs.close();
     await vi.waitUntil(async () => (await a.relay.nodes()).connected.length === 0);
     // Gone, but still known, to be chosen while away.

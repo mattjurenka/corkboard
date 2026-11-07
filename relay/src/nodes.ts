@@ -50,7 +50,23 @@ export class Nodes extends DurableObject {
   setLeader(device: string | null): NodesView {
     if (device) this.sql.exec("INSERT INTO meta (k, v) VALUES ('leader', ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v", device);
     else this.sql.exec("DELETE FROM meta WHERE k = 'leader'");
+    this.tell();
     return this.status();
+  }
+
+  // Every node socket told which node the tunnel goes to now ("leader <device>",
+  // or "leader -" with none), so a node knows at once whether it leads and
+  // fleetd moves its channel, rather than waiting on their next look. Not
+  // JSON, so a node from before this drops it.
+  private tell(except?: WebSocket) {
+    const to = this.target(except);
+    const said = `leader ${(to?.deserializeAttachment() as Attached | undefined)?.device ?? "-"}`;
+    for (const { ws } of this.sockets()) {
+      if (ws === except) continue;
+      try {
+        ws.send(said);
+      } catch {}
+    }
   }
 
   private sockets(): { ws: WebSocket; a: Attached }[] {
@@ -90,8 +106,8 @@ export class Nodes extends DurableObject {
   }
 
   // The node a request goes to: the leader, or the newest.
-  private target(): WebSocket | undefined {
-    const all = this.sockets().filter(({ a }) => a.tunnel !== false);
+  private target(except?: WebSocket): WebSocket | undefined {
+    const all = this.sockets().filter(({ ws, a }) => a.tunnel !== false && ws !== except);
     const leader = this.leader();
     return (all.find(({ a }) => a.device === leader) ?? all.sort((x, y) => y.a.since - x.a.since)[0])?.ws;
   }
@@ -130,6 +146,7 @@ export class Nodes extends DurableObject {
     const { 0: client, 1: server } = new WebSocketPair();
     this.ctx.acceptWebSocket(server, [device]);
     server.serializeAttachment({ device, since: Date.now(), ...(request.headers.get("X-Tunnel") === "0" && { tunnel: false as const }) } satisfies Attached);
+    this.tell();
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -197,6 +214,7 @@ export class Nodes extends DurableObject {
     }
     if (a) this.sql.exec("UPDATE devices SET seen = ? WHERE device = ?", Date.now(), a.device);
     this.drop(ws, code === 1005 ? 1000 : code);
+    if (a) this.tell(ws);
   }
 
   webSocketError(ws: WebSocket) {

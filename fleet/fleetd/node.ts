@@ -97,7 +97,24 @@ function channel(file: string): Promise<Channel> {
 // relay never sends the tunnel to; gives back the way to stop.
 export function answerChannels(node: NodeLink, channels: Handler): () => void {
   if (!node.device) return () => {};
-  return opener(node.device).serveTunnel?.(async () => new Response(null, { status: 404 }), { name: "fleetd", tunnel: false, channels }) ?? (() => {});
+  const file = node.device;
+  return opener(file).serveTunnel?.(async () => new Response(null, { status: 404 }), { name: "fleetd", tunnel: false, channels, onLeader: (to) => moved(file, to) }) ?? (() => {});
+}
+
+// The leader moved (the relay says): a channel to another node is let go,
+// so the next request opens one to the new one; closed after a while, for
+// what's still out on it to come back.
+function moved(file: string, to: string | null) {
+  const c = channels.get(file);
+  if (!c || !to) return;
+  void c.then(
+    (ch) => {
+      if (ch.peer.body.device === to || channels.get(file) !== c) return;
+      channels.delete(file);
+      setTimeout(() => ch.close("the leader moved"), 60_000);
+    },
+    () => {},
+  );
 }
 
 // A request to the node's HTTP, at its own paths (/api/node/...).
