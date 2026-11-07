@@ -16,21 +16,13 @@
 //   forge                  user: the account's Forgejo login
 //   revoked:<hash>:<by>    statement: a grant taken back (a GrantRevocation)
 
-import { type Chain, type ForgeChallenge, type GrantRevocation, type Revoked, type Signer, answerForge, checkAnswer, checkChain, checkGrantRevocation } from "../../lib/e2ee/forge";
-import { type DeviceCert, type Revocation, type Signed, b64url, fromB64url, fromUtf8, utf8 } from "../../lib/e2ee/wire";
+import { type Chain, type ForgeChallenge, type GrantRevocation, type Revoked, ANSWER_HEADER, CHAIN_HEADER, channelChallenge, checkAnswer, checkChain, checkGrantRevocation } from "../../lib/e2ee/forge";
+import { type DeviceCert, type Revocation, type Signed, fromB64url, fromUtf8 } from "../../lib/e2ee/wire";
 import { forgeProxy, type Upstream } from "../../forge/gate/proxy";
 import { FLEET, SEP } from "./objects";
 import type { Replicas } from "./replicas";
 
-export const CHAIN_HEADER = "x-corkboard-chain";
-export const ANSWER_HEADER = "x-corkboard-answer";
-// What a holder signs to show its chain on device's channels: the same
-// every time, and good on that device's channels alone.
-export const channelChallenge = (device: string) => ({ origin: `corkboard-channel:${device}`, nonce: device });
-export const channelAnswer = (holder: Signer, device: string) => {
-  const c = channelChallenge(device);
-  return b64url(utf8(JSON.stringify(answerForge(holder, c.origin, c.nonce))));
-};
+export { ANSWER_HEADER, CHAIN_HEADER, channelAnswer } from "../../lib/e2ee/forge";
 const fromHeader = <T>(raw: string): T | undefined => {
   try {
     return JSON.parse(fromUtf8(fromB64url(raw)));

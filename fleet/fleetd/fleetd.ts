@@ -21,7 +21,8 @@ import { join } from "node:path";
 import { coresOf, guestOf, manifest, memoryOf, newId, schedule, SPAWNS, spawns, tokenFor, write, type Manifest, type Spawn } from "./fleet";
 import { Actions, forgejo } from "./actions";
 import { assist } from "./assistant";
-import { GitSessions, gitNote } from "./forge";
+import { GitSessions, SlotForges, gitNote, slotForge } from "./forge";
+import { nodeFetch, readDevice } from "./node";
 import { ENVIRONMENT, Queue, nodeApi } from "./queue";
 import { end, message, post, serveSessions } from "./sessions";
 import { CLOUD } from "../../bridge/cloud";
@@ -32,6 +33,15 @@ const git = new GitSessions(
   undefined,
   async (s, holder) => (await nodeApi(manifest(), "GET", `/fleet/spawns/${s.id}?${new URLSearchParams({ git: holder, environment: ENVIRONMENT })}`)).git,
   write,
+);
+// The forge for each slot's guest, on fleetd's channel to the node (forge.ts).
+const forges = new SlotForges(
+  slotForge({
+    manifest,
+    spawns,
+    device: () => readDevice(manifest().node!.device!).device.id,
+    send: (path, init) => nodeFetch(manifest().node!, path, init),
+  }),
 );
 // Forgejo Actions jobs, each a spawn (actions.ts).
 const actions = new Actions(forgejo, write, newId);
@@ -173,6 +183,7 @@ async function tick() {
     s.state = state;
   }
 
+  if (m.node?.device) forges.keep(m);
   await git.step(m, spawns());
   await actions.step(m, spawns());
 

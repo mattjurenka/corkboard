@@ -22,6 +22,9 @@
   # Port the host-side filtering proxy listens on, for VMs whose egress
   # is an allowlist. Unused when egress is open.
   proxyPort ? 8888,
+  # Port fleetd serves the account's forge on, for a slot's guest
+  # (fleet/fleetd/forge.ts's FORGE_PORT).
+  forgePort ? 8890,
   # How many independent interactive consoles the guest offers.
   #
   # One is not a limitation of the socket but of two things at once, and
@@ -43,7 +46,7 @@
 }:
 assert consoles >= 1;
 rec {
-  inherit name interface mac proxyPort consoles;
+  inherit name interface mac proxyPort forgePort consoles;
 
   prefixLength = 24;
   hostAddress = "10.${toString octet}.0.1";

@@ -16,7 +16,7 @@ import { ed25519 } from "@noble/curves/ed25519.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { checkCert, verify } from "./device";
 import type { AccountKeys, KeyPair } from "./keys";
-import { type DeviceCert, type Revocation, type Signed, KEY, b64url, isRevocation, revocationBytes, signed } from "./wire";
+import { type DeviceCert, type Revocation, type Signed, KEY, b64url, isRevocation, revocationBytes, signed, utf8 } from "./wire";
 
 export const MAX_CHAIN = 4;
 // How far a grant's issued may be ahead of the gate's clock.
@@ -154,6 +154,19 @@ export function answerForge(holder: Signer, origin: string, nonce: string): Sign
   const body: ForgeChallenge = { v: 1, origin, nonce, holder: holder.id };
   return { body, sig: sign(holder.sign, forgeChallengeBytes(body)) };
 }
+
+// A chain shown on a sealed channel to the node's forge (bridge/node/forge.ts),
+// as headers: the chain (base64url JSON), and, when it's held by a key that
+// isn't the channel's device, that key's answer to channelChallenge(the
+// channel's device): the same every time, and good on that device's
+// channels alone.
+export const CHAIN_HEADER = "x-corkboard-chain";
+export const ANSWER_HEADER = "x-corkboard-answer";
+export const channelChallenge = (device: string) => ({ origin: `corkboard-channel:${device}`, nonce: device });
+export const channelAnswer = (holder: Signer, device: string) => {
+  const c = channelChallenge(device);
+  return b64url(utf8(JSON.stringify(answerForge(holder, c.origin, c.nonce))));
+};
 
 export function revokeForgeGrant(by: Signer, account: string, grant: string, at = Date.now()): Signed<GrantRevocation> {
   const body: GrantRevocation = { v: 1, account, grant, by: by.id, at };

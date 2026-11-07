@@ -69,6 +69,14 @@ let
       iifname "${vm.interface}" tcp dport ${toString vm.proxyPort} counter accept
     '';
 
+  # The account's forge, which fleetd serves a slot on its host address
+  # (fleet/fleetd/forge.ts's slotForge), carrying the slot's spawn's grant
+  # to the leader; it answers only that slot's guest. Residents have none.
+  forgeHole = vm: inst:
+    if !inst.slot then "" else ''
+      iifname "${vm.interface}" tcp dport ${toString vm.forgePort} counter accept
+    '';
+
   # The second hole, and only for a guest that has a routed exception.
   dnsHole = vm: inst:
     if inst.routedEgress == [ ] then "" else ''
@@ -156,6 +164,7 @@ let
 
           ${indentBy "    " (proxyHole vm inst)}
           ${indentBy "    " (dnsHole vm inst)}
+          ${indentBy "    " (forgeHole vm inst)}
 
           # Replies to connections *this machine* opened into the guest --
           # the mirror image of the forward chain's rule below, and the
@@ -676,7 +685,7 @@ let
     slots = lib.mapAttrs
       (name: inst:
         let vm = plans.${name}; in {
-          inherit (vm) guestAddress stateDir shareDir outboxDir;
+          inherit (vm) guestAddress hostAddress stateDir shareDir outboxDir;
           unit = "${name}.service";
           network = network name inst;
         })

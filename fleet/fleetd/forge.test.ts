@@ -12,7 +12,8 @@ import { accountKeys, newRoot } from "../../lib/e2ee/keys";
 import { type AccountView, b64url } from "../../lib/e2ee/wire";
 import { createGate } from "../../forge/gate/gate";
 import { Store } from "../../forge/gate/store";
-import { type Git, GitSessions, gitNote, newHolder } from "./forge";
+import { forgeHandler } from "../../bridge/node/forge";
+import { type Git, GitSessions, gitNote, newHolder, slotForge } from "./forge";
 import type { Manifest, Spawn } from "./fleet";
 
 const GATE = "https://git.test";
@@ -119,4 +120,33 @@ test("a grant nearly over gets another from the node, kept with the spawn; one t
 test("the agent is told what it has", async () => {
   expect(gitNote(await claimed())).toContain("https://git.test/ to matt/corkboard (contents:write; pushes only to refs/heads/agent/*)");
   expect(gitNote({ id: "x" } as Spawn)).toBe("");
+});
+
+test("a slot's guest reaches the forge through fleetd, which shows its spawn's grant", async () => {
+  const keys = accountKeys(newRoot());
+  const node = newDevice();
+  const fleetd = newDevice();
+  const fleetdCert = certify(keys, fleetd, "fleetd", Date.now(), "relay");
+  const h = newHolder();
+  const g = grantForge(node, keys.id, h.id, { name: "fleet s1 (coding)", repos: ["matt/corkboard"], perms: { contents: "read" }, expires: Date.now() + 86_400_000 });
+  const git: Git = { account: keys.id, gate: GATE, chain: { cert: certify(keys, node, "node"), grants: [g] }, key: h.key };
+  const s: Spawn = { id: "s1", template: "coding", task: "t", by: "user", account: "personal", state: "running", slot: "agent-0", created: "", remote: { board: null, card: null, agent: "a", token: null, git } };
+  // The leader's forge, as fleetd's channel reaches it.
+  const forge = forgeHandler({ upstream: forgejo.url.href, userHeader: "X-Forge-User", records: { user: () => "matt", revokedBy: () => [] }, account: () => ({ id: keys.id, key: keys.id }), revocations: async () => [] });
+  let all = [s];
+  const handle = slotForge({
+    manifest: () => ({ slots: { "agent-0": { guestAddress: "10.80.0.2", hostAddress: "10.80.0.1", shareDir: dir } } }) as unknown as Manifest,
+    spawns: () => all,
+    device: () => fleetd.id,
+    send: (path, init) => forge(new Request(`http://node.invalid${path}`, init), fleetdCert),
+  });
+  const ask = (path: string, from = "10.80.0.2") => handle("agent-0", new Request(`http://10.80.0.1:8890${path}`), from);
+  expect((await ask("/matt/corkboard.git/info/refs?service=git-upload-pack")).status).toBe(200);
+  expect((await ask("/matt/corkboard.git/info/refs?service=git-upload-pack", "::ffff:10.80.0.2")).status).toBe(200);
+  expect((await ask("/matt/corkboard.git/info/refs?service=git-receive-pack")).status).toBe(403);
+  expect((await ask("/matt/secret.git/info/refs?service=git-upload-pack")).status).toBe(403);
+  expect((await ask("/matt/corkboard.git/info/refs?service=git-upload-pack", "10.81.0.2")).status).toBe(403);
+  expect((await handle("agent-1", new Request("http://10.80.0.1:8890/"), "10.80.0.2")).status).toBe(403);
+  all = [{ ...s, state: "done" }];
+  expect((await ask("/matt/corkboard.git/info/refs?service=git-upload-pack")).status).toBe(403);
 });

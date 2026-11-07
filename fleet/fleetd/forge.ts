@@ -10,9 +10,9 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ed25519 } from "@noble/curves/ed25519.js";
-import type { Chain, Signer } from "../../lib/e2ee/forge";
+import { type Chain, type Signer, ANSWER_HEADER, CHAIN_HEADER, channelAnswer } from "../../lib/e2ee/forge";
 import { type ForgeSession, openForgeSession } from "../../lib/e2ee/forge-client";
-import { b64url, fromB64url } from "../../lib/e2ee/wire";
+import { b64url, fromB64url, utf8 } from "../../lib/e2ee/wire";
 import type { Manifest, Spawn } from "./fleet";
 
 // What a spawn keeps of its grant: the node's answer, and its key's secret.
@@ -98,6 +98,70 @@ export class GitSessions {
       await this.keep(m.slots[s.slot].shareDir, s, now);
     }
     for (const id of this.by.keys()) if (!running.has(id)) this.by.delete(id);
+  }
+}
+
+// The forge for a slot's guest (forge-on-leader.md, piece 3): fleetd
+// listens on each slot's host address, and carries what the guest asks to
+// the leader's /forge/ on its node channel (node.ts), with the running
+// spawn's chain and its key's answer for fleetd's device, so the guest
+// holds nothing. A request from anywhere but the slot's guest, or with no
+// spawn there that has a grant, is refused.
+export const FORGE_PORT = 8890;
+const GIT_HEADERS = ["content-type", "accept", "git-protocol", "content-encoding"];
+
+// device: fleetd's own (the channel's); send: a request to the node.
+export function slotForge(o: { manifest: () => Manifest; spawns: () => Spawn[]; device: () => string; send: (path: string, init: RequestInit) => Promise<Response> }) {
+  return async (slot: string, req: Request, from: string | undefined): Promise<Response> => {
+    const sl = o.manifest().slots[slot];
+    if (!sl || from?.replace(/^::ffff:/, "") !== sl.guestAddress) return new Response("not this slot's guest", { status: 403 });
+    const s = o.spawns().find((x) => x.state === "running" && x.slot === slot);
+    const git = s?.remote?.git;
+    if (!git) return new Response("this slot's spawn has no git access", { status: 403 });
+    const headers = new Headers();
+    for (const h of GIT_HEADERS) {
+      const v = req.headers.get(h);
+      if (v) headers.set(h, v);
+    }
+    headers.set(CHAIN_HEADER, b64url(utf8(JSON.stringify(git.chain))));
+    headers.set(ANSWER_HEADER, channelAnswer(signerOf(git), o.device()));
+    const url = new URL(req.url);
+    const hasBody = !/^(GET|HEAD)$/i.test(req.method);
+    try {
+      return await o.send(`/forge${url.pathname}${url.search}`, { method: req.method, headers, ...(hasBody && { body: req.body, duplex: "half" }), signal: req.signal } as RequestInit);
+    } catch (e) {
+      return new Response(`the forge: ${(e as Error).message}`, { status: 502 });
+    }
+  };
+}
+
+// A listener on each slot's host address (its tap's, up from boot), tried
+// again at each tick until it's there.
+export class SlotForges {
+  private servers = new Map<string, ReturnType<typeof Bun.serve>>();
+  private failed = new Set<string>();
+
+  constructor(
+    private handle: ReturnType<typeof slotForge>,
+    private port = FORGE_PORT,
+  ) {}
+
+  keep(m: Manifest) {
+    for (const [name, sl] of Object.entries(m.slots)) {
+      if (!sl.hostAddress || this.servers.has(name)) continue;
+      try {
+        this.servers.set(name, Bun.serve({ hostname: sl.hostAddress, port: this.port, idleTimeout: 255, fetch: (req, srv) => this.handle(name, req, srv.requestIP(req)?.address) }));
+        this.failed.delete(name);
+      } catch (e) {
+        if (!this.failed.has(name)) console.error(`${name}: the forge on ${sl.hostAddress}:${this.port}: ${(e as Error).message}`);
+        this.failed.add(name);
+      }
+    }
+  }
+
+  stop() {
+    for (const s of this.servers.values()) s.stop(true);
+    this.servers.clear();
   }
 }
 

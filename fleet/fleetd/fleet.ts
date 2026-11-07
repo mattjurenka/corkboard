@@ -36,7 +36,7 @@ export type Manifest = {
   // The most one spawn's VM may ask for (MiB, vCPUs), or null for no more
   // than the budget (and the host's cores).
   offer?: { memory: number | null; cores: number | null };
-  slots: Record<string, { guestAddress: string; stateDir: string; shareDir: string; outboxDir: string; unit: string; network?: Network }>;
+  slots: Record<string, { guestAddress: string; hostAddress?: string; stateDir: string; shareDir: string; outboxDir: string; unit: string; network?: Network }>;
   // VMs that are always there: they count against the budget while up.
   residents: Record<
     string,
