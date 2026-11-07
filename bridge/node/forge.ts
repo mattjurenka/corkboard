@@ -3,9 +3,12 @@
 // the account's Forgejo user. The channel has shown who the peer is, so a
 // full device of the account is the account, with nothing more to show. A
 // relay-only one (fleetd's) holds a grant, and shows the chain in
-// x-corkboard-chain (base64url JSON, a Chain whose holder is the channel's
-// device) on each request, checked as the hosted gate checks a session's
-// (forge/gate/proxy.ts): its repos, permissions and refs.
+// x-corkboard-chain (base64url JSON, a Chain) on each request, checked as
+// the hosted gate checks a session's (forge/gate/proxy.ts): its repos,
+// permissions and refs. A chain held by a key that isn't the channel's
+// device (a spawn's, which fleetd keeps) comes with x-corkboard-answer, the
+// holder's answer (base64url JSON) to channelChallenge(the channel's device),
+// so only the device that has the key can show it.
 //
 // What goes with the forge when the leader moves is in the account's fleet
 // object (fleet.ts), so a new leader has it from the start:
@@ -13,13 +16,26 @@
 //   forge                  user: the account's Forgejo login
 //   revoked:<hash>:<by>    statement: a grant taken back (a GrantRevocation)
 
-import { type Chain, type GrantRevocation, type Revoked, checkChain, checkGrantRevocation } from "../../lib/e2ee/forge";
-import { type DeviceCert, type Revocation, type Signed, fromB64url, fromUtf8 } from "../../lib/e2ee/wire";
+import { type Chain, type ForgeChallenge, type GrantRevocation, type Revoked, type Signer, answerForge, checkAnswer, checkChain, checkGrantRevocation } from "../../lib/e2ee/forge";
+import { type DeviceCert, type Revocation, type Signed, b64url, fromB64url, fromUtf8, utf8 } from "../../lib/e2ee/wire";
 import { forgeProxy, type Upstream } from "../../forge/gate/proxy";
 import { FLEET, SEP } from "./objects";
 import type { Replicas } from "./replicas";
 
 export const CHAIN_HEADER = "x-corkboard-chain";
+export const ANSWER_HEADER = "x-corkboard-answer";
+// What a holder signs to show its chain on device's channels: the same
+// every time, and good on that device's channels alone.
+export const channelChallenge = (device: string) => ({ origin: `corkboard-channel:${device}`, nonce: device });
+export const channelAnswer = (holder: Signer, device: string) => {
+  const c = channelChallenge(device);
+  return b64url(utf8(JSON.stringify(answerForge(holder, c.origin, c.nonce))));
+};
+const fromHeader = <T>(raw: string): T | undefined => {
+  try {
+    return JSON.parse(fromUtf8(fromB64url(raw)));
+  } catch {}
+};
 export const FORGE_RECORD = "forge";
 export const revokedRecord = (hash: string, by: string) => `revoked${SEP}${hash}${SEP}${by}`;
 const REVOKED_PREFIX = `revoked${SEP}`;
@@ -94,15 +110,16 @@ export function forgeHandler(o: ForgeConfig) {
     if (!a) return error(503, "this node isn't signed in to its account");
     const raw = req.headers.get(CHAIN_HEADER);
     if (!raw) return error(401, `a relay-only device shows its grant (${CHAIN_HEADER})`);
-    let chain: Chain;
-    try {
-      chain = JSON.parse(fromUtf8(fromB64url(raw)));
-    } catch {
-      return error(400, `${CHAIN_HEADER} isn't a chain`);
-    }
+    const chain = fromHeader<Chain>(raw);
+    if (!chain) return error(400, `${CHAIN_HEADER} isn't a chain`);
     const checked = checkChain(a.id, a.key, chain, await revoked(a.key));
     if (typeof checked === "string") return error(403, checked);
-    if (checked.holder !== from.body.device) return error(403, "the grant isn't held by this channel's device");
+    if (checked.holder !== from.body.device) {
+      const answer = fromHeader<Signed<ForgeChallenge>>(req.headers.get(ANSWER_HEADER) ?? "");
+      const c = channelChallenge(from.body.device);
+      const bad = answer ? checkAnswer(answer, c.origin, c.nonce, checked.holder) : `the grant isn't this channel's device's, and there's no ${ANSWER_HEADER}`;
+      if (bad) return error(403, bad);
+    }
     const v = await allow(req, to, user, checked.scope!);
     if (!v.ok) return error(v.status, v.error);
     return forward(req, to, user, v.body, v.dropEncoding);

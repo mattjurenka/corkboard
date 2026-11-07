@@ -3,7 +3,7 @@ import { certify, newDevice, revoke } from "../../lib/e2ee/device";
 import { type GrantRevocation, forgeGrantHash, grantForge, revokeForgeGrant } from "../../lib/e2ee/forge";
 import { accountKeys, newRoot } from "../../lib/e2ee/keys";
 import { type Revocation, type Signed, b64url, utf8 } from "../../lib/e2ee/wire";
-import { CHAIN_HEADER, forgeHandler } from "./forge";
+import { ANSWER_HEADER, CHAIN_HEADER, channelAnswer, forgeHandler } from "./forge";
 
 const HEADER = "X-Forge-User";
 type Seen = { method: string; path: string; user: string | null; chain: string | null };
@@ -88,6 +88,19 @@ describe("the node's forge", () => {
       revocations: async () => [revoke(keys, laptop.id)],
     });
     expect((await fresh(new Request(`http://node.invalid${path}`, { headers: { [CHAIN_HEADER]: chain } }), fleetdCert)).status).toBe(403);
+  });
+
+  it("takes a spawn key's chain with its answer for this channel's device, and no other", async () => {
+    const spawn = newDevice();
+    const g = grantForge({ id: laptop.id, sign: laptop.sign }, keys.id, spawn.id, { name: "spawn", repos: ["matt/corkboard"], perms: { contents: "read" }, expires: Date.now() + 3600_000 });
+    const chain = header({ cert: laptopCert, grants: [g] });
+    const path = "/forge/matt/corkboard.git/info/refs?service=git-upload-pack";
+    const signer = { id: spawn.id, sign: spawn.sign };
+    expect((await call(path, fleetdCert, { headers: { [CHAIN_HEADER]: chain } })).status).toBe(403);
+    const ok = await call(path, fleetdCert, { headers: { [CHAIN_HEADER]: chain, [ANSWER_HEADER]: channelAnswer(signer, fleetd.id) } });
+    expect(ok.status).toBe(200);
+    expect(last()).toMatchObject({ user: "matt", chain: null });
+    expect((await call(path, otherCert, { headers: { [CHAIN_HEADER]: chain, [ANSWER_HEADER]: channelAnswer(signer, fleetd.id) } })).status).toBe(403);
   });
 
   it("refuses a chain that isn't one", async () => {

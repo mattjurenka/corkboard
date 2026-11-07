@@ -115,6 +115,7 @@ export function forgeProxy(config: Upstream) {
     });
     headers.delete(config.userHeader);
     headers.delete("x-corkboard-chain");
+    headers.delete("x-corkboard-answer");
     if (user) {
       headers.set(config.userHeader, user);
       headers.delete("authorization");
