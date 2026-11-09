@@ -59,6 +59,7 @@ export default {
     target: [
       { target: "AppImage", arch: ["x64", "arm64"] },
       { target: "deb", arch: ["x64", "arm64"] },
+      { target: "rpm", arch: ["x64", "arm64"] },
       { target: "tar.gz", arch: ["x64", "arm64"] },
     ],
     icon: "build/icons",
@@ -72,5 +73,14 @@ export default {
     // electron-builder's own, and git, which corkboard can't do without.
     depends: ["libgtk-3-0", "libnotify4", "libnss3", "libxss1", "libxtst6", "xdg-utils", "libatspi2.0-0", "libuuid1", "libsecret-1-0", "git"],
     recommends: ["ripgrep", "fd-find"],
+  },
+  rpm: {
+    // electron-builder's, with what Electron links that it leaves out on a
+    // minimal Fedora (libgbm, libasound), and as the deb's. It has no
+    // recommends of its own for an rpm.
+    depends: ["gtk3", "libnotify", "nss", "libXScrnSaver", "(libXtst or libXtst6)", "xdg-utils", "at-spi2-core", "(libuuid or libuuid1)", "mesa-libgbm", "alsa-lib", "libsecret", "git"],
+    // Directories as well as files, or an erase leaves /opt/corkboard's empty.
+    fpm: ["--rpm-auto-add-directories", "--rpm-tag", "Recommends: ripgrep", "--rpm-tag", "Recommends: fd-find"],
+    afterRemove: "build/rpm-after-remove.sh",
   },
 };

@@ -253,14 +253,17 @@ async function own(tries = 3) {
   ORIGIN = new URL(bridge.url).origin;
 }
 
-// AppImage, macOS and Windows; not the .deb or the tarball (AUR), which have
-// no APPIMAGE and are their package managers' to update. Once one has
-// downloaded, it asks whether to restart into it now; if not, it's
-// installed when the app next quits.
+// AppImage, macOS and Windows; not the .deb, the .rpm or the tarball (AUR),
+// which have no APPIMAGE and are their package managers' to update. Once one
+// has downloaded, it asks whether to restart into it now; if not, it's
+// installed when the app next quits. From the release bucket; the GitHub
+// release in app-update.yml is for the versions before this, which still
+// read it. R2 takes one range to a request.
 async function updates() {
   if (process.platform === "linux" && !process.env.APPIMAGE) return;
   try {
     const { autoUpdater } = (await import("electron-updater")).default;
+    autoUpdater.setFeedURL({ provider: "generic", url: "https://dl.corkboard.fyi/", useMultipleRangeRequest: false });
     autoUpdater.on("update-downloaded", async ({ version }) => {
       const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
       const options = {

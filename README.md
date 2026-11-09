@@ -21,6 +21,7 @@ Downloads are on the [releases page](https://github.com/mattjurenka/corkboard/re
 | macOS | `corkboard-<version>-mac-arm64.dmg` (Apple silicon) or `-mac-x64.dmg` (Intel) |
 | Windows | `corkboard-<version>-win-x64-setup.exe` |
 | Debian, Ubuntu | `sudo apt install ./corkboard-<version>-linux-amd64.deb` |
+| Fedora | `sudo curl -fsSL https://corkboard.fyi/rpm/corkboard.repo -o /etc/yum.repos.d/corkboard.repo && sudo dnf install corkboard` |
 | Arch | `yay -S corkboard-bin` (AUR) |
 | other Linux | `corkboard-<version>-linux-x86_64.AppImage` |
 | Nix | `nix run github:mattjurenka/corkboard` (the bridge; open the URL it prints) |
