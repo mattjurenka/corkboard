@@ -216,11 +216,12 @@ function M.start(opts)
   return buf
 end
 
--- What to call a session: its --name, else what Claude Code puts in the
--- terminal's title (without its spinner), else Claude Code.
+-- What to call a session: its --name, else what it was handed off as, else
+-- what Claude Code puts in the terminal's title (without its spinner), else
+-- Claude Code.
 function M.title(buf)
   local t = (vim.b[buf].term_title or ""):gsub("^[^%w]+", "")
-  return vim.b[buf].corkboard_name or (t ~= "" and t) or "Claude Code"
+  return vim.b[buf].corkboard_name or vim.b[buf].corkboard_handoff_title or (t ~= "" and t) or "Claude Code"
 end
 
 -- A fleet session, once it's running: its conversation, in a tab of its

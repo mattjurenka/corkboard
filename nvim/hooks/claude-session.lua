@@ -36,7 +36,7 @@ local out
 if used then
   local limit = context.limit()
   local k = math.floor(used / 1000 + 0.5)
-  local ASK = "call the corkboard MCP's handoff tool (load it with ToolSearch if it isn't loaded) with what the next session needs:"
+  local ASK = "call the corkboard MCP's handoff tool (load it with ToolSearch if it isn't loaded) with a title naming the work and what the next session needs:"
     .. " the goal, what's done and verified, what's left, and anything you learned that it would otherwise have to find again."
     .. " Then end your turn: corkboard clears this session and starts the next one from your handoff."
   local HANDOFF_TOOLS = { ToolSearch = true, mcp__corkboard__handoff = true }
@@ -134,6 +134,7 @@ pcall(vim.rpcnotify, chan, "nvim_exec_lua", "require('corkboard.agents').hook(..
     corkboard_tool = tool or nil,
     card = card,
     handoff = handoff,
+    handoff_title = handoff and type(input.tool_input.title) == "string" and input.tool_input.title or nil,
     -- AskUserQuestion's first question, for the card's attention.
     question = type(input.tool_input) == "table" and type(input.tool_input.questions) == "table"
       and type(input.tool_input.questions[1]) == "table" and input.tool_input.questions[1].question or nil,

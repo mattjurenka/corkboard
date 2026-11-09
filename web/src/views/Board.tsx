@@ -93,7 +93,7 @@ const KEYS = [
   ["priority", "p", "Priority"],
   ["left", "H", "Move left"],
   ["right", "L", "Move right"],
-  ["assign", "a", "Hand to agent"],
+  ["start", "a", "New session"],
   ["session", "s", "Session"],
   ["review", "v", "Review"],
   ["answer", "r", "Go to question"],

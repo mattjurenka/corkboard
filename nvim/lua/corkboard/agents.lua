@@ -207,7 +207,12 @@ end
 local function hand_off(buf, ev)
   local path = handoff_path(ev.session_id or tostring(os.time()))
   vim.fn.mkdir(vim.fs.dirname(path), "p", tonumber("700", 8))
-  vim.fn.writefile(vim.split(ev.handoff, "\n", { plain = true }), path)
+  local lines = vim.split(ev.handoff, "\n", { plain = true })
+  -- Its heading is what the next session is called (resume), kept in the
+  -- file for a /clear that comes after a reload.
+  local title = vim.trim((ev.handoff_title or ""):gsub("%s+", " "))
+  if title ~= "" then lines = vim.list_extend({ "# " .. title, "" }, lines) end
+  vim.fn.writefile(lines, path)
   handing[buf] = { path = path, session = ev.session_id }
 end
 
@@ -224,7 +229,13 @@ local function resume(buf)
   resuming[buf] = nil
   if not terminal.alive(buf) then return end
   local id = vim.b[buf].corkboard_card
-  local text = "Carry on from where the last session left off: its handoff is in " .. h.path .. ", so read that first."
+  local title = vim.fn.readfile(h.path, "", 1)[1]
+  title = title and title:match("^# (.+)")
+  vim.b[buf].corkboard_handoff_title = title
+  local card = id and require("corkboard.cards").get(id)
+  local work = title or (card and card.title)
+  local text = (work and ("Picking up %q, handed off by the last session."):format(work) or "Carry on from where the last session left off.")
+    .. " Its handoff is in " .. h.path .. ", so read that first."
     .. (id and (" You are still on corkboard card " .. id .. ", and still hold it.") or "")
   -- After /clear Claude Code redraws; the prompt waits for it.
   vim.defer_fn(function()
@@ -259,6 +270,7 @@ function M.hook(ev)
       if vim.uv.fs_stat(path) then resuming[buf] = { path = path, session = last } end
       handing[buf] = nil
     end
+    if ev.source == "clear" and not resuming[buf] then vim.b[buf].corkboard_handoff_title = nil end
     -- A new session (a /clear) has none of the last one's background work.
     if vim.b[buf].corkboard_claude_session ~= ev.session_id then pending[buf], waking[buf] = nil, nil end
     vim.b[buf].corkboard_claude_session = ev.session_id

@@ -247,8 +247,12 @@ const TOOLS: Record<string, Tool> = {
   handoff: {
     description:
       "Hand your work to a fresh session when your context is nearly full: the goal, what's done and verified, what's left, and what you learned that the next session would otherwise have to find again. On a card, it goes in the card's log. Then end your turn.",
-    properties: { id: str("The card you're on, if any"), text: str("The handoff, markdown") },
-    required: ["text"],
+    properties: {
+      id: str("The card you're on, if any"),
+      title: str("A few words naming the work being handed over, which the next session is called"),
+      text: str("The handoff, markdown"),
+    },
+    required: ["title", "text"],
     card: "own",
     run: async (a, c) => {
       await c.data.appendLog(c.board, a.id, c.me, `handoff:\n${String(a.text).trim()}`);
@@ -667,7 +671,7 @@ const lineList = (description: string) => ({ type: "array", items: { type: "obje
 const blockSchema = {
   type: "array",
   description:
-    "The blocks, minutes since midnight. kind: work (planned), fixed (a calendar event, not yours to move), off (meals, rest; games stay blocked) or play (games and fun, the only time they're allowed; feeds run through any block on their hour a day). title: 'Prefix: concrete action'. desc: the first physical step, which is what the block's notification says. project: a key from projects. card and board: the corkboard card it's for.",
+    "The blocks, minutes since midnight. kind: work (planned), fixed (a calendar event, not yours to move), off (meals, rest) or play (games and fun, free of the day's hour; anything else runs through a block on that hour). title: 'Prefix: concrete action'. desc: the first physical step, which is what the block's notification says. project: a key from projects. card and board: the corkboard card it's for.",
   items: {
     type: "object",
     properties: {

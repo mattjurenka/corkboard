@@ -41,11 +41,6 @@ function M.create(title, status, body)
   return id
 end
 
--- Hand the card to an agent: queued; corkboard.agents starts it when it may.
-function M.assign(id, agent)
-  M.set(id, { agent = agent or "claude", agent_state = "queued", status = "ready", attention = "" })
-end
-
 -- "-- TODO(me): fix this" -> "fix this". Block-comment closers are dropped.
 local function todo_text(line)
   for _, marker in ipairs({ "TODO", "FIXME", "XXX", "HACK" }) do
@@ -283,13 +278,13 @@ local function card_buffer(id)
   return b
 end
 
--- The buttons on a card opened beside a session (M.card_action): a card with
--- a session running can't be taken, and card files can't be archived or deleted.
+-- The buttons on a rendered card (M.card_action): only one opened beside a
+-- session can be taken, a card with a session running can't be taken or
+-- started, and card files can't be archived or deleted.
 local function card_buttons(float)
-  if not float.session then return nil end
   local out = {}
   if not require("corkboard.agents").session(float.id) then
-    table.insert(out, { name = "take", key = "t", label = "take" })
+    if float.session then table.insert(out, { name = "take", key = "t", label = "take" }) end
     table.insert(out, { name = "start", key = "a", label = "new session" })
   end
   if cards.cloud() then
@@ -314,7 +309,7 @@ local function push_rendered()
 end
 
 -- session: the Claude Code session it was opened beside (its cards panel),
--- which its buttons and their keys act for.
+-- which take acts for.
 local function rendered_buffer(id, session)
   local b = vim.api.nvim_create_buf(false, true)
   vim.bo[b].bufhidden = "wipe"
@@ -324,10 +319,8 @@ local function rendered_buffer(id, session)
     vim.keymap.set("n", lhs, "<Cmd>close<CR>", { buffer = b, nowait = true, desc = "board: close card" })
   end
   vim.keymap.set("n", "e", function() M.open_card(id, { edit = true }) end, { buffer = b, nowait = true, desc = "board: edit card" })
-  if session then
-    for lhs, name in pairs({ t = "take", a = "start", x = "archive", D = "delete" }) do
-      vim.keymap.set("n", lhs, function() M.card_action(name) end, { buffer = b, nowait = true, desc = "board: card " .. name })
-    end
+  for lhs, name in pairs({ t = session and "take" or nil, a = "start", x = "archive", D = "delete" }) do
+    vim.keymap.set("n", lhs, function() M.card_action(name) end, { buffer = b, nowait = true, desc = "board: card " .. name })
   end
   vim.api.nvim_create_autocmd("BufWipeout", {
     buffer = b,
@@ -357,7 +350,7 @@ local function card_float(rows)
 end
 
 -- Rendered to read; opts.edit to edit. opts.session: the Claude Code
--- session whose cards panel opened it, which its buttons act for.
+-- session whose cards panel opened it, which take acts for.
 function M.open_card(id, opts)
   opts = opts or {}
   -- Opening a card is seeing what its agent asked for.
@@ -450,8 +443,8 @@ local actions = {
       end
     end)
   end,
-  assign = function(id)
-    if id then M.assign(id) end
+  start = function(id)
+    if id then require("corkboard.agents").start(id) end
   end,
   -- None clears it, which counts as medium.
   priority = function(id)
@@ -529,7 +522,7 @@ local float_actions = {
 -- this runs inside an RPC request, which a prompt must not block.
 function M.card_action(name)
   vim.schedule(function()
-    if rendered and rendered.session then float_actions[name](rendered) end
+    if rendered then float_actions[name](rendered) end
   end)
 end
 
@@ -572,7 +565,7 @@ local function buffer()
     H = { act("left"), "move card left" },
     L = { act("right"), "move card right" },
     o = { act("new"), "new card" },
-    a = { act("assign"), "hand to agent" },
+    a = { act("start"), "new session" },
     p = { act("priority"), "set the card's priority" },
     s = { act("session"), "go to the agent's session" },
     v = { act("review"), "review the card's work" },
