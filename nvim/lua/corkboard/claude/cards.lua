@@ -4,8 +4,8 @@
 -- (b:corkboard_view "cards") in a window to the right of the session's, one
 -- panel per session. The browser draws it (web/src/views/Cards.tsx). j/k
 -- move between cards, t hands the selected one to the session, <CR>
--- opens it in the board's card float (rendered; e there edits it, and t
--- hands it to the session); s or a click goes to its session, or to what
+-- opens it in the board's card float (rendered; e there edits it, and its
+-- buttons take it, start a session on it, or archive or delete it); s or a click goes to its session, or to what
 -- it's asking, or to the card on the board.
 --
 -- Below it, the lower half of the column, the files agents attached to those

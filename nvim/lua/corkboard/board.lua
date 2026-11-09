@@ -247,7 +247,7 @@ end
 -- saving edits; rendered, so do <CR> and <Esc>.
 
 local card_win
-local rendered -- the rendered float: { buf, id }
+local rendered -- the rendered float: { buf, id, session }
 
 local function save_card(id, lines)
   local title = vim.trim((lines[1] or ""):gsub("^#+%s*", ""))
@@ -283,6 +283,22 @@ local function card_buffer(id)
   return b
 end
 
+-- The buttons on a card opened beside a session (M.card_action): a card with
+-- a session running can't be taken, and card files can't be archived or deleted.
+local function card_buttons(float)
+  if not float.session then return nil end
+  local out = {}
+  if not require("corkboard.agents").session(float.id) then
+    table.insert(out, { name = "take", key = "t", label = "take" })
+    table.insert(out, { name = "start", key = "a", label = "new session" })
+  end
+  if cards.cloud() then
+    table.insert(out, { name = "archive", key = "x", label = "archive" })
+    table.insert(out, { name = "delete", key = "D", label = "delete", danger = true })
+  end
+  return out
+end
+
 -- The rendered card, as the card file now has it.
 local function push_rendered()
   if not (rendered and vim.api.nvim_buf_is_valid(rendered.buf)) then return end
@@ -294,25 +310,24 @@ local function push_rendered()
   vim.bo[rendered.buf].modifiable = false
   -- A cloud card has no file; its links and images resolve from the project.
   local path = card.path or vim.fs.joinpath(vim.fn.getcwd(), rendered.id .. ".md")
-  require("corkboard").notify("corkboard.view", rendered.buf, { path = path, text = table.concat(lines, "\n") })
+  require("corkboard").notify("corkboard.view", rendered.buf, { path = path, text = table.concat(lines, "\n"), actions = card_buttons(rendered) })
 end
 
 -- session: the Claude Code session it was opened beside (its cards panel),
--- which t hands it to.
+-- which its buttons and their keys act for.
 local function rendered_buffer(id, session)
   local b = vim.api.nvim_create_buf(false, true)
   vim.bo[b].bufhidden = "wipe"
   vim.b[b].corkboard_view = "markdown"
-  rendered = { buf = b, id = id }
+  rendered = { buf = b, id = id, session = session }
   for _, lhs in ipairs({ "q", "<CR>", "<Esc>" }) do
     vim.keymap.set("n", lhs, "<Cmd>close<CR>", { buffer = b, nowait = true, desc = "board: close card" })
   end
   vim.keymap.set("n", "e", function() M.open_card(id, { edit = true }) end, { buffer = b, nowait = true, desc = "board: edit card" })
   if session then
-    vim.keymap.set("n", "t", function()
-      vim.cmd.close()
-      require("corkboard.agents").take(session, id)
-    end, { buffer = b, nowait = true, desc = "board: this session takes the card" })
+    for lhs, name in pairs({ t = "take", a = "start", x = "archive", D = "delete" }) do
+      vim.keymap.set("n", lhs, function() M.card_action(name) end, { buffer = b, nowait = true, desc = "board: card " .. name })
+    end
   end
   vim.api.nvim_create_autocmd("BufWipeout", {
     buffer = b,
@@ -342,7 +357,7 @@ local function card_float(rows)
 end
 
 -- Rendered to read; opts.edit to edit. opts.session: the Claude Code
--- session whose cards panel opened it, which t there hands it to.
+-- session whose cards panel opened it, which its buttons act for.
 function M.open_card(id, opts)
   opts = opts or {}
   -- Opening a card is seeing what its agent asked for.
@@ -359,7 +374,7 @@ function M.open_card(id, opts)
       rows = rows + math.max(1, math.ceil(vim.fn.strdisplaywidth(l) / width))
     end
   end
-  local title = " " .. id .. (opts.session and not edit and " · t take it " or " ")
+  local title = " " .. id .. " "
   local config = vim.tbl_extend("force", card_float(rows), { title = title, title_pos = "center" })
 
   -- A float left open in another tab is closed, not gone to: the card opens
@@ -488,6 +503,35 @@ local actions = {
   end,
   refresh = function() M.push() end,
 }
+
+local function close_float()
+  if card_win and vim.api.nvim_win_is_valid(card_win) then pcall(vim.api.nvim_win_close, card_win, true) end
+end
+
+local float_actions = {
+  take = function(float)
+    close_float()
+    require("corkboard.agents").take(float.session, float.id)
+  end,
+  start = function(float)
+    close_float()
+    require("corkboard.agents").start(float.id)
+  end,
+  archive = function(float)
+    vim.ui.select({ "Archive", "Keep" }, { prompt = "Archive " .. float.id .. "? " }, function(choice)
+      if choice == "Archive" then remove(float.id, "archive") end
+    end)
+  end,
+  delete = function(float) actions.delete(float.id) end,
+}
+
+-- A button on the rendered card, or its key. Scheduled since from the browser
+-- this runs inside an RPC request, which a prompt must not block.
+function M.card_action(name)
+  vim.schedule(function()
+    if rendered and rendered.session then float_actions[name](rendered) end
+  end)
+end
 
 -- win is set when the browser calls this for a click inside a board window.
 function M.action(name, win)

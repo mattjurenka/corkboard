@@ -12,6 +12,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import type { Nvim } from "@/nvim/context";
 import { store } from "@/store";
+import { Button } from "./Brains";
 import type { ViewProps } from "./index";
 
 type FileState = { path: string; name: string; mtime?: number; size?: number; error?: string };
@@ -105,7 +106,7 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   }
 });
 
-type MarkdownState = { path: string; text?: string; topline?: number };
+type MarkdownState = { path: string; text?: string; topline?: number; actions?: { name: string; key: string; label: string; danger?: boolean }[] };
 
 // Each top-level block is wrapped with the source line it starts on, which
 // is what scrolling follows: Neovim sends the source window's top line, and
@@ -113,6 +114,8 @@ type MarkdownState = { path: string; text?: string; topline?: number };
 export function MarkdownView({ state, win, nvim }: ViewProps<MarkdownState>) {
   const scroller = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLElement>(null);
+  const bar = useRef<HTMLDivElement>(null);
+  const hasBar = !!state.actions?.length;
   const topline = useRef(state.topline);
   topline.current = state.topline;
   const html = useMemo(() => (state.text == null ? null : DOMPurify.sanitize(blocks(state.text))), [state.text]);
@@ -151,14 +154,14 @@ export function MarkdownView({ state, win, nvim }: ViewProps<MarkdownState>) {
     if (!md) return;
     let sent = 0;
     const ro = new ResizeObserver(() => {
-      const rows = Math.ceil(md.offsetHeight / store.get().cell.h);
+      const rows = Math.ceil((md.offsetHeight + (bar.current?.offsetHeight ?? 0)) / store.get().cell.h);
       if (rows === sent) return;
       sent = rows;
       void nvim.lua("require('corkboard.board').fit_card(...)", win, rows);
     });
     ro.observe(md);
     return () => ro.disconnect();
-  }, [win]);
+  }, [win, hasBar]);
 
   // A link in the preview never navigates the page: a web link opens in a
   // new tab, #anchor scrolls the preview, and a path opens that file in
@@ -179,6 +182,15 @@ export function MarkdownView({ state, win, nvim }: ViewProps<MarkdownState>) {
 
   return (
     <div ref={scroller} className="relative h-full overflow-y-auto px-6">
+      {hasBar && (
+        <div ref={bar} className="sticky top-0 z-10 flex justify-end bg-background">
+          {state.actions!.map((a) => (
+            <Button key={a.name} k={a.key} lit danger={a.danger} onClick={() => void nvim.lua("require('corkboard.board').card_action(...)", a.name)}>
+              {a.label}
+            </Button>
+          ))}
+        </div>
+      )}
       {/* Kept across renders without text (a scroll), which keep the last. */}
       <article ref={body} onClick={follow} className="markdown-body" dangerouslySetInnerHTML={html == null ? undefined : { __html: html }} />
     </div>
