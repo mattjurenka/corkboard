@@ -20,6 +20,8 @@
 //   DELETE /spawns/:id/git         its git grant taken back (forge.ts's revoked:, and the gate)
 //   GET    /environments           the manifests
 //   PUT    /environments/:name     { manifest }: fleetd's
+//   PUT    /environments/:name/running  { running }: fleetd's, each look: its load, kept
+//                                  in memory only, over the manifest's in GET /environments
 //   /holds[/:name]                 as the Worker's /api/holds (holds.ts)
 
 import { Invalid } from "../../lib/model/cards";
@@ -78,6 +80,10 @@ const cut = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" 
 const PREFIX = { spawn: spawnRecord(""), hold: holdRecord(""), env: environmentRecord("") };
 
 export class FleetRecords {
+  // Each environment's running as its fleetd last said, load and all: the
+  // object keeps it only when something but the load changes.
+  private live = new Map<string, unknown>();
+
   constructor(
     private replicas: Replicas,
     private worker?: () => Worker | undefined,
@@ -212,14 +218,27 @@ export class FleetRecords {
   // Environments ---------------------------------------------------------------------
 
   environments(): Record<string, unknown>[] {
-    return this.records(PREFIX.env).flatMap((m) => (m.manifest && typeof m.manifest === "object" ? [{ ...(m.manifest as object), name: m.id.slice(PREFIX.env.length) }] : []));
+    return this.records(PREFIX.env).flatMap((m) => {
+      if (!m.manifest || typeof m.manifest !== "object") return [];
+      const name = m.id.slice(PREFIX.env.length);
+      const running = this.live.get(name);
+      return [{ ...(m.manifest as object), ...(running !== undefined && { running }), name }];
+    });
   }
 
   async putEnvironment(name: string, manifest: unknown) {
     if (!LABEL.test(name)) throw new Invalid("bad environment name");
     if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Invalid("manifest must be an object");
     if (JSON.stringify(manifest).length > 256 * 1024) throw new Invalid("that manifest is too big");
+    this.live.delete(name);
     await this.set(environmentRecord(name), { manifest, seen: now() });
+  }
+
+  putRunning(name: string, running: unknown) {
+    if (!LABEL.test(name)) throw new Invalid("bad environment name");
+    if (!running || typeof running !== "object" || Array.isArray(running)) throw new Invalid("running must be an object");
+    if (JSON.stringify(running).length > 256 * 1024) throw new Invalid("that is too big");
+    this.live.set(name, running);
   }
 
   // Holds ----------------------------------------------------------------------------

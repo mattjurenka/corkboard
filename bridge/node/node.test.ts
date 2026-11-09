@@ -13,7 +13,7 @@ import { certify, checkCert, newDevice } from "../../lib/e2ee/device";
 import { DAY, dayObject, fleetObject, listObjects, noteRecord } from "./objects";
 import { type ForgeSigner, FleetRecords } from "./fleet";
 import { checkChain } from "../../lib/e2ee/forge";
-import { Conflict } from "./day";
+import { Conflict, feedsRecord, meditationRecord } from "./day";
 import { Replicas } from "./replicas";
 import { Data, Invalid, now } from "./data";
 import { isCard, newCardId } from "./board";
@@ -1577,6 +1577,11 @@ describe("the fleet sealed, on the node", () => {
   it("keeps the manifests, and answers none of it on the plaintext tunnel or to an agent", async () => {
     await local("/api/node/fleet/environments/droplet", { method: "PUT", body: JSON.stringify({ manifest: { egress: { open: false } } }) });
     expect(await (await local("/api/node/fleet/environments")).json()).toEqual([{ egress: { open: false }, name: "droplet" }]);
+    // Its load, in memory over the manifest's, until the manifest changes.
+    await local("/api/node/fleet/environments/droplet/running", { method: "PUT", body: JSON.stringify({ running: { used: 2 } }) });
+    expect(await (await local("/api/node/fleet/environments")).json()).toEqual([{ egress: { open: false }, running: { used: 2 }, name: "droplet" }]);
+    await local("/api/node/fleet/environments/droplet", { method: "PUT", body: JSON.stringify({ manifest: { egress: { open: false } } }) });
+    expect(await (await local("/api/node/fleet/environments")).json()).toEqual([{ egress: { open: false }, name: "droplet" }]);
     expect((await n.call("/api/node/fleet/environments", { headers: owner() })).status).toBe(404);
     const agent = n.oauth.mint("pepper", 1, "assistant", "assistant");
     expect((await n.app(new Request(`${ORIGIN}/api/node/fleet/holds`, { headers: { Authorization: `Bearer ${agent}` } }), { requestIP: () => ({ address: "127.0.0.1" }) })).status).toBe(404);
@@ -2106,6 +2111,50 @@ describe("day plans and chat, the phone's API", () => {
     expect((await api(owner, "DELETE", `chat/${mine.id}`)).status).toBe(409);
     expect((await api(owner, "GET", `chat?after=${mine.id}`)).body.map((m: { text: string }) => m.text)).toEqual(["hello"]);
     expect((await api(owner, "DELETE", "chat/nope")).status).toBe(404);
+    n.stop();
+  });
+
+  it("times one meditation for every device, banking what's run at a pause", async () => {
+    const n = await setup();
+    const owner = n.oauth.mint("laptop", 1, "owner");
+    const pepper = n.oauth.mint("pepper", 1, "assistant", "assistant");
+    const api = async (token: string, method: string, path: string) => {
+      const res = await n.call(`/api/node/${path}`, { method, headers: { Authorization: `Bearer ${token}` } });
+      return { status: res.status, body: await res.json() };
+    };
+    expect((await api(owner, "GET", "meditation/2026-11-07")).body).toMatchObject({ goal: 1800, elapsed: 0, running: false, since: null });
+    expect((await api(pepper, "POST", "meditation/2026-11-07/start")).status).toBe(403);
+    expect((await api(owner, "POST", "meditation/2026-11-07/start")).body.running).toBe(true);
+    // A phone's start ten minutes ago, as its replica writes it.
+    await n.data.replicas.change("day", DAY, { t: "card", card: meditationRecord("2026-11-07"), set: { banked: 300, since: new Date(Date.now() - 600_000).toISOString() } });
+    expect((await api(pepper, "GET", "meditation/2026-11-07")).body).toMatchObject({ elapsed: 900, running: true });
+    const paused = (await api(owner, "POST", "meditation/2026-11-07/pause")).body;
+    expect(paused).toMatchObject({ banked: 900, since: null, running: false });
+    expect((await api(owner, "POST", "meditation/2026-11-07/pause")).body).toEqual(paused);
+    await n.data.replicas.change("day", DAY, { t: "card", card: meditationRecord("2026-11-07"), set: { banked: 1700, since: new Date(Date.now() - 600_000).toISOString() } });
+    expect((await api(owner, "GET", "meditation/2026-11-07")).body).toMatchObject({ elapsed: 1800, running: false, since: null });
+    n.stop();
+  });
+
+  it("adds up each device's seconds of feeds, only for the user's own clients", async () => {
+    const n = await setup();
+    const owner = n.oauth.mint("laptop", 1, "owner");
+    const pepper = n.oauth.mint("pepper", 1, "assistant", "assistant");
+    const api = async (token: string, method: string, path: string) => {
+      const res = await n.call(`/api/node/${path}`, { method, headers: { Authorization: `Bearer ${token}` } });
+      return { status: res.status, body: await res.json() };
+    };
+    expect((await api(owner, "GET", "feeds/2026-11-08")).body).toEqual({ date: "2026-11-08", laptop: 0, phone: 0, used: 0 });
+    expect((await api(pepper, "GET", "feeds/2026-11-08")).status).toBe(403);
+    expect((await api(owner, "POST", "feeds/2026-11-08/laptop?seconds=600")).body).toMatchObject({ laptop: 600, used: 600 });
+    // The phone's, as its replica writes it, leaves the laptop's alone.
+    await n.data.replicas.change("day", DAY, { t: "card", card: feedsRecord("2026-11-08"), set: { phone: 900 } });
+    expect((await api(owner, "GET", "feeds/2026-11-08")).body).toMatchObject({ laptop: 600, phone: 900, used: 1500 });
+    // A count that went backwards doesn't give time back.
+    expect((await api(owner, "POST", "feeds/2026-11-08/laptop?seconds=10")).body.laptop).toBe(600);
+    expect((await api(owner, "POST", "feeds/2026-11-08/tablet?seconds=10")).status).toBe(404);
+    expect((await api(owner, "POST", "feeds/2026-11-08/laptop?seconds=nope")).status).toBe(400);
+    expect((await api(owner, "GET", "feeds/2026-11-09")).body.used).toBe(0);
     n.stop();
   });
 });

@@ -218,6 +218,9 @@ export class Queue {
       if (kept !== this.nodeTold) {
         await nodeApi(m, "PUT", `/fleet/environments/${ENVIRONMENT}`, { manifest: said });
         this.nodeTold = kept;
+      } else if (running) {
+        // Its load, for the fleet views; a node from before this has no such route.
+        await nodeApi(m, "PUT", `/fleet/environments/${ENVIRONMENT}/running`, { running }).catch(() => {});
       }
     }
     const { egress, running: _, ...open } = said;

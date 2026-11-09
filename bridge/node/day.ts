@@ -14,6 +14,16 @@
 // A message is `chat:<id>`: at, who, text, by_user, delivered, and deleted
 // once taken back. Its id is its time and random, so two devices never make
 // the same one, and messages are in id order.
+//
+// A date's meditation is `meditation:<date>`: `banked`, the seconds done
+// before the run in progress, and `since`, when that run started (null:
+// none). A start or a pause on any device writes both at once, so the
+// phone and the laptop time the same 30 minutes.
+//
+// A date's feeds are `feeds:<date>`: a field per device (`laptop`, `phone`),
+// the seconds it has counted, each written only by that device, so one that
+// was offline adds what it counted. It's only ever seconds, never what was
+// watched.
 
 import { type Block, type ChatMessage, type Day, type Plan, type Proposal, emptyPlan } from "../../lib/model/plans";
 import type { BoardState, MergedCard } from "../../lib/e2ee/merge";
@@ -23,6 +33,34 @@ export const planRecord = (date: string) => `plan${SEP}${date}`;
 export const PLAN_PREFIX = planRecord("");
 export const chatRecord = (id: string) => `chat${SEP}${id}`;
 export const CHAT_PREFIX = chatRecord("");
+export const meditationRecord = (date: string) => `meditation${SEP}${date}`;
+
+// What the morning gate asks of a meditation, in seconds.
+export const MEDITATION_GOAL = 30 * 60;
+
+export type Meditation = { date: string; goal: number; banked: number; since: string | null; elapsed: number; running: boolean };
+
+export function meditationOf(date: string, m: MergedCard | undefined, at = Date.now()): Meditation {
+  const banked = Math.min(MEDITATION_GOAL, typeof m?.banked === "number" && m.banked > 0 ? Math.floor(m.banked) : 0);
+  const started = typeof m?.since === "string" ? Date.parse(m.since) : NaN;
+  const run = Number.isFinite(started) ? Math.max(0, Math.floor((at - started) / 1000)) : 0;
+  const elapsed = Math.min(MEDITATION_GOAL, banked + run);
+  // A run that's reached the goal has stopped, whether or not its device said so.
+  const running = Number.isFinite(started) && elapsed < MEDITATION_GOAL;
+  return { date, goal: MEDITATION_GOAL, banked, since: running ? (m!.since as string) : null, elapsed, running };
+}
+
+export const feedsRecord = (date: string) => `feeds${SEP}${date}`;
+
+export type FeedDevice = "laptop" | "phone";
+export type Feeds = { date: string; laptop: number; phone: number; used: number };
+
+export function feedsOf(date: string, f: MergedCard | undefined): Feeds {
+  const seconds = (v: unknown) => (typeof v === "number" && v > 0 ? Math.floor(v) : 0);
+  const laptop = seconds(f?.laptop);
+  const phone = seconds(f?.phone);
+  return { date, laptop, phone, used: laptop + phone };
+}
 
 // The node's messages are named by a string.
 export type Message = Omit<ChatMessage, "id"> & { id: string };

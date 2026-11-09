@@ -10,7 +10,7 @@
 
 import { Invalid } from "./cards";
 
-export const KINDS = ["work", "fixed", "off"] as const;
+export const KINDS = ["work", "fixed", "off", "play"] as const;
 
 export type Block = {
   id: string;

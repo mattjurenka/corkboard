@@ -122,6 +122,7 @@ pcall(vim.rpcnotify, chan, "nvim_exec_lua", "require('corkboard.agents').hook(..
     buf = buf,
     event = input.hook_event_name,
     session_id = input.session_id,
+    source = input.source,
     transcript_path = input.transcript_path,
     notification_type = input.notification_type,
     message = input.message,

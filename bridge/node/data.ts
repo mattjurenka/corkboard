@@ -15,7 +15,7 @@ import type { CardChange, MergedCard } from "../../lib/e2ee/merge";
 import { b64url } from "../../lib/e2ee/wire";
 import { random } from "../../lib/e2ee/keys";
 import { BRAIN_RECORD, DAY, ROLLUP_RECORD, VECTOR_PREFIX, entryRecord, noteRecord, recordOf, vectorRecord } from "./objects";
-import { CHAT_PREFIX, Conflict, type Message, PLAN_PREFIX, askKey, chatRecord, importedMessageId, messageOf, planOf, planRecord, versionOf } from "./day";
+import { CHAT_PREFIX, Conflict, type FeedDevice, type Feeds, type Meditation, type Message, PLAN_PREFIX, askKey, chatRecord, feedsOf, feedsRecord, importedMessageId, meditationOf, meditationRecord, messageOf, planOf, planRecord, versionOf } from "./day";
 import { BOARD_RECORD, type BoardSettings, MEDIA_PREFIX, extraOf, extraSet, isCard, isExtraField, leaseRecord, mediaRecord, newCardId, settingsOf } from "./board";
 import type { Replicas } from "./replicas";
 
@@ -510,6 +510,47 @@ export class Data {
     const changes = [...(Object.keys(set).length ? [{ t: "card" as const, card: planRecord(p.date), set }] : []), ...asked.map((entry) => ({ t: "log" as const, card: planRecord(p.date), entry }))];
     if (changes.length) await this.replicas.change("day", DAY, ...changes);
     return changes.length > 0;
+  }
+
+  // Meditation (day.ts) -------------------------------------------------------------
+
+  meditation(date: string): Meditation {
+    const id = meditationRecord(date);
+    return meditationOf(
+      date,
+      this.replica("day", DAY)
+        .cards()
+        .find((c) => c.id === id),
+    );
+  }
+
+  // Started where it was left, or paused with what's run banked; either
+  // again is nothing.
+  async meditate(date: string, change: "start" | "pause"): Promise<Meditation> {
+    const was = this.meditation(date);
+    if (change === "start" ? was.running || was.elapsed >= was.goal : !was.running) return was;
+    await this.replicas.change("day", DAY, { t: "card", card: meditationRecord(date), set: { banked: was.elapsed, since: change === "start" ? new Date().toISOString() : null } });
+    return this.meditation(date);
+  }
+
+  // Feeds (day.ts) ------------------------------------------------------------------
+
+  feeds(date: string): Feeds {
+    const id = feedsRecord(date);
+    return feedsOf(
+      date,
+      this.replica("day", DAY)
+        .cards()
+        .find((c) => c.id === id),
+    );
+  }
+
+  // A device's count only grows, so one that lost its own can't give time back.
+  async countFeeds(date: string, device: FeedDevice, seconds: number): Promise<Feeds> {
+    const was = this.feeds(date);
+    if (seconds <= was[device]) return was;
+    await this.replicas.change("day", DAY, { t: "card", card: feedsRecord(date), set: { [device]: seconds } });
+    return this.feeds(date);
   }
 
   // Chat (day.ts) -------------------------------------------------------------------

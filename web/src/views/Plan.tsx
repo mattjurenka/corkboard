@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { ViewProps } from "./index";
 
-type Kind = "work" | "fixed" | "off";
+type Kind = "work" | "fixed" | "off" | "play";
 type Project = { key: string; name: string; color: "accent" | "review" | "working" | "special" };
 type Block = { id: string; start: number; stop: number; title: string; kind: Kind; project?: string; tag?: string; card?: string; pinned?: boolean };
 type Ranked = { title: string; project: string; est: string; why: string; block?: string };
@@ -82,7 +82,7 @@ function colorOf(projects: Project[], key?: string) {
   return p ? VAR[p.color] : undefined;
 }
 
-const pinOf = (kind: Kind) => (kind === "fixed" ? "◇" : kind === "off" ? "·" : "●");
+const pinOf = (kind: Kind) => (kind === "fixed" ? "◇" : kind === "off" ? "·" : kind === "play" ? "○" : "●");
 
 // The time of day in minutes, kept current: since the midnight that began
 // the plan's day, which turns over at 4am (plan.lua), so past 1440 before.

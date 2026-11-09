@@ -192,7 +192,7 @@ phone / page / Neovim ──wss /e2ee/channel──▶ relay ──node's socket
      Worker. look() PUTs the whole manifest to `/api/node/fleet/environments/:name` and the
      queue's part to the Worker.
    - A sealed spawn waits for the node: none is claimed while no node is connected.
-5. **The TLS relay, and the plaintext tunnel gone.** relay-tls/ (SNI routing, the nodes'
+5. **The TLS relay, and the plaintext tunnel gone.** *Dropped 2026-11-06 (forge-on-leader.md): the web service is a trust-us convenience, so claude.ai web keeps `/n/<handle>` as an opt-in.* relay-tls/ (SNI routing, the nodes'
    reverse connections, the node's ACME client and its TLS listener in serve.ts), deployed on
    the droplet in front of Caddy. claude.ai's connector moves to `<label>.n.corkboard.fyi`.
    Once 2-4 are done, `/n/<handle>` answers 410. Tests: a connection whose SNI no node holds is
@@ -228,6 +228,11 @@ phone / page / Neovim ──wss /e2ee/channel──▶ relay ──node's socket
   box key and no root. It can open and answer channels and receive sealed spawns and holds, but
   can't read objects. It's still a node grant for what it does on the node. **Recommended:
   (b).** It replaces the owner token fleetd holds today.
+  **Revisited 2026-11-07 (the user: "that was a mistake"):** fleetd stays relay-only, but the
+  droplet is now also a full device and node (`droplet`, k_lXwSZJ…), and the account's leader,
+  so the always-on work is on an always-on machine. It runs as its own user, `corkboard-node`,
+  not in the workspace or fleetd, so coding sessions and slots don't share the root. The
+  droplet can read everything; that's the accepted trade.
 - **The calendar's refresh token.** It conflicts with "ciphertext only": the Worker holding it
   could read the calendar, though it never sees a plan. (a) Keep it, as the one stated
   exception, with no new consent (what was decided earlier today). (b) Move it to the node with

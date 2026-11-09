@@ -43,6 +43,8 @@ export type HubBridge = {
   url: string | null;
   environment: string | null;
   sessions: Record<string, unknown>[];
+  // Its machine, as host.ts looks at it, where the bridge says.
+  host?: Record<string, unknown>;
 };
 export type Hello = {
   id: string;
@@ -66,6 +68,8 @@ type Result = { status: number; value: Record<string, any> };
 
 const str = (x: unknown, n = 128) => (typeof x === "string" ? x.slice(0, n) : null);
 const num = (x: unknown) => (Number.isFinite(x) ? (x as number) : null);
+// A machine's look (host.ts's Host), if it's a small enough object.
+const look = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) && JSON.stringify(v).length <= 8192 ? (v as Record<string, unknown>) : undefined);
 // The Worker's bridgeSession.
 const session = (v: unknown) => {
   const s = (v ?? {}) as Record<string, unknown>;
@@ -132,6 +136,7 @@ export class Hub {
           .slice(0, 64)
           .map(session)
           .filter((s: { key: string }) => s.key),
+        ...(look(m.host) && { host: look(m.host) }),
       };
       this.tell({ type: "bridge", bridge: me.b });
     } else if (m?.type === "answer" && typeof m.ask === "number") me.asks.get(m.ask)?.(m);

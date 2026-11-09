@@ -667,7 +667,7 @@ const lineList = (description: string) => ({ type: "array", items: { type: "obje
 const blockSchema = {
   type: "array",
   description:
-    "The blocks, minutes since midnight. kind: work (planned), fixed (a calendar event, not yours to move) or off (meals, free time). title: 'Prefix: concrete action'. desc: the first physical step, which is what the block's notification says. project: a key from projects. card and board: the corkboard card it's for.",
+    "The blocks, minutes since midnight. kind: work (planned), fixed (a calendar event, not yours to move), off (meals, rest; games stay blocked) or play (games and fun, the only time they're allowed; feeds run through any block on their hour a day). title: 'Prefix: concrete action'. desc: the first physical step, which is what the block's notification says. project: a key from projects. card and board: the corkboard card it's for.",
   items: {
     type: "object",
     properties: {
@@ -675,7 +675,7 @@ const blockSchema = {
       start: { type: "integer" },
       stop: { type: "integer" },
       title: str("One line"),
-      kind: { type: "string", enum: ["work", "fixed", "off"] },
+      kind: { type: "string", enum: ["work", "fixed", "off", "play"] },
       desc: str("The first physical step"),
       project: str("Project key"),
       tag: str("Short label: deep, review, due Wed"),

@@ -181,6 +181,11 @@ function M.take(buf, id)
   terminal.focus(buf)
 end
 
+-- Where a session's handoff is kept (hand_off, below).
+local function handoff_path(session)
+  return vim.fs.joinpath(vim.fn.stdpath("state"), "corkboard", "handoffs", session .. ".md")
+end
+
 local function clear(buf)
   local id = clearing[buf]
   clearing[buf] = nil
@@ -188,6 +193,8 @@ local function clear(buf)
   if vim.b[buf].corkboard_card == id then M.link(buf, nil) end
   -- Its card is done, so there's nothing for a handoff to go on with.
   handing[buf], resuming[buf] = nil, nil
+  local session = vim.b[buf].corkboard_claude_session
+  if session then os.remove(handoff_path(session)) end
   type_line(buf, "/clear")
   vim.notify("corkboard: " .. id .. " is done, so its session was cleared for the next task")
 end
@@ -198,9 +205,8 @@ end
 -- follows on it. It keeps its card.
 
 local function hand_off(buf, ev)
-  local dir = vim.fs.joinpath(vim.fn.stdpath("state"), "corkboard", "handoffs")
-  vim.fn.mkdir(dir, "p", tonumber("700", 8))
-  local path = vim.fs.joinpath(dir, (ev.session_id or tostring(os.time())) .. ".md")
+  local path = handoff_path(ev.session_id or tostring(os.time()))
+  vim.fn.mkdir(vim.fs.dirname(path), "p", tonumber("700", 8))
   vim.fn.writefile(vim.split(ev.handoff, "\n", { plain = true }), path)
   handing[buf] = { path = path, session = ev.session_id }
 end
@@ -245,6 +251,14 @@ function M.hook(ev)
   local id = vim.b[buf].corkboard_card
   -- What corkboard.restore resumes; a /clear starts another.
   if ev.event == "SessionStart" and ev.session_id then
+    -- A /clear of a session that handed off, typed by you or after a reload
+    -- forgot the handoff, starts from it too.
+    local last = vim.b[buf].corkboard_claude_session
+    if ev.source == "clear" and last and last ~= ev.session_id and not resuming[buf] then
+      local path = handoff_path(last)
+      if vim.uv.fs_stat(path) then resuming[buf] = { path = path, session = last } end
+      handing[buf] = nil
+    end
     -- A new session (a /clear) has none of the last one's background work.
     if vim.b[buf].corkboard_claude_session ~= ev.session_id then pending[buf], waking[buf] = nil, nil end
     vim.b[buf].corkboard_claude_session = ev.session_id

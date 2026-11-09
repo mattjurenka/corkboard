@@ -1,5 +1,7 @@
 # Self-hosted git: Forgejo at git.corkboard.fyi
 
+> **2026-11-06:** steps 1, 2 and 4 (Forgejo, backups and runners on the droplet) are superseded by forge-on-leader.md: Forgejo moves onto the account's leader node.
+
 **Written:** 2026-10-29 · **Decided:** Forgejo on the droplet is the source of truth for every
 project; each repo push-mirrors to GitHub; private, sign-up off; Forgejo Actions with our own
 runners; Stable (`stable-monorepo`, `stable-accounts`) and Baum (`baum-monorepo`) move onto it later.

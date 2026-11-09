@@ -1,5 +1,7 @@
 # Forge keys: the account root is Forgejo's credential
 
+> **2026-11-06:** the hosted gate (pieces 2 and 6) is superseded by forge-on-leader.md: Forgejo and the gate move onto the account's leader node.
+
 **Written:** 2026-11-06 · **Proposed, not decided.** The account key that roots e2ee (its
 DeviceCerts, `lib/e2ee/wire.ts`) is also what signs into git.corkboard.fyi. A device with a cert
 is the account in Forgejo; it can hand a VM a grant for named repos with per-permission levels,

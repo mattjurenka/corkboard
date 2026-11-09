@@ -578,6 +578,10 @@ const pages = new Set<Bun.ServerWebSocket<Session>>();
 
 const ISOLATED = { "cross-origin-embedder-policy": "require-corp", "cross-origin-resource-policy": "same-origin" };
 const IMMUTABLE = "private, max-age=31536000, immutable";
+// Which install the page is from, in its ETags: a Nix store dates every file
+// 1970, so a release whose page is the same size as the last one's would
+// otherwise be answered 304 and the old page kept.
+const WEB_BUILD = Bun.hash(existsSync(WEB_ROOT) ? realpathSync(WEB_ROOT) : WEB_ROOT).toString(36);
 
 // What of Neovim's runtimepath never changes, whole, for the page to keep
 // (wasm.snapshot), at a URL that changes when it does.
@@ -857,7 +861,7 @@ Bun.serve<Session, {}>({
     if (path.startsWith("assets/")) headers["cache-control"] = IMMUTABLE;
     else {
       headers["cache-control"] = "no-cache";
-      headers.etag = `"${file.size.toString(36)}-${Math.floor(file.lastModified).toString(36)}"`;
+      headers.etag = `"${WEB_BUILD}-${file.size.toString(36)}-${Math.floor(file.lastModified).toString(36)}"`;
       if (req.headers.get("if-none-match") === headers.etag) return new Response(null, { status: 304, headers });
     }
     return new Response(file, { headers });

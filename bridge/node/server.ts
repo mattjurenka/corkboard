@@ -29,6 +29,10 @@
 //     GET   plans/:date                the day plan (day.ts)
 //     POST  plans/:date/:change        say { text }, accept, discard or day { blocks, version?,
 //                                      proposal? } (owner); a stale one is 409 with { error, plan }
+//     GET   meditation/:date           its seconds, and whether it's running (day.ts)
+//     POST  meditation/:date/:change   start or pause (owner)
+//     GET   feeds/:date                each device's seconds of feeds (owner; day.ts)
+//     POST  feeds/:date/:device        ?seconds=: that device's count (owner)
 //     GET   chat                       ?after=<id>&limit=: the messages, oldest first
 //     POST  chat                       { text, who? }: the user's (owner), or the brain's
 //     PATCH chat/:id, DELETE chat/:id  the user's own, until it's delivered (owner)
@@ -426,6 +430,24 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
         if (sub === "day") return json(await data.setDay(d, version, checkBlocks(b.blocks)));
       }
     }
+    if (what === "meditation" && name) {
+      const d = checkDate(name);
+      if (m === "GET" && !sub) return json(data.meditation(d));
+      if (m === "POST" && (sub === "start" || sub === "pause")) {
+        if (who.scope !== "owner") return json({ error: "only the user's own clients meditate" }, 403);
+        return json(await data.meditate(d, sub));
+      }
+    }
+    if (what === "feeds" && name) {
+      if (who.scope !== "owner") return json({ error: "only the user's own clients see feeds" }, 403);
+      const d = checkDate(name);
+      if (m === "GET" && !sub) return json(data.feeds(d));
+      if (m === "POST" && (sub === "laptop" || sub === "phone")) {
+        const seconds = Number(q("seconds"));
+        if (!Number.isInteger(seconds) || seconds < 0) throw new Invalid("seconds must be a whole number");
+        return json(await data.countFeeds(d, sub, seconds));
+      }
+    }
     // Each change to the day object, as an event with nothing in it: pepperd
     // reads the chat after one (fleet/fleetd/assistant.ts), not every ten seconds.
     if (what === "day" && name === "events" && m === "GET") return sse((send) => data.replicas.onChange((x) => x.kind === "day" && send({ kind: "day" })));
@@ -466,7 +488,8 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
           return new Response(null, { status: 204 });
         }
         if (name === "environments" && !sub && m === "GET") return json(f.environments());
-        if (name === "environments" && sub && m === "PUT") return (await f.putEnvironment(sub, (await body()).manifest), json({}));
+        if (name === "environments" && sub && !id && m === "PUT") return (await f.putEnvironment(sub, (await body()).manifest), json({}));
+        if (name === "environments" && sub && id === "running" && m === "PUT") return (f.putRunning(sub, (await body()).running), json({}));
         if (name === "holds" && !id) {
           const r = await f.holdRoute(m, sub, body);
           return r.status === 204 ? new Response(null, { status: 204 }) : json(r.body, r.status);

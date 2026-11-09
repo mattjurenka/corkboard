@@ -233,7 +233,7 @@ end
 -- Text under the HTML --------------------------------------------------------------
 
 local function pin_of(b)
-  return b.kind == "fixed" and "◇" or b.kind == "off" and "·" or "●"
+  return b.kind == "fixed" and "◇" or b.kind == "off" and "·" or b.kind == "play" and "○" or "●"
 end
 
 local function render_plan()

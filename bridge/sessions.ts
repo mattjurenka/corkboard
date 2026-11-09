@@ -59,6 +59,9 @@ export type Source = {
   // The account's hubs, watched on sealed channels (peers.ts): their
   // bridges are told to peers beside the Worker's, and over them.
   sealed?: Peers;
+  // Its machine as the fleet view's card shows it (host.ts): told with the
+  // list on the hub's link only, and again every while, as it gets busier.
+  host?(): unknown;
 };
 
 // Another bridge, as the Worker says of it (its user.ts Bridge).
@@ -90,23 +93,25 @@ type Stream = { key: string; send(m: object): void; follower?: Follower; timer?:
 // The protocol's bridge end, whatever it's linked to: each link hears the
 // list, is asked and is sent its own streams.
 function core(environment: string, source: Source) {
-  const links = new Set<(m: object) => void>();
+  // Each link, and whether it's the hub's, sealed.
+  const links = new Map<(m: object) => void, boolean>();
   const streams = new Map<string, Stream>();
   const mirrored = new Map<string, (m: object) => void>();
 
   // Where its log is stays here: only whether it can be followed goes. With
   // no screen to show, a session is followed before it has a log (fleetd's,
   // before its first message), which the stream waits for.
-  const listed = () => ({
+  const listed = (sealed: boolean) => ({
     type: "sessions",
     environment,
     sessions: source.list().map(({ transcript, ...s }) => ({ ...s, attach: !!transcript || !source.screen, terminal: !!source.terminals })),
+    ...(sealed && source.host && { host: source.host() }),
   });
-  source.watch(() => {
-    if (!links.size) return;
-    const m = listed();
-    for (const send of links) send(m);
-  });
+  const tell = (only?: boolean) => {
+    for (const [send, sealed] of links) if (only === undefined || sealed === only) send(listed(sealed));
+  };
+  source.watch(() => tell());
+  if (source.host) setInterval(() => tell(true), 15_000);
 
   const answer = async (send: (m: object) => void, q: any) => {
     if (typeof q.key !== "string") return send({ type: "answer", ask: q.ask, error: "which session?" });
@@ -176,9 +181,9 @@ function core(environment: string, source: Source) {
 
   // A link opening: it's told the list at once. Its streams are its own,
   // and go with it.
-  return (send: (m: object) => void): Link => {
-    links.add(send);
-    send(listed());
+  return (send: (m: object) => void, sealed = false): Link => {
+    links.set(send, sealed);
+    send(listed(sealed));
     const mine = (stream: unknown) => typeof stream === "string" && (streams.get(stream)?.send ?? mirrored.get(stream)) === send;
     return {
       receive(m: any) {
@@ -199,7 +204,7 @@ function core(environment: string, source: Source) {
 
 export function serve(id: string, environment: string, source: Source) {
   const connect = core(environment, source);
-  source.hub?.({ id, machine: hostname(), url: PAGE ?? null, environment }, connect);
+  source.hub?.({ id, machine: hostname(), url: PAGE ?? null, environment }, (send) => connect(send, true));
 
   // Peers ------------------------------------------------------------------------
   //

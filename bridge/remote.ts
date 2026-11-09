@@ -10,6 +10,7 @@
 
 import { hostname } from "node:os";
 import * as away from "./away";
+import { host } from "./host";
 import { say, sentence } from "./speech";
 import { bridgeId, serve, type Hosted, type HubJoin, type Peer } from "./sessions";
 import type { Peers } from "./peers";
@@ -49,6 +50,7 @@ export function start(port: number, hub?: HubJoin, sealed?: Peers) {
   serve(id, ENVIRONMENT, {
     list,
     watch: away.watch,
+    host,
     // For away mode. fleetd's run in VMs, on their own, not in a page.
     peers: (bridges) =>
       away.peers(
