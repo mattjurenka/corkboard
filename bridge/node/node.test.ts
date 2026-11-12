@@ -1504,7 +1504,7 @@ describe("the fleet sealed, on the node", () => {
   });
 
   it("signs a spawn's key what its template's git says, at its claim, and takes it back at the gate", async () => {
-    const git = { repos: ["matt/corkboard"], permissions: { contents: "write", issues: "read" }, refs: ["agent/*"] };
+    const git = { repos: ["matt/corkboard"], permissions: { contents: "write", issues: "read" }, refs: ["agent/{spawn}/*"] };
     await local("/api/node/fleet/environments/droplet", { method: "PUT", body: JSON.stringify({ manifest: { templates: { coding: { git } } } }) });
     const s = JSON.parse((await tool("spawn_agent", { task: "push it" })).text);
     const vm = newDevice();
@@ -1513,7 +1513,7 @@ describe("the fleet sealed, on the node", () => {
     const got = await (await local(`/api/node/fleet/spawns/${s.id}?git=${vm.id}&environment=droplet`)).json();
     expect(got.git).toMatchObject({ account: keys.id, gate: gate.url.origin });
     const c = checkChain(keys.id, keys.id, got.git.chain, { devices: [], grant: () => false });
-    expect(c).toMatchObject({ holder: vm.id, scope: { repos: ["matt/corkboard"], perms: { contents: "write", issues: "read" }, refs: ["refs/heads/agent/*"] } });
+    expect(c).toMatchObject({ holder: vm.id, scope: { repos: ["matt/corkboard"], perms: { contents: "write", issues: "read" }, refs: [`refs/heads/agent/${s.id}/*`] } });
     // Asked again (its grant nearly over): another, and the one before taken back.
     const again = await (await local(`/api/node/fleet/spawns/${s.id}?git=${vm.id}&environment=droplet`)).json();
     const c2 = checkChain(keys.id, keys.id, again.git.chain, { devices: [], grant: () => false }) as any;

@@ -7,7 +7,7 @@
 // running asks the node for another before then.
 
 import { ed25519 } from "@noble/curves/ed25519.js";
-import { type Chain, type Signer, ANSWER_HEADER, CHAIN_HEADER, channelAnswer } from "../../lib/e2ee/forge";
+import { type Chain, type Scope, type Signer, ANSWER_HEADER, CHAIN_HEADER, channelAnswer, refAllowed, repoAllowed } from "../../lib/e2ee/forge";
 import { b64url, fromB64url, utf8 } from "../../lib/e2ee/wire";
 import type { Manifest, Spawn } from "./fleet";
 
@@ -150,5 +150,26 @@ export function gitNote(s: Spawn): string {
   const g = s.remote?.git?.chain.grants?.at(-1)?.body;
   if (!g) return "";
   const perms = g.perms ? g.perms.split(" ").join(", ") : "read only";
-  return `\n\nYou have git access at http://fleet-gateway:${FORGE_PORT}/ (the forge's own URLs go there too) to ${g.repos.split(" ").join(", ")} (${perms}${g.refs ? `; pushes only to ${g.refs.split(" ").join(", ")}` : ""}); it needs no credentials.`;
+  const work = s.forge ? ` Your work dir's origin is ${s.forge.repo} there, on branch ${s.forge.branch}: push your work to it.` : "";
+  const pulls = /(^| )pull_requests:write( |$)/.test(g.perms)
+    ? ` To open a pull request, POST {"head", "base", "title", "body"} as JSON to http://fleet-gateway:${FORGE_PORT}/api/v1/repos/<owner>/<repo>/pulls (Forgejo's API, no token).`
+    : "";
+  return `\n\nYou have git access at http://fleet-gateway:${FORGE_PORT}/ (the forge's own URLs go there too) to ${g.repos.split(" ").join(", ")} (${perms}${g.refs ? `; pushes only to ${g.refs.split(" ").join(", ")}` : ""}); it needs no credentials.${work}${pulls}`;
+}
+
+// The forge's repo a spawn's repo is a clone of, by its origin (the
+// bridge's /forge/ loopback, or the forge's own host), when the grant
+// covers it: the guest works on that, on the spawn's own branch, rather
+// than only the bundle.
+export function forgeOrigin(s: Spawn, origin: string, forgeHost = "git.corkboard.fyi"): Spawn["forge"] {
+  const g = s.remote?.git?.chain.grants?.at(-1)?.body;
+  if (!g) return;
+  const host = forgeHost.replaceAll(".", "\\.");
+  const m = new RegExp(`(?:/forge/|^https?://${host}/|^(?:ssh://)?git@${host}[:/])([\\w.-]+)/([\\w.-]+?)(?:\\.git)?/?$`).exec(origin.trim());
+  if (!m) return;
+  const repo = `${m[1]}/${m[2]}`.toLowerCase();
+  const scope = { repos: g.repos.split(" "), refs: g.refs?.split(" ") ?? null } as Scope;
+  const branch = `agent/${s.id}/work`;
+  if (!repoAllowed(scope, m[1], m[2]) || !refAllowed(scope, `refs/heads/${branch}`)) return;
+  return { repo, branch, url: `http://fleet-gateway:${FORGE_PORT}/${repo}.git` };
 }

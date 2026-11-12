@@ -75,6 +75,9 @@ export type Spawn = {
   task: string;
   // A repo on this machine to work in; its commits come back as a bundle.
   repo?: string;
+  // The forge's copy of repo, when its grant covers it: the guest's origin
+  // (url, through the gateway), and the branch it works and pushes on.
+  forge?: { repo: string; branch: string; url: string };
   // Who asked: "user", or a brain. A brain's spawn that holds credentials
   // waited for approval in the Worker's queue; the CLI's never does.
   by: string;

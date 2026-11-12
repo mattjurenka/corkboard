@@ -183,6 +183,7 @@ export class FleetRecords {
 
   // A grant to holder (a key fleetd made for the spawn) of what its
   // template's git says, for its environment's manifest; none if it says nothing.
+  // {spawn} in its refs is the spawn's id, so each spawn's VM pushes to its own.
   // Asked again (a claim retried, or the last nearly run out), it signs
   // another and takes back the one before; not once the spawn's is over.
   async gitGrant(id: string, holder: string, environment: string): Promise<{ account: string; gate: string; chain: Chain } | undefined> {
@@ -198,7 +199,7 @@ export class FleetRecords {
     const f = this.forge?.();
     if (!f) throw new Invalid(`${template} names repos, and this node can't sign for the forge`);
     const perms = Object.fromEntries(Object.entries(terms.permissions ?? {}).filter(([p]) => PERMISSIONS.includes(p as Permission)));
-    const g = grantForge(f.device, f.account, holder, { name: `fleet ${id} (${template})`, repos: terms.repos ?? [], perms, refs: terms.refs ?? null, del: terms.delete === true, expires: Date.now() + GIT_GRANT_MS });
+    const g = grantForge(f.device, f.account, holder, { name: `fleet ${id} (${template})`, repos: terms.repos ?? [], perms, refs: terms.refs?.map((r) => r.replaceAll("{spawn}", id)) ?? null, del: terms.delete === true, expires: Date.now() + GIT_GRANT_MS });
     const bad = scopeOf(g.body);
     if (typeof bad === "string") throw new Invalid(`${template}'s git: ${bad}`);
     const was = str(m.git);

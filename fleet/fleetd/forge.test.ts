@@ -6,7 +6,7 @@ import { certify, newDevice } from "../../lib/e2ee/device";
 import { grantForge } from "../../lib/e2ee/forge";
 import { accountKeys, newRoot } from "../../lib/e2ee/keys";
 import { forgeHandler } from "../../bridge/node/forge";
-import { type Git, GitGrants, gitNote, newHolder, slotForge } from "./forge";
+import { type Git, GitGrants, forgeOrigin, gitNote, newHolder, slotForge } from "./forge";
 import type { Manifest, Spawn } from "./fleet";
 
 const GATE = "https://git.test";
@@ -114,4 +114,27 @@ test("a slot's guest reaches the forge through fleetd, which shows its spawn's g
   expect((await handle("agent-1", new Request("http://10.80.0.1:8890/"), "10.80.0.2")).status).toBe(403);
   all = [{ ...s, state: "done" }];
   expect((await ask("/matt/corkboard.git/info/refs?service=git-upload-pack")).status).toBe(403);
+});
+
+test("a repo cloned from the forge is the guest's origin, on the spawn's branch", () => {
+  const s = claimed();
+  expect(forgeOrigin(s, "http://127.0.0.1:7777/forge/matt/corkboard.git\n")).toEqual({ repo: "matt/corkboard", branch: "agent/s1/work", url: "http://fleet-gateway:8890/matt/corkboard.git" });
+  expect(forgeOrigin(s, "git@git.corkboard.fyi:matt/corkboard.git")?.repo).toBe("matt/corkboard");
+  expect(forgeOrigin(s, "https://git.corkboard.fyi/matt/corkboard")?.repo).toBe("matt/corkboard");
+  expect(forgeOrigin(s, "https://git.corkboard.fyi/matt/secret.git")).toBeUndefined();
+  expect(forgeOrigin(s, "git@github.com:matt/corkboard.git")).toBeUndefined();
+  expect(forgeOrigin({ ...s, remote: { ...s.remote!, git: undefined } }, "https://git.corkboard.fyi/matt/corkboard")).toBeUndefined();
+  s.forge = forgeOrigin(s, "https://git.corkboard.fyi/matt/corkboard");
+  expect(gitNote(s)).toContain("Your work dir's origin is matt/corkboard there, on branch agent/s1/work");
+  expect(gitNote(s)).not.toContain("pull request");
+});
+
+test("one that may write pull requests is told how to open one", () => {
+  const s = claimed();
+  const keys = accountKeys(newRoot());
+  const g = grantForge(newDevice(), keys.id, newHolder().id, { name: "fleet s1 (coding)", repos: ["matt/*"], perms: { contents: "write", pull_requests: "write" }, refs: ["agent/s1/*"], expires: Date.now() + 86_400_000 });
+  s.remote!.git!.chain.grants = [g];
+  expect(gitNote(s)).toContain("POST {\"head\", \"base\", \"title\", \"body\"} as JSON to http://fleet-gateway:8890/api/v1/repos/<owner>/<repo>/pulls");
+  expect(forgeOrigin(s, "https://git.corkboard.fyi/matt/other.git")?.branch).toBe("agent/s1/work");
+  expect(forgeOrigin({ ...s, id: "s2" }, "https://git.corkboard.fyi/matt/other.git")).toBeUndefined();
 });

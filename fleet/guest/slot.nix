@@ -184,7 +184,16 @@ let
       rm -rf "$work"
       if [ -f /mnt/share/repo.bundle ]; then
         git clone --quiet /mnt/share/repo.bundle "$work"
-        git -C "$work" checkout --quiet -B fleet-result
+        branch=fleet-result
+        # The forge's copy, when the grant covers it: origin is that (on the
+        # gateway), and the work goes on the spawn's own branch there.
+        if [ -f /mnt/share/forge.json ]; then
+          git -C "$work" remote set-url origin "$(jq -r .url /mnt/share/forge.json)"
+          git -C "$work" fetch --quiet origin || true
+          git -C "$work" config push.autoSetupRemote true
+          branch=$(jq -r .branch /mnt/share/forge.json)
+        fi
+        git -C "$work" checkout --quiet -B "$branch"
         base=$(git -C "$work" rev-parse HEAD)
       else
         mkdir -p "$work"
@@ -281,6 +290,7 @@ let
           git commit --quiet -m "fleet: uncommitted work at the end of the task"
         fi
         if [ "$(git rev-list --count "$base"..HEAD)" -gt 0 ]; then
+          git branch --force fleet-result HEAD 2>/dev/null || true
           git bundle create --quiet "$out/work.bundle" "^$base" fleet-result
         fi
       fi

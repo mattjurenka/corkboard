@@ -113,8 +113,8 @@ let
           # serves on the slot's gateway: fleet/fleetd/forge.ts), granted
           # to each at its claim (.agent/plans/forge-keys.md), or null:
           # { repos = [ "owner/name" "owner/*" ]; permissions = { contents =
-          # "write"; pull_requests = "read"; ... }; refs ? [ "agent/*" ];
-          # delete ? false; }. Only a sealed fleet (its node a device) signs one.
+          # "write"; pull_requests = "read"; ... }; refs ? [ "agent/{spawn}/*" ];
+          # delete ? false; }, {spawn} being each spawn's id. Only a sealed fleet (its node a device) signs one.
           git = t.git or null;
           # The approval rule: a template with no credentials (nor git) runs
           # whoever asks; one with any needs the user's yes when a brain asks.

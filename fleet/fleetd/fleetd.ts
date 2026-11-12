@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { coresOf, guestOf, manifest, memoryOf, newId, schedule, SPAWNS, spawns, tokenFor, write, type Manifest, type Spawn } from "./fleet";
 import { Actions, forgejo } from "./actions";
 import { assist } from "./assistant";
-import { GitGrants, SlotForges, gitNote, slotForge } from "./forge";
+import { GitGrants, SlotForges, forgeOrigin, gitNote, slotForge } from "./forge";
 import { nodeFetch, readDevice, useDevice } from "./node";
 import { ENVIRONMENT, Queue, nodeApi } from "./queue";
 import { end, message, post, serveSessions } from "./sessions";
@@ -70,6 +70,11 @@ async function start(m: Manifest, s: Spawn, slot: string) {
   if (token && !existsSync(token)) throw new Error(`no token for the ${s.account} account at ${token} (claude setup-token, signed in as it, then save it there)`);
   empty(sl.shareDir);
   empty(sl.outboxDir);
+  if (s.repo && s.remote?.git) {
+    const o = await run(["git", "-C", s.repo, "remote", "get-url", "origin"]);
+    s.forge = o.ok ? forgeOrigin(s, o.out) : undefined;
+    if (s.forge) writeFileSync(join(sl.shareDir, "forge.json"), JSON.stringify(s.forge) + "\n");
+  }
   writeFileSync(join(sl.shareDir, "task.md"), s.remote ? s.task + (s.remote.card ? cardNote(s) : s.interactive ? sessionNote(s) : taskNote(s)) : s.task);
   if (s.interactive) {
     writeFileSync(join(sl.shareDir, "session"), "");
