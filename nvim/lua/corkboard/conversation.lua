@@ -5,7 +5,9 @@
 -- agent://session/<bridge>/<key>, in a tab, as the phone does (corkboard-
 -- cloud's android Sessions.kt): what you said on a shaded row, what Claude
 -- said as markdown, each tool on a line with the start of how it went, and
--- what you say in a prompt under it.
+-- what you say in a prompt under it. With a page attached, the page draws
+-- it instead, as a chat (web/src/views/Conversation.tsx), with what you say
+-- in its composer; what's drawn here is under it.
 --
 --   i, a, o   say something, in the prompt
 --   <CR>      a tool whole, or back to its line
@@ -39,6 +41,8 @@ end
 -- bridge has it, "loading" until its first batch; state: the session's, as
 -- its last batch said.
 local open = {}
+
+local function page() return require("corkboard").attached() end
 
 -- What's drawn at its foot: while it's reached, then by its state.
 local function status(c)
@@ -242,8 +246,41 @@ local function draw(c)
   end
   for _, w in ipairs(wins) do
     if at_end[w] then vim.api.nvim_win_set_cursor(w, { #lines, 0 }) end
-    vim.wo[w].winbar = "%#CorkboardConvName# " .. (c.name or ""):gsub("%%", "%%%%") .. "  %#CorkboardConvDim#" .. (c.ended and "ended" or c.state or "")
+    -- Under the page's panel, whose own header says it.
+    vim.wo[w].winbar = not page() and "%#CorkboardConvName# " .. (c.name or ""):gsub("%%", "%%%%") .. "  %#CorkboardConvDim#" .. (c.ended and "ended" or c.state or "") or ""
   end
+  M.push(c)
+end
+
+-- What the page draws (Conversation.tsx): all of it, each time it changes,
+-- once a tick. ask: the question it's on, as asking() has it, with the
+-- options ticked by their numbers from 0.
+function M.push(c)
+  if c.pushing or not page() then return end
+  c.pushing = true
+  vim.schedule(function()
+    c.pushing = nil
+    if not vim.api.nvim_buf_is_valid(c.buf) then return end
+    local qs, answers = asking(c)
+    local a = qs and c.ask
+    require("corkboard").notify("corkboard.view", c.buf, {
+      name = c.name,
+      where = c.where,
+      items = c.items,
+      results = c.results,
+      state = c.state or vim.NIL,
+      status = c.why or status(c) or vim.NIL,
+      ended = c.ended ~= nil,
+      questions = qs or vim.NIL,
+      ask = a and { step = a.step, picks = vim.tbl_keys(a.picks[a.step] or {}), other = a.others[a.step] or vim.NIL } or vim.NIL,
+      answers = answers,
+      focus = c.focus or 0,
+    })
+  end)
+end
+
+function M.push_all()
+  for _, c in pairs(open) do M.push(c) end
 end
 
 local function say(c, text, keys, answers)
@@ -339,6 +376,11 @@ local function prompt(c)
 end
 
 local function ask(c)
+  -- The page's composer, which takes the keys.
+  if page() then
+    c.focus = (c.focus or 0) + 1
+    return M.push(c)
+  end
   local win = prompt(c)
   if not win then return end
   vim.api.nvim_set_current_win(win)
@@ -352,12 +394,13 @@ function M.close(c)
 end
 
 local function follow(c)
-  c.ended, c.phase, c.state = nil, "connecting", nil
+  c.ended, c.why, c.phase, c.state = nil, nil, "connecting", nil
   if vim.api.nvim_buf_is_valid(c.buf) then draw(c) end
   cloud().call_async("fleet_follow", function(err)
     if not vim.api.nvim_buf_is_valid(c.buf) then return end
     if err then
-      c.ended, c.phase = tostring(err), nil
+      c.why, c.phase = tostring(err), nil
+      c.ended = c.why
     elseif c.phase == "connecting" then
       c.phase = "loading"
     end
@@ -379,10 +422,12 @@ function M.open(bridge, key, name, where)
       vim.cmd.tabnew()
       vim.api.nvim_win_set_buf(0, c.buf)
     end
-    prompt(c)
+    if not page() then prompt(c) end
     return
   end
   vim.cmd.tabnew()
+  -- Opened from a terminal's insert mode, keys would be typed into it.
+  vim.cmd.stopinsert()
   local buf = vim.api.nvim_get_current_buf()
   c = { bridge = bridge, key = key, name = name, buf = buf, items = {}, results = {}, opened = {}, rows = {} }
   open[id] = c
@@ -399,6 +444,8 @@ function M.open(bridge, key, name, where)
   vim.b[buf].corkboard_account = where.account
   vim.b[buf].corkboard_host = where.host
   vim.b[buf].corkboard_dir = where.dir ~= "" and where.dir ~= vim.NIL and where.dir or nil
+  vim.b[buf].corkboard_view = "conversation"
+  c.where = { vm = where.vm, brain = where.brain, account = where.account, host = where.host, dir = vim.b[buf].corkboard_dir }
   local wo = vim.wo[0][0]
   wo.wrap = true
   wo.linebreak = true
@@ -445,8 +492,37 @@ function M.open(bridge, key, name, where)
       cloud().send("fleet_unfollow", bridge, key)
     end,
   })
-  prompt(c)
+  if not page() then prompt(c) end
   follow(c)
+end
+
+-- From the page, for the conversation in buf.
+local function by_buf(buf)
+  for _, c in pairs(open) do
+    if c.buf == buf then return c end
+  end
+end
+
+-- What's typed in its composer, as in the prompt.
+function M.submit(buf, text)
+  local c = by_buf(buf)
+  if c then submit(c, text) end
+end
+
+-- An option clicked, as its number typed (from 1).
+function M.pick(buf, n)
+  local c = by_buf(buf)
+  if c then pick(c, n) end
+end
+
+function M.interrupt(buf)
+  local c = by_buf(buf)
+  if c then say(c, "", { "esc" }) end
+end
+
+function M.refollow(buf)
+  local c = by_buf(buf)
+  if c then follow(c) end
 end
 
 -- From the bridge: a part of one, or its end.
@@ -455,7 +531,8 @@ function M.event(event)
   if not c then return end
   c.phase = nil
   if event.type == "conversation_end" then
-    c.ended = tostring(nil_if_null(event.why) or "ended") .. " (R to follow again)"
+    c.why = tostring(nil_if_null(event.why) or "ended")
+    c.ended = c.why .. " (R to follow again)"
     return draw(c)
   end
   c.state = nil_if_null(event.state) or c.state

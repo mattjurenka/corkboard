@@ -192,4 +192,17 @@
   .markdown-body th { background: var(--muted); font-weight: 600; }
   .markdown-body img { max-width: 100%; display: inline; }
   .markdown-body .missing { color: var(--muted-foreground); }
+  /* A turn of Claude's in a conversation (views/Conversation.tsx).
+     Spaced in whole lines, square, with code as wide as a cell. */
+  .markdown-body.chat { padding: 0; }
+  .markdown-body.chat :is(p, ul, ol, blockquote, pre, table) { margin: 0 0 var(--cell-h); }
+  .markdown-body.chat :is(h1, h2, h3, h4, h5, h6) { margin: var(--cell-h) 0 0; line-height: var(--cell-h); border: 0; }
+  .markdown-body.chat :is(ul, ol) { padding-left: 2ch; }
+  .markdown-body.chat li + li { margin-top: 0; }
+  .markdown-body.chat code { font: inherit; border-radius: 0; padding: 0 .5ch; }
+  .markdown-body.chat pre { line-height: var(--cell-h); border: 0; border-radius: 0; padding: 0 1ch; }
+  .markdown-body.chat pre code { padding: 0; }
+  .markdown-body.chat :is(th, td) { padding: 0 1ch; }
+  .markdown-body.chat > :first-child { margin-top: 0; }
+  .markdown-body.chat > :last-child { margin-bottom: 0; }
 }

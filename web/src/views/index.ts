@@ -3,6 +3,7 @@ import { Avatar } from "./Avatar";
 import { Board } from "./Board";
 import { BrainMemory, Brains } from "./Brains";
 import { Cards } from "./Cards";
+import { Conversation } from "./Conversation";
 import { Fleet } from "./Fleet";
 import { Holds } from "./Holds";
 import { Media } from "./Media";
@@ -38,4 +39,5 @@ export const VIEWS: Record<string, React.ComponentType<ViewProps>> = {
   image: ImageView,
   pdf: PdfView,
   markdown: MarkdownView,
+  conversation: Conversation,
 };
