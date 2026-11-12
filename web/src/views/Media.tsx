@@ -2,8 +2,10 @@
 // (corkboard.claude.cards' media panel), under its cards: the list, newest first, and the selected
 // file below it. Images, video, audio, PDFs and text show here; anything
 // else is a download. Each comes from the bridge's /media once, as a blob.
+// Below them, the files on no card, kept on the leader (the bridge's
+// /files): the page's own to list, pick, send (+, or dropped here) and delete.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import type { Nvim } from "@/nvim/context";
 import type { ViewProps } from "./index";
@@ -23,22 +25,86 @@ type MediaFile = {
   who: string;
 };
 type MediaState = { files?: MediaFile[]; selected?: string };
+type Kept = { id: string; name: string; type: string; size: number; at: string; who: string };
+
+const kept = (f: Kept): MediaFile => ({ ...f, key: `kept:${f.id}`, url: `files/${f.id}` });
+
+// The leader's files, looked at again every half minute while the panel's open.
+function useKept(nvim: Nvim) {
+  const [files, setFiles] = useState<MediaFile[]>([]);
+  const [error, setError] = useState<string>();
+  const look = useCallback(async () => {
+    try {
+      const res = await nvim.bridge("files");
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `${res.status}`);
+      setFiles(((await res.json()) as Kept[]).map(kept));
+      setError(undefined);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [nvim]);
+  useEffect(() => {
+    void look();
+    const t = setInterval(look, 30_000);
+    return () => clearInterval(t);
+  }, [look]);
+  const send = async (list: Iterable<File>) => {
+    for (const f of list) {
+      const q = new URLSearchParams({ name: f.name, ...(f.type && { type: f.type }) });
+      const res = await nvim.bridge(`files?${q}`, { method: "PUT", body: f });
+      if (!res.ok) setError(`${f.name}: ${(await res.json().catch(() => ({}))).error ?? res.status}`);
+    }
+    await look();
+  };
+  const drop = async (f: MediaFile) => {
+    await nvim.bridge(f.url!, { method: "DELETE" });
+    await look();
+  };
+  return { files, error, send, drop };
+}
 
 export function Media({ state, win, focused, nvim }: ViewProps<MediaState>) {
   const list = useRef<HTMLDivElement>(null);
-  const files = state.files ?? [];
-  const file = files.find((f) => f.key === state.selected) ?? files[0];
-  const pick = (key: string) => nvim.lua("require('corkboard.claude.cards').pick(...)", win, key);
+  const input = useRef<HTMLInputElement>(null);
+  const leader = useKept(nvim);
+  const [mine, setMine] = useState<string>();
+  const [over, setOver] = useState(false);
+  const files = [...(state.files ?? []), ...leader.files];
+  const file = files.find((f) => f.key === (mine ?? state.selected)) ?? files[0];
+  const pick = (key: string) => {
+    if (key.startsWith("kept:")) return setMine(key);
+    setMine(undefined);
+    nvim.lua("require('corkboard.claude.cards').pick(...)", win, key);
+  };
 
   useEffect(() => {
     list.current?.querySelector("[data-selected]")?.scrollIntoView({ block: "nearest" });
-  }, [state.selected]);
+  }, [state.selected, mine]);
+  useEffect(() => setMine(undefined), [state.selected]);
 
   return (
-    <div className="flex h-full flex-col">
-      <h2 className="flex-none px-2ch pt-row">
-        files <span className="text-muted-foreground">{files.length}</span>
+    <div
+      className={cn("flex h-full flex-col", over && "bg-accent")}
+      onDragOver={(e) => e.dataTransfer.types.includes("Files") && (e.preventDefault(), setOver(true))}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        if (!e.dataTransfer.files.length) return;
+        e.preventDefault();
+        setOver(false);
+        void leader.send([...e.dataTransfer.files]);
+      }}
+    >
+      <h2 className="flex flex-none gap-ch px-2ch pt-row">
+        <span>
+          files <span className="text-muted-foreground">{files.length}</span>
+        </span>
+        <span className="flex-1" />
+        <button type="button" onClick={() => input.current?.click()} className="cursor-pointer text-muted-foreground hover:text-foreground">
+          +
+        </button>
+        <input ref={input} type="file" multiple hidden onChange={(e) => (void leader.send([...(e.target.files ?? [])]), (e.target.value = ""))} />
       </h2>
+      {leader.error && <div className="flex-none truncate px-2ch text-muted-foreground">{leader.error}</div>}
       <div ref={list} className="max-h-[calc(var(--cell-h)*4)] flex-none overflow-y-auto px-2ch pt-half pb-half">
         {files.map((f) => (
           <div
@@ -57,12 +123,12 @@ export function Media({ state, win, focused, nvim }: ViewProps<MediaState>) {
         ))}
         {!files.length && <div className="px-ch text-border">—</div>}
       </div>
-      {file && <Shown key={file.key} file={file} nvim={nvim} />}
+      {file && <Shown key={file.key} file={file} nvim={nvim} drop={file.key.startsWith("kept:") ? () => void leader.drop(file) : undefined} />}
     </div>
   );
 }
 
-function Shown({ file, nvim }: { file: MediaFile; nvim: Nvim }) {
+function Shown({ file, nvim, drop }: { file: MediaFile; nvim: Nvim; drop?: () => void }) {
   const [blob, setBlob] = useState<{ url?: string; text?: string; error?: string }>({});
   useEffect(() => {
     let live = true;
@@ -113,8 +179,13 @@ function Shown({ file, nvim }: { file: MediaFile; nvim: Nvim }) {
       <div className="min-h-0 flex-1 border-t" onMouseLeave={refocus}>
         {body}
       </div>
-      <div className="flex-none truncate border-t px-ch text-muted-foreground">
-        {[file.card, file.who, when(file.at)].filter(Boolean).join(" · ")}
+      <div className="flex flex-none gap-ch border-t px-ch text-muted-foreground">
+        <span className="min-w-0 flex-1 truncate">{[file.card, file.who, when(file.at)].filter(Boolean).join(" · ")}</span>
+        {drop && (
+          <button type="button" onClick={drop} className="flex-none cursor-pointer hover:text-foreground">
+            ×
+          </button>
+        )}
       </div>
     </>
   );

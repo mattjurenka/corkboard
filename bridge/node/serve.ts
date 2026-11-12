@@ -61,6 +61,7 @@ import { brainThink, Consolidator } from "./consolidator";
 import { Handoff } from "./handoff";
 import { ForgeSnapshots } from "./snapshots";
 import { Media } from "./media";
+import { FileOffers, Files } from "./files";
 import { startLeases } from "./leases";
 import { OAuthStore, SCOPES, type Scope, type Shared } from "./oauth";
 import { type AppCall, type AppEvents, node } from "./server";
@@ -264,9 +265,21 @@ export async function startNode(o: NodeOptions = {}) {
       if (to === d.device.id) return forgejo(new Request(`http://node.invalid/forge${path}`, { ...init, ...(init.body != null && { duplex: "half" }) } as RequestInit), d.cert);
       return reach.fetch(to, `/forge${path}`, init);
     };
+    // A request to the leader's files (files.ts), on its channel (its
+    // /files/), or answered here when this node leads. path is /files....
+    const files = new Files(join(NODE_DIR, "files"));
+    const toFiles = async (path: string, init: RequestInit = {}) => {
+      const to = await leader();
+      if (to === d.device.id) {
+        const req = new Request(`http://node.invalid${path}`, { ...init, ...(init.body != null && { duplex: "half" }) } as RequestInit);
+        return files.serve(req, new URL(req.url).pathname.slice("/files".length).split("/").filter(Boolean).map(decodeURIComponent));
+      }
+      return reach.fetch(to, path, init);
+    };
+    const fileOffers = new FileOffers(toFiles);
     let app: AppCall | undefined;
     let appEvents: AppEvents | undefined;
-    const server = Bun.serve({ port: o.port ?? c.port ?? 8787, hostname, idleTimeout: 255, fetch: node({ ...served, origin, app: () => app, appEvents: () => appEvents, reach, toForge }) });
+    const server = Bun.serve({ port: o.port ?? c.port ?? 8787, hostname, idleTimeout: 255, maxRequestBodySize: 1025 * 1024 * 1024, fetch: node({ ...served, origin, app: () => app, appEvents: () => appEvents, reach, toForge, files, toFiles, fileOffers }) });
     if (r) {
       const nodes = await r.nodes().catch((e) => void console.error(`node: no tunnel: ${(e as Error).message}`));
       if (nodes) {
@@ -276,7 +289,7 @@ export async function startNode(o: NodeOptions = {}) {
         // phone's tokens work on either; never loopback. One with no
         // token is its device's, the owner (fleetd's relay-only one).
         forgeWeb = !!nodes.forge;
-        const tunneled = node({ ...served, origin: nodes.url, forgeWeb: () => forgeWeb, toForge });
+        const tunneled = node({ ...served, origin: nodes.url, forgeWeb: () => forgeWeb, toForge, files, toFiles, fileOffers });
         // The relay says when the leader may have changed, so a move takes
         // effect at once rather than at the next minute's look.
         const told = (to: string | null) => (led = { at: Date.now(), to: to ?? d.device.id });
@@ -346,6 +359,7 @@ export async function startNode(o: NodeOptions = {}) {
       hub,
       reach,
       toForge,
+      toFiles,
       // The account's nodes as just told (app.ts's nodes_*).
       noteNodes: (v: NodesView) => void (forgeWeb = !!v.forge),
       // The app's operations on the loopback /app (app.ts's), and its

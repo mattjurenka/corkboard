@@ -25,6 +25,7 @@ import { Conflict, type Data, type FullCard, Invalid } from "./data";
 import type { Search } from "./search";
 import { touch } from "./leases";
 import { MAX_INLINE, type Media, fileName, fileType } from "./media";
+import { type FileItem, type FileOffers, type ToFiles, filesJson } from "./files";
 import { type Kind, boardBound } from "./oauth";
 
 export type Caller = { scope: Kind; agent: string; brain?: string; board?: string; card?: string };
@@ -744,6 +745,77 @@ function dayReaches(t: DayTool, caller: Caller, data: Data) {
   return Array.isArray(abilities) && abilities.includes(t.ability);
 }
 
+// The files on no card (files.ts), on the leader ----------------------------------------
+
+type FileCall = { files: ToFiles; offers?: FileOffers; origin: string; me: string };
+type FileTool = { description: string; properties?: Record<string, object>; required?: string[]; run: (a: any, c: FileCall) => Promise<unknown> };
+
+// What a tool gives back as MCP content itself, an image say, not as JSON.
+class Content {
+  constructor(readonly content: object[]) {}
+}
+
+// Read into the call itself: an image Claude looks at, or text.
+const SEE_IMAGE = 5 * 1024 * 1024;
+const SEE_TEXT = 256 * 1024;
+const SEEN_IMAGES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const isText = (type: string) => type.startsWith("text/") || type === "application/json";
+
+const FILE_TOOLS: Record<string, FileTool> = {
+  list_files: {
+    description:
+      "List the user's files: what they sent from their phone or the page, and what agents kept with keep_file, newest first. Not the files attached to cards (read_card has those). read_file reads one.",
+    run: (_, c) => filesJson<FileItem[]>(c.files, "/files"),
+  },
+  read_file: {
+    description:
+      "Read one of the user's files, by its id from list_files. An image under 5 MB comes back as the image itself, and text under 256 KB as text; anything else, or with download set, as a URL good for an hour: run the command it gives (curl -o <path> <url>) to have it on disk.",
+    properties: { id: str("The file's id, from list_files"), download: { type: "boolean", description: "A URL to download it with, whatever it is" } },
+    required: ["id"],
+    run: async (a, c) => {
+      const id = String(a.id ?? "");
+      const f = (await filesJson<FileItem[]>(c.files, "/files")).find((x) => x.id === id);
+      if (!f) throw new ToolError(`no file ${id}; list_files lists them`);
+      const inline = !a.download && ((SEEN_IMAGES.has(f.type) && f.size <= SEE_IMAGE) || (isText(f.type) && f.size <= SEE_TEXT));
+      if (!inline) {
+        if (!c.offers) throw new ToolError("this node can't hand out a download");
+        const { url, expires_at } = c.offers.download(c.origin, f.id);
+        return { ...f, download: url, expires_at, command: `curl -fsS -o ${JSON.stringify(f.name)} ${url}` };
+      }
+      const res = await c.files(`/files/${f.id}`);
+      if (!res.ok) throw new ToolError(`the leader answered ${res.status}`);
+      const bytes = Buffer.from(await res.arrayBuffer());
+      const about = { type: "text", text: JSON.stringify(f) };
+      if (isText(f.type)) return new Content([about, { type: "text", text: bytes.toString("utf8") }]);
+      return new Content([about, { type: "image", data: bytes.toString("base64"), mimeType: f.type }]);
+    },
+  },
+  keep_file: {
+    description:
+      "Keep a file with the user's files, on no card, for them to look at in corkboard and on their phone: a screenshot, plot, recording, PDF. Pass data (base64) for a small file you have in hand; otherwise leave it out and you get an upload URL, good for an hour: run the command it gives (curl -T <path> <url>). Up to 1 GB. For a file about a card's work, attach_file puts it on the card instead.",
+    properties: {
+      name: str("The file's name, like plot.png; its extension gives its type"),
+      type: str("Its MIME type, like video/mp4, if the name doesn't say"),
+      data: str("The file, base64, for one under 4 MB; leave it out to upload it with curl instead"),
+    },
+    required: ["name"],
+    run: async (a, c) => {
+      const name = fileName(a.name);
+      const type = fileType(name, a.type);
+      if (a.data === undefined || a.data === null || a.data === "") {
+        if (!c.offers) throw new ToolError("this node can't take an upload");
+        const { url, expires_at } = c.offers.upload(c.origin, name, type, c.me);
+        return { upload: url, expires_at, command: `curl -fsS -T <path to ${name}> ${url}` };
+      }
+      if (typeof a.data !== "string" || a.data.length > (MAX_INLINE * 4) / 3 + 4) throw new ToolError("data is base64 under 4 MB; upload a larger file with curl");
+      const clean = a.data.replace(/\s+/g, "");
+      if (!/^[A-Za-z0-9+/]*={0,2}$/.test(clean)) throw new ToolError("data must be base64");
+      const q = new URLSearchParams({ name, type, who: c.me });
+      return filesJson<FileItem>(c.files, `/files?${q}`, { method: "PUT", body: Buffer.from(clean, "base64") });
+    },
+  },
+};
+
 // Tools and calls ------------------------------------------------------------------------
 
 // A fleet session's (oauth.ts's session grants): it has no card of its own,
@@ -755,7 +827,7 @@ const reaches = (name: string, caller: Caller) => (caller.scope === "session" ? 
 // memoryOnly: the memory tools alone, for a local session (app.ts), whose
 // board tools are its own board's. One held to a board, that board's tools
 // it reaches, with no board argument.
-function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryOnly = false, fleet?: Fleet) {
+function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryOnly = false, fleet?: Fleet, files?: ToFiles) {
   if (boardBound(caller))
     return Object.entries(memoryOnly ? {} : TOOLS)
       .filter(([name]) => reaches(name, caller))
@@ -788,6 +860,11 @@ function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryO
       description: t.description,
       inputSchema: { type: "object", properties: t.properties ?? {}, required: t.required ?? [] },
     })),
+    ...Object.entries(files ? FILE_TOOLS : {}).map(([name, t]) => ({
+      name,
+      description: t.description,
+      inputSchema: { type: "object", properties: t.properties ?? {}, required: t.required ?? [] },
+    })),
     ...Object.entries(pairs(caller) ? PAIR_TOOLS : {}).map(([name, t]) => ({
       name,
       description: t.description,
@@ -796,7 +873,7 @@ function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryO
   ];
 }
 
-export type Node = { data: Data; search: Search; media?: Media; origin: string; fleet?: Fleet; sealed?: FleetRecords };
+export type Node = { data: Data; search: Search; media?: Media; files?: ToFiles; fileOffers?: FileOffers; origin: string; fleet?: Fleet; sealed?: FleetRecords };
 
 async function callTool(node: Node, caller: Caller, name: string, args: any): Promise<unknown> {
   const { data, search, media, origin } = node;
@@ -809,6 +886,10 @@ async function callTool(node: Node, caller: Caller, name: string, args: any): Pr
   if (PAIR_TOOLS[name] && pairs(caller))
     return PAIR_TOOLS[name].run({ ...args }).catch((e) => {
       throw e instanceof ToolError ? e : new ToolError((e as Error).message);
+    });
+  if (FILE_TOOLS[name] && node.files && !bound)
+    return FILE_TOOLS[name].run({ ...args }, { files: node.files, offers: node.fileOffers, origin, me: caller.agent }).catch((e) => {
+      throw e instanceof Invalid || e instanceof ToolError ? e : new ToolError((e as Error).message);
     });
   if (DAY_TOOLS[name] && dayReaches(DAY_TOOLS[name], caller, data)) return DAY_TOOLS[name].run({ ...args }, { data, caller });
   // A brain's own agent sees its goals; the user's clients don't.
@@ -867,12 +948,13 @@ async function handle(node: Node, caller: Caller, msg: Message, memoryOnly: bool
     case "ping":
       return reply({});
     case "tools/list":
-      return reply({ tools: toolsFor(node.data, caller, BRAIN_ONLY_KINDS, memoryOnly, node.fleet).filter((t) => !boardOnly || !MEMORY_TOOLS[t.name]) });
+      return reply({ tools: toolsFor(node.data, caller, BRAIN_ONLY_KINDS, memoryOnly, node.fleet, node.files).filter((t) => !boardOnly || !MEMORY_TOOLS[t.name]) });
     case "tools/call":
       try {
         const name = String(params?.name);
         if ((memoryOnly && !MEMORY_TOOLS[name]) || (boardOnly && MEMORY_TOOLS[name])) throw new ToolError(`unknown tool ${name}`);
         const out = await callTool(node, caller, name, { ...(params?.arguments ?? {}) });
+        if (out instanceof Content) return reply({ content: out.content });
         return reply({ content: [{ type: "text", text: typeof out === "string" ? out : JSON.stringify(out, null, 2) }] });
       } catch (e) {
         if (e instanceof ToolError || e instanceof Invalid || e instanceof Conflict) return reply({ content: [{ type: "text", text: e.message }], isError: true });

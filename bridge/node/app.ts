@@ -85,6 +85,9 @@ export type AppNode = {
   // A request to the account's forge, wherever it leads (serve.ts's
   // toForge): path is Forgejo's.
   forge(path: string, init?: RequestInit): Promise<Response>;
+  // A request to the leader's files on no card (files.ts), wherever it
+  // leads: path is /files....
+  files(path: string, init?: RequestInit): Promise<Response>;
 };
 
 export type BoardListener = (key: string, event: BoardEvent) => void;
@@ -143,6 +146,7 @@ export async function startAppNode(): Promise<AppNode | undefined> {
     sessions: joinHub(n.hub),
     reach: n.reach,
     forge: n.toForge,
+    files: n.toFiles,
   };
   n.serveApp(
     (op, args) =>
@@ -316,6 +320,12 @@ async function runningNode(pid: number): Promise<AppNode | undefined> {
       const headers = new Headers(init.headers);
       headers.set("Authorization", `Bearer ${token}`);
       return fetch(`${url}/app/forge${path}`, { ...init, headers, ...(init.body != null && { duplex: "half" }) } as RequestInit);
+    },
+    files: async (path, init = {}) => {
+      const { url, token } = where();
+      const headers = new Headers(init.headers);
+      headers.set("Authorization", `Bearer ${token}`);
+      return fetch(`${url}/api/node${path}`, { ...init, headers, ...(init.body != null && { duplex: "half" }) } as RequestInit);
     },
   };
 }

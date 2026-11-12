@@ -741,9 +741,31 @@ async function media(req: Request, url: URL): Promise<Response> {
   return new Response(res.body, { status: res.status, headers });
 }
 
+// /files, /files/<id>: the files on no card, on the leader (node/files.ts),
+// for the page's media panel to list, show, send and delete; guarded as /media/ is.
+const FILES_PATH = /^\/files(\/[0-9a-f]{12})?$/;
+async function files(req: Request, url: URL): Promise<Response> {
+  if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
+  if (!TOKEN && !isLoopback(url.hostname)) return new Response(`wrong host: ${url.host}`, { status: 403 });
+  const m = url.pathname.match(FILES_PATH);
+  if (!m || !NODE) return new Response("not found", { status: 404 });
+  const ok = m[1] ? ["GET", "DELETE"] : ["GET", "PUT"];
+  if (!ok.includes(req.method)) return new Response(`${ok.join(" or ")} here`, { status: 405 });
+  const res = await NODE.files(url.pathname + url.search, { method: req.method, ...(req.method === "PUT" && { body: req.body }), signal: req.signal }).catch((e) => void console.error(`node: files: ${(e as Error).message}`));
+  if (!res) return Response.json({ error: "the leader can't be reached" }, { status: 502 });
+  const headers = new Headers({ "x-content-type-options": "nosniff" });
+  for (const h of ["content-type", "content-length", "content-disposition", "etag", "cache-control"]) {
+    const v = res.headers.get(h);
+    if (v) headers.set(h, v);
+  }
+  return new Response(res.body, { status: res.status, headers });
+}
+
 Bun.serve<Session, {}>({
   hostname: HOST,
   port: PORT,
+  // A file for the leader (/files) is up to 1 GB.
+  maxRequestBodySize: 1025 * 1024 * 1024,
 
   async fetch(req, server) {
     const url = new URL(req.url);
@@ -789,6 +811,7 @@ Bun.serve<Session, {}>({
     if (url.pathname.startsWith("/api/git/")) return gitProxy(req, url);
     if (url.pathname.startsWith("/forge/")) return forgeProxy(req, url);
     if (url.pathname.startsWith("/media/")) return media(req, url);
+    if (url.pathname === "/files" || url.pathname.startsWith("/files/")) return files(req, url);
     if (url.pathname === "/speech") {
       if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
       if (!TOKEN && !isLoopback(url.hostname)) return new Response(`wrong host: ${url.host}`, { status: 403 });

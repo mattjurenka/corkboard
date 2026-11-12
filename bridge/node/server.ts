@@ -6,6 +6,8 @@
 //   /.well-known/..., /register, /authorize, /token     oauth.ts
 //   POST /mcp                          mcp.ts, with a token
 //   PUT  /upload/:token                a file for attach_file's upload (media.ts); the token is the auth
+//   PUT  /file-upload/:token, GET /file/:token   keep_file's upload and read_file's download (files.ts)
+//   /files/...                         the leader's files (files.ts), on a channel from another node
 //   /api/node/...                      the phone's API, with a token:
 //     GET   status                     which objects are synced, and how far
 //     GET   boards                     [{ key, name, root, roots, commit, remotes, cards: [summary] }]
@@ -17,6 +19,8 @@
 //     PATCH boards/:key/cards/:id      fields
 //     POST  boards/:key/cards/:id/log  { note, who? }
 //     GET   boards/:key/cards/:id/media/:mid   a file on the card (media.ts)
+//     GET   files, PUT files?name=&type=, GET files/:id, DELETE files/:id   the files on no card,
+//                                      the leader's wherever this is (files.ts; owner, sealed)
 //     GET   brains                     each brain's settings and counts
 //     GET   brains/:name/notes         ?q=&kind=&limit=
 //     GET   brains/:name/notes/:id
@@ -62,6 +66,7 @@ import type { Search } from "./search";
 import type { CalendarConfig } from "./calendar";
 import { type Episodes, TooBig } from "./episodes";
 import type { Media } from "./media";
+import type { FileOffers, Files, ToFiles } from "./files";
 import type { DeviceCert, Signed } from "../../lib/e2ee/wire";
 import type { Hub, Joined } from "../hub";
 import type { Reach } from "../peers";
@@ -72,6 +77,11 @@ export type NodeOptions = {
   oauth: OAuthStore;
   episodes?: Episodes;
   media?: Media;
+  // The files on no card: this node's, which it answers for on a channel
+  // (files.ts), and the leader's wherever it is (serve.ts's toFiles).
+  files?: Files;
+  toFiles?: ToFiles;
+  fileOffers?: FileOffers;
   // A board the node doesn't keep yet, kept from now on (serve.ts's).
   addBoard?: (key: string) => Promise<void>;
   origin?: string;
@@ -314,6 +324,12 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
     // The goals are the brains' own agents', not the user's clients'.
     const hidden = who.brain && who.brain === name ? [] : BRAIN_ONLY_KINDS;
 
+    if (what === "files") {
+      // Sealed, never the plaintext tunnel's.
+      if (!o.toFiles || who.scope !== "owner" || !sealed) return json({ error: "not found" }, 404);
+      const hasBody = !/^(GET|HEAD)$/i.test(m);
+      return await o.toFiles(`/${path.map(encodeURIComponent).join("/")}${url.search}`, { method: m, ...(hasBody && { body: req.body }), signal: req.signal });
+    }
     if (what === "status" && m === "GET" && !name) return json({ objects: data.replicas.status(), calendar: !!(await Promise.resolve(o.calendar?.()).catch(() => undefined)), default_brain: data.defaultBrain() ?? null });
     if (what === "boards") {
       if (!name && m === "GET")
@@ -573,7 +589,17 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       if (p === "/mcp") {
         const who = caller(req, origin, from, true);
         if (!who) return unauthorized(origin);
-        return await mcp(req, { data: o.data, search: o.search, media: o.media, origin, fleet: o.fleet?.(), sealed: o.sealed }, who);
+        return await mcp(req, { data: o.data, search: o.search, media: o.media, files: o.toFiles, fileOffers: o.fileOffers, origin, fleet: o.fleet?.(), sealed: o.sealed }, who);
+      }
+      if (p.startsWith("/file-upload/") || p.startsWith("/file/")) {
+        if (!o.fileOffers) return json({ error: "not found" }, 404);
+        return p.startsWith("/file/") ? await o.fileOffers.get(req, p.slice("/file/".length)) : await o.fileOffers.put(req, p.slice("/file-upload/".length));
+      }
+      if (p === "/files" || p.startsWith("/files/")) {
+        // Another node's, passing a request on to the leader: on a channel,
+        // from a device that's more than a relay-only one.
+        if (!o.files || !from || from.body.role !== undefined || req.headers.get("Authorization")) return json({ error: "not found" }, 404);
+        return await o.files.serve(req, p.slice("/files".length).split("/").filter(Boolean).map(decodeURIComponent));
       }
       if (p.startsWith("/upload/")) {
         if (!o.media) return json({ error: "not found" }, 404);
