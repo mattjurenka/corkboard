@@ -818,8 +818,41 @@ local function notify_page(msg, level, opts)
   })
 end
 
+-- f, its error an ERROR notification rather than an E5108 on the command
+-- line, which the page's notifications never see.
+local function guard(f)
+  return function(...)
+    local r = vim.F.pack_len(xpcall(f, function(err)
+      return (tostring(err):gsub("^[^\n]-([^/\n]+%.lua:%d+:)", "%1"))
+    end, ...))
+    if r[1] then return unpack(r, 2, r.n) end
+    vim.notify(r[2], vim.log.levels.ERROR)
+  end
+end
+
+-- Lua keymaps, commands, autocmds and scheduled callbacks, each guarded:
+-- their errors are notifications.
+local function guard_callbacks()
+  local set, command, buf_command, autocmd, schedule = vim.keymap.set, vim.api.nvim_create_user_command, vim.api.nvim_buf_create_user_command, vim.api.nvim_create_autocmd, vim.schedule
+  vim.keymap.set = function(mode, lhs, rhs, opts)
+    return set(mode, lhs, type(rhs) == "function" and guard(rhs) or rhs, opts)
+  end
+  vim.api.nvim_create_user_command = function(name, cmd, opts)
+    return command(name, type(cmd) == "function" and guard(cmd) or cmd, opts)
+  end
+  vim.api.nvim_buf_create_user_command = function(buf, name, cmd, opts)
+    return buf_command(buf, name, type(cmd) == "function" and guard(cmd) or cmd, opts)
+  end
+  vim.api.nvim_create_autocmd = function(event, opts)
+    if type(opts) == "table" and type(opts.callback) == "function" then opts = vim.tbl_extend("force", opts, { callback = guard(opts.callback) }) end
+    return autocmd(event, opts)
+  end
+  vim.schedule = function(f) return schedule(guard(f)) end
+end
+
 function M.setup()
   vim.notify = notify_page
+  guard_callbacks()
   require("corkboard.ask").setup()
   vim.g.clipboard = {
     name = "corkboard",
@@ -884,7 +917,7 @@ function M.setup()
     vim.keymap.set({ "n", "i", "t" }, "<C-f>", picker.files, { desc = "corkboard: find file" })
     vim.keymap.set({ "n", "i", "t" }, "<D-p>", picker.files, { desc = "corkboard: find file" })
     vim.keymap.set({ "n", "i", "t" }, "<C-`>", require("corkboard.terminal").toggle, { desc = "corkboard: terminal" })
-    vim.keymap.set({ "n", "i", "t" }, "<C-.>", require("corkboard.session").open, { desc = "corkboard: new session" })
+    vim.keymap.set({ "n", "i", "t" }, "<C-.>", function() require("corkboard.session").open() end, { desc = "corkboard: new session" })
     vim.keymap.set("n", "<leader>f", function() Snacks.picker.files() end, { desc = "find file" })
     vim.keymap.set("n", "<leader>g", function() Snacks.picker.grep() end, { desc = "grep" })
     vim.keymap.set("n", "<leader>,", function() Snacks.picker.buffers() end, { desc = "buffers" })

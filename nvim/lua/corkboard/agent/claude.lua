@@ -8,6 +8,7 @@ local M = {
   label = "Claude Code",
   exe = "claude",
   events = "hooks",
+  tools = { ask = "AskUserQuestion", notify = "PushNotification" },
 }
 
 -- The Claude account this machine is logged in as, which a session started
@@ -41,6 +42,22 @@ local function account_for(brain)
     return login(), nil
   end
   return account, token
+end
+
+-- The environment that runs a session on the brain's model, and the
+-- model's name (bridge/node/app.ts's brains_session, from lib/think.ts's
+-- sessionEnv): the key stays on the node till a session starts. Its "" values
+-- matter, since the session's env inherits this one's. Without the bridge,
+-- or the brain naming no model, nothing.
+local function brain_env(brain)
+  local cloud = require("corkboard.cards.cloud")
+  if not cloud.enabled() then return {}, nil end
+  local ok, got = pcall(cloud.call, "brains_session", brain or vim.NIL)
+  if not ok then
+    vim.notify("corkboard: " .. tostring(got) .. "; this session runs on Claude Code's own model", vim.log.levels.WARN)
+    return {}, nil
+  end
+  return type(got) == "table" and type(got.env) == "table" and got.env or {}, type(got) == "table" and type(got.model) == "string" and got.model or nil
 end
 
 -- One word for the shell Claude Code runs hooks with, whatever 'shell' is
@@ -125,7 +142,15 @@ function M.command(o)
   if o.via then
     return vim.list_extend(vim.deepcopy(o.via), vim.list_extend({ "claude", "--append-system-prompt", prompt }, args(o))), {}, nil
   end
-  local account, token = account_for(o.brain)
+  local env, model = brain_env(o.brain)
+  local account, token
+  if env.ANTHROPIC_AUTH_TOKEN or env.ANTHROPIC_API_KEY or env.CLAUDE_CODE_OAUTH_TOKEN then
+    -- The brain's own endpoint or key: no account of the machine's.
+    account = model
+  else
+    account, token = account_for(o.brain)
+    env.CLAUDE_CODE_OAUTH_TOKEN = token
+  end
   local cmd = { "claude", "--settings", vim.json.encode(settings()), "--append-system-prompt", prompt }
   -- The memory tools, from the bridge's node (bridge/node/app.ts); with =,
   -- since --mcp-config otherwise takes as many values as follow it.
@@ -134,8 +159,8 @@ function M.command(o)
   -- and Pepper's plan beside it.
   local mod = vim.api.nvim_get_runtime_file("claude-plugin/.claude-plugin/plugin.json", false)[1]
   if mod then vim.list_extend(cmd, { "--plugin-dir", vim.fs.dirname(vim.fs.dirname(mod)) }) end
-  -- CLAUDE_CODE_OAUTH_TOKEN: the account to run as.
-  return vim.list_extend(cmd, args(o)), { CLAUDE_CODE_OAUTH_TOKEN = token }, account
+  -- CLAUDE_CODE_OAUTH_TOKEN: the account to run as, or the brain's model's.
+  return vim.list_extend(cmd, args(o)), env, account
 end
 
 -- The task-notifications in the transcript's end, by the tool call that

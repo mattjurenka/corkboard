@@ -165,6 +165,10 @@ end
 -- go a key at a time, after it's told they will.
 function M.say(q, buf, text, keys, answers)
   if not live(buf) then return answer(q, { error = "that session has ended", missing = true }) end
+  if answers ~= nil and answers ~= vim.NIL and require("corkboard.questions").pending(buf) then
+    local ok, why = require("corkboard.questions").answer(buf, answers)
+    return answer(q, ok and { ok = true } or { error = why })
+  end
   if answers ~= nil and answers ~= vim.NIL then
     local writes, why = M.answer_keys(vim.b[buf].corkboard_questions, answers)
     if not writes then return answer(q, { error = why }) end
@@ -178,6 +182,13 @@ function M.say(q, buf, text, keys, answers)
       vim.defer_fn(next, 100)
     end
     return next()
+  end
+  -- An ACP agent's session takes a prompt, and esc stops its turn.
+  local kind = require("corkboard.agent").of(buf)
+  if kind and kind.prompt then
+    if text ~= "" then kind.prompt(buf, text) end
+    if vim.tbl_contains(keys, "esc") and kind.cancel then kind.cancel(buf) end
+    return answer(q, { ok = true })
   end
   local chan = terminal.job(buf)
   if text ~= "" then vim.fn.chansend(chan, text:find("\n") and ("\27[200~" .. text .. "\27[201~") or text) end

@@ -87,6 +87,15 @@ function M.start(opts)
     vim.notify("corkboard: " .. exe .. " is not on PATH", vim.log.levels.ERROR)
     return nil
   end
+  if kind.events == "acp" and not (opts.via or opts.attach) then
+    if opts.here then vim.cmd.enew() elseif opts.split then vim.cmd("rightbelow vnew") else vim.cmd.tabnew() end
+    local buf = vim.api.nvim_get_current_buf()
+    vim.b[buf].corkboard_agent = kind.name
+    vim.b[buf].corkboard_role = opts.role or "project"
+    vim.b[buf].corkboard_brain = opts.brain
+    vim.b[buf].corkboard_name = opts.name
+    return require("corkboard.acp").start(buf, kind, opts)
+  end
   local cmd, kind_env, account = kind.command(opts)
   if opts.here then
     vim.cmd.enew()
@@ -237,23 +246,27 @@ end
 
 local function nil_if_null(v) return v ~= vim.NIL and v or nil end
 
--- Where brain (nil: none) can have a session, as corkboard.columns' right
--- column: here, when this machine has the agent; its own VMs (a resident of
--- its, a slot whose spawn is its, already running); and a new spawn for it
--- of each environment's templates, on this board's project.
-local function places(brain, fleet, vms)
+-- The agent a fleet environment's template runs: its `agent`, else Claude
+-- Code's (a resident's, which has no template).
+local function template_agent(fleet, env, t)
+  local e = t and vim.iter(fleet and fleet.environments or {}):find(function(e) return e.name == env end)
+  return e and nil_if_null(vim.tbl_get(e, "templates", t, "agent")) or require("corkboard.agent").DEFAULT
+end
+
+-- Where else brain (nil: none) can have a session of agent in the fleet:
+-- its own VMs running agent (a resident of its, a slot whose spawn is its,
+-- already running); and a new spawn for it of each environment's templates
+-- that run agent, on this board's project.
+local function fleet_places(brain, fleet, vms, agent)
   local cloud = require("corkboard.cards.cloud")
   local out = {}
-  if brain and runs_here() then
-    table.insert(out, { text = "here", detail = vim.uv.os_gethostname(), run = function() M.start({ brain = brain }) end })
-  end
   local spawns = {}
   for _, s in ipairs(fleet and fleet.spawns or {}) do spawns[s.id] = s end
   local function of(m) return m.resident and m.brain or (m.spawn and spawns[m.spawn] and nil_if_null(spawns[m.spawn].brain)) end
   local here = fleet and nil_if_null(fleet.machine) and fleet.machine.environment
   table.sort(vms, function(a, b) return a.environment .. a.name < b.environment .. b.name end)
   for _, m in ipairs(vms) do
-    if (m.resident or m.spawn) and of(m) == brain then
+    if (m.resident or m.spawn) and of(m) == brain and template_agent(fleet, m.environment, m.template) == agent then
       table.insert(out, {
         text = m.name,
         detail = m.environment .. (m.template and (" · " .. m.template) or ""),
@@ -264,7 +277,7 @@ local function places(brain, fleet, vms)
   for _, e in ipairs(fleet and fleet.environments or {}) do
     local slots = vim.tbl_get(e, "running", "slots") or {}
     local free = #vim.tbl_filter(function(sl) return nil_if_null(sl.spawn) == nil end, slots)
-    local names = vim.tbl_keys(e.templates or {})
+    local names = vim.tbl_filter(function(t) return template_agent(fleet, e.name, t) == agent end, vim.tbl_keys(e.templates or {}))
     table.sort(names)
     for _, t in ipairs(names) do
       -- One of its VMs already running t, on this machine, which can take
@@ -294,27 +307,61 @@ local function places(brain, fleet, vms)
   return out
 end
 
--- <C-.>: an agent's session, for the brain chosen on the left, wherever
--- the right says it can run: here, one of its VMs, or a new one from the
--- fleet's templates, whose conversation opens when it's up.
+-- The agents brain can have a session of, as corkboard.columns' middle
+-- column, each with where it can run: here when this machine has it
+-- (start(brain, kind) starts it), unless brain is nil (none, which only
+-- the fleet runs; false: none, here too), and the fleet's places that
+-- run it.
+local function agents(brain, start, fleet, vms)
+  local kinds = require("corkboard.agent")
+  local out = {}
+  for _, kind in ipairs(kinds.all()) do
+    local items = {}
+    if brain ~= nil and kinds.runs_here(kind) then
+      table.insert(items, { text = "here", detail = vim.uv.os_gethostname(), run = function() start(brain or nil, kind.name) end })
+    end
+    if fleet then vim.list_extend(items, fleet_places(brain, fleet, vim.deepcopy(vms), kind.name)) end
+    if #items > 0 then table.insert(out, { text = kind.label, items = items }) end
+  end
+  return out
+end
+
+-- <C-.>: an agent's session, for the brain chosen on the left, of the agent
+-- in the middle, wherever the right says it can run: here, one of its VMs,
+-- or a new one from the fleet's templates, whose conversation opens when
+-- it's up.
 function M.open()
   if require("corkboard.projects").need() then return end
   local cloud = require("corkboard.cards.cloud")
   local ok, got = pcall(cloud.call, "fleet_get")
   local fleet = ok and got or nil
   local vms = fleet and require("corkboard.fleet").vms(fleet) or {}
+  local start = function(brain, agent) M.start({ brain = brain, agent = agent }) end
   local left = vim.tbl_map(function(b) return { text = b.name, brain = b.name } end, require("corkboard.brains").live())
   if fleet and #(fleet.environments or {}) > 0 then table.insert(left, { text = "no brain" }) end
   if #left == 0 then
     if runs_here() then return M.start() end
     return vim.notify("corkboard: no " .. require("corkboard.agent").get().exe .. " here, and no fleet to start a session in" .. (ok and "" or (": " .. tostring(got))), vim.log.levels.ERROR)
   end
-  require("corkboard.columns").pick({
-    title = "Session",
-    key = "session",
-    left = left,
-    right = function(item) return places(item.brain, fleet, vim.deepcopy(vms)) end,
-  })
+  for _, it in ipairs(left) do
+    it.items = function() return agents(it.brain, start, fleet, vms) end
+  end
+  require("corkboard.columns").pick({ title = "Session", key = "session", items = left })
+end
+
+-- The board's A: card id's session, for the brain on the left, of the agent
+-- in the middle, which the card keeps; here, where its worktree is.
+function M.open_card(id)
+  local start = function(brain, agent)
+    require("corkboard.board").set(id, { agent = agent })
+    require("corkboard.agents").start(id, { brain = brain })
+  end
+  local left = vim.tbl_map(function(b) return { text = b.name, brain = b.name } end, require("corkboard.brains").live())
+  table.insert(left, { text = "no brain", brain = false })
+  for _, it in ipairs(left) do
+    it.items = function() return agents(it.brain, start) end
+  end
+  require("corkboard.columns").pick({ title = id, key = "card", items = left })
 end
 
 local HANDOFF_PROMPT = [=[

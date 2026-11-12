@@ -36,7 +36,8 @@ import { BRAIN_ONLY_KINDS, type Plan, blocks as checkBlocks, chatText, date as c
 import { type Data, type FullCard, Invalid, now } from "./data";
 import { Conflict, type Message } from "./day";
 import { Conflict as HoldConflict, LABEL } from "./fleet";
-import { parseModel } from "../../lib/think";
+import { parseModel, think } from "../../lib/think";
+import { brainModel, brainSession } from "./consolidator";
 import { DAY } from "./objects";
 import { NODE_DIR, NodeRunning, type StartedNode, startNode } from "./serve";
 import { touch } from "./leases";
@@ -357,7 +358,7 @@ export async function notes(n: Pick<StartedNode, "data">, op: string, args: any[
 }
 
 // The brains view's operations (brains.lua), with the Worker's shapes.
-async function brains(n: StartedNode, op: string, args: any[]): Promise<unknown> {
+export async function brains(n: StartedNode, op: string, args: any[]): Promise<unknown> {
   const { data, search, episodes } = n;
   const known = (name: unknown) => {
     const b = data.brains().find((x) => x.name === name);
@@ -384,6 +385,27 @@ async function brains(n: StartedNode, op: string, args: any[]): Promise<unknown>
       throw new Invalid("model_key must name a hold, or be null");
     return f;
   };
+  // A brain's model, for a Claude Code session to run on (claude.lua) or
+  // a one-shot thought (autopilot.lua), or an ACP agent the bridge runs
+  // (bridge/acp.ts's brains_model): args[0] null is the default brain. Its
+  // key leaves this machine only in a session's environment.
+  if (op === "brains_session" || op === "brains_think" || op === "brains_model") {
+    const name = args[0] ?? data.defaultBrain();
+    if (!name) throw new Invalid("there's no default brain on this node");
+    const b = known(name);
+    const secret = (hold: string) => n.sealed.secrets([hold])[hold];
+    const o = args[1] ?? {};
+    if (op === "brains_think" && (typeof o.system !== "string" || typeof o.input !== "string")) throw new Invalid("think needs a system and an input");
+    let m: ReturnType<typeof brainModel>;
+    try {
+      if (op === "brains_session") return brainSession(b, secret);
+      m = brainModel(b, secret);
+      if (op === "brains_model") return m;
+    } catch (e) {
+      throw new Invalid(`${name}: ${(e as Error).message}`);
+    }
+    return think({ system: o.system, input: o.input, schema: o.schema, timeout: typeof o.timeout === "number" ? o.timeout : undefined, ...m });
+  }
   const brain = (op === "brains_get" || op.startsWith("brains_hold") || op === "brains_create") ? "" : known(args[0]).name;
   switch (op) {
     case "brains_get":

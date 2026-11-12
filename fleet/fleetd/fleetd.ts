@@ -18,7 +18,7 @@
 
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { coresOf, guestOf, manifest, memoryOf, newId, schedule, SPAWNS, spawns, tokenFor, write, type Manifest, type Spawn } from "./fleet";
+import { coresOf, credentialFor, guestOf, manifest, memoryOf, newId, schedule, SPAWNS, spawns, write, type Manifest, type Spawn } from "./fleet";
 import { Actions, forgejo } from "./actions";
 import { assist } from "./assistant";
 import { GitGrants, SlotForges, forgeOrigin, gitNote, slotForge } from "./forge";
@@ -66,8 +66,8 @@ function empty(dir: string) {
 async function start(m: Manifest, s: Spawn, slot: string) {
   const sl = m.slots[slot];
   // An Actions job runs no agent, so has no account.
-  const token = s.job === "actions" ? undefined : tokenFor(s.account);
-  if (token && !existsSync(token)) throw new Error(`no token for the ${s.account} account at ${token} (claude setup-token, signed in as it, then save it there)`);
+  const cred = credentialFor(m, s);
+  if (cred && !existsSync(cred.file)) throw new Error(`no ${cred.share} for the ${s.account} account at ${cred.file} (${cred.how})`);
   empty(sl.shareDir);
   empty(sl.outboxDir);
   if (s.repo && s.remote?.git) {
@@ -80,7 +80,7 @@ async function start(m: Manifest, s: Spawn, slot: string) {
     writeFileSync(join(sl.shareDir, "session"), "");
     if (s.task) post(sl.shareDir, message(s.task + (s.remote ? sessionNote(s) : "")));
   }
-  if (token) copyFileSync(token, join(sl.shareDir, "claude-token"));
+  if (cred) copyFileSync(cred.file, join(sl.shareDir, cred.share));
   if (s.actions) {
     const a = m.actions;
     if (!a || !s.actions.token) throw new Error("an Actions job, and no Actions here (or its runner's gone)");

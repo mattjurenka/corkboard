@@ -98,6 +98,16 @@ let
         };
       })).nixosConfigurations == [ "c+work@slot" "c@slot" "resident" ];
 
+    # A template runs Claude Code unless it names another of the kinds.
+    agentIsClaudeByDefault =
+      (fleet { c = { capabilities = [ "coding" ]; environments = [ "local" ]; }; }).templates.c.agent == "claude";
+
+    agentIsTheTemplates =
+      (fleet { g = { capabilities = [ "coding" ]; environments = [ "local" ]; agent = "gemini"; }; }).templates.g.agent == "gemini";
+
+    unknownAgentFails =
+      fails (fleet { x = { capabilities = [ "coding" ]; environments = [ "local" ]; agent = "cursor"; }; }).templates.x;
+
     bindingsListTheirShares =
       (fleet { }).bindings == { pepper.shares = [ ]; work.shares = [ "vault" ]; };
 

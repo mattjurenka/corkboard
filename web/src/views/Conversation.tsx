@@ -1,6 +1,6 @@
-// A Claude Code session's conversation from the fleet view, drawn the way
-// the terminal draws one (corkboard.conversation, which follows it and sends
-// what's said here): your turns shaded behind a › , Claude's as markdown
+// A Claude Code session's conversation from the fleet view, or an ACP
+// agent's session (corkboard.acp), drawn the way the terminal draws one
+// (corkboard.conversation, which follows it and sends what's said here): your turns shaded behind a › , Claude's as markdown
 // behind a ●, each tool a ● row with its result under a └ that opens to the
 // whole of it, and a boxed prompt at the foot. On the grid, like the panels.
 //
@@ -18,12 +18,13 @@ import type { ViewProps } from "./index";
 type Option = { label?: string; description?: string };
 type Question = { header?: string; question?: string; multiSelect?: boolean; options?: Option[] };
 type Item = {
-  kind: "you" | "claude" | "tool";
+  kind: "you" | "claude" | "tool" | "note";
   id: string;
   text?: string;
   tool?: string;
   detail?: string;
   call?: string;
+  error?: boolean;
 };
 type Result = { call: string; text?: string; error?: boolean };
 type State = {
@@ -31,6 +32,8 @@ type State = {
   where?: { vm?: string; brain?: string; account?: string; host?: string; dir?: string };
   items?: Item[];
   results?: Record<string, Result> | [];
+  // What it's saying that isn't an item yet.
+  live?: string | null;
   state?: "starting" | "working" | "asking" | "permission" | "stopping" | null;
   status?: string | null;
   ended?: boolean;
@@ -120,6 +123,10 @@ export function Conversation({ state, win, buf, nvim }: ViewProps<State>) {
                 <span>●</span>
                 <Markdown text={t.text ?? ""} />
               </div>
+            ) : t.kind === "note" ? (
+              <div key={t.id} className={cn("px-2ch whitespace-pre-wrap", t.error ? "text-destructive" : "text-muted-foreground")}>
+                {t.text}
+              </div>
             ) : (
               <Tool
                 key={t.id}
@@ -129,6 +136,13 @@ export function Conversation({ state, win, buf, nvim }: ViewProps<State>) {
                 toggle={() => setOpened((o) => ({ ...o, [t.id]: !o[t.id] }))}
               />
             ),
+          )}
+
+          {state.live && (
+            <div className={cn(ROW, "px-2ch")}>
+              <span>●</span>
+              <Markdown text={state.live} />
+            </div>
           )}
 
           {state.state === "working" && <div className="px-2ch text-working">✻ working…</div>}

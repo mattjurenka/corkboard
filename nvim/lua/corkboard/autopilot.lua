@@ -36,9 +36,21 @@ local function on(name, default)
   return v == true
 end
 
--- claude -p; done(answer as schema's JSON) or done(nil, why). opts.tools:
--- the tools it may use (none otherwise), opts.cwd, opts.model.
+-- done(answer as schema's JSON) or done(nil, why). opts.tools: the tools it
+-- may use (none otherwise), opts.cwd, opts.model. With none, the default
+-- brain thinks it, on its model (bridge/node/app.ts's brains_think); with
+-- tools, or without the bridge, claude -p.
 local function think(system, input, schema, opts, done)
+  local cloud = require("corkboard.cards.cloud")
+  if (opts.tools or "") == "" and cloud.enabled() then
+    local timeout = opts.timeout or 5 * 60000
+    -- Its own retries on a bad answer (lib/think.ts) take a while longer.
+    return cloud.call_within(3 * timeout, "brains_think", function(err, got)
+      if err then return done(nil, tostring(err)) end
+      if type(got) ~= "table" or type(got.json) ~= "table" then return done(nil, "no answer") end
+      done(got.json)
+    end, vim.NIL, { system = system, input = input, schema = schema, timeout = timeout })
+  end
   if vim.fn.executable("claude") == 0 then return done(nil, "claude is not on PATH") end
   local tools = opts.tools or ""
   local args = {

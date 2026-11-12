@@ -271,6 +271,20 @@ function M.kept(src, tab)
   end
 end
 
+-- What a session said through corkboard-ui's own server (hooks/ui-mcp.lua),
+-- for a kind whose log this doesn't read: { text, mood } or { emote }.
+local said_n = 0
+function M.say(src, item)
+  local a = panels[src]
+  if not a then return end
+  said_n = said_n + 1
+  table.insert(a.said, vim.tbl_extend("force", item, { id = "ui:" .. said_n }))
+  while #a.said > KEEP do
+    table.remove(a.said, 1)
+  end
+  push(src)
+end
+
 -- A session's state changed (corkboard.agents' hook): the face follows it.
 function M.changed(src)
   if panels[src] then push(src) end

@@ -9,6 +9,10 @@
 -- it instead, as a chat (web/src/views/Conversation.tsx), with what you say
 -- in its composer; what's drawn here is under it.
 --
+-- An ACP agent's session (corkboard.acp) is drawn the same way, in its own
+-- buffer, with M.attach: what it has comes from the bridge, and what's said
+-- or answered goes to its handlers rather than to fleet_say.
+--
 --   i, a, o   say something, in the prompt
 --   <CR>      a tool whole, or back to its line
 --   1-9       an answer, while it asks
@@ -36,10 +40,13 @@ for name, hl in pairs({
   vim.api.nvim_set_hl(0, name, hl)
 end
 
--- By "bridge/key": { bridge, key, name, buf, prompt, items, results,
--- opened, rows, ask, phase, state, ended }. phase: "connecting" until the
--- bridge has it, "loading" until its first batch; state: the session's, as
--- its last batch said.
+-- By "bridge/key" (an ACP session's by "acp/<buf>"): { name, buf, prompt,
+-- items, results, opened, rows, ask, phase, state, ended, on }; a fleet
+-- session's bridge and key too. phase: "connecting" until the bridge has it,
+-- "loading" until its first batch; state: the session's, as its last batch
+-- said. on: what's done with what you say (M.attach). An ACP session's
+-- also: live, the words it's saying; questions(), what corkboard.questions has it
+-- asking; choices, a permission's options.
 local open = {}
 
 local function page() return require("corkboard").attached() end
@@ -59,9 +66,10 @@ local function nil_if_null(v)
 end
 
 -- text's markdown highlights, by its own rows and columns: { row, col,
--- end_row, end_col, group, opts }. Kept, since a turn's text doesn't change.
+-- end_row, end_col, group, opts }. Kept, since a turn's text doesn't change,
+-- unless it's still being said.
 local parsed = {}
-local function markdown(text)
+local function markdown(text, saying)
   if parsed[text] then return parsed[text] end
   local out = {}
   -- Ended with a newline, or a closing fence on its last line isn't one.
@@ -87,7 +95,7 @@ local function markdown(text)
       end
     end)
   end
-  parsed[text] = out
+  if not saying then parsed[text] = out end
   return out
 end
 
@@ -115,13 +123,16 @@ end
 -- a permission's or an older bridge's question's.
 local function asking(c)
   local q = question(c)
-  local qs = q and c.state == "asking" and nil_if_null(q.questions)
+  -- What a session's source keeps itself, which outlasts its tool call.
+  local own = c.questions and c.questions()
+  local qs = own or (q and c.state == "asking" and nil_if_null(q.questions))
   if qs and #qs > 0 then
-    if not c.ask or c.ask.call ~= q.call then c.ask = { call = q.call, step = 1, picks = {}, others = {} } end
+    local call = own or q.call
+    if not c.ask or c.ask.call ~= call then c.ask = { call = call, step = 1, picks = {}, others = {} } end
     for i = 1, #qs do c.ask.picks[i] = c.ask.picks[i] or {} end
     return qs, {}
   end
-  if c.state == "permission" then return nil, { "yes", "always", "no" } end
+  if c.state == "permission" then return nil, c.choices or { "yes", "always", "no" } end
   local first = c.state == "asking" and q and nil_if_null(q.options)
   return nil, first and first[1] or {}
 end
@@ -133,7 +144,7 @@ local function width(c)
 end
 
 local function draw(c)
-  if not vim.api.nvim_buf_is_valid(c.buf) then return end
+  if not (c.buf and vim.api.nvim_buf_is_valid(c.buf)) then return end
   local cols = width(c)
   local lines, marks = {}, {}
   c.rows = {}
@@ -150,8 +161,8 @@ local function draw(c)
   local function whole(first, hl)
     for r = first, #lines - 1 do mark(r, 0, r, #lines[r + 1], hl) end
   end
-  local function md(text, first, off1, off)
-    for _, h in ipairs(markdown(text)) do
+  local function md(text, first, off1, off, saying)
+    for _, h in ipairs(markdown(text, saying)) do
       -- One that ends at the start of a row ends there, not past its prefix.
       local er, ec = first + h[3], (h[4] == 0 and h[3] > h[1]) and 0 or h[4] + (h[3] == 0 and off1 or off)
       if er >= #lines then er, ec = #lines - 1, #lines[#lines] end
@@ -195,7 +206,13 @@ local function draw(c)
         end
       end
       for row = first, #lines - 1 do c.rows[row + 1] = t.id end
+    elseif t.kind == "note" then
+      whole(put(t.text or "", ""), t.error and "CorkboardConvError" or "CorkboardConvDim")
     end
+    table.insert(lines, "")
+  end
+  if c.live and c.live ~= "" then
+    md(c.live, put(c.live, "● "), #"● ", #"  ", true)
     table.insert(lines, "")
   end
 
@@ -252,6 +269,8 @@ local function draw(c)
   M.push(c)
 end
 
+M.draw = draw
+
 -- What the page draws (Conversation.tsx): all of it, each time it changes,
 -- once a tick. ask: the question it's on, as asking() has it, with the
 -- options ticked by their numbers from 0.
@@ -268,6 +287,7 @@ function M.push(c)
       where = c.where,
       items = c.items,
       results = c.results,
+      live = c.live ~= "" and c.live or vim.NIL,
       state = c.state or vim.NIL,
       status = c.why or status(c) or vim.NIL,
       ended = c.ended ~= nil,
@@ -281,11 +301,6 @@ end
 
 function M.push_all()
   for _, c in pairs(open) do M.push(c) end
-end
-
-local function say(c, text, keys, answers)
-  local ok, err = pcall(cloud().call, "fleet_say", c.bridge, c.key, text, keys, answers)
-  if not ok then vim.notify("corkboard: " .. tostring(err), vim.log.levels.WARN) end
 end
 
 -- The question it asks: on to the next, or, after the last, its answers
@@ -304,7 +319,7 @@ local function next_question(c)
     table.sort(picks)
     table.insert(answers, { picks = picks, other = a.others[i] })
   end
-  say(c, "", {}, answers)
+  c.on.answers(answers)
 end
 
 -- n (from 1): while it asks, that option, which answers a question of one
@@ -322,7 +337,7 @@ local function pick(c, n)
     a.picks[a.step], a.others[a.step] = { [n - 1] = true }, nil
     return next_question(c)
   end
-  if answers[n] then say(c, tostring(n), {}) end
+  if answers[n] then c.on.answer(n) end
 end
 
 -- What's typed in the prompt: while it asks, the question's answer, in your
@@ -337,7 +352,7 @@ local function submit(c, text)
     end
     return next_question(c)
   end
-  if text ~= "" then say(c, text, { "enter" }) end
+  if text ~= "" then c.on.say(text) end
 end
 
 -- Its prompt, under it in the tab, made again when it was closed.
@@ -362,7 +377,7 @@ local function prompt(c)
       vim.bo[buf].modified = false
     end)
   end)
-  vim.fn.prompt_setinterrupt(buf, function() say(c, "", { "esc" }) end)
+  vim.fn.prompt_setinterrupt(buf, function() c.on.interrupt() end)
   local win = vim.api.nvim_open_win(buf, false, { split = "below", win = conv, height = 1 })
   local wo = vim.wo[win][0]
   wo.winfixheight = true
@@ -370,8 +385,8 @@ local function prompt(c)
   wo.relativenumber = false
   wo.signcolumn = "yes:1"
   wo.winhighlight = "SignColumn:Normal"
-  vim.keymap.set("n", "q", function() M.close(c) end, { buffer = buf, desc = "corkboard: close the conversation" })
-  vim.keymap.set("n", "<C-c>", function() say(c, "", { "esc" }) end, { buffer = buf, desc = "corkboard: interrupt the session" })
+  vim.keymap.set("n", "q", function() c.on.close() end, { buffer = buf, desc = "corkboard: close the conversation" })
+  vim.keymap.set("n", "<C-c>", function() c.on.interrupt() end, { buffer = buf, desc = "corkboard: interrupt the session" })
   return win
 end
 
@@ -408,6 +423,73 @@ local function follow(c)
   end, c.bridge, c.key)
 end
 
+-- buf, the current window's, as a conversation's: drawn by M.draw, with
+-- its keys, and its prompt under it (or the page's composer). o: { id, name,
+-- where, on }, on: what's done with what you say:
+--   say(text)        said, between turns
+--   answer(n)        the nth of its answers (a permission's, typed)
+--   answers(list)    a question's answers, as corkboard.questions takes them
+--   interrupt()      its turn stopped
+--   close()          q (M.close by default)
+--   refollow()       R, if it can be followed again
+--   gone()           its buffer wiped
+function M.attach(buf, o)
+  local c = { name = o.name, where = o.where or {}, buf = buf, items = {}, results = {}, opened = {}, rows = {}, on = o.on }
+  c.on.close = c.on.close or function() M.close(c) end
+  open[o.id] = c
+  -- Wrapped under the text, past its bullet.
+  vim.bo[buf].formatlistpat = [[^\s*\(●\|›\|└\|\[.\]\|\d\+\)\s]]
+  vim.b[buf].corkboard_view = "conversation"
+  local wo = vim.wo[0][0]
+  wo.wrap = true
+  wo.linebreak = true
+  wo.breakindent = true
+  wo.breakindentopt = "list:-1"
+  wo.number = false
+  wo.relativenumber = false
+  wo.conceallevel = 2
+  wo.concealcursor = "nc"
+  -- The terminals' inset (corkboard's TermOpen).
+  wo.signcolumn = "yes:1"
+  wo.winhighlight = "SignColumn:Normal,WinBar:Normal,WinBarNC:Normal"
+  local map = function(lhs, fn, desc) vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, desc = "corkboard: " .. desc }) end
+  for _, lhs in ipairs({ "i", "a", "o" }) do map(lhs, function() ask(c) end, "say something to the session") end
+  map("<CR>", function()
+    local t = c.rows[vim.api.nvim_win_get_cursor(0)[1]]
+    if not t then return end
+    c.opened[t] = not c.opened[t] or nil
+    M.draw(c)
+  end, "a tool whole, or back to its line")
+  for n = 1, 9 do map(tostring(n), function() pick(c, n) end, "answer it") end
+  map("<C-c>", function() c.on.interrupt() end, "interrupt the session")
+  map("q", function() c.on.close() end, "close the conversation")
+  if c.on.refollow then map("R", function() c.on.refollow() end, "follow it again") end
+  local group = vim.api.nvim_create_augroup("corkboard.conversation." .. o.id, { clear = true })
+  -- Its tools' lines are cut to its width.
+  vim.api.nvim_create_autocmd("WinResized", {
+    group = group,
+    callback = function()
+      for _, w in ipairs(vim.v.event.windows or {}) do
+        if vim.api.nvim_win_is_valid(w) and vim.api.nvim_win_get_buf(w) == buf then return M.draw(c) end
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd("BufWipeout", {
+    buffer = buf,
+    once = true,
+    callback = function()
+      if open[o.id] == c then open[o.id] = nil end
+      pcall(vim.api.nvim_del_augroup_by_id, group)
+      if c.prompt and vim.api.nvim_buf_is_valid(c.prompt) then
+        vim.schedule(function() pcall(vim.api.nvim_buf_delete, c.prompt, { force = true }) end)
+      end
+      if c.on.gone then c.on.gone() end
+    end,
+  })
+  if not page() then prompt(c) end
+  return c
+end
+
 -- Open a session's conversation in a tab, or go to it if it's open. where:
 -- the vm it runs in, its brain and Claude account, the host that's on and its
 -- dir, for its status line.
@@ -429,70 +511,35 @@ function M.open(bridge, key, name, where)
   -- Opened from a terminal's insert mode, keys would be typed into it.
   vim.cmd.stopinsert()
   local buf = vim.api.nvim_get_current_buf()
-  c = { bridge = bridge, key = key, name = name, buf = buf, items = {}, results = {}, opened = {}, rows = {} }
-  open[id] = c
   vim.api.nvim_buf_set_name(buf, "agent://session/" .. id)
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].swapfile = false
   vim.bo[buf].modifiable = false
-  -- Wrapped under the text, past its bullet.
-  vim.bo[buf].formatlistpat = [[^\s*\(●\|›\|└\|\[.\]\|\d\+\)\s]]
   vim.b[buf].corkboard_name = name
   vim.b[buf].corkboard_vm = where.vm
   vim.b[buf].corkboard_brain = where.brain
   vim.b[buf].corkboard_account = where.account
   vim.b[buf].corkboard_host = where.host
   vim.b[buf].corkboard_dir = where.dir ~= "" and where.dir ~= vim.NIL and where.dir or nil
-  vim.b[buf].corkboard_view = "conversation"
-  c.where = { vm = where.vm, brain = where.brain, account = where.account, host = where.host, dir = vim.b[buf].corkboard_dir }
-  local wo = vim.wo[0][0]
-  wo.wrap = true
-  wo.linebreak = true
-  wo.breakindent = true
-  wo.breakindentopt = "list:-1"
-  wo.number = false
-  wo.relativenumber = false
-  wo.conceallevel = 2
-  wo.concealcursor = "nc"
-  -- The terminals' inset (corkboard's TermOpen).
-  wo.signcolumn = "yes:1"
-  wo.winhighlight = "SignColumn:Normal,WinBar:Normal,WinBarNC:Normal"
-  local map = function(lhs, fn, desc) vim.keymap.set("n", lhs, fn, { buffer = buf, desc = "corkboard: " .. desc }) end
-  for _, lhs in ipairs({ "i", "a", "o" }) do map(lhs, function() ask(c) end, "say something to the session") end
-  map("<CR>", function()
-    local t = c.rows[vim.api.nvim_win_get_cursor(0)[1]]
-    if not t then return end
-    c.opened[t] = not c.opened[t] or nil
-    draw(c)
-  end, "a tool whole, or back to its line")
-  for n = 1, 9 do map(tostring(n), function() pick(c, n) end, "answer it") end
-  map("<C-c>", function() say(c, "", { "esc" }) end, "interrupt the session")
-  map("q", function() M.close(c) end, "close the conversation")
-  map("R", function() follow(c) end, "follow it again")
-  local group = vim.api.nvim_create_augroup("corkboard.conversation." .. id, { clear = true })
-  -- Its tools' lines are cut to its width.
-  vim.api.nvim_create_autocmd("WinResized", {
-    group = group,
-    callback = function()
-      for _, w in ipairs(vim.v.event.windows or {}) do
-        if vim.api.nvim_win_is_valid(w) and vim.api.nvim_win_get_buf(w) == buf then return draw(c) end
-      end
-    end,
+  local function say(text, keys, answers)
+    local ok, err = pcall(cloud().call, "fleet_say", bridge, key, text, keys, answers)
+    if not ok then vim.notify("corkboard: " .. tostring(err), vim.log.levels.WARN) end
+  end
+  c = M.attach(buf, {
+    id = id,
+    name = name,
+    where = { vm = where.vm, brain = where.brain, account = where.account, host = where.host, dir = vim.b[buf].corkboard_dir },
+    on = {
+      say = function(text) say(text, { "enter" }) end,
+      answer = function(n) say(tostring(n), {}) end,
+      answers = function(answers) say("", {}, answers) end,
+      interrupt = function() say("", { "esc" }) end,
+      refollow = function() follow(c) end,
+      gone = function() cloud().send("fleet_unfollow", bridge, key) end,
+    },
   })
-  vim.api.nvim_create_autocmd("BufWipeout", {
-    buffer = buf,
-    once = true,
-    callback = function()
-      open[id] = nil
-      pcall(vim.api.nvim_del_augroup_by_id, group)
-      if c.prompt and vim.api.nvim_buf_is_valid(c.prompt) then
-        vim.schedule(function() pcall(vim.api.nvim_buf_delete, c.prompt, { force = true }) end)
-      end
-      cloud().send("fleet_unfollow", bridge, key)
-    end,
-  })
-  if not page() then prompt(c) end
+  c.bridge, c.key = bridge, key
   follow(c)
 end
 
@@ -517,12 +564,12 @@ end
 
 function M.interrupt(buf)
   local c = by_buf(buf)
-  if c then say(c, "", { "esc" }) end
+  if c then c.on.interrupt() end
 end
 
 function M.refollow(buf)
   local c = by_buf(buf)
-  if c then follow(c) end
+  if c and c.on.refollow then c.on.refollow() end
 end
 
 -- From the bridge: a part of one, or its end.

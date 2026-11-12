@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { check, parseModel, think, type Schema } from "./think";
+import { check, parseModel, sessionEnv, think, type Schema } from "./think";
 
 const SCHEMA: Schema = { type: "object", properties: { items: { type: "array", items: { type: "string" } } }, required: ["items"] };
 
@@ -132,5 +132,35 @@ if [[ " $* " == *" --json-schema "* ]]; then echo '{"structured_output":{"items"
   test("an API key", async () => {
     await think({ system: "s", input: "i", key: "sk-ant-api03-y" });
     expect(ran().key).toBe("sk-ant-api03-y");
+  });
+});
+
+describe("sessionEnv", () => {
+  test("claude: its model, and the brain's key as what it is", () => {
+    expect(sessionEnv(parseModel(""))).toEqual({});
+    expect(sessionEnv(parseModel("opus"), "sk-ant-oat01-x")).toEqual({ ANTHROPIC_MODEL: "opus", CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-x" });
+    expect(sessionEnv(parseModel("claude:"), "sk-ant-api03-y")).toEqual({ ANTHROPIC_API_KEY: "sk-ant-api03-y" });
+  });
+
+  test("an endpoint: its Anthropic side, every model its one, and no account of the machine's", () => {
+    const env = sessionEnv(parseModel("openrouter:moonshotai/kimi-k2"), "sk-or-z");
+    expect(env).toEqual({
+      ANTHROPIC_BASE_URL: "https://openrouter.ai/api",
+      ANTHROPIC_AUTH_TOKEN: "sk-or-z",
+      ANTHROPIC_API_KEY: "",
+      CLAUDE_CODE_OAUTH_TOKEN: "",
+      ANTHROPIC_MODEL: "moonshotai/kimi-k2",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "moonshotai/kimi-k2",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "moonshotai/kimi-k2",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "moonshotai/kimi-k2",
+      CLAUDE_CODE_SUBAGENT_MODEL: "moonshotai/kimi-k2",
+    });
+    expect(sessionEnv(parseModel("ollama:qwen3")).ANTHROPIC_BASE_URL).toBe("http://localhost:11434");
+    expect(sessionEnv(parseModel("ollama:qwen3")).ANTHROPIC_AUTH_TOKEN).toBe("corkboard");
+    expect(sessionEnv(parseModel("openai:qwen3@http://box:8000/v1/")).ANTHROPIC_BASE_URL).toBe("http://box:8000");
+  });
+
+  test("OpenAI's own is refused", () => {
+    expect(() => sessionEnv(parseModel("openai:gpt-5.1"), "sk-x")).toThrow(/Anthropic-compatible/);
   });
 });

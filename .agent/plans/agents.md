@@ -146,15 +146,19 @@ think({ system, input, schema?, model?, tools?: [] }): Promise<{ text: string; j
 - **Brains** get `agent` (the kind) and `model`, beside `account`. The default brain's default
   is `claude`.
 - **Cards**: `card.agent` already exists and is always `"claude"`. The board's `a` gives the
-  brain's; `A` (or the card's menu) picks a kind. `agents.lua`'s grant, worktree and prompt are
+  brain's; `A` (and the card float's `A`) picks the brain and the kind in corkboard.columns
+  (Brain │ Agent │ here, "no brain" last) and sets `card.agent` before it starts. `agents.lua`'s grant, worktree and prompt are
   kind-neutral already, apart from naming AskUserQuestion.
-- **New session** (`<C-.>`, the sidebar): a row per kind on PATH ("Codex here", "Gemini CLI
-  here") beside the fleet's templates.
-- **Fleet templates** get `agent`. slot.nix installs that kind's CLI and runs its headless form
-  (`codex exec`, `gemini -p`, `opencode run`) where it runs `claude -p` now; chats over
-  stream-json stay Claude Code only until a kind has an equivalent.
-- **Accounts** become `{ kind, credential }`: fleetd's ACCOUNTS keeps tokens per account and
-  kind, written to `/mnt/share/<kind>-credential`; the VM user becomes `agent`.
+- **New session** (`<C-.>`, the sidebar): Brain │ Agent │ Where, corkboard.columns taking any
+  number of columns. The agent column has a row per kind with somewhere to run: here when it's
+  on PATH (an ACP kind only under the bridge), and for Claude Code the fleet's VMs and
+  templates, till stage 8 gives templates their kind.
+- **Fleet templates** get `agent`. slot.nix installs that kind's CLI and runs it over ACP
+  (`fleet-acp`, tasks and chats alike) where it runs `claude -p`; Claude Code stays on
+  stream-json (stage 8).
+- **Accounts**: fleetd's ACCOUNTS keeps a credential per account and kind (`<account>.<kind>`
+  beside Claude Code's `<account>`), written to `/mnt/share/<kind>-credential`; the VM user stays
+  `claude`.
 
 ---
 
@@ -183,20 +187,175 @@ think({ system, input, schema?, model?, tools?: [] }): Promise<{ text: string; j
    Done: `lib/think.ts` (claude, openai, openrouter, ollama; `<provider>:<model>[@<base>]`);
    brains' `model` and `model_key` (a hold, its secret read on the node; app.ts checks both) in
    the Brains view and form; the node's consolidator thinks as each brain says
-   (consolidator.ts's `brainThink`); propose.ts on `think` (CORKBOARD_PROPOSE_MODEL). Left:
-   autopilot (its reviewer runs tools in the worktree, so it stays on `claude -p`; its
-   tool-less calls could ask the node to think as the board's brain, the key never leaving it),
-   slot.nix's `think` (the Worker's consolidation job), Pepper's usage review in ~/pepper.
-3. **Claude Code on other models.** A brain's `provider`/`base_url`: the cheapest way to other
-   models with everything working.
-4. **ask and notify in corkboard-ui**, so a kind without AskUserQuestion and PushNotification
-   still reaches the card and the phone.
-5. **The ACP client**: `lib/acp/`, in the bridge, with opencode first (native ACP, many
-   providers): sessions, permissions, `usage_update`, the transcript corkboard writes.
-6. **The conversation view** in Neovim and on the phone, for an ACP session.
-7. **Gemini CLI and Codex** on the client: each only its command, its prompt, its auth.
-8. **The fleet**: `agent` on templates, the CLIs and adapters in the guest image, credentials per
-   kind; slot.nix's chats over ACP for every kind instead of stream-json.
+   (consolidator.ts's `brainThink`); propose.ts on `think` (CORKBOARD_PROPOSE_MODEL).
+   2026-11-12: autopilot's intake and groom ask the node to think as the default brain (app.ts's
+   `brains_think`, the key never leaving it), `claude -p` without the bridge; its reviewer runs
+   tools in the worktree, so it stays on `claude -p`. slot.nix's `consolidate` (the Worker's
+   plaintext consolidation) is gone, the node's consolidator being the one. Pepper's usage review
+   stays a `claude -p` with the memory tools, on the brain's model as stage 3 gives it.
+3. **Done 2026-11-12, on this machine.** **Claude Code on other models.** No new brain field: its
+   `model` and `model_key` drive its sessions too. lib/think.ts's `sessionEnv`: for an endpoint,
+   `ANTHROPIC_BASE_URL` (its base without /v1, the Anthropic side OpenRouter, Ollama, LiteLLM and
+   vLLM serve), `ANTHROPIC_AUTH_TOKEN` (the key; Ollama's any), the machine's login blanked, and
+   every model Claude Code picks set to the brain's; api.openai.com refused. For claude, its model
+   and the key as an OAuth token or API key. app.ts's `brains_session` hands it out when a session
+   starts (agent/claude.lua), so the key stays on the node till then. Pepper's VM: fleetd reads
+   the node's `GET /api/node/brains/<brain>/session` (owner, sealed) each hour and writes it as
+   shell exports to the resident's `sessionEnvFile`, which the guest sources over its Claude
+   token (assistant.ts, fleet/pepper). Its proxy's allowlist has to have the endpoint's host.
+   Fleet sessions on a brain's model are stage 8's, by the same route.
+   Verified live 2026-11-12: `claude -p` with a fresh CLAUDE_CONFIG_DIR on Ollama's /v1/messages
+   (qwen3:1.7b) ran two Bash calls and answered, its transcript as usual. Found: its
+   `total_cost_usd` (0.07) is priced as Claude, so a brain's usage and cost read wrong.
+4. **Done 2026-11-12, on this machine.** **ask and notify in corkboard-ui**, so a kind without
+   AskUserQuestion and PushNotification still reaches the card and the phone. corkboard-ui is an
+   MCP server of its own as well as the mod: `nvim/hooks/ui-mcp.lua`, stdio, run as `nvim -l`
+   with `$NVIM` and `$CORKBOARD_BUF` as the hooks are, with `ask`, `notify`, `show`, `say` and
+   `emote`. `corkboard.agent.ui_server(buf)` gives it in ACP's `mcpServers` shape for stage 5;
+   a kind's `tools` names its own (claude's are AskUserQuestion and PushNotification). `ask`
+   (`corkboard.questions`; `corkboard.ask` is vim.ui's box on the page) raises corkboard's `asking` event with AskUserQuestion's questions, so the
+   card's attention, the page's notification and away mode follow as they do now; its answers
+   come from away mode's `say` (away.lua sends them to it, not as keys) or from attending the
+   card (`vim.ui.select`). It waits 50 s (under Codex's minute-long MCP timeout), then tells the
+   agent to carry on, and a later answer goes as its next prompt (the kind's `prompt`, else a
+   terminal paste). `notify` is corkboard.notification titled with the kind's label; `say` and
+   `emote` go straight to the avatar (avatar.lua's `say`), since only Claude Code's log is read
+   for them. Left for stage 5: the phone sees the questions from the transcript, so the ACP
+   client writes an `ask` call as an AskUserQuestion record; and its system prompt tells the
+   agent to use `notify` and `ask` (claude.lua's NOTIFY_PROMPT is Claude Code's).
+5. **Done 2026-11-12, on this machine (opencode 2.2.5).** **The ACP client**: `lib/acp/`, in the
+   bridge, with opencode first (native ACP, many providers): sessions, permissions,
+   `usage_update`, the transcript corkboard writes. `AcpSession` (client.ts) speaks to `opencode
+   acp` and raises corkboard's events; transcript.ts writes Claude-Code-shaped JSONL to
+   `<state>/acp/<session>.jsonl`, which bridge/transcript.ts and the phone read unchanged;
+   bridge/acp.ts runs a Neovim's sessions by buffer (`acp_*` ops through cards/cloud.lua), the
+   model from the node's `brains_model`; `corkboard/acp.lua` is the buffer (a line view till
+   stage 6), `agent/opencode.lua` the kind, and `<C-.>` has a row per kind this machine runs
+   (`agent.here()`). Restore keeps an ACP buffer and resumes it with `session/load`.
+   What opencode does, verified:
+   - `initialize` advertises `loadSession`; `session/load` replays the history as updates
+     (`user_message_chunk` with a `messageId`, tool calls) before it answers, which the view
+     draws and the transcript doesn't write again.
+   - Updates: `agent_message_chunk`/`agent_thought_chunk` with `messageId`; `tool_call` (name,
+     title, kind, empty rawInput) then `tool_call_update` (rawInput in progress, then
+     completed/failed with text content and rawOutput); `usage_update {used, size, cost}`;
+     `available_commands_update`, `config_option_update`. The prompt's result is `{stopReason,
+     usage}`; a model error (a provider's quota, say) is the prompt's JSON-RPC error.
+   - Permissions: none asked by default. The user's config `permission` (`{"edit":"ask",
+     "bash":"ask"}`; the schema now says `permissions`, the old key still works in 2.2.5) makes it
+     send `session/request_permission` with `once`/`always`/`reject`; a reject fails the tool and
+     ends the turn `cancelled`. After `session/cancel` the bridge refuses what's still asked, as
+     ACP says the client must.
+   - The system prompt is a file in `instructions` (removed when the agent ends). MCP servers go
+     in the config's `mcp` with `codemode:false`: handed over in `session/new`'s `mcpServers`
+     they sit behind one code-mode `execute` tool, their names only in its rawOutput.
+   - An ask that stops waiting leaves the session asking after its turn settles (agents.lua),
+     and the late answer is its next prompt.
+   - opencode's own `question` tool is off (`tools: {question: false}`): it can't be shown to an
+     ACP client, each call failing "couldn't be shown to the user in this client", and a small
+     model loops on it rather than use corkboard-ui's ask.
+   - opencode logs "mcp connected" before session/new answers, yet a prompt sent at once lacks
+     the MCP tools (0–30 ms fails, 100 ms works). `Spec.settle` waits after session/new or load:
+     1000 ms for opencode with MCP servers. A timing workaround, verified 3/3.
+   - opencode 2.0.32, the flake's pin, never gives MCP tools to the model; 2.2.5 does.
+   Verified live 2026-11-12 (2.2.5): a `permission: {bash: "ask"}` prompt answered with an
+   option ran the shell; corkboard-ui's ask through MCP, written as AskUserQuestion with its
+   result; a custom OpenAI-compatible provider in opencode's config (Ollama, a scripted
+   endpoint). Not verified live: the brain's model handed over by bridge/acp.ts, and switching
+   models.
+   Found: bridge/acp.ts passes no `log`, so an agent's stderr is dropped and a failed start
+   (codex's "Authentication required") shows in Neovim only as the buffer exiting. The board's `A` picks a card's brain and kind (see Choosing the agent),
+   verified 2026-11-12 in a headless Neovim with the board and start stubbed.
+6. **Neovim's part done 2026-11-12, on this machine (opencode 2.2.5).** **The conversation view**
+   in Neovim and on the phone, for an ACP session. The fleet's view (conversation.lua) is shared:
+   `attach(buf, o)` sets a buffer up as one (its keys, the prompt split under it, the page's
+   composer when one is attached) with the source's handlers (`say`, `answer(n)`, `answers`,
+   `interrupt`, `close`, `refollow`, `gone`). bridge/acp.ts follows the session's own transcript
+   with bridge/transcript.ts's `Follower`, as the phone does, and draws at most every 40 ms:
+   `corkboard.acp.view(buf, items, live)`, the new items and the words not yet flushed
+   (`AcpSession.saying`), skipped while it only thinks. So a resumed session's history comes from
+   the file, not the replay. A permission's options are answered with 1-9 in the view; a
+   corkboard-ui ask is the view's question card, answered through `corkboard.questions`; how a
+   turn ended (stopped, out of tokens, a failure) is a `note` item, which the page draws too.
+   Verified live through a headless Neovim on the bridge's Acp: a prompt's › row, live words
+   under ✻ working, the ● reply; a tool's └ result; a permission's 1; an ask's card and answer;
+   C-c leaving the partial words and "— stopped"; /clear; resume; q and a wiped buffer each
+   stopping the agent once. The phone needs nothing new: remote.ts lists the session's
+   transcript, which the hub follows; what it says is the next prompt and esc stops the turn
+   (away.lua through the kind); a question's answers go to `corkboard.questions`, and a
+   permission's number, sent as text, answers it (`acp.prompt`), checked through `away.say`.
+   Not yet tried on a phone.
+7. **Wired 2026-11-12; spiked against stand-in APIs, no real turn yet (no Gemini or OpenAI
+   credentials on this machine).** **Gemini CLI and Codex** on the client: `lib/acp/gemini.ts`
+   and `codex.ts`, in `lib/acp/kinds.ts`'s `KINDS` beside opencode (bridge/acp.ts and the fleet
+   both take them from there), and `agent/gemini.lua` and `agent/codex.lua`, which read their
+   transcripts as opencode's does. Each file's header says what was verified. In short:
+   - **Gemini CLI 0.47.0**, `gemini --acp`: corkboard's prompt is a `GEMINI.md` in an included
+     directory, added to Gemini's own; the MCP servers and that go in a settings file at
+     `GEMINI_CLI_SYSTEM_DEFAULTS_PATH` (the lowest layer, so `~/.gemini` is untouched), `trust`ed,
+     in a trusted workspace (untrusted, no MCP server starts). Auth is the user's Google login,
+     or `GEMINI_API_KEY` from a brain whose model is at generativelanguage.googleapis.com.
+     A built-in tool's title is what it does, its name only in the toolCallId, so a kind's
+     `names(title, id)` gets both. No `usage_update`: the prompt result's
+     `_meta.quota.token_count` is written as the turn's tokens, so its context reads unknown.
+     `session/load` is advertised but writes a fresh start over the session, so a restore
+     starts it afresh (`NO_RESUME`). nixpkgs flags 0.47.0 for removal: Google replaced Gemini CLI
+     with Antigravity CLI for unpaid and AI Pro/Ultra users.
+   - **Codex 0.167.0 through codex-acp 2.1.1**: everything in `CODEX_CONFIG`: the prompt as
+     `developer_instructions`, the MCP servers with `default_tools_approval_mode = "approve"`
+     (handed over in `session/new` they ask every call), and the brain's model.
+     `INITIAL_AGENT_MODE=workspace-write`, so what's outside it asks corkboard instead of
+     Codex's "Guardian Review" model. A brain's model must be behind the Responses API (OpenAI,
+     OpenRouter, LiteLLM, Ollama), given as the adapter's in-memory "gateway" auth: its
+     "api-key" login would write `~/.codex/auth.json` over the user's ChatGPT login. Without
+     either, `codex login` once. Resume and `usage_update` work. An MCP call's rawInput is
+     `{server, tool, arguments}` and its rawOutput `{result: {content}, error}`, which
+     transcript.ts unwraps.
+   Verified live 2026-11-12, Codex 0.163.0 (the flake's nixpkgs) through codex-acp 2.1.1 in a
+   headless Neovim on bridge/acp.ts, on qwen3:1.7b behind Ollama's /v1/responses as a brain's
+   model: the prompt's › row, an exec_command row and its result, the ● reply, the turn settling.
+   Found and fixed: its exec tool spawns `codex-linux-sandbox` from PATH, which nixpkgs' codex
+   doesn't have ("No viable candidates found in PATH"); it's codex itself under that name
+   (argv[0]), which slot.nix now links beside codex-acp. A host whose codex comes from nixpkgs
+   needs the same. Found and fixed: a command Codex parses as a list, read or search comes with
+   no rawInput, only a title ("List files"), which transcript.ts now writes as its
+   `description`. Not tried: Codex's own `request_user_input` tool through ACP.
+   Left: a real turn of each on its own service (Gemini, OpenAI), with the user's login or key.
+8. **Done 2026-11-12; opencode and Codex booted in a slot.** **The fleet**: a template's `agent` (fleet/lib.nix's
+   `agents`, Claude Code's by default; any other throws) goes into the manifest, fleetd and
+   `fleet_get`, so `<C-.>` lists each template, and each VM running one, under its own kind.
+   slot.nix installs the kind's CLI (`opencode`, `gemini-cli`, `codex-acp` wrapping nixpkgs'
+   codex) with `fleet-acp`: fleet/guest/acp.ts on lib/acp/, which runs a task (one turn on
+   task.md, its `result.json`) or a session (the inbox fleetd fills, each turn's end a result
+   line in `events.jsonl`, its transcript in `outbox/projects/acp/`) so fleetd reads it as
+   Claude Code's. Every permission is allowed, as Claude Code runs with
+   `--dangerously-skip-permissions`. The brain's memory note (`/etc/claude-code/CLAUDE.md`) is
+   its prompt. Credentials: fleetd's `accounts/<account>` stays Claude Code's token;
+   another kind's is `accounts/<account>.<kind>`, KEY=value lines (`GEMINI_API_KEY`,
+   `OPENAI_API_KEY`, which fleet-acp gives codex-acp as OpenAI's gateway) copied to
+   `share/<kind>-credential`. fleet/tests.nix checks the default and a bad agent; slot guests
+   for each kind evaluate, and the opencode one's task script builds (shellcheck) and its
+   fleet-acp runs.
+   Decided: Claude Code stays on stream-json in the slot rather than claude-code-acp, which
+   would lose its hooks: the context handoff and the brain's memory hooks are Claude Code's
+   alone, and an ACP kind's task is one session with no handoff. The VM user stays `claude`.
+   A brain's model for an ACP kind in a slot (stage 3's route) isn't wired: the credential is
+   the account's.
+   Booted 2026-11-12: `t@slot` guests from mkFleet on the flake's locked nixpkgs, QEMU user
+   networking in place of the tap, the host's endpoints at 10.0.2.2. opencode 2.0.32 on a
+   scripted OpenAI-compatible endpoint (its credential `OPENCODE_CONFIG` naming a provider) ran
+   its shell in the guest and wrote `result.json`, `exit` 0 and its transcript. Codex through
+   codex-acp, its credential `DEFAULT_AUTH_REQUEST` at Ollama, ran exec_command in its sandbox
+   (once slot.nix had codex-linux-sandbox) with the same outputs.
+   Found: with no model given, Codex asks the gateway for its own default (`gpt-6.1-sol`), and
+   sends that model's `additional_tools` input, which anything but OpenAI refuses; the test
+   gave `CODEX_CONFIG` in the credential, which replaces corkboard's prompt and MCP servers.
+   So a non-OpenAI gateway in a slot needs the model wiring above. Found: codex-acp hands a
+   provider's error back as the agent's words and ends the turn `end_turn`, so `result.json`
+   reads `is_error: false` with the error JSON as its result.
+   Pins: opencode 2.0.32 (the lock's) never gives MCP tools to the model, 2.2.5 does; bumping
+   nixpkgs for it breaks codex, which then isn't cached and fails building aws-lc-sys. A
+   separate nixpkgs input for the agent CLIs is one way out (undecided).
 
 Each kind's spike (its **verify** items, against the version nixpkgs has) comes before its stage.
 

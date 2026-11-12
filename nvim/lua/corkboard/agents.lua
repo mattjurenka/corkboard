@@ -99,6 +99,9 @@ end
 function M.attend(id)
   board().set(id, { attention = "", budget_hold = "" })
   local buf = M.session(id)
+  -- What it asks through corkboard-ui's ask is answered here, not in its view.
+  if buf and require("corkboard.questions").prompt(buf) then return end
+  if buf and require("corkboard.acp").answer_prompt(buf) then return end
   if buf then return terminal.focus(buf) end
   board().reveal(id)
 end
@@ -148,6 +151,8 @@ local function between_turns(buf) return live[buf] == nil or live[buf] == "idle"
 -- Types a line into the session and sends it. Claude Code opens its command
 -- menu on a /, and takes fast input as a paste; Enter once it has.
 local function type_line(buf, text)
+  local kind = require("corkboard.agent").of(buf)
+  if kind and kind.prompt then return kind.prompt(buf, text) end
   local chan = terminal.job(buf)
   vim.fn.chansend(chan, text)
   vim.defer_fn(function()
@@ -295,16 +300,22 @@ function M.hook(ev)
     end
   end
   if ev.wakeup then waking[buf] = true end
+  -- An ask that stopped waiting (corkboard.questions) still asks once the turn's
+  -- over.
+  local open = state == "settled" and require("corkboard.questions").pending(buf)
+  if open then state = "asking" end
+  local question = asking(ev) or (open and "asks: " .. open[1].question)
   if state == "settled" then state = settle(buf, ev) end
   if state then
     live[buf] = state
     -- What it waits on, for away mode: a Notification that it still does
     -- doesn't say.
     local waiting = state == "asking" or state == "permission"
-    vim.b[buf].corkboard_asking = waiting and (asking(ev) or vim.b[buf].corkboard_asking) or nil
-    vim.b[buf].corkboard_questions = state == "asking" and (ev.questions or vim.b[buf].corkboard_questions) or nil
+    vim.b[buf].corkboard_asking = waiting and (question or vim.b[buf].corkboard_asking) or nil
+    vim.b[buf].corkboard_questions = state == "asking" and (ev.questions or open or vim.b[buf].corkboard_questions) or nil
     require("corkboard.away").report()
     require("corkboard.avatar").changed(buf)
+    if vim.b[buf].corkboard_acp then require("corkboard.acp").changed(buf) end
     -- The tab's mark: a session in a tab off screen draws nothing that
     -- would push it.
     require("corkboard").push_layout()
@@ -317,7 +328,6 @@ function M.hook(ev)
   -- Its card was done while it was mid-turn.
   if clearing[buf] and between_turns(buf) then return vim.schedule(function() clear(buf) end) end
   if not id then return end
-  local question = asking(ev)
   if question then
     -- Setting attention raises the page's notification (attention.ts).
     board().set(id, { agent_state = "blocked", attention = question })

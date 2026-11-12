@@ -1490,6 +1490,19 @@ describe("the fleet sealed, on the node", () => {
     expect((await (await local(`/api/node/fleet/spawns/${s.id}?holds=github`)).json()).secrets).toEqual({});
   });
 
+  it("gives fleetd a brain's session env, its key from its hold, on loopback to the owner only", async () => {
+    await local("/api/node/fleet/holds", { method: "POST", body: JSON.stringify({ name: "or-key", about: "OpenRouter", secret: "sk-or-9" }) });
+    await n.data.putBrain("work", { credentials: ["google"], account: "stable", model: "openrouter:z-ai/glm-4.6", model_key: "or-key" });
+    const got = await (await local("/api/node/brains/work/session")).json();
+    expect(got.model).toBe("z-ai/glm-4.6");
+    expect(got.env).toMatchObject({ ANTHROPIC_BASE_URL: "https://openrouter.ai/api", ANTHROPIC_AUTH_TOKEN: "sk-or-9", CLAUDE_CODE_OAUTH_TOKEN: "" });
+    expect((await n.call("/api/node/brains/work/session", { headers: owner() })).status).toBe(404);
+    const agent = n.oauth.mint("pepper", 1, "assistant", "assistant");
+    expect((await n.app(new Request(`${ORIGIN}/api/node/brains/work/session`, { headers: { Authorization: `Bearer ${agent}` } }), { requestIP: () => ({ address: "127.0.0.1" }) })).status).not.toBe(200);
+    await local("/api/node/fleet/holds/or-key", { method: "DELETE" });
+    expect((await local("/api/node/brains/work/session")).status).toBe(400);
+  });
+
   it("keeps the manifests, and answers none of it on the plaintext tunnel or to an agent", async () => {
     await local("/api/node/fleet/environments/droplet", { method: "PUT", body: JSON.stringify({ manifest: { egress: { open: false } } }) });
     expect(await (await local("/api/node/fleet/environments")).json()).toEqual([{ egress: { open: false }, name: "droplet" }]);

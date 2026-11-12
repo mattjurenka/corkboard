@@ -1,31 +1,44 @@
 # Pepper's VM on the droplet: one Claude Code session, in tmux, always
 # running, as the guest's `claude`. The droplet's half (fleet/pepper/pepper.nix)
 # boots it, gives it its egress proxy, and reaches it over ssh from the
-# gateway: fleetd (fleet/fleetd/assistant.ts) to write its corkboard token
-# and paste in the phone's chat, and the day plan's window to attach.
+# gateway: fleetd (fleet/fleetd/assistant.ts) to write its node token and
+# what its sessions run on, and paste in the phone's chat, and the day plan's window to attach.
 #
 # As pepper-vm on the laptop (~/nixosconfig/modules/hosts/pepper-vm): no
-# shares, no route and no resolver, only the proxy, which knows the pepper
-# brain's allowlist. Its code and settings are this closure, so Pepper can't
+# shares, no route and no resolver, only the proxy, which reaches the internet
+# but not the droplet's own services. Its code and settings are this closure, so Pepper can't
 # edit its own instructions. What it keeps between boots (the Claude token,
-# ~/.claude, the corkboard tokens) is on its disk.
+# ~/.claude, its node token) is on its disk.
 #
-# Its memory is on the user's node, not the Worker: the hooks and the
-# corkboard-memory MCP server reach the leader through the relay's tunnel,
+# Its memory, boards, day plan and chat are on the user's node, not the
+# Worker: the hooks and the corkboard-memory MCP server reach the leader
+# through the relay's tunnel,
 # with a token for the pepper brain minted there by fleetd each day (its
 # resident's memoryTokenFile, assistant.ts).
 { plan, memoryHooks }:
 { config, pkgs, lib, modulesPath, ... }:
 let
   vm = plan;
-  tokenFile = "/var/lib/pepper/corkboard-token";
   socket = "/run/pepper/tmux.sock";
   # The Claude account's OAuth token (`claude setup-token`), the personal
   # account's, as the pepper brain names. Copied in by hand.
   claudeToken = "/home/claude/.config/claude-token";
   memoryToken = "/var/lib/pepper/memory-token";
+  # What its sessions run on, the pepper brain's model (shell exports),
+  # written by fleetd from the node (assistant.ts's sessionEnvFile): over the
+  # Claude token, so a brain on another model needs none.
+  sessionEnv = "/var/lib/pepper/session-env";
+  # Matt's Composio MCP server, his apps through it (shell exports of
+  # COMPOSIO_MCP_URL and COMPOSIO_API_KEY, which managed-mcp.json expands).
+  # Copied in by hand; without it the server points nowhere.
+  composioEnv = "/var/lib/pepper/composio.env";
   # The user's account's tunnel, to whichever node leads.
   node = "https://portal.corkboard.fyi/n/tXwvWRd0Ce7CGvviZ6KtY_";
+  # The Google calendar Matt's scheduled job fills with ASU events to choose from.
+  asuEvents = "d97e1b2ecfeb9ced2c53489e1246ddd91b5f5078b47951d57a3f17d6c18c0de4@group.calendar.google.com";
+  # Luma's iCal feeds, subscribed in Matt's Google Calendar: what he's going to or hosting, and what's near him.
+  lumaGoing = "5smdfvuficg4cv5ispbg7ge7gvdmohoo@import.calendar.google.com";
+  lumaNearby = "l64jfko3bo2lqhk3j2ifut9gfhgaorhb@import.calendar.google.com";
 
   proxyUrl = "http://${vm.hostAddress}:${toString vm.proxyPort}";
   proxyEnv = {
@@ -38,11 +51,11 @@ let
   };
 
   claudeCodeEnv = {
-    # The account's claude.ai connectors include Google Calendar with write,
-    # and only the user accepts a day plan.
+    # Its apps are Composio's (composio below), not the account's claude.ai
+    # connectors.
     ENABLE_CLAUDEAI_MCP_SERVERS = "false";
     CLAUDE_CODE_DISABLE_ARTIFACT = "1";
-    # Hosts that aren't on the allowlist.
+    # Telemetry and error reports.
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
     # Nix owns the binary.
     DISABLE_AUTOUPDATER = "1";
@@ -65,20 +78,20 @@ let
   managedSettings = {
     env = claudeCodeEnv;
     # Phone messages arrive with no one at the terminal to approve a call.
-    permissions.allow = [ "mcp__corkboard" "mcp__corkboard-memory" ];
+    permissions.allow = [ "mcp__corkboard-memory" "mcp__composio" "WebFetch(domain:devpost.com)" ];
     inherit (memoryHooks { inherit pkgs lib; url = node; brain = "pepper"; tokenFile = memoryToken; }) hooks;
   };
 
   managedMcp.mcpServers = {
-    corkboard = {
-      type = "http";
-      url = "https://portal.corkboard.fyi/mcp";
-      headersHelper = lib.getExe (headers "pepper-corkboard-headers" tokenFile);
-    };
     corkboard-memory = {
       type = "http";
       url = "${node}/mcp";
       headersHelper = lib.getExe (headers "pepper-memory-headers" memoryToken);
+    };
+    composio = {
+      type = "http";
+      url = "\${COMPOSIO_MCP_URL:-http://127.0.0.1:9/no-composio}";
+      headers.x-consumer-api-key = "\${COMPOSIO_API_KEY:-}";
     };
   };
 
@@ -94,9 +107,22 @@ let
     calendar. He sees it as a diff in the plan window or on his phone, undoes what he doesn't want, and accepts it there, which
     writes the calendar; he may also say what to change, which plan_read returns as asked. You can't accept it for him, and he
     can't skip planning by asking you to.
-    Your memory is on the corkboard-memory server, as are the day plan and chat (the corkboard server's memory, note, plan and
-    chat tools no longer answer), and so are the
-    boards it lists (list_boards) and their cards; a board it doesn't list is still on the corkboard server. The session starts with your memory (who you are, the last days' log, what you've learned), and a new
+    Matt's apps (Google Calendar, and whatever else he's connected) are on the composio server, which can write as well as read.
+    Day plans still go through plan_propose: never write the day's blocks or a "✅ Plan approved" event on his Claude calendar
+    yourself, since that event is what unlocks his laptop and phone.
+    Before you plan a day, read that day's events on Google calendar ${asuEvents} through composio: a scheduled job of
+    Matt's puts ASU events there that he might want to go to, already filtered for him. Ask for that one day only
+    (GOOGLECALENDAR_EVENTS_LIST with its timeMin and timeMax, singleEvents, fields items(summary,start,end,location)), so the
+    answer comes back inline. Skip events that run longer than a day, and take an event listed twice as one. They're options, not commitments. Suggest the ones that fit the day: as blocks in the
+    proposal where there's room (kind off, the event's title and place, the desc how to get there), the rest named
+    in reasons, so he can take them or leave them. Don't move work he has to do to make room for one unless he asks.
+    Read the same day the same way on ${lumaGoing}, the Luma events he's going to or hosting: those are commitments, so plan
+    around them (kind off, with time to get there), and on ${lumaNearby}, Luma events near him, which are options like the ASU ones.
+    Online hackathons open now are at https://devpost.com/api/hackathons?challenge_type[]=online&status[]=open&order_by=deadline
+    (title, submission_period_dates, url). When he asks about hackathons, or on Mondays when you plan the day, name the few
+    that suit him in reasons, with when they close.
+    Your memory is on the corkboard-memory server, as are the day plan, the chat, and the boards (list_boards) and their cards.
+    The session starts with your memory (who you are, the last days' log, what you've learned), and a new
     session starts each day at 4am. When something happens, is decided or is learned, write it in today's log with
     memory_remember, a line that will make sense later. To find what you don't see, memory_recall (or memory_grep for exact
     words), then note_read. Keep lasting knowledge in notes (note_write; pass the version you read). Notes also hold Matt's
@@ -116,7 +142,7 @@ let
   # notes are corkboard-memory's.
   usageReviewPrompt = pkgs.writeText "pepper-usage-review-prompt" ''
     You are Pepper, Matt's personal assistant. Review his Claude Code token usage and suggest how to reduce it.
-    The notes are on the corkboard-memory server, and so are the cards (list_cards) of the boards it lists; the rest are on corkboard's.
+    The notes are on the corkboard-memory server, and so are the boards' cards (list_cards).
 
     1. Find the usage reports: notes_search with kind review and the query "Token usage", then note_read each
        note whose id starts with usage- (usage-recommendations is yours, below). Use only those with a
@@ -171,8 +197,14 @@ let
     inherit name;
     runtimeInputs = [ pkgs.coreutils ];
     text = ''
-      CLAUDE_CODE_OAUTH_TOKEN=$(tr -d '\n' < ${claudeToken})
-      export CLAUDE_CODE_OAUTH_TOKEN
+      if [ -s ${claudeToken} ]; then
+        CLAUDE_CODE_OAUTH_TOKEN=$(tr -d '\n' < ${claudeToken})
+        export CLAUDE_CODE_OAUTH_TOKEN
+      fi
+      # shellcheck disable=SC1091
+      if [ -s ${sessionEnv} ]; then . ${sessionEnv}; fi
+      # shellcheck disable=SC1091
+      if [ -s ${composioEnv} ]; then set -a; . ${composioEnv}; set +a; fi
       # Not home itself: Claude Code never saves trusting it, and would ask
       # each new session.
       mkdir -p /home/claude/pepper
@@ -246,7 +278,7 @@ in
       wantedBy = [ "multi-user.target" ];
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
-      unitConfig.ConditionPathExists = claudeToken;
+      unitConfig.ConditionPathExists = [ "|${claudeToken}" "|${sessionEnv}" ];
       path = [ "/run/current-system/sw" ];
       serviceConfig = {
         Type = "forking";
@@ -278,7 +310,7 @@ in
         User = "claude";
         Group = "users";
         ExecStart = lib.getExe (withToken "pepper-usage-review" ''
-          exec ${lib.getExe pkgs.claude-code} -p "$(cat ${usageReviewPrompt})" --allowedTools mcp__corkboard mcp__corkboard-memory
+          exec ${lib.getExe pkgs.claude-code} -p "$(cat ${usageReviewPrompt})" --allowedTools mcp__corkboard-memory
         '');
       };
     };

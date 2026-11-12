@@ -1,7 +1,7 @@
 # Pepper, the personal assistant, on the droplet (the fleet's `cloud`
 # environment, see .agent/plans/agent-fleet.md): one Claude Code session that
 # is always running, in a VM of its own (./guest.nix). This is the droplet's
-# half: the VM's network, its filtering proxy and its launcher, and the
+# half: the VM's network, its proxy and its launcher, and the
 # `assistant` its resident has in the fleet's manifest (fleet-resident.json),
 # by which fleetd (fleet/fleetd/assistant.ts) gives the session its corkboard
 # token and pastes in the phone's chat, over ssh. The day plan's window
@@ -14,20 +14,6 @@
 { pkgs, lib, plan, vm }:
 let
   vmAddr = plan.guestAddress;
-  # The pepper brain's egress (~/nixosconfig modules/features/fleet.nix):
-  # Claude Code's own hosts, corkboard's Worker, and read-only Google.
-  allowed = [
-    "api.anthropic.com"
-    "platform.claude.com"
-    "claude.ai"
-    "claude.com"
-    "code.claude.com"
-    "portal.corkboard.fyi"
-    "oauth2.googleapis.com"
-    "www.googleapis.com"
-    "gmail.googleapis.com"
-  ];
-
   ssh = home: opts: lib.concatStringsSep " " ([
     "${pkgs.openssh}/bin/ssh"
     # Not Ubuntu's ssh_config, whose options this ssh doesn't know.
@@ -62,19 +48,14 @@ let
     }
   '';
 
-  filter = pkgs.writeText "pepper-vm-allowed-domains.filter"
-    (lib.concatMapStrings (d: "^${lib.escapeRegex d}$\n") allowed);
-
+  # Any host on the internet, any port (Matt's call, 2026-11-12). What the
+  # droplet itself and private networks serve is kept from it by the proxy
+  # unit's IPAddressDeny, not here: a name can resolve to anything.
   proxyConf = pkgs.writeText "pepper-vm-proxy.conf" ''
     Port ${toString plan.proxyPort}
     Listen ${plan.hostAddress}
     Allow ${vmAddr}
     Timeout 600
-    FilterDefaultDeny yes
-    FilterExtended yes
-    FilterURLs no
-    Filter "${filter}"
-    ConnectPort 443
     DisableViaHeader yes
     LogLevel Notice
   '';
@@ -127,13 +108,17 @@ let
     '';
     "pepper-vm-proxy.service" = ''
       [Unit]
-      Description=Filtering proxy for Pepper's VM
+      Description=Pepper's VM's way out
       After=pepper-vm-net.service
       Requires=pepper-vm-net.service
 
       [Service]
       DynamicUser=yes
       ExecStart=${pkgs.tinyproxy}/bin/tinyproxy -d -c ${proxyConf}
+      # Not the droplet's own services (the node, the workspace's bridge) nor
+      # anything private: only the VM, resolved's stub, and the internet.
+      IPAddressDeny=localhost link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7
+      IPAddressAllow=${vmAddr}/32 ${plan.hostAddress}/32 127.0.0.53/32
       Restart=on-failure
       RestartSec=5s
 
@@ -172,8 +157,8 @@ let
   resident = builtins.toJSON {
     ssh = fleetdSsh;
     tmuxSocket = "/run/pepper/tmux.sock";
-    tokenFile = "/var/lib/pepper/corkboard-token";
     memoryTokenFile = "/var/lib/pepper/memory-token";
+    sessionEnvFile = "/var/lib/pepper/session-env";
     chat = true;
   };
 

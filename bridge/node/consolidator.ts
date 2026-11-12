@@ -12,7 +12,7 @@
 // names none. After a run that failed, the next waits an hour, then two, up
 // to a day.
 
-import { parseModel, think } from "../../lib/think";
+import { type Model, parseModel, sessionEnv, think } from "../../lib/think";
 import { ATTEMPTS, DAY_CHARS, QUIET, ROLLUP_DAYS, bullets, flushInput, flushPrompt, parseRollup, render, rollupInput, rollupPrompt } from "../../lib/memory/consolidate";
 import type { Data } from "./data";
 import type { Episode, Episodes } from "./episodes";
@@ -26,14 +26,24 @@ export type Think = (prompt: string, input: string, brain: string) => Promise<st
 // its model_key names, which stays on this machine.
 export type BrainModel = Record<string, unknown> & { model?: unknown; model_key?: unknown };
 
+export function brainModel(b: BrainModel | undefined, secret: (hold: string) => string | undefined): { model: Model; key?: string } {
+  const hold = typeof b?.model_key === "string" ? b.model_key : undefined;
+  const key = hold && secret(hold);
+  if (hold && !key) throw new Error(`its model_key, ${hold}, has no secret on this machine`);
+  return { model: parseModel(typeof b?.model === "string" ? b.model : null), key: key || undefined };
+}
+
+// What a Claude Code session on the brain's model is started with (lib/think.ts's
+// sessionEnv), and its model's name: for a session here (app.ts's
+// brains_session) or in a VM (server.ts's /api/node/brains/<name>/session,
+// fleetd's). Throws when it can't run.
+export function brainSession(b: BrainModel | undefined, secret: (hold: string) => string | undefined): { env: Record<string, string>; model: string | null } {
+  const m = brainModel(b, secret);
+  return { env: sessionEnv(m.model, m.key), model: m.model.model ?? null };
+}
+
 export function brainThink(settings: (brain: string) => BrainModel | undefined, secret: (hold: string) => string | undefined): Think {
-  return async (prompt, input, brain) => {
-    const b = settings(brain) ?? {};
-    const hold = typeof b.model_key === "string" ? b.model_key : undefined;
-    const key = hold && secret(hold);
-    if (hold && !key) throw new Error(`its model_key, ${hold}, has no secret on this machine`);
-    return (await think({ system: prompt, input, model: parseModel(typeof b.model === "string" ? b.model : null), key: key || undefined })).text;
-  };
+  return async (prompt, input, brain) => (await think({ system: prompt, input, ...brainModel(settings(brain), secret) })).text;
 }
 
 // after: once a brain's run has finished (serve.ts embeds what it wrote).

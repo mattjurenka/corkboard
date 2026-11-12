@@ -9,6 +9,8 @@ function M.job(buf) return vim.b[buf].terminal_job_id or vim.bo[buf].channel end
 
 -- Whether a terminal buffer's job is still running.
 function M.alive(buf)
+  -- An ACP agent's session (corkboard.acp) has no job of its own.
+  if buf ~= nil and vim.api.nvim_buf_is_valid(buf) and vim.b[buf].corkboard_acp then return vim.b[buf].corkboard_acp_alive == true end
   return buf ~= nil and vim.api.nvim_buf_is_valid(buf) and vim.fn.jobwait({ M.job(buf) }, 0)[1] == -1
 end
 

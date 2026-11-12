@@ -83,12 +83,13 @@ export function notifyAttention(cards: Card[], open: (id: string) => void) {
 // are looking can be wrong, so one it held back still shows if this window
 // isn't focused.
 // Clicking it goes to the session's terminal, when the hook knew which.
-export function notifyClaude(n: { message: string; cwd?: string; sent: boolean; reason?: string; buf?: number }, open: (buf: number) => void) {
+// Another kind's (corkboard-ui's notify, hooks/ui-mcp.lua) comes with its label.
+export function notifyClaude(n: { message: string; cwd?: string; sent: boolean; reason?: string; buf?: number; label?: string }, open: (buf: number) => void) {
   const project = n.cwd?.split("/").at(-1);
   const want = n.sent || !document.hasFocus();
   record(
     {
-      title: project ? `Claude Code · ${project}` : "Claude Code",
+      title: project ? `${n.label ?? "Claude Code"} · ${project}` : (n.label ?? "Claude Code"),
       body: n.message,
       reason: want ? undefined : (n.reason ?? "held back by Claude Code"),
       open: n.buf ? () => open(n.buf!) : undefined,

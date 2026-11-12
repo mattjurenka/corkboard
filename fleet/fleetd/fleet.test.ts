@@ -1,7 +1,7 @@
 // fleetd's scheduling: which queued spawns start, given slots, residents and
 // the memory budget.   bun test fleet/fleetd
 import { expect, test } from "bun:test";
-import { accountFor, egressOf, guestOf, occupancy, OVERHEAD, schedule, type Manifest, type Network, type Spawn } from "./fleet";
+import { accountFor, credentialFor, egressOf, guestOf, occupancy, OVERHEAD, schedule, type Manifest, type Network, type Spawn } from "./fleet";
 
 const slot = (n: number) => ({ guestAddress: `10.${80 + n}.0.2`, stateDir: "", shareDir: "", outboxDir: "", unit: `agent-${n}.service` });
 
@@ -87,6 +87,17 @@ test("a brain this host has memory for boots with it; any other, its template's 
   expect(guestOf(m(null), { ...spawn("coding"), brain: "garden" })).toBe("coding");
   expect(guestOf({ ...m(null), bindings: undefined }, { ...spawn("coding"), brain: "work" })).toBe("coding");
   expect(guestOf(m(null), spawn("coding"))).toBe("coding");
+});
+
+test("an agent's credential: Claude Code's token, another kind's KEY=value file, none for a job", () => {
+  const withGemini = { ...m(null), templates: { ...m(null).templates, gem: { memory: 4096, cores: 2, needsApproval: false, capNames: [], agent: "gemini" } } };
+  expect(credentialFor(m(null), spawn("coding"))).toMatchObject({ share: "claude-token" });
+  expect(credentialFor(m(null), spawn("coding"))!.file).toMatch(/accounts\/personal$/);
+  const g = credentialFor(withGemini, spawn("gem"))!;
+  expect(g.share).toBe("gemini-credential");
+  expect(g.file).toMatch(/accounts\/personal\.gemini$/);
+  expect(g.how).toContain("GEMINI_API_KEY");
+  expect(credentialFor(m(null), { ...spawn("coding"), job: "actions" })).toBeUndefined();
 });
 
 test("what every slot may reach: what they all allow, open if they all are, unknown if one doesn't say", () => {

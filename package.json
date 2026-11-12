@@ -17,7 +17,7 @@
     "mcp": "bun mcp/board.ts",
     "latency": "bun bridge/latency.ts",
     "login": "bun bridge/cloud.ts login",
-    "test:fleet": "bun test --isolate fleet/fleetd",
+    "test:fleet": "bun test --isolate fleet/fleetd fleet/guest",
     "test:e2ee": "bun test lib/e2ee bridge/keystore bridge/forge bridge/node forge"
   },
   "dependencies": {

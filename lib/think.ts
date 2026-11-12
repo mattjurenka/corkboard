@@ -191,3 +191,31 @@ async function endpoint(o: ThinkOptions, model: { model: string; base: string },
   if (typeof content !== "string") throw new Error(`${model.base}: no answer`);
   return { text: content };
 }
+
+// What Claude Code needs in its environment to run a whole session on a
+// brain's model (.agent/plans/agents.md stage 3): for claude, the model and
+// the brain's key, if it has one; for an endpoint, its Anthropic-compatible
+// side, which OpenRouter, Ollama, LiteLLM and vLLM serve beside their
+// OpenAI one, at the same base without its /v1. Every model Claude Code
+// would pick (its subagents', its background calls') is that one. OpenAI's
+// own has no such side.
+export function sessionEnv(model: Model, key?: string): Record<string, string> {
+  if (model.provider === "claude") {
+    const env: Record<string, string> = model.model ? { ANTHROPIC_MODEL: model.model } : {};
+    if (key) env[key.startsWith("sk-ant-oat") ? "CLAUDE_CODE_OAUTH_TOKEN" : "ANTHROPIC_API_KEY"] = key;
+    return env;
+  }
+  if (new URL(model.base).hostname === "api.openai.com") throw new Error("Claude Code can't run on OpenAI's API, which has no Anthropic-compatible side");
+  return {
+    ANTHROPIC_BASE_URL: model.base.replace(/\/v1$/, ""),
+    // Ollama takes any token; the others, the brain's key.
+    ANTHROPIC_AUTH_TOKEN: key || "corkboard",
+    ANTHROPIC_API_KEY: "",
+    CLAUDE_CODE_OAUTH_TOKEN: "",
+    ANTHROPIC_MODEL: model.model,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: model.model,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: model.model,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: model.model,
+    CLAUDE_CODE_SUBAGENT_MODEL: model.model,
+  };
+}

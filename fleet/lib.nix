@@ -14,6 +14,9 @@
 let
   inherit (lib) concatMap concatStringsSep elem foldl' max subtractLists unique;
 
+  # The agent kinds a template can run (its `agent`, Claude Code's by default).
+  agents = [ "claude" "opencode" "gemini" "codex" ];
+
   capability = name: c: {
     inherit name;
     # NixOS modules the capability adds to a guest (or to an image).
@@ -99,8 +102,12 @@ let
           credentials = unique (concatMap (c: c.credentials) cs);
         in
         if t ? brain then throw "fleet: template `${name}`: a brain is a spawn's now, not a template's; bind its memory with `bindings.${t.brain}.shares`"
+        else if !(elem (t.agent or "claude") agents) then throw "fleet: template `${name}`: no agent `${t.agent}`; one of ${concatStringsSep ", " agents}"
         else {
           inherit name capNames credentials;
+          # The agent kind its guest runs (nvim/lua/corkboard/agent/): Claude
+          # Code, or an ACP one (fleet/guest/acp.ts).
+          agent = t.agent or "claude";
           environments = t.environments or [ ];
           needs = unique (concatMap (c: c.needs) cs);
           memory = foldl' max (t.memory or 0) (map (c: c.memory) cs);

@@ -1,15 +1,19 @@
 // A resident that is an assistant (the manifest's `assistant`, as Pepper's
 // VM on the droplet, fleet/pepper): one Claude Code session in tmux, always
 // running, reached over ssh. fleetd gives it what it can't get itself, being
-// signed in to the Worker as it is:
+// a device of the user's node as it is:
 //
-// - Its token: its brain's token (Pepper's is the one grant that sees the
-//   goals), minted here and written to `tokenFile` in the guest, which the
-//   session's corkboard MCP server and memory hooks read. Replaced each day,
-//   the old one revoked. The machine token that mints it never goes in the VM.
-//   With the manifest's node and `memoryTokenFile`, a second: the brain's on
-//   the node, for the memory hooks and corkboard-memory, minted there
-//   (its POST /api/node/grants) and replaced each day the same way.
+// - Its token: with the manifest's node and `memoryTokenFile`, its brain's
+//   on the node (Pepper's is the one grant that sees the goals), for the
+//   memory hooks and corkboard-memory, minted there (its POST
+//   /api/node/grants), written to that file in the guest, and replaced each
+//   day, the old one revoked. What mints it never goes in the VM.
+//
+// - With the node and `sessionEnvFile`, what its sessions run on: the
+//   brain's model (its GET /api/node/brains/<brain>/session), as shell
+//   exports the guest sources over the Claude token it has, so a brain on
+//   OpenRouter or Ollama runs there, its key in the guest only as that file.
+//   Read each hour, written when it changes; a session takes it on starting.
 //
 // - With `chat`, the phone's chat (the hosted Worker's user.ts): each new
 //   message of the user's is pasted into the session as a line starting
@@ -28,10 +32,12 @@ import type { Assistant } from "./fleet";
 
 const STATE_DIR = join(process.env.XDG_STATE_HOME ?? "/var/lib/corkboard/state", "corkboard");
 const DAY = 24 * 3600_000;
+const HOUR = 3600_000;
 
 // The newest message passed on (the node's ids are strings, from: "node"),
-// and the tokens it has and when they were made: the Worker's, and the node's.
-type State = { last: number | string; from?: "node"; token?: string; minted?: number; nodeToken?: string; nodeMinted?: number };
+// the token it has on the node and when it was made; and the session env it
+// was last given (a hash of it), and when.
+type State = { last: number | string; from?: "node"; nodeToken?: string; nodeMinted?: number; sessionEnv?: string; sessionRead?: number };
 // by_user: the user's own, from the phone; a Worker from before it says "matt".
 type Message = { id: number | string; at: string; who: string; text: string; by_user?: boolean; delivered?: string | null };
 const byUser = (m: Message) => m.by_user ?? m.who === "matt";
@@ -94,6 +100,14 @@ async function nodeApi(node: Node, method: string, path: string, body?: unknown)
   return json;
 }
 
+// The env as lines for sh to source.
+export function exports(env: Record<string, string>): string {
+  return Object.entries(env)
+    .filter(([k]) => /^[A-Z_][A-Z0-9_]*$/.test(k))
+    .map(([k, v]) => `export ${k}='${v.replace(/'/g, `'\\''`)}'\n`)
+    .join("");
+}
+
 async function spawn(cmd: string[], stdin?: string) {
   const proc = Bun.spawn(cmd, { stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin), stdout: "pipe", stderr: "pipe" });
   const [err, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
@@ -121,21 +135,9 @@ export function assist(name: string, brain: string, a: Assistant, node?: Node) {
     writeFileSync(file, JSON.stringify(s) + "\n", { mode: 0o600 });
   };
 
-  // Tokens last 7 days (the hosted Worker's api.ts); a new one each day leaves room for
-  // days fleetd isn't running. The file is written in place: it's the session's
-  // to read, not to replace.
-  async function renew(s: State) {
-    if (s.token && s.minted && Date.now() - s.minted < DAY) return;
-    const { token: fresh } = await api("POST", `/api/brains/${brain}/tokens`, {});
-    await spawn([...ssh, `cat > ${a.tokenFile}`], fresh);
-    const old = s.token;
-    Object.assign(s, { token: fresh, minted: Date.now() });
-    save(s);
-    if (old) await api("POST", "/api/tokens/revoke", { token: old }).catch(() => {});
-    log("a new token");
-  }
-
-  // The node's grants last a week too (server.ts's grants).
+  // The node's grants last a week (server.ts's grants); a new one each day
+  // leaves room for days fleetd isn't running. The file is written in place:
+  // it's the session's to read, not to replace.
   async function renewNode(s: State) {
     if (!node || !a.memoryTokenFile || (s.nodeToken && s.nodeMinted && Date.now() - s.nodeMinted < DAY)) return;
     const { token: fresh } = await nodeApi(node, "POST", "/grants", { scope: "brain", brain, agent: name });
@@ -145,6 +147,19 @@ export function assist(name: string, brain: string, a: Assistant, node?: Node) {
     save(s);
     if (old) await nodeApi(node, "DELETE", "/grants", { token: old }).catch(() => {});
     log("a new token on the node");
+  }
+
+  async function renewSession(s: State) {
+    if (!node || !a.sessionEnvFile || (s.sessionRead && Date.now() - s.sessionRead < HOUR)) return;
+    const { env, model } = await nodeApi(node, "GET", `/brains/${encodeURIComponent(brain)}/session`);
+    const text = exports(env);
+    const hash = new Bun.CryptoHasher("sha256").update(text).digest("hex");
+    if (hash !== s.sessionEnv) {
+      await spawn([...ssh, `umask 077; cat > ${a.sessionEnvFile}`], text);
+      log(`its sessions run on ${model ?? "Claude Code's own model"}`);
+    }
+    Object.assign(s, { sessionEnv: hash, sessionRead: Date.now() });
+    save(s);
   }
 
   // One prompt into the session, pasted (bracketed, so its newlines don't send
@@ -221,8 +236,8 @@ export function assist(name: string, brain: string, a: Assistant, node?: Node) {
       do {
         again = false;
         // The token it has lasts days: a failed renewal mustn't hold up the chat.
-        await renew(s).catch(fail);
         await renewNode(s).catch(fail);
+        await renewSession(s).catch(fail);
         if (a.chat) await pass(s);
       } while (again);
     } catch (e) {

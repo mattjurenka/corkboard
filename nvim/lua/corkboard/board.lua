@@ -318,7 +318,7 @@ local function rendered_buffer(id, session)
     vim.keymap.set("n", lhs, "<Cmd>close<CR>", { buffer = b, nowait = true, desc = "board: close card" })
   end
   vim.keymap.set("n", "e", function() M.open_card(id, { edit = true }) end, { buffer = b, nowait = true, desc = "board: edit card" })
-  for lhs, name in pairs({ t = session and "take" or nil, a = "start", x = "archive", D = "delete" }) do
+  for lhs, name in pairs({ t = session and "take" or nil, a = "start", A = "start_as", x = "archive", D = "delete" }) do
     vim.keymap.set("n", lhs, function() M.card_action(name) end, { buffer = b, nowait = true, desc = "board: card " .. name })
   end
   vim.api.nvim_create_autocmd("BufWipeout", {
@@ -445,6 +445,10 @@ local actions = {
   start = function(id)
     if id then require("corkboard.agents").start(id) end
   end,
+  -- Its brain and agent picked first.
+  start_as = function(id)
+    if id then require("corkboard.session").open_card(id) end
+  end,
   -- None clears it, which counts as medium.
   priority = function(id)
     if not id then return end
@@ -509,6 +513,10 @@ local float_actions = {
     close_float()
     require("corkboard.agents").start(float.id)
   end,
+  start_as = function(float)
+    close_float()
+    require("corkboard.session").open_card(float.id)
+  end,
   archive = function(float)
     vim.ui.select({ "Archive", "Keep" }, { prompt = "Archive " .. float.id .. "? " }, function(choice)
       if choice == "Archive" then remove(float.id, "archive") end
@@ -565,6 +573,7 @@ local function buffer()
     L = { act("right"), "move card right" },
     o = { act("new"), "new card" },
     a = { act("start"), "new session" },
+    A = { act("start_as"), "new session, its brain and agent picked" },
     p = { act("priority"), "set the card's priority" },
     s = { act("session"), "go to the agent's session" },
     v = { act("review"), "review the card's work" },

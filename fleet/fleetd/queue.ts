@@ -206,8 +206,8 @@ export class Queue {
       offer: m.offer ?? { memory: m.memoryBudget && m.memoryBudget - OVERHEAD, cores: null },
       egress: egressOf(m),
       bindings: Object.keys(m.bindings ?? {}),
-      // What its guests run instead of an agent (fleet/guest/slot.nix).
-      jobs: ["consolidate"],
+      // What its guests run instead of an agent for the Worker: nothing now.
+      jobs: [],
       running,
     };
     const sealed = !!m.node?.device;
@@ -316,9 +316,8 @@ export class Queue {
   }
 
   // A spawn on the node's board, given what the Worker didn't: its grant
-  // and repo from the node, and the brain's memory there (not a job's: the
-  // Worker's consolidator is the Worker's). The approval its card waited on
-  // is over, since it's queued.
+  // and repo from the node, and the brain's memory there (not a job's). The
+  // approval its card waited on is over, since it's queued.
   private async equip(m: Manifest, s: Spawn, spawn: { id: string; board: string | null; card: string | null; agent: string }) {
     const r = s.remote!;
     r.node = true;

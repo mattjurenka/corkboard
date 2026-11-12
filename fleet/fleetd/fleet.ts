@@ -25,8 +25,9 @@ export type Network = {
 // A resident that is a brain's one session (assistant.ts): the ssh into its
 // guest (a command line, ending at the host), the tmux socket there and its
 // session (the brain's name, if not), where its token goes (and its token on
-// the manifest's node, for its memory), and whether it has the phone's chat.
-export type Assistant = { ssh: string; tmuxSocket: string; session?: string; tokenFile: string; memoryTokenFile?: string; chat?: boolean };
+// the manifest's node, for its memory), where its brain's session env goes
+// (assistant.ts), and whether it has the phone's chat.
+export type Assistant = { ssh: string; tmuxSocket: string; session?: string; memoryTokenFile?: string; sessionEnvFile?: string; chat?: boolean };
 
 export type Manifest = {
   flake: string;
@@ -44,7 +45,9 @@ export type Manifest = {
   >;
   // git: what its spawns may do on the forge, granted at each one's claim
   // (forge.ts), as fleet/lib.nix's template git says.
-  templates: Record<string, { memory: number; cores: number; needsApproval: boolean; capNames: string[]; credentials?: string[]; git?: GitTerms | null }>;
+  // agent: the kind its guest runs (fleet/lib.nix's agents), Claude Code's
+  // when it doesn't say.
+  templates: Record<string, { memory: number; cores: number; needsApproval: boolean; capNames: string[]; credentials?: string[]; git?: GitTerms | null; agent?: string }>;
   // The brains whose memory this host has, by name: the shares a spawn for
   // one mounts, in the guest `<template>+<brain>`. A brain with none runs
   // here in its template's own guest. Absent from a manifest written before
@@ -129,10 +132,9 @@ export type Spawn = {
   shell?: { packages: string[] } | { flake: string };
   memory?: number;
   cores?: number;
-  // A job the guest runs instead of an agent:
-  // "consolidate", a brain's consolidator (fleet/guest/slot.nix), or
-  // "actions", a Forgejo Actions job (actions.ts).
-  job?: "consolidate" | "actions";
+  // A job the guest runs instead of an agent: "actions", a Forgejo Actions
+  // job (actions.ts).
+  job?: "actions";
   // An Actions job's: its handle, ids, and the ephemeral runner it's run
   // by, whose token is dropped once the runner's gone.
   actions?: { handle: string; job: number; run: number; runner: number; uuid: string; token?: string; gone?: true };
@@ -146,9 +148,21 @@ export const MANIFEST = process.env.CORKBOARD_FLEET_MANIFEST ?? "/etc/corkboard/
 export const STATE = process.env.CORKBOARD_FLEET_STATE ?? join(homedir(), ".local/state/corkboard/fleet");
 export const SPAWNS = join(STATE, "spawns");
 // One Claude Code OAuth token per account, from `claude setup-token`, at
-// accounts/<name>. An agent is handed its account's.
+// accounts/<name>; another kind's credential, KEY=value lines
+// (fleet/guest/acp.ts), at accounts/<name>.<kind>. An agent is handed its
+// account's.
 export const ACCOUNTS = join(STATE, "accounts");
 export const tokenFor = (account: string) => join(ACCOUNTS, account);
+
+// What a spawn's agent signs in with: the file here, its name in the share,
+// and how to make it when it's missing. None for an Actions job.
+export function credentialFor(m: Manifest, s: Spawn): { file: string; share: string; how: string } | undefined {
+  if (s.job === "actions") return undefined;
+  const kind = m.templates[s.template]?.agent ?? "claude";
+  if (kind === "claude") return { file: tokenFor(s.account), share: "claude-token", how: "claude setup-token, signed in as it, then save it there" };
+  const keys: Record<string, string> = { gemini: "GEMINI_API_KEY=...", codex: "OPENAI_API_KEY=..." };
+  return { file: join(ACCOUNTS, `${s.account}.${kind}`), share: `${kind}-credential`, how: `its key as ${keys[kind] ?? "KEY=value"} lines there` };
+}
 
 // QEMU's own allocations on top of the guest's RAM, per running slot.
 export const OVERHEAD = 512;

@@ -70,8 +70,8 @@ end
 
 -- A request whose answer comes to done(err, result) later, from the main
 -- loop, so the keys typed meanwhile run: for what a tab loads on entering
--- it, which shouldn't hold up the next one.
-local function request_async(op, done, ...)
+-- it, which shouldn't hold up the next one. ms: how long it may take.
+local function request_within(ms, op, done, ...)
   local chan = channel()
   if not chan then return vim.schedule(function() done("corkboard: cloud boards need the bridge") end) end
   last_id = last_id + 1
@@ -81,9 +81,10 @@ local function request_async(op, done, ...)
   vim.defer_fn(function()
     if waiting[id] ~= done then return end
     waiting[id] = nil
-    done("corkboard: the cloud didn't answer " .. op .. " in 30s")
-  end, 30000)
+    done("corkboard: the cloud didn't answer " .. op .. " in " .. math.floor(ms / 1000) .. "s")
+  end, ms)
 end
+local function request_async(op, done, ...) return request_within(30000, op, done, ...) end
 
 -- The board's key. A project's board is found by its first commit, so every
 -- clone of it, wherever it is, shares one; its key is still the path of the
@@ -363,6 +364,8 @@ M.delete = remove("delete")
 M.call = request
 -- call_async(op, done, args...): done(err, result) once it's answered.
 M.call_async = request_async
+-- call_within(ms, op, done, args...): the same, for what takes longer, like thinking.
+M.call_within = request_within
 
 -- The same without waiting, nor hearing how it went: for what goes often
 -- and in order, like a mirrored terminal's keys. Id 0 is never waited on.

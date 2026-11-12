@@ -142,7 +142,7 @@ switch (cmd) {
 
   case "templates": {
     for (const [name, t] of Object.entries(manifest().templates))
-      console.log(`${name}  ${t.memory} MiB, ${t.cores} cores, ${t.capNames.join(" ") || "-"}${t.needsApproval ? "  (holds credentials)" : ""}`);
+      console.log(`${name}  ${t.agent ?? "claude"}, ${t.memory} MiB, ${t.cores} cores, ${t.capNames.join(" ") || "-"}${t.needsApproval ? "  (holds credentials)" : ""}`);
     for (const [brain, b] of Object.entries(manifest().bindings ?? {})) console.log(`${brain}'s memory: ${b.shares.join(" ") || "-"}`);
     break;
   }

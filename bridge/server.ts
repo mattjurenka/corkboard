@@ -16,6 +16,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realp
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Acp } from "./acp";
 import * as away from "./away";
 import * as boards from "./boards";
 import * as remote from "./remote";
@@ -186,6 +187,8 @@ type Session = {
   lastError?: string;
   // Neovim's cloud boards, made when it first asks for one (boards.ts).
   cloud?: boards.Session;
+  // Its ACP agents' sessions, by buffer (acp.ts).
+  acp?: Acp;
   // "plan": the day plan's window (?view=plan), of which there's one.
   view?: "plan";
   // What away mode knows it by (away.ts).
@@ -425,7 +428,8 @@ function cloud(data: Session, params: any[]) {
   );
   const [id, op, ...args] = params;
   const answer = (a: object) => lua("require('corkboard.cards.cloud').answer(...)", { id, ...a });
-  data.cloud.call(op, args).then(
+  const acp = typeof op === "string" && op.startsWith("acp_") ? (data.acp ??= new Acp(lua, () => NODE || undefined)) : undefined;
+  (acp ? acp.call(op, args) : data.cloud.call(op, args)).then(
     (result) => answer({ result: result ?? null }),
     (err) => answer({ error: (err as Error).message }),
   );
@@ -911,6 +915,7 @@ Bun.serve<Session, {}>({
       if (ws.data.page) away.closed(ws.data.page);
       ws.data.closed = true;
       ws.data.cloud?.close();
+      ws.data.acp?.close();
       ws.data.nvim?.kill();
       if (ws.data.wasmHost) hosts.delete(ws.data.wasmHost.id);
       ws.data.wasmHost?.close();

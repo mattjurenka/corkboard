@@ -61,6 +61,7 @@ import { Conflict, type Data, Invalid } from "./data";
 import { type Caller, type Consent, OAuthError, type OAuthStore, Redirect, SCOPES, boardBound, deniedUrl } from "./oauth";
 import { type Fleet, mcp } from "./mcp";
 import { gitViews } from "./git";
+import { brainSession } from "./consolidator";
 import { Conflict as HoldConflict, type FleetRecords, SPAWN_ID } from "./fleet";
 import type { Search } from "./search";
 import type { CalendarConfig } from "./calendar";
@@ -404,6 +405,16 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
     if (what === "brains") {
       if (!name && m === "GET") return json(data.brains().map((b) => ({ ...b, default: b.name === data.defaultBrain(), notes: data.notes(b.name).length, entries: data.entries(b.name).length })));
       const brain = brainOf(name);
+      // A session on its model, its key in it: fleetd's, for a VM's
+      // (assistant.ts), so only the owner's, sealed.
+      if (sub === "session" && !id && m === "GET") {
+        if (who.scope !== "owner" || !sealed) return json({ error: "not found" }, 404);
+        try {
+          return json(brainSession(data.brains().find((b) => b.name === brain), (hold) => o.sealed?.secrets([hold])[hold]));
+        } catch (e) {
+          throw new Invalid(`${brain}: ${(e as Error).message}`);
+        }
+      }
       if (sub === "notes" && !id && m === "GET") return json(search.notes(brain, q("q"), q("kind"), Math.min(Number(q("limit")) || 20, 200), hidden));
       if (sub === "notes" && id && m === "GET") {
         const n = data.note(brain, noteId(id));

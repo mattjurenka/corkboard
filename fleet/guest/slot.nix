@@ -18,7 +18,10 @@
 # and a writable outbox it collects once the slot stops.
 #
 #   /mnt/share/task.md       the prompt
-#   /mnt/share/claude-token  the OAuth token of the account it runs as
+#   /mnt/share/claude-token  the OAuth token of the account it runs as, for
+#                            Claude Code
+#   /mnt/share/<kind>-credential  for an ACP kind (the template's agent): the
+#                            account's KEY=value lines (fleet/guest/acp.ts)
 #   /mnt/share/repo.bundle   optional: a git bundle of the repo to work in
 #   /mnt/share/mcp.json      optional: corkboard's MCP server, with the spawn
 #                            token for the agent's card (a spawn from the
@@ -37,22 +40,23 @@
 #                            guest's nixpkgs, or { "flake": ref }'s devShell
 #                            ("." is the repo's). Only ever evaluated in the
 #                            guest, so a shell can't reach the host's secrets
-#   /mnt/share/job           for a job rather than an agent: "consolidate",
-#                            the brain's consolidator (below), or "actions",
-#                            a Forgejo Actions job (fleet/caps/actions.nix)
+#   /mnt/share/job           for a job rather than an agent: "actions", a
+#                            Forgejo Actions job (fleet/caps/actions.nix)
 #   /mnt/share/session       for a session you talk to rather than a task:
-#                            Claude Code keeps going, reading each message
+#                            the agent keeps going, reading each message
 #                            fleetd puts in /mnt/share/inbox/ (a file a stream-
 #                            json line, named 0, 1, 2, ...; the first the task
 #                            if there is one) until one is END, then finishes
 #                            as a task does
 #
-#   /mnt/outbox/result.json  Claude Code's `--output-format json`
+#   /mnt/outbox/result.json  Claude Code's `--output-format json` (an ACP
+#                            kind's: its result, stop_reason and is_error)
 #   /mnt/outbox/work.bundle  the commits it made, if it was given a repo
 #   /mnt/outbox/exit         its exit status
 #   /mnt/outbox/shell.log    building its shell, if it brought one
 #   /mnt/outbox/events.jsonl a session's output, as stream-json
-#   /mnt/outbox/projects/    a session's Claude Code logs, which fleetd
+#   /mnt/outbox/projects/    a session's Claude Code logs (an ACP kind's
+#                            transcript under acp/), which fleetd
 #                            follows while it runs (fleet/fleetd/sessions.ts)
 #
 # A guest for a brain also mounts the brain's memory on this host (its
@@ -77,83 +81,45 @@ let
 
   env = claudeCodeEnv;
 
+  # The template's agent: Claude Code, or an ACP kind that fleet-acp runs
+  # (fleet/guest/acp.ts, lib/acp/). Claude Code's hooks (the context's
+  # handoff, the brain's memory) are its alone.
+  agent = template.agent or "claude";
+  acp = agent != "claude";
+  kindPackages = {
+    claude = [ ];
+    opencode = [ pkgs.opencode ];
+    gemini = [ pkgs.gemini-cli ];
+    # codex-acp runs nixpkgs' codex, which it's wrapped with. Its exec tool
+    # spawns codex-linux-sandbox from PATH, which nixpkgs' codex doesn't
+    # have: it's codex itself under that name (codex dispatches on argv[0]).
+    codex = [
+      pkgs.codex-acp
+      (pkgs.runCommand "codex-linux-sandbox" { } ''
+        mkdir -p $out/bin
+        ln -s ${pkgs.codex}/bin/codex $out/bin/codex-linux-sandbox
+      '')
+    ];
+  }.${agent};
+
+  fleetAcp = pkgs.writeShellApplication {
+    name = "fleet-acp";
+    runtimeInputs = [ pkgs.bun ] ++ kindPackages;
+    text = ''
+      exec bun ${pkgs.runCommand "corkboard-fleet-acp" { } ''
+        mkdir -p $out/lib $out/fleet/guest
+        cp -r ${../../lib/acp} $out/lib/acp
+        cp ${./acp.ts} $out/fleet/guest/acp.ts
+      ''}/fleet/guest/acp.ts "$@"
+    '';
+  };
+
   url = "https://${corkboardHost}";
 
   memoryHooks = import ../memory-hooks.nix {
     inherit pkgs lib url;
     urlFile = "/mnt/share/memory-url";
     tokenFile = "/mnt/share/brain-token";
-  };
-
-  # A brain's consolidator (the hosted Worker's consolidate.ts): asks the Worker for
-  # its next job, thinks about each part with Claude Code given no tools, no
-  # MCP and no settings but the managed ones, and sends back what it said,
-  # until there's nothing left. The Worker decides what it sees and what its
-  # answers become; this only carries them. An empty answer fails the run,
-  # and the Worker waits longer before the next. The memory hooks stay out of
-  # it, or its own sessions would be episodes to consolidate.
-  consolidate = pkgs.writeShellApplication {
-    name = "corkboard-consolidate";
-    runtimeInputs = [ pkgs.curl pkgs.jq pkgs.coreutils ];
-    text = ''
-      out=$1
-      export CORKBOARD_NO_MEMORY=1
-      token=$(tr -d '\n' < /mnt/share/brain-token)
-      tmp=$(mktemp -d)
-
-      # A request to the Worker; prints the body, and returns its status.
-      api() {
-        local path=$1 code
-        shift
-        code=$(curl -sS --max-time 120 -o "$tmp/body" -w '%{http_code}' \
-          -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
-          "$@" "${url}$path") || code=000
-        cat "$tmp/body" 2>/dev/null || true
-        echo "$code" > "$tmp/code"
-      }
-      code() { cat "$tmp/code"; }
-
-      # A system prompt and, on stdin, the input: the answer.
-      think() {
-        printf '%s' "$1" > "$tmp/prompt"
-        claude -p --tools "" --strict-mcp-config --setting-sources "" \
-          --system-prompt-file "$tmp/prompt" --output-format json | jq -r '.result // empty'
-      }
-
-      finish() {
-        jq -n --arg result "$1" '{ result: $result }' > "$out/result.json"
-        exit "$2"
-      }
-
-      count=0
-      rolled=""
-      for _ in $(seq 50); do
-        job=$(api /memory/consolidate)
-        [ "$(code)" = 200 ] || finish "Couldn't get the job: $(code) $job" 1
-        n=$(jq '.episodes | length' <<< "$job")
-        for i in $(seq 0 $((n - 1))); do
-          id=$(jq -r ".episodes[$i].id" <<< "$job")
-          answer=$(jq -r ".episodes[$i].input" <<< "$job" | think "$(jq -r ".episodes[$i].prompt" <<< "$job")") || true
-          [ -n "$answer" ] || finish "No answer for episode $id after $count read." 1
-          said=$(jq -n --arg text "$answer" '{ text: $text }' | api "/memory/consolidate/episodes/$id" --data-binary @-)
-          # 404: a newer upload of its session replaced it, and is read next.
-          case $(code) in 200 | 404) ;; *) finish "Episode $id: $(code) $said" 1 ;; esac
-          count=$((count + 1))
-        done
-        [ "$n" -eq 0 ] || continue
-        if [ "$(jq '.rollup != null' <<< "$job")" = true ]; then
-          through=$(jq -r .rollup.through <<< "$job")
-          answer=$(jq -r .rollup.input <<< "$job" | think "$(jq -r .rollup.prompt <<< "$job")") || true
-          [ -n "$answer" ] || finish "No answer for the rollup through $through after $count episodes read." 1
-          said=$(jq -n --arg text "$answer" --arg through "$through" --argjson version "$(jq .rollup.version <<< "$job")" \
-            '{ through: $through, version: $version, text: $text }' | api /memory/consolidate/rollup --data-binary @-)
-          [ "$(code)" = 200 ] || finish "The rollup through $through: $(code) $said" 1
-          rolled=$through
-        fi
-        break
-      done
-      finish "Read $count episodes''${rolled:+, and rewrote the long-term memory from the log through $rolled}." 0
-    '';
   };
 
   # corkboard's session hook, which here only keeps the context under its
@@ -169,12 +135,13 @@ let
 
   runTask = pkgs.writeShellApplication {
     name = "fleet-task";
-    runtimeInputs = [ pkgs.git pkgs.coreutils pkgs.jq ];
+    runtimeInputs = [ pkgs.git pkgs.coreutils pkgs.jq ] ++ lib.optional acp fleetAcp;
     text = ''
       out=/mnt/outbox
       rm -rf "''${out:?}"/*
 
-      # None for an Actions job, which runs no agent.
+      # None for an Actions job, which runs no agent, or an ACP kind's,
+      # whose credential fleet-acp reads itself.
       if [ -f /mnt/share/claude-token ]; then
         CLAUDE_CODE_OAUTH_TOKEN=$(cat /mnt/share/claude-token)
         export CLAUDE_CODE_OAUTH_TOKEN
@@ -208,6 +175,10 @@ let
         if [ -e "$f" ]; then mcp+=(--mcp-config "$f"); fi
       done
 
+      # The brain's memory, as the managed CLAUDE.md tells Claude Code.
+      prompt_file=()
+      if [ -f /etc/claude-code/CLAUDE.md ]; then prompt_file=(--prompt-file /etc/claude-code/CLAUDE.md); fi
+
       # The spawner's tools, built first so a shell that doesn't build says
       # so rather than leaving Claude Code without them.
       run=()
@@ -229,8 +200,12 @@ let
       if [ "$(cat /mnt/share/job 2>/dev/null)" = actions ]; then
         # The actions capability's (fleet/caps/actions.nix).
         fleet-actions-job "$out" || status=$?
-      elif [ -f /mnt/share/job ]; then
-        ${lib.getExe consolidate} "$out" || status=$?
+      elif ${lib.boolToString acp} && [ -f /mnt/share/session ]; then
+        # fleet-acp reads the inbox itself, and writes events.jsonl and
+        # result.json as Claude Code's session does.
+        "''${run[@]}" fleet-acp ${agent} session "''${mcp[@]}" "''${prompt_file[@]}" || status=$?
+      elif ${lib.boolToString acp}; then
+        "''${run[@]}" fleet-acp ${agent} task "''${mcp[@]}" "''${prompt_file[@]}" > "$out/acp.log" 2>&1 || status=$?
       elif [ -f /mnt/share/session ]; then
         # Its logs where fleetd can follow them.
         mkdir -p "$out/projects" "$HOME/.claude"

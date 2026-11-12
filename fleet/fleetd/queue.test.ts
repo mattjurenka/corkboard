@@ -161,7 +161,7 @@ test("says what it runs, and claims what's queued for it as a spawn of its own",
   add({ id: "aaaaaa5", board: null, card: null });
   await queue.step(new Set());
   expect(Object.keys(environment.templates)).toEqual(["coding"]);
-  expect(environment).toMatchObject({ egress: { open: false, domains: ["api.anthropic.com"], suffixes: [] }, bindings: ["work"], jobs: ["consolidate"] });
+  expect(environment).toMatchObject({ egress: { open: false, domains: ["api.anthropic.com"], suffixes: [] }, bindings: ["work"], jobs: [] });
   expect(environment.running).toMatchObject({ budget: null, used: 0, residents: [], slots: [{ name: "agent-0", spawn: null }], host: { name: expect.any(String) } });
   const a = fleet.read("aaaaaa1")!;
   expect(a).toMatchObject({ state: "queued", by: "user", account: "personal", repo, remote: { board: "proj", card: "TASK-1", agent: "coding-aaaaaa1", token: "cbc_aaaaaa1" } });

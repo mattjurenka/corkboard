@@ -31,9 +31,10 @@ local function leaf(win)
   local b, name = vim.b[buf], vim.api.nvim_buf_get_name(buf)
   local l = { width = vim.api.nvim_win_get_width(win), height = vim.api.nvim_win_get_height(win) }
   l.focus = win == vim.api.nvim_get_current_win() or nil
-  if vim.bo[buf].buftype == "terminal" then
+  -- An ACP session (corkboard.acp) is a buffer of its own, not a terminal.
+  if vim.bo[buf].buftype == "terminal" or b.corkboard_acp then
     if b.corkboard_plan_claude or b.corkboard_role == "pepper" then return nil end
-    l.cwd = name:match("^term://(.-)//%d+:")
+    l.cwd = b.corkboard_cwd or name:match("^term://(.-)//%d+:")
     if b.corkboard_agent then
       if not b.corkboard_agent_session then return nil end
       l.type, l.agent, l.session = "agent", b.corkboard_agent, b.corkboard_agent_session
