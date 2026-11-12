@@ -212,7 +212,8 @@ export class WasmRpc extends WasmNvim {
 // and the Worker's when it serves the page): where Neovim is, and the
 // plugins' files (wasm.bundle), with their names in runtimepath order.
 // cloud: the page's own origin is the Worker, which it signs in to
-// (../../cloud.ts) for its boards and its clone.
+// (../../cloud.ts) for the cloud's requests, and the node's tunnel, for its
+// boards and its clone.
 type Manifest = { wasm: string; plugins: string; rtp: string[]; cloud?: boolean };
 
 // What to open: a board (its repository is its remote on Forgejo), or a
@@ -287,9 +288,9 @@ export class EphemeralRpc extends WasmNvim {
     return new Promise((resolve, reject) => this.asks.set(id, { resolve, reject }));
   }
 
-  // The repository of a board: its remote on Forgejo.
+  // The repository of a board: its remote on the forge, both the node's.
   private async repoOf(key: string) {
-    const [boards, git] = await Promise.all([cloud.api<{ key: string; remotes?: string[] }[]>("/api/boards"), cloud.api<{ origin: string }>("/api/git")]);
+    const [boards, git] = await Promise.all([cloud.nodeApi<{ key: string; remotes?: string[] }[]>("boards"), cloud.nodeApi<{ origin: string }>("git")]);
     const board = boards.find((b) => b.key === key);
     if (!board) throw new Error(`no board ${key}`);
     const host = new URL(git.origin).hostname;
@@ -315,14 +316,16 @@ export class EphemeralRpc extends WasmNvim {
     }
     const repo = open.repo ?? (open.board && manifest.cloud ? await this.repoOf(open.board) : undefined);
     if (!repo) throw new Error("which repository? ?repo=owner/name, or ?board= on a page the Worker serves");
-    // The Worker's git route (its git.ts), signed in; a bridge's
-    // passes it on with its own sign-in, for its token.
-    const git = manifest.cloud ? { Authorization: `Bearer ${await cloud.token()}` } : headers;
+    // The node's git views (bridge/node/git.ts), through the tunnel with the
+    // portal's sign-in to it; a bridge's serves the same, with its own sign-in.
+    const node = manifest.cloud ? await cloud.node() : undefined;
+    const git = node ? { Authorization: `Bearer ${node.token}` } : headers;
+    const from = node ? `${node.base}api/node/git/` : location.origin + "/api/git/";
     const dir = `/work/${repo.name}`;
     const plugins = await bundle;
     await Promise.all([
       this.ask({ type: "load", bundle: plugins }, [plugins.buffer]),
-      this.ask({ type: "clone", url: new URL(`api/git/repos/${repo.owner}/${repo.name}`, location.origin + "/").href, dir, ref: open.repo?.ref, headers: git }),
+      this.ask({ type: "clone", url: new URL(`repos/${repo.owner}/${repo.name}`, from).href, dir, ref: open.repo?.ref, headers: git }),
     ]);
     const link = new MessageChannel();
     const reply = replyBuffer();

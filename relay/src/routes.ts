@@ -185,6 +185,10 @@ const TUNNEL = /^\/n\/([^/]+)(\/.*)?$/;
 const WELL_KNOWN = /^\/\.well-known\/([^/]+)\/n\/([^/]+)(\/.*)?$/;
 // What isn't passed on: the hop's own, and what Cloudflare adds.
 const HOP = /^(host|connection|keep-alive|transfer-encoding|upgrade|content-length|cookie|cf-.*|x-real-ip|x-forwarded-.*)$/i;
+// Forgejo's pages, only while the account has them on (Nodes.forgeWeb), and
+// the cookies its login keeps (forgejo.ts names them), passed on for those alone.
+const FORGE = /^\/forge(\/|\?|$)/;
+const FORGE_COOKIE = /^(forge_\w+|_csrf|lang|redirect_to)$/;
 
 export async function tunnel(request: Request, env: RelayEnv): Promise<Response | undefined> {
   const url = new URL(request.url);
@@ -199,7 +203,11 @@ export async function tunnel(request: Request, env: RelayEnv): Promise<Response 
   if (length > LIMITS.tunnel) return error(413, `a request through the tunnel is at most ${LIMITS.tunnel} bytes`);
   const bytes = request.body ? new Uint8Array(await request.arrayBuffer()) : undefined;
   if (bytes && bytes.length > LIMITS.tunnel) return error(413, `a request through the tunnel is at most ${LIMITS.tunnel} bytes`);
+  const forge = FORGE.test(path);
+  if (forge && !(await nodesOf(env, handle).forgeWeb())) return error(404, "not found");
   const headers = [...request.headers].filter(([k]) => !HOP.test(k)) as [string, string][];
+  const cookie = forge && (request.headers.get("cookie") ?? "").split(/;\s*/).filter((c) => FORGE_COOKIE.test(c.split("=")[0])).join("; ");
+  if (cookie) headers.push(["cookie", cookie]);
   headers.push(["x-forwarded-proto", "https"]);
   const req: TunnelRequest = { id: random(12), method: request.method, path: path + url.search, headers, ...(bytes?.length && { body: b64url(bytes) }) };
   const r = (await nodesOf(env, handle).forward(req)) as TunnelResponse | { none: true } | { timeout: true };
@@ -324,9 +332,10 @@ export async function e2ee(request: Request, env: RelayEnv, r: Accounts): Promis
   if (path === "/e2ee/revoked") return method === "GET" ? json(await r.e2eeRevocations(who.account)) : error(405, "method not allowed");
 
   // The account's nodes: which are connected and which leads (GET), the
-  // leader (PUT { device | null }), a node's own socket (live), and a
-  // channel to one of them (channel?to=).
-  if (path === "/e2ee/nodes" || path === "/e2ee/nodes/leader" || path === "/e2ee/nodes/live" || path === "/e2ee/channel") {
+  // leader (PUT { device | null }), whether Forgejo's pages go through the
+  // tunnel (PUT forge { on }), a node's own socket (live), and a channel to
+  // one of them (channel?to=).
+  if (path === "/e2ee/nodes" || path === "/e2ee/nodes/leader" || path === "/e2ee/nodes/forge" || path === "/e2ee/nodes/live" || path === "/e2ee/channel") {
     const handle = await nodeHandle(who.account);
     const stub = nodesOf(env, handle);
     if (path === "/e2ee/nodes/live" || path === "/e2ee/channel") {
@@ -348,6 +357,11 @@ export async function e2ee(request: Request, env: RelayEnv, r: Accounts): Promis
     }
     if (path === "/e2ee/nodes") return method === "GET" ? json({ handle, url: `${env.ORIGIN}/n/${handle}`, ...(await stub.status()) }) : error(405, "method not allowed");
     if (method !== "PUT") return error(405, "method not allowed");
+    if (path === "/e2ee/nodes/forge") {
+      const { on } = await body(request);
+      if (typeof on !== "boolean") return error(400, "on must be true or false");
+      return json({ handle, url: `${env.ORIGIN}/n/${handle}`, ...(await stub.setForgeWeb(on)) });
+    }
     const { device } = await body(request);
     if (!(device === null || (typeof device === "string" && KEY.test(device)))) return error(400, "device must be a device id, or null for none");
     return json({ handle, url: `${env.ORIGIN}/n/${handle}`, ...(await stub.setLeader(device)) });

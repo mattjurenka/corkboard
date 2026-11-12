@@ -22,7 +22,7 @@ local blocks = {} -- the queue and each card, in order: { first, last } line num
 local selected
 local fleet -- { environments, spawns, machine } as the bridge answers
 local sessions = {} -- every page's, as the bridge last said
-local by = "project" -- or "machine"
+local by = "machine" -- or "project"
 local problem
 local following = false
 local asking -- { id, task }: x's "stop it?", until it's answered
@@ -796,7 +796,10 @@ local function open_slot(m)
   if m.spawn then
     for _, c in ipairs(remote_sessions()) do
       if nil_if_null(c.vm) == m.name and c.environment == m.environment and c.attach then
-        return require("corkboard.conversation").open(c.bridge, c.key, c.name, m.name)
+        local spawn = vim.iter(fleet.spawns or {}):find(function(s) return s.id == m.spawn end)
+        return require("corkboard.conversation").open(c.bridge, c.key, c.name, {
+          vm = m.name, brain = spawn and nil_if_null(spawn.brain), account = spawn and nil_if_null(spawn.account), host = c.host, dir = c.project,
+        })
       end
     end
     return vim.notify("corkboard: " .. m.name .. "'s spawn has no conversation to follow")
@@ -810,11 +813,11 @@ local function open_slot(m)
     local ui = require("corkboard")
     local id = "session-" .. m.environment
     ui.toast(id, "pending", "starting a " .. template .. " session in " .. m.environment)
-    cloud().call_async("fleet_session", function(err)
+    cloud().call_async("fleet_session", function(err, spawn)
       if err then
         ui.toast(id, "error", "couldn't start a session in " .. m.environment .. ": " .. tostring(err))
       else
-        ui.toast(id, "done", template .. " session queued in " .. m.environment)
+        require("corkboard.session").follow_spawn(spawn, template .. " in " .. m.environment, id)
       end
       reload()
     end, m.environment, template)
@@ -828,6 +831,28 @@ end
 local GUEST_TOKEN = "$HOME/.config/corkboard/token"
 -- A guest's clones of the host's repos, by the repo's directory name.
 local GUEST_WORK = "/var/lib/second-brain/work/"
+
+-- A session over ssh in m, a VM on this machine, as its login user, whose
+-- login shell has the VM's credentials: run after enter (a cd), and a
+-- shell beside it in the same place. opts are corkboard.session.start's.
+local function over_ssh(m, enter, run, opts)
+  local login = "claude@" .. m.config.address
+  -- Which terminal it's in, which the guest publishes with its state
+  -- (corkboard.away reads it).
+  local cmd = vim.list_extend({ "ssh", "-t", "-o", "SendEnv=CORKBOARD_BUF NVIM" }, GUEST_SSH)
+  vim.list_extend(cmd, { login, "bash -lc " .. vim.fn.shellescape(enter .. "; " .. run) })
+  local shell = vim.list_extend(vim.list_extend({ "ssh", "-t" }, GUEST_SSH), { login, enter .. "; exec bash -l" })
+  local buf = require("corkboard.session").start(vim.tbl_extend("force", { attach = cmd, vm = m.name, host = fleet.machine.name, shell = shell }, opts))
+  if not buf then return end
+  -- Where that cd leaves it, for its status line: without the clone, the
+  -- login shell's own directory.
+  vim.system(vim.list_extend(vim.list_extend({ "ssh" }, GUEST_SSH), { login, "bash -lc " .. vim.fn.shellescape(enter .. "; pwd") }), { text = true }, vim.schedule_wrap(function(r)
+    local dir = r.code == 0 and vim.trim(r.stdout):match("[^\n]*$")
+    if not dir or dir == "" or not vim.api.nvim_buf_is_valid(buf) then return end
+    vim.b[buf].corkboard_dir = dir
+    vim.cmd.redrawstatus({ bang = true })
+  end))
+end
 
 -- A session in a VM: Pepper's own; in another VM on this machine, a new
 -- Claude Code over ssh as its login user, whose login shell has the VM's
@@ -854,15 +879,36 @@ local function open_vm(m)
     end
   end
   local project = vim.fs.basename(require("corkboard.util").project_root(vim.fn.getcwd(-1, -1)))
-  local script = "cd " .. vim.fn.shellescape(GUEST_WORK .. project) .. " 2>/dev/null; exec claude"
-  -- Which terminal it's in, which the guest publishes with its state
-  -- (corkboard.away reads it).
-  local cmd = vim.list_extend({ "ssh", "-t", "-o", "SendEnv=CORKBOARD_BUF NVIM" }, GUEST_SSH)
-  vim.list_extend(cmd, { login, "bash -lc " .. vim.fn.shellescape(script) })
-  local shell = vim.list_extend(vim.list_extend({ "ssh", "-t" }, GUEST_SSH), {
-    login, "cd " .. vim.fn.shellescape(GUEST_WORK .. project) .. " 2>/dev/null; exec bash -l",
+  over_ssh(m, "cd " .. vim.fn.shellescape(GUEST_WORK .. project) .. " 2>/dev/null", "exec claude", {
+    brain = m.brain, account = m.config and nil_if_null(m.config.account), name = m.brain or m.name,
   })
-  require("corkboard.claude").start({ attach = cmd, vm = m.name, brain = m.brain, shell = shell, args = { "--name", m.brain or m.name } })
+end
+
+-- A second Claude Code in a slot's VM, beside its spawn's: in its clone,
+-- as its account, with its MCP servers and not the clone's .mcp.json (the
+-- host's, which -p doesn't load either), but with a config directory of
+-- its own, since the spawn's logs are the newest in ~/.claude/projects
+-- that fleetd follows (fleet/guest/slot.nix). The spawn's shell.json
+-- tools aren't built for it.
+local SLOT_CLAUDE = [=[
+export CLAUDE_CODE_OAUTH_TOKEN=$(cat /mnt/share/claude-token 2>/dev/null)
+export CLAUDE_CONFIG_DIR=$HOME/.claude-ssh
+mkdir -p "$CLAUDE_CONFIG_DIR"
+c=$CLAUDE_CONFIG_DIR/.claude.json
+[ -s "$c" ] || echo '{}' > "$c"
+off=$(jq -c '.mcpServers // {} | keys' .mcp.json 2>/dev/null || echo '[]')
+jq --arg d "$PWD" --argjson off "$off" '.hasCompletedOnboarding = true | .projects[$d] += {hasTrustDialogAccepted: true, disabledMcpjsonServers: $off}' "$c" > "$c.new" && mv "$c.new" "$c"
+mcp=()
+for f in /mnt/share/mcp.json /etc/fleet/mcp/*.json; do [ -e "$f" ] && mcp+=(--mcp-config "$f"); done
+exec claude "${mcp[@]}"]=]
+
+-- A new session in m, a slot on this machine whose spawn is running.
+function M.new_in_slot(m)
+  local spawn = vim.iter(fleet and fleet.spawns or {}):find(function(s) return s.id == m.spawn end)
+  local brain = spawn and nil_if_null(spawn.brain)
+  over_ssh(m, 'cd "$HOME/work" 2>/dev/null', SLOT_CLAUDE, {
+    brain = brain, account = spawn and nil_if_null(spawn.account), name = brain or m.name,
+  })
 end
 
 -- A project's clone on this machine, the first of the account's projects
@@ -877,6 +923,14 @@ end
 -- run ({ module, function, args... }) in the project's window: the one
 -- there is, brought forward, or a new one (the bridge's openWindow).
 local function in_window(path, run) require("corkboard").notify("corkboard.open", { cwd = path, run = run }) end
+
+-- The VMs in f (fleet_get's answer, which becomes the view's), as machines()
+-- has them, for <C-.> (corkboard.session); open_vm opens one as <CR> does.
+function M.vms(f)
+  fleet = f
+  return vim.tbl_filter(function(m) return m.resident or m.slot end, vim.tbl_values(machines()))
+end
+M.open_vm = open_vm
 
 function M.open()
   local m = selected and selected:match("^m:") and machines()[selected]
@@ -899,7 +953,12 @@ function M.open()
   end
   local s = selected_spawn()
   if not s then return end
-  if not s.card then return vim.notify("corkboard: " .. s.id .. " is a session, with no card") end
+  -- A session has no card: its slot's conversation, as <CR> on the slot.
+  if not nil_if_null(s.card) then
+    local m = vim.iter(vim.tbl_values(machines())):find(function(m) return m.slot and m.spawn == s.id end)
+    if m then return open_slot(m) end
+    return vim.notify("corkboard: " .. s.id .. " is a session, with no card")
+  end
   local here = vim.env.CORKBOARD_BOARD and vim.fs.basename(vim.env.CORKBOARD_BOARD) or require("corkboard.cards.cloud").key()
   if s.board == here then return require("corkboard.board").reveal(s.card) end
   local path = clone_here(function(p) return p.key == s.board end)

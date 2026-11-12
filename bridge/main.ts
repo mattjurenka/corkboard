@@ -5,7 +5,7 @@
 //   corkboard-bridge [--dev] [--resources DIR]   the bridge (server.ts)
 //   corkboard-bridge mcp                         the board's MCP server (mcp/board.ts)
 //   corkboard-bridge memory-sync ...             bridge/memory-sync.ts
-//   corkboard-bridge login|token|server|machine  bridge/cloud.ts
+//   corkboard-bridge token|server                bridge/cloud.ts
 //   corkboard-bridge e2ee ...                    bridge/e2ee.ts
 //   corkboard-bridge serve ...                   the node, headless (bridge/node/serve.ts)
 //   corkboard-bridge record start|stop|status   a meeting, recorded (bridge/record.ts)
@@ -22,7 +22,7 @@ if (command === "mcp") {
 } else if (command === "memory-sync") {
   own();
   await import("./memory-sync");
-} else if (command === "login" || command === "token" || command === "server" || command === "machine") {
+} else if (command === "token" || command === "server") {
   const { cli } = await import("./cloud");
   await cli(process.argv.slice(2));
 } else if (command === "e2ee") {

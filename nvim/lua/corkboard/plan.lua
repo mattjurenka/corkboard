@@ -850,6 +850,16 @@ function M.show()
   redraw()
 end
 
+-- Google's consent for the Claude calendar, which the Worker keeps for the
+-- account and lends to its node (bridge/boards.ts's calendar_connect).
+function M.connect_calendar()
+  cloud().call_async("calendar_connect", function(err, url)
+    if err then return vim.notify("corkboard: " .. err, vim.log.levels.ERROR) end
+    local _, open_err = vim.ui.open(url)
+    if open_err then vim.notify("corkboard: " .. url, vim.log.levels.WARN) end
+  end)
+end
+
 -- For a channel that just attached: the last state again, if the view exists.
 function M.push_all()
   if (plan_buf and vim.api.nvim_buf_is_valid(plan_buf)) or (goals_buf and vim.api.nvim_buf_is_valid(goals_buf)) then notify_page() end

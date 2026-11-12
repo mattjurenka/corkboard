@@ -31,7 +31,6 @@ import { Hub, joinHub } from "../hub";
 import { type Hosted, type TerminalOut, serve } from "../sessions";
 import { type PeerEvent, type Reach, Peers } from "../peers";
 import type { Fleet } from "./mcp";
-import { moveBoards, moveHolds, moveMemory, movePlans } from "./move";
 import { type DayEvent, boardEvents, boards, dayEvents, notes, plans } from "./app";
 import { LEASE_MS, sweep, touch } from "./leases";
 import { lentCalendar, startCalendar, writeAccepted } from "./calendar";
@@ -104,7 +103,7 @@ async function setup(o: { fleet?: Fleet; sealed?: boolean; forge?: () => ForgeSi
   const episodes = new Episodes();
   const blobs = memoryBlobs();
   const media = new Media({ data, blobs, dir: join(dir, "blobs") });
-  const sealed = o.sealed ? new FleetRecords(replicas, () => o.fleet, o.forge) : undefined;
+  const sealed = o.sealed ? new FleetRecords(replicas, () => o.fleet, o.forge, data) : undefined;
   const app = node({ data, search, oauth, episodes, media, origin: ORIGIN, fleet: () => o.fleet, sealed });
   // Another device of the account: the laptop, on the same relay.
   const board = objects.find((o) => o.kind === "board")!;
@@ -437,12 +436,14 @@ describe("the app's operations, for another bridge", () => {
     expect(await (await as(owner, { op: "brains_holds" })).json()).toEqual({});
     expect((await as(owner, { op: "boards_get" })).status).toBe(400);
     expect(await (await as(owner, { op: "board_boards" })).json()).toEqual({ value: { op: "board_boards" } });
+    expect(await (await as(owner, { op: "board_token" })).json()).toEqual({ value: { op: "board_token" } });
+    expect(await (await as(owner, { op: "board_revoke" })).json()).toEqual({ value: { op: "board_revoke" } });
     // Not from another machine, nor through the tunnel (no peer), even the owner.
     expect((await as(owner, { op: "brains_get" }, "192.168.1.5")).status).toBe(404);
     expect((await app(new Request(`${ORIGIN}/app`, { method: "POST", headers: { Authorization: `Bearer ${owner}` }, body: "{}" }))).status).toBe(404);
     expect((await as(n.oauth.mint("session", 1, "assistant"), { op: "brains_get" })).status).toBe(404);
     expect((await app(new Request(`${ORIGIN}/app`, { method: "POST" }))).status).toBe(401);
-    expect(asked).toEqual([["brains_notes", ["assistant"]], ["brains_holds", []], ["board_boards", []]]);
+    expect(asked).toEqual([["brains_notes", ["assistant"]], ["brains_holds", []], ["board_boards", []], ["board_token", []], ["board_revoke", []]]);
     await n.stop();
   });
 
@@ -1114,105 +1115,6 @@ describe("a brain made while the node runs", () => {
   });
 });
 
-describe("memory moved off the Worker", () => {
-  // The Worker's move routes (api.ts), over tables kept here, paged a row at a time.
-  function worker(tables: Record<string, Record<string, Row[]>>, records: Record<string, unknown>[]) {
-    const calls: string[] = [];
-    const state = { move: null as null | { account: string; state: string }, purged: false };
-    const fetch = async (path: string, init: RequestInit = {}) => {
-      const method = init.method ?? "GET";
-      calls.push(`${method} ${path.split("?")[0]}`);
-      const url = new URL(path, "https://worker.test");
-      if (url.pathname === "/api/brains") return Response.json(records);
-      if (url.pathname === "/api/memory/move" && method === "POST") {
-        state.move = { account: JSON.parse(String(init.body)).account, state: "moving" };
-        return Response.json({ ...state.move, brains: Object.keys(tables) });
-      }
-      if (url.pathname === "/api/memory/move" && method === "DELETE") return (state.move = null), new Response(null, { status: 204 });
-      if (state.move?.state !== "moving") return new Response("not moving", { status: 409 });
-      if (url.pathname === "/api/memory/move/done") return (state.purged = true), (state.move.state = "moved"), Response.json(state.move);
-      const brain = url.pathname.split("/").pop()!;
-      const table = url.searchParams.get("table")!;
-      const after = Number(url.searchParams.get("after"));
-      const episode = url.searchParams.get("episode");
-      const all = (tables[brain][table] ?? []).map((r, i): Row & { _rowid: number } => ({ _rowid: i + 1, ...r })).filter((r) => r._rowid > after && (episode === null || r.episode === episode));
-      return Response.json({ rows: all.slice(0, 1), next: all.length > 1 ? all[0]._rowid : null });
-    };
-    return { fetch, calls, state };
-  }
-  type Row = Record<string, string | number | null>;
-  const tables = (): Record<string, Record<string, Row[]>> => ({
-    pepper: {
-      notes: [
-        { id: "soul", kind: "soul", title: "Soul", body: "be kind", created: "2026-01-01T00:00:00Z", updated: "2026-02-01T00:00:00Z", version: 3 },
-        { id: "goals", kind: "goal", title: "Goals", body: "ship", created: "2026-01-01T00:00:00Z", updated: "2026-01-02T00:00:00Z", version: 1 },
-      ],
-      entries: [
-        { id: 1, at: "2026-03-01T10:00:00Z", day: "2026-03-01", who: "assistant", text: "one" },
-        { id: 2, at: "2026-03-01T10:00:00Z", day: "2026-03-01", who: "assistant", text: "two, at the same time" },
-      ],
-      episodes: [{ id: "ep1", session: "s1", agent: "assistant", trigger: "stop", at: "2026-03-01T11:00:00Z", bytes: 6, parts: 2, consolidated: 1 }],
-      episode_parts: [
-        { episode: "ep1", seq: 0, text: "abc" },
-        { episode: "ep1", seq: 1, text: "def" },
-      ],
-      consolidated_sessions: [{ session: "s1", through: "2026-03-01T11:00:00Z" }],
-      meta: [{ key: "brain", value: "pepper" }, { key: "rolled", value: "2026-03-01" }],
-    },
-    work: { notes: [], entries: [{ id: 1, at: "2026-03-02T09:00:00Z", day: "2026-03-01", who: "user", text: "late night" }] },
-  });
-  const target = (n: Awaited<ReturnType<typeof setup>>) => ({
-    ...n,
-    account: "acct-0123456789abcdefghij",
-    addBrain: (name: string) => n.replicas.add(listObjects(n.root, { boards: [], brains: [name] })[0]),
-  });
-
-  it("copies every brain's memory and settings, then purges the Worker's", async () => {
-    const n = await setup();
-    const w = worker(tables(), [{ name: "work", title: "Work", description: "the job", default: true, abilities: [], credentials: [], created: "2026-01-01T00:00:00Z" }]);
-    const moved = await moveMemory(target(n), w.fetch, { log: () => {} });
-    expect(moved.pepper).toEqual({ notes: 2, entries: 2, episodes: 1 });
-    expect(w.state.purged).toBe(true);
-
-    expect(n.data.brain("pepper").title).toBe("Pepper");
-    expect(n.data.brain("work")).toMatchObject({ title: "Work", description: "the job" });
-    expect(n.data.defaultBrain()).toBe("work");
-    expect(n.data.note("pepper", "soul")).toMatchObject({ body: "be kind", version: 3, updated: "2026-02-01T00:00:00Z" });
-    expect(n.data.entries("pepper").map((e) => e.text)).toEqual(["one", "two, at the same time"]);
-    expect(n.data.entries("work")[0].day).toBe("2026-03-01");
-    expect(n.episodes.transcript("pepper", "ep1")).toBe("abcdef");
-    expect(n.episodes.list("pepper")[0].consolidated).toBe(true);
-    expect(n.episodes.through("pepper", "s1")).toBe("2026-03-01T11:00:00Z");
-    expect(n.data.rolled("pepper")).toBe("2026-03-01");
-    await n.stop();
-  });
-
-  it("copies again only what isn't here, keeps a newer note, and a dry run leaves the Worker's", async () => {
-    const n = await setup();
-    const w = worker(tables(), []);
-    await moveMemory(target(n), w.fetch, { dryRun: true, log: () => {} });
-    expect(w.state).toEqual({ move: null, purged: false });
-    await n.data.putNote("pepper", "goals", { kind: "goal", title: "Goals", body: "ship it" }, 1);
-
-    await moveMemory(target(n), w.fetch, { log: () => {} });
-    expect(n.data.entries("pepper")).toHaveLength(2);
-    expect(n.episodes.count("pepper")).toBe(1);
-    expect(n.data.note("pepper", "goals")!.body).toBe("ship it");
-    expect(w.state.purged).toBe(true);
-    await n.stop();
-  });
-
-  it("unfreezes the Worker when an episode comes short", async () => {
-    const n = await setup();
-    const t = tables();
-    t.pepper.episode_parts!.pop();
-    const w = worker(t, []);
-    await expect(moveMemory(target(n), w.fetch, { log: () => {} })).rejects.toThrow("episode ep1 has 1 of its 2 parts");
-    expect(w.state).toEqual({ move: null, purged: false });
-    await n.stop();
-  });
-});
-
 describe("the relay's tunnel", () => {
   // The relay's side of a node's socket: what it sends, and what comes back.
   class FakeSocket extends EventTarget {
@@ -1519,7 +1421,6 @@ describe("the fleet sealed, on the node", () => {
       return { id: body.id, template: "coding", environment: "droplet", agent: `coding-${body.id}`, state: "queued", task: "", sealed: true };
     }
     if (path.startsWith("/fleet/status?id=")) return { id: path.slice("/fleet/status?id=".length), state: "done", task: "" };
-    if (path.startsWith("/brains")) return [{ name: "pepper", credentials: ["google"], updated: "t" }];
     return {};
   };
   const owner = () => ({ Authorization: `Bearer ${n.oauth.mint("phone", 1)}`, "Content-Type": "application/json" });
@@ -1533,7 +1434,11 @@ describe("the fleet sealed, on the node", () => {
   const revoked: any[] = [];
   const gate = Bun.serve({ port: 0, fetch: async (req) => (revoked.push(await req.json()), Response.json({ ok: true })) });
   const signer: ForgeSigner = { account: keys.id, device, cert, gate: gate.url.origin };
-  beforeAll(async () => void (n = await setup({ fleet, sealed: true, forge: () => signer })));
+  beforeAll(async () => {
+    n = await setup({ fleet, sealed: true, forge: () => signer });
+    // A brain that holds a hold not recorded yet.
+    await n.data.putBrain("assistant", { credentials: ["google"] });
+  });
   afterAll(() => (n.stop(), gate.stop(true)));
 
   it("keeps a spawn's words in the fleet object and queues only the rest", async () => {
@@ -1554,6 +1459,17 @@ describe("the fleet sealed, on the node", () => {
     refuse = false;
     const id = asked.at(-1)!.body.id;
     expect((await local(`/api/node/fleet/spawns/${id}`)).status).toBe(404);
+  });
+
+  it("sends a brain's holds and account with its spawn, and refuses a brain it doesn't have", async () => {
+    await n.replicas.add(listObjects(n.root, { boards: [], brains: ["work"] })[0]);
+    await n.data.putBrain("work", { credentials: ["google"], account: "stable" });
+    const s = JSON.parse((await tool("spawn_agent", { task: "go", brain: "work" })).text);
+    expect(asked.at(-1)!.body).toEqual({ brain: "work", holds: ["google"], account: "stable", id: s.id, sealed: true });
+    const before = asked.length;
+    const r = await tool("spawn_agent", { task: "go", brain: "nope" });
+    expect(r).toMatchObject({ error: true, text: "no brain nope; brain_list lists them" });
+    expect(asked.length).toBe(before);
   });
 
   it("keeps holds as the Worker did, their secrets only to a claim", async () => {
@@ -1585,24 +1501,6 @@ describe("the fleet sealed, on the node", () => {
     expect((await n.call("/api/node/fleet/environments", { headers: owner() })).status).toBe(404);
     const agent = n.oauth.mint("pepper", 1, "assistant", "assistant");
     expect((await n.app(new Request(`${ORIGIN}/api/node/fleet/holds`, { headers: { Authorization: `Bearer ${agent}` } }), { requestIP: () => ({ address: "127.0.0.1" }) })).status).toBe(404);
-  });
-
-  it("takes the Worker's holds with their secrets, keeps its own, and forgets them there only after", async () => {
-    await local("/api/node/fleet/holds", { method: "POST", body: JSON.stringify({ name: "mine", secret: "here" }) });
-    const records = {
-      github: { about: "a PAT", where: null, secret: "2026-11-01T00:00:00Z", created: "2026-11-01T00:00:00Z", updated: "2026-11-01T00:00:00Z" },
-      mine: { about: "the Worker's", where: null, secret: "2026-11-01T00:00:00Z", created: "2026-11-01T00:00:00Z", updated: "2026-11-01T00:00:00Z" },
-    };
-    const calls: string[] = [];
-    const worker = async (path: string, init: RequestInit = {}) => {
-      calls.push(`${init.method ?? "GET"} ${path} ${init.body ?? ""}`.trim());
-      return init.method === "DELETE" ? new Response(null, { status: 204 }) : Response.json({ records, secrets: { github: "ghp_w", mine: "there" } });
-    };
-    expect(await moveHolds({ ...n, sealed: n.sealed! }, worker, { dryRun: true, log: () => {} })).toEqual({ holds: ["github"], kept: ["mine"] });
-    expect(calls).toEqual(["GET /api/holds?move"]);
-    expect(n.sealed!.secrets(["github", "mine"])).toEqual({ github: "ghp_w", mine: "here" });
-    expect(await moveHolds({ ...n, sealed: n.sealed! }, worker, { log: () => {} })).toEqual({ holds: [], kept: ["github", "mine"] });
-    expect(calls.at(-1)).toBe(`DELETE /api/holds ${JSON.stringify({ names: ["github", "mine"] })}`);
   });
 
   it("signs a spawn's key what its template's git says, at its claim, and takes it back at the gate", async () => {
@@ -1642,190 +1540,6 @@ describe("the bridge's notes and goals, on the node", () => {
     await n.data.putNote("assistant", "goal-fitness", { kind: "goal", title: "Goal: Fitness, get stronger", body: "## Why\nTo feel good.\n\n## This week (week of 2026-11-02)\n- Train 3 times\n" });
     expect(await notes(n, "goals", [])).toMatchObject([{ id: "goal-fitness", name: "Fitness", aim: "get stronger", why: "To feel good.", week: ["Train 3 times"], week_of: "2026-11-02" }]);
     n.stop();
-  });
-});
-
-describe("boards moved off the Worker", () => {
-  // The Worker's board move routes (api.ts), over cards and files kept here, paged a card at a time.
-  type Card = { id: string; n: number; log: { at: string; who: string; note: string }[]; [k: string]: unknown };
-  function worker(boards: { key: string; name: string; root: string | null; roots: Record<string, string>; cards: Card[] }[], files: Record<string, string>) {
-    const calls: string[] = [];
-    const state = { move: null as null | { account: string; state: string }, done: false };
-    const fetch = async (path: string, init: RequestInit = {}) => {
-      const method = init.method ?? "GET";
-      calls.push(`${method} ${path.split("?")[0]}`);
-      const url = new URL(path, "https://worker.test");
-      if (url.pathname === "/api/boards/move" && method === "POST") {
-        state.move = { account: JSON.parse(String(init.body)).account, state: "moving" };
-        return Response.json({ ...state.move, at: "2026-11-05T00:00:00Z", handle: "h", node: "n", boards: boards.map(({ cards: _, ...b }) => b) });
-      }
-      if (url.pathname === "/api/boards/move" && method === "DELETE") return (state.move = null), new Response(null, { status: 204 });
-      if (state.move?.state !== "moving") return new Response("not moving", { status: 409 });
-      if (url.pathname === "/api/boards/move/done") return (state.done = true), (state.move.state = "moved"), Response.json(state.move);
-      const [key, media, , mid] = url.pathname.slice("/api/boards/move/".length).split("/").map(decodeURIComponent);
-      if (media === "media") return files[mid] === undefined ? new Response("no such file", { status: 404 }) : new Response(files[mid]);
-      const after = Number(url.searchParams.get("after"));
-      const all = boards.find((b) => b.key === key)!.cards.filter((c) => c.n > after);
-      return Response.json({ cards: all.slice(0, 1), next: all.length > 1 ? all[0].n : null });
-    };
-    return { fetch, calls, state };
-  }
-  const file = { id: "0123456789ab", name: "plot.png", type: "image/png", size: 4, at: "2026-03-01T12:00:00Z", who: "claude" };
-  const boardsOf = (): Parameters<typeof worker>[0] => [
-    {
-      key: "proj",
-      name: "Project",
-      root: "/src/proj",
-      roots: { droplet: "/home/workspace/src/proj" },
-      cards: [
-        { id: "TASK-1", n: 1, title: "Plot it", status: "done", archived: null, created: "2026-03-01T10:00:00Z", updated: "2026-03-01T12:00:00Z", extra: { media: [file], pr: 7 }, log: [{ at: "2026-03-01T11:00:00Z", who: "claude", note: "plotting" }, { at: "2026-03-01T12:00:00Z", who: "claude", note: "attached plot.png (image/png, 4 B)" }] },
-        { id: "TASK-2", n: 2, title: "Old", status: "done", archived: "2026-02-02T00:00:00Z", created: "2026-02-01T10:00:00Z", updated: "2026-02-01T10:00:00Z", log: [] },
-      ],
-    },
-    { key: "fresh", name: "Fresh", root: null, roots: {}, cards: [{ id: "TASK-1", n: 1, title: "First", status: "ready", archived: null, created: "2026-03-02T10:00:00Z", updated: "2026-03-02T10:00:00Z", log: [] }] },
-  ];
-  const target = (n: Awaited<ReturnType<typeof setup>>) => ({
-    ...n,
-    account: "acct-0123456789abcdefghij",
-    addBoard: (key: string) => n.replicas.add(listObjects(n.root, { boards: [key], brains: [] })[0]),
-  });
-
-  it("copies every board's cards, logs, files and settings, then deletes the Worker's", async () => {
-    const n = await setup();
-    const w = worker(boardsOf(), { [file.id]: "PNG!" });
-    const moved = await moveBoards(target(n), w.fetch, { log: () => {} });
-    expect(moved).toEqual({ proj: { cards: 2, files: 1 }, fresh: { cards: 1, files: 0 } });
-    expect(w.state.done).toBe(true);
-
-    expect(n.data.board("proj")).toMatchObject({ name: "Project", root: "/src/proj", roots: { droplet: "/home/workspace/src/proj" } });
-    expect(n.data.cards("proj").map((c) => c.id)).toEqual(["TASK-1"]);
-    const c = n.data.card("proj", "TASK-1");
-    expect(c).toMatchObject({ title: "Plot it", status: "done", created: "2026-03-01T10:00:00Z" });
-    expect(c.extra.pr).toBe(7);
-    // The file's own record, with the Worker's id and time, and no second log line.
-    expect(c.extra.media).toEqual([file]);
-    expect(c.log.map((e) => e.note)).toEqual(["plotting", "attached plot.png (image/png, 4 B)"]);
-    expect(await n.media.serve("proj", "TASK-1", file.id)!.text()).toBe("PNG!");
-    expect(n.data.cards("proj", true).find((c) => c.id === "TASK-2")).toMatchObject({ title: "Old", archived: "2026-02-02T00:00:00Z" });
-    expect(n.data.cards("fresh").map((c) => c.title)).toEqual(["First"]);
-    await n.stop();
-  });
-
-  it("a dry run leaves the Worker's, and a second run adds nothing", async () => {
-    const n = await setup();
-    const w = worker(boardsOf(), { [file.id]: "PNG!" });
-    await moveBoards(target(n), w.fetch, { dryRun: true, log: () => {} });
-    expect(w.state).toEqual({ move: null, done: false });
-    expect(w.calls.at(-1)).toBe("DELETE /api/boards/move");
-
-    const state = () => JSON.stringify(["proj", "fresh"].map((k) => n.replicas.get("board", k)!.state));
-    const had = state();
-    const kept = n.blobs.kept.size;
-    await moveBoards(target(n), w.fetch, { log: () => {} });
-    expect(state()).toBe(had);
-    expect(n.blobs.kept.size).toBe(kept);
-    expect(n.data.card("proj", "TASK-1").log).toHaveLength(2);
-    expect(w.state.done).toBe(true);
-    await n.stop();
-  });
-
-  it("unfreezes the Worker when a file can't be had", async () => {
-    const n = await setup();
-    const w = worker(boardsOf(), {});
-    await expect(moveBoards(target(n), w.fetch, { log: () => {} })).rejects.toThrow("404");
-    expect(w.state).toEqual({ move: null, done: false });
-    await n.stop();
-  });
-});
-
-describe("day plans and chat moved off the Worker", () => {
-  // The Worker's plan move routes (api.ts), paged one at a time.
-  const block: Block = { id: "a", start: 600, stop: 660, title: "A", kind: "work" };
-  const plansOf = (): Plan[] => [
-    { date: "2026-10-24", version: 3, projects: [{ key: "jobs", name: "Jobs" }], day: { blocks: [block], ranked: [], later: [], inputs: [] }, proposal: null, asked: [], accepted: "2026-10-24T08:00:00Z", calendar: { accepted: "2026-10-24T08:00:00Z", at: "2026-10-24T08:00:01Z", blocks: 1 } },
-    { date: "2026-10-25", version: 2, projects: [], day: { blocks: [], ranked: [], later: [], inputs: [] }, proposal: { from: 0, blocks: [block], reasons: [], why: {}, by: "assistant", answering: [] } as never, asked: ["later please", "and shorter"], accepted: null },
-  ];
-  const messagesOf = (): ChatMessage[] => [
-    { id: 1, at: "2026-10-24T09:00:00.000Z", who: "Me", text: "hi", by_user: true, delivered: "2026-10-24T09:00:05Z" },
-    { id: 2, at: "2026-10-24T09:00:00.000Z", who: "pepper", text: "hello", by_user: false, delivered: null },
-    { id: 10, at: "2026-10-24T09:01:00.000Z", who: "Me", text: "not yet seen", by_user: true, delivered: null },
-  ];
-  function worker(plans: Plan[], messages: ChatMessage[]) {
-    const calls: string[] = [];
-    const state = { move: null as null | { account: string; state: string }, done: false };
-    const fetch = async (path: string, init: RequestInit = {}) => {
-      const method = init.method ?? "GET";
-      calls.push(`${method} ${path.split("?")[0]}`);
-      const url = new URL(path, "https://worker.test");
-      if (url.pathname === "/api/plans/move" && method === "POST") {
-        state.move = { account: JSON.parse(String(init.body)).account, state: "moving" };
-        return Response.json({ ...state.move, at: "2026-11-05T00:00:00Z", calendar: { connected: true, id: "claude@group.calendar.google.com", timezone: "UTC" } });
-      }
-      if (url.pathname === "/api/plans/move" && method === "DELETE") return (state.move = null), new Response(null, { status: 204 });
-      if (state.move?.state !== "moving") return new Response("not moving", { status: 409 });
-      if (url.pathname === "/api/plans/move/done") return (state.done = true), (state.move.state = "moved"), Response.json(state.move);
-      const after = url.searchParams.get("after") ?? "";
-      if (url.pathname === "/api/plans/move/plans") {
-        const all = plans.filter((p) => p.date > after);
-        return Response.json({ plans: all.slice(0, 1), next: all.length > 1 ? all[0].date : null });
-      }
-      const all = messages.filter((m) => m.id > Number(after));
-      return Response.json({ messages: all.slice(0, 1), next: all.length > 1 ? all[0].id : null });
-    };
-    return { fetch, calls, state };
-  }
-  const target = (n: Awaited<ReturnType<typeof setup>>) => ({ ...n, account: "acct-0123456789abcdefghij", calendar: () => undefined });
-
-  it("copies every plan and message, as they were, then deletes the Worker's", async () => {
-    const n = await setup();
-    const w = worker(plansOf(), messagesOf());
-    const moved = await movePlans(target(n), w.fetch, { log: () => {} });
-    expect(moved).toEqual({ plans: 2, messages: 3, calendar: { connected: true, id: "claude@group.calendar.google.com", timezone: "UTC" } });
-    expect(w.state.done).toBe(true);
-
-    // An accepted day, already on the calendar: not written again.
-    expect(n.data.plan("2026-10-24")).toMatchObject({ day: { blocks: [block] }, proposal: null, accepted: "2026-10-24T08:00:00Z", projects: [{ key: "jobs" }], calendar: { blocks: 1 } });
-    // A proposal waiting, and what's been asked since, still open to accept.
-    const waiting = n.data.plan("2026-10-25");
-    expect(waiting).toMatchObject({ proposal: { id: "worker-2", blocks: [block] }, asked: ["later please", "and shorter"] });
-    expect((await n.data.accept("2026-10-25", null, [block], "worker-2")).day.blocks).toEqual([block]);
-
-    // In order, with their times and who passed them on; ids the node's strings.
-    const chat = n.data.chat();
-    expect(chat.map((m) => [m.text, m.at, m.delivered])).toEqual([
-      ["hi", "2026-10-24T09:00:00.000Z", "2026-10-24T09:00:05Z"],
-      ["hello", "2026-10-24T09:00:00.000Z", null],
-      ["not yet seen", "2026-10-24T09:01:00.000Z", null],
-    ]);
-    // What pepperd hadn't passed on is still the user's to change, and newer messages go after.
-    expect((await n.data.edit(chat[2].id, "changed")).text).toBe("changed");
-    expect((await n.data.post("pepper", "after")).id > chat[2].id).toBe(true);
-    await n.stop();
-  });
-
-  it("a dry run leaves the Worker's, and a second run adds nothing", async () => {
-    const n = await setup();
-    const w = worker(plansOf(), messagesOf());
-    await movePlans(target(n), w.fetch, { dryRun: true, log: () => {} });
-    expect(w.state).toEqual({ move: null, done: false });
-    expect(w.calls.at(-1)).toBe("DELETE /api/plans/move");
-
-    const state = () => JSON.stringify(n.replicas.get("day", DAY)!.state);
-    const had = state();
-    await movePlans(target(n), w.fetch, { log: () => {} });
-    expect(state()).toBe(had);
-    expect(n.data.plan("2026-10-25").asked).toHaveLength(2);
-    expect(w.state.done).toBe(true);
-    await n.stop();
-  });
-
-  it("calls the Worker's move off when a page can't be had", async () => {
-    const n = await setup();
-    const w = worker(plansOf(), messagesOf());
-    const broken = async (path: string, init?: RequestInit) => (path.startsWith("/api/plans/move/chat") ? new Response("boom", { status: 500 }) : w.fetch(path, init));
-    await expect(movePlans(target(n), broken, { log: () => {} })).rejects.toThrow("500");
-    expect(w.state).toEqual({ move: null, done: false });
-    await n.stop();
   });
 });
 
@@ -2173,7 +1887,7 @@ describe("the machine's sessions, on a channel", () => {
     serve("laptop-1", "laptop", {
       list: () => sessions,
       watch: (fn) => void watchers.push(fn),
-      say: async (key, text, keys) => (typed.push([key, text, keys]), { ok: true }),
+      say: async (key, text, keys, answers) => (typed.push(answers ? [key, answers] : [key, text, keys]), { ok: true }),
       screen: async (key) => (key === "1-2" ? { lines: ["$ hi"], width: 80 } : { error: "no such", missing: true }),
       terminals: (t) => ((to = t), { open: (s, k) => term.push(["open", k]), input: (s, d) => (term.push(["in", d]), to!.out(s, "echo")), size: (s, r, c) => void term.push(["size", r, c]), close: () => void term.push(["close"]) }),
       hub: joinHub(hub),
@@ -2198,7 +1912,15 @@ describe("the machine's sessions, on a channel", () => {
     expect((await ch.fetch("/api/sessions/laptop-1/9-9")).status).toBe(404);
     expect((await ch.fetch("/api/sessions/laptop-1/1-2/say", { method: "POST", body: JSON.stringify({ text: "go", keys: ["enter"] }) })).status).toBe(200);
     expect((await ch.fetch("/api/sessions/laptop-1/1-2/say", { method: "POST", body: JSON.stringify({ keys: ["meta"] }) })).status).toBe(400);
-    expect(typed).toEqual([["1-2", "go", ["enter"]]]);
+    // Answers to its question, checked here and given whole.
+    const answering = (answers: unknown) => ch.fetch("/api/sessions/laptop-1/1-2/say", { method: "POST", body: JSON.stringify({ answers }) });
+    expect((await answering([{ picks: [1] }, { picks: [0, 2], other: "Bacon", extra: 1 }, { picks: [], other: null }])).status).toBe(200);
+    expect((await answering([{ picks: [-1] }])).status).toBe(400);
+    expect((await answering([])).status).toBe(400);
+    expect(typed).toEqual([
+      ["1-2", "go", ["enter"]],
+      ["1-2", [{ picks: [1] }, { picks: [0, 2], other: "Bacon" }, { picks: [] }]],
+    ]);
     // Following the list: it whole, then each change.
     const follow = (await ch.fetch("/api/sessions?follow")).body!.getReader();
     const next = async (r: ReadableStreamDefaultReader<Uint8Array>) => JSON.parse(new TextDecoder().decode((await r.read()).value!).trim());

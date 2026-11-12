@@ -259,11 +259,12 @@ export class Queue {
     };
     let { secrets } = c.json as { secrets?: Record<string, string> };
     // Its words, from the node. One the node can't give yet stays claimed
-    // and unwritten here, and is claimed again at the next look.
+    // and unwritten here, and is claimed again at the next look; with no
+    // node to ask, it fails rather than wait for one.
     // A template that names repos gets a key of its own, which the node
     // signs a grant to (forge.ts).
     let git: Git | undefined;
-    if (spawn.sealed) {
+    if (spawn.sealed && m.node) {
       let words: { task: string; shell: Spawn["shell"] | null; secrets?: Record<string, string>; git?: Omit<Git, "key"> };
       const holder = m.templates[spawn.template]?.git ? newHolder() : undefined;
       const q = new URLSearchParams();
@@ -301,6 +302,7 @@ export class Queue {
       ...(spawn.job && { job: spawn.job }),
     };
     try {
+      if ((spawn.sealed || spawn.node) && !m.node) throw new Error("its board is the node's, and this host's manifest names no node");
       // The Worker's rule, which it can't see on a sealed spawn: a shell of the
       // spawner's never goes beside a brain's memory.
       if (spawn.sealed && s.shell && s.brain) throw new Error(`a shell of your own never goes beside the ${s.brain} brain's memory`);
@@ -359,15 +361,20 @@ export class Queue {
         await cardSays(manifest(), s, result.trim());
         write({ ...read(s.id)!, carded: s.state });
       }
+      // A sealed one's go to the node; with none, it never ran, and only
+      // why goes to the Worker.
       const words = { error: s.error, result: result.trim() || undefined };
-      if (s.remote.sealed && (words.error || words.result)) await nodeApi(manifest(), "PUT", `/fleet/spawns/${s.id}`, words);
+      const sealed = s.remote.sealed && !!manifest().node;
+      if (sealed && (words.error || words.result)) await nodeApi(manifest(), "PUT", `/fleet/spawns/${s.id}`, words);
       const r = await api("POST", `/api/spawns/${s.id}/report`, {
         state: s.state,
         slot: s.slot,
         exit: s.exit,
-        ...(!s.remote.sealed && words),
+        ...(!sealed && words),
       });
-      if (r.status >= 400 && r.status !== 409) throw new Error(`reporting ${s.id}: ${r.json.error ?? r.status}`);
+      // 404: the Worker has forgotten it, so there's no one to tell, and it mustn't hold up the rest.
+      if (r.status === 404) console.error(`fleetd: ${s.id}: the queue has no such spawn; it's taken as told`);
+      else if (r.status >= 400 && r.status !== 409) throw new Error(`reporting ${s.id}: ${r.json.error ?? r.status}`);
       if (over && s.remote.git) await nodeApi(manifest(), "DELETE", `/fleet/spawns/${s.id}/git`).catch((e) => console.error(`${s.id}: its git grant: ${(e as Error).message}`));
       const { secrets: _, git: __, ...kept } = s.remote;
       const remote = over ? { ...kept, token: null, ...(s.remote.brainToken !== undefined && { brainToken: "" }) } : s.remote;

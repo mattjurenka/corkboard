@@ -90,11 +90,13 @@ export function forgeHandler(o: ForgeConfig) {
     return { devices: list, grant: (hash, issuer) => o.records.revokedBy(hash).some((by) => by === issuer || by === key) };
   };
 
-  // req: a channel's request under /forge/; from: the channel's peer.
-  return async function forge(req: Request, from: Signed<DeviceCert>): Promise<Response> {
+  // req: a request under /forge/; from: the channel's peer, or null for a
+  // browser's, which signs in to Forgejo itself.
+  return async function forge(req: Request, from: Signed<DeviceCert> | null): Promise<Response> {
     const url = new URL(req.url);
     const path = url.pathname.slice("/forge".length) || "/";
     const to = new URL(path + url.search, o.upstream);
+    if (!from) return forward(req, to, null, req.body);
     const user = o.records.user();
     if (!user) return error(503, "the account has no forge yet");
     if (from.body.role !== "relay") return forward(req, to, user, req.body);

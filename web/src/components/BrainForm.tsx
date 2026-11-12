@@ -2,8 +2,10 @@
 // the page: its title, what it's for, and the rest picked rather than typed.
 // The account and what it holds are tags from the live brains', or one
 // added; a new brain names itself from its title and may start from another,
-// taking its account, what it holds, its abilities and its persona. The
-// persona is who its sessions' avatar is. Saved in Neovim
+// taking its account, what it holds, its model, its abilities and its
+// persona. Its model is what it thinks with (lib/think.ts), its key the hold
+// whose secret the node gives that model. The persona is who its sessions'
+// avatar is. Saved in Neovim
 // (corkboard.brains.save); a stale change gets the brain as it is now.
 
 import { useEffect, useRef, useState } from "react";
@@ -16,7 +18,7 @@ type Draft = Omit<BrainFields, "updated">;
 
 // The avatar's skin tones; none is the model's own.
 const SKINS = { porcelain: "#f7e1d3", fair: "#efc9ad", light: "#e0ac87", tan: "#c68a5e", brown: "#9a6440", deep: "#5e3b26" };
-const BLANK: Draft = { name: "", title: "", description: "", account: null, credentials: [], abilities: [], persona: null, skin: null, default: false };
+const BLANK: Draft = { name: "", title: "", description: "", account: null, credentials: [], abilities: [], persona: null, skin: null, model: null, model_key: null, default: false };
 const LABEL = /^[\w.-]{1,64}$/;
 
 // A title as a name: lowercase, dashes, starting with a letter, at most 32.
@@ -56,6 +58,7 @@ export function BrainForm() {
   const set = (f: Partial<Draft>) => setD((x) => ({ ...x, ...f }));
   const accounts = uniq([...open.brains.map((b) => b.account), d.account]);
   const labels = uniq([...open.brains.flatMap((b) => b.credentials), ...d.credentials]);
+  const keys = uniq([...labels, ...open.brains.map((b) => b.model_key), d.model_key]);
   const toggle = (xs: string[], x: string) => (xs.includes(x) ? xs.filter((y) => y !== x) : [...xs, x]);
 
   const close = () => {
@@ -64,7 +67,15 @@ export function BrainForm() {
   };
   const start = (b: BrainFields | null) => {
     setFrom(b?.name ?? null);
-    set({ account: b?.account ?? null, credentials: b?.credentials ?? [], abilities: b?.abilities ?? [], persona: b?.persona ?? null, skin: b?.skin ?? null });
+    set({
+      account: b?.account ?? null,
+      credentials: b?.credentials ?? [],
+      abilities: b?.abilities ?? [],
+      persona: b?.persona ?? null,
+      skin: b?.skin ?? null,
+      model: b?.model ?? null,
+      model_key: b?.model_key ?? null,
+    });
   };
   const save = async () => {
     if (busy || !d.title.trim() || (!base && !d.name)) return;
@@ -170,6 +181,36 @@ export function BrainForm() {
               rows={3}
               className="min-w-0 resize-none border bg-muted px-ch outline-none focus:border-primary"
             />
+
+            <label htmlFor="brain-model" className="text-muted-foreground">
+              model
+            </label>
+            <input
+              id="brain-model"
+              value={d.model ?? ""}
+              onChange={(e) => set({ model: e.target.value || null })}
+              placeholder="claude"
+              autoComplete="off"
+              spellCheck={false}
+              className="min-w-0 border-b bg-transparent px-ch outline-none placeholder:text-muted-foreground focus:border-primary"
+            />
+
+            {fleet && (
+              <>
+                <span className="text-muted-foreground">key</span>
+                <div className="flex flex-wrap gap-ch">
+                  <Tag on={d.model_key === null} mark={d.model_key === null ? "●" : "○"} onClick={() => set({ model_key: null })}>
+                    none
+                  </Tag>
+                  {keys.map((k) => (
+                    <Tag key={k} on={d.model_key === k} mark={d.model_key === k ? "●" : "○"} onClick={() => set({ model_key: k })}>
+                      {k}
+                    </Tag>
+                  ))}
+                  <Add what="hold" onAdd={(k) => set({ model_key: k })} />
+                </div>
+              </>
+            )}
 
             {fleet && (
               <>

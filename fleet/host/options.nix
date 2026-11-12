@@ -53,6 +53,18 @@
       '';
     };
 
+    node = lib.mkOption {
+      type = lib.types.nullOr (lib.types.attrsOf lib.types.str);
+      default = null;
+      example = { url = "https://portal.corkboard.fyi/n/HANDLE"; device = "/home/me/.local/state/corkboard/fleet/device.json"; };
+      description = ''
+        The user's node (fleetd's `NodeLink`): its tunnel `url`, and a
+        relay-only `device` file (`corkboard-fleet device`) or an owner
+        token's `tokenFile`. Without it, a spawn on the node's board fails
+        here: its words, grants and repo are the node's.
+      '';
+    };
+
     memoryBudget = lib.mkOption {
       type = lib.types.nullOr lib.types.ints.positive;
       default = null;

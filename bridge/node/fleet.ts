@@ -31,6 +31,7 @@ import { type DeviceCert, type Signed, KEY } from "../../lib/e2ee/wire";
 import type { MergedCard } from "../../lib/e2ee/merge";
 import { FLEET, environmentRecord, holdRecord, spawnRecord } from "./objects";
 import { ForgeRecords } from "./forge";
+import type { Data } from "./data";
 import type { Replicas } from "./replicas";
 
 export type Shell = { packages: string[] } | { flake: string };
@@ -88,6 +89,8 @@ export class FleetRecords {
     private replicas: Replicas,
     private worker?: () => Worker | undefined,
     private forge?: () => ForgeSigner | undefined,
+    // The account's brains, whose credentials name holds (data.ts's).
+    private brainData?: Pick<Data, "brains" | "putBrain">,
   ) {}
 
   has() {
@@ -147,7 +150,7 @@ export class FleetRecords {
   // refuses is dropped again.
   async queue(input: Record<string, unknown>) {
     const w = this.worker?.();
-    if (!w) throw new Invalid("this machine isn't signed in to the fleet");
+    if (!w) throw new Invalid("this machine's account isn't on the relay, where the fleet's queue is");
     const { task, shell: s, packages, ...rest } = input;
     const interactive = rest.interactive === true;
     if (typeof task !== "string" && !(interactive && task === undefined)) throw new Invalid("task must say what the agent should do");
@@ -156,10 +159,17 @@ export class FleetRecords {
     const shell = shellOf(s, packages);
     // The Worker's rule: a shell of the spawner's never goes beside a brain's memory.
     if (shell && typeof rest.brain === "string" && rest.brain) throw new Invalid(`a shell of your own never goes beside the ${rest.brain} brain's memory; spawn it for no brain`);
+    // The brain's record is here, not the Worker's: what it holds and runs as goes with the spawn.
+    const brain = typeof rest.brain === "string" && rest.brain ? this.brainData?.brains().find((b) => b.name === rest.brain && !b.archived) : undefined;
+    if (typeof rest.brain === "string" && rest.brain && !brain) throw new Invalid(`no brain ${rest.brain}; brain_list lists them`);
+    const of = brain && {
+      holds: Array.isArray(brain.credentials) ? brain.credentials.filter((c): c is string => typeof c === "string" && LABEL.test(c)) : [],
+      account: typeof brain.account === "string" ? brain.account : null,
+    };
     const id = newSpawnId();
     await this.seal(id, words, shell);
     try {
-      const s = await w("POST", "/spawns", { ...rest, id, sealed: true });
+      const s = await w("POST", "/spawns", { ...rest, ...of, id, sealed: true });
       // Where the Worker put it: what its git grant, if any, is for.
       if (typeof s?.template === "string") await this.set(spawnRecord(id), { template: s.template, environment: str(s.environment) });
       return this.open(s);
@@ -265,10 +275,8 @@ export class FleetRecords {
     return out;
   }
 
-  private async brains(): Promise<{ name: string; credentials: string[]; updated: string }[]> {
-    const w = this.worker?.();
-    if (!w) return [];
-    return ((await w("GET", "/brains?archived=1").catch(() => [])) as any[]).filter((b) => b && typeof b.name === "string" && Array.isArray(b.credentials));
+  private async brains(): Promise<{ name: string; credentials: string[] }[]> {
+    return (this.brainData?.brains() ?? []).flatMap((b) => (Array.isArray(b.credentials) ? [{ name: b.name, credentials: b.credentials.filter((c): c is string => typeof c === "string") }] : []));
   }
 
   private async holders(): Promise<Map<string, Holders>> {
@@ -284,11 +292,10 @@ export class FleetRecords {
 
   // Each brain holding from holds to instead, or nothing, if it's null.
   private async moveOnBrains(from: string, to: string | null) {
-    const w = this.worker?.();
     for (const b of await this.brains()) {
       if (!b.credentials.includes(from)) continue;
       const credentials = [...new Set(b.credentials.map((c) => (c === from ? to : c)).filter((c): c is string => c !== null))];
-      await w!("PATCH", `/brains/${encodeURIComponent(b.name)}`, { updated: b.updated, credentials });
+      await this.brainData!.putBrain(b.name, { credentials });
     }
   }
 

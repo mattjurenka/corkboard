@@ -72,7 +72,7 @@ export function start(port: number, hub?: HubJoin, sealed?: Peers) {
         ),
       ),
     screen: (key) => away.ask(at(key)[0], "screen", at(key)[1]),
-    say: (key, text, keys) => away.ask(at(key)[0], "say", at(key)[1], text, keys),
+    say: (key, text, keys, answers) => away.ask(at(key)[0], "say", at(key)[1], text, keys, answers ?? null),
     speech: async (asked) => {
       const s = sentence(asked);
       if (typeof s === "string") return { error: `bad ${s}` };

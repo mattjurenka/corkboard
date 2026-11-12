@@ -76,6 +76,7 @@ local function state()
       name = b.name, title = b.title, description = nil_if_null(b.description), account = nil_if_null(b.account),
       default = b.default or nil, archived = nil_if_null(b.archived) and ago(b.archived) or nil,
       credentials = list(b.credentials), abilities = list(b.abilities), persona = nil_if_null(b.persona), skin = nil_if_null(b.skin),
+      model = nil_if_null(b.model), model_key = nil_if_null(b.model_key),
       memory = { notes = m.notes or 0, entries = m.entries or 0, episodes = m.episodes or 0, last = ago(nil_if_null(m.lastEpisode)) },
     })
   end
@@ -123,6 +124,7 @@ local function render_text()
         plural(m.episodes, "session", "sessions")))
     end
     if m.last then field("active", m.last) end
+    field("thinks", (c.model or "claude") .. (c.model_key and ("  key " .. c.model_key) or ""))
     field("runs as", c.account or "the machine's default account")
     if #c.credentials > 0 then field("holds", table.concat(c.credentials, " ") .. "  agents need your OK to spawn it") end
     if #c.abilities > 0 then field("can", table.concat(c.abilities, " ")) end
@@ -160,24 +162,71 @@ function M.load()
     if not selected and brains and brains[1] then selected = brains[1].name end
     redraw()
     require("corkboard.avatar").personas_changed()
+    vim.cmd.redrawstatus({ bang = true })
+  end)
+end
+
+-- A brain by name, or the default brain for nil. The brains are asked for
+-- once if they haven't been, after whatever's asking: a status line can't
+-- start anything.
+local asked = false
+local function brain_named(name)
+  if not brains and not asked then
+    asked = true
+    vim.schedule(M.load)
+  end
+  return vim.iter(brains or {}):find(function(x)
+    if name then return x.name == name end
+    return x.default == true and not nil_if_null(x.archived)
   end)
 end
 
 -- A brain's persona and skin, or the default brain's for nil
--- (corkboard.avatar); nil for either it hasn't. The brains are asked for
--- once if they haven't been.
-local asked = false
+-- (corkboard.avatar); nil for either it hasn't.
 function M.persona_of(name)
-  if not brains and not asked then
-    asked = true
-    M.load()
-  end
-  local b = vim.iter(brains or {}):find(function(x)
-    if name then return x.name == name end
-    return x.default == true and not nil_if_null(x.archived)
-  end)
+  local b = brain_named(name)
   if not b then return nil end
   return nil_if_null(b.persona), nil_if_null(b.skin)
+end
+
+-- The Claude account a brain's VMs run as, if it's known.
+function M.account_of(name)
+  local b = brain_named(name)
+  return b and nil_if_null(b.account)
+end
+
+-- The same for a session about to start, which can't be told later: the
+-- brains are waited for a moment if they aren't in. -> the account, or nil
+-- and whether the brains were there to say so.
+local function wait()
+  if not brains and cloud().enabled() then
+    asked = true
+    M.load()
+    vim.wait(3000, function() return brains ~= nil or problem ~= nil end, 20)
+  end
+end
+
+function M.account_now(name)
+  wait()
+  return M.account_of(name), brains ~= nil
+end
+
+-- The brains a session can run as, the default first, as { name, title }:
+-- waited for as account_now's are; {} without them.
+function M.live()
+  wait()
+  local out = vim.iter(brains or {}):filter(function(b) return not nil_if_null(b.archived) end):totable()
+  table.sort(out, function(a, b)
+    if (a.default == true) ~= (b.default == true) then return a.default == true end
+    return a.name < b.name
+  end)
+  return vim.tbl_map(function(b) return { name = b.name, title = b.title } end, out)
+end
+
+-- The default brain's name, once the brains are in.
+function M.default_name()
+  local b = brain_named(nil)
+  return b and b.name
 end
 
 local pending = false
@@ -217,7 +266,7 @@ end
 -- A brain as lines, `key: value`, lists comma-separated, the description
 -- last and as long as it likes. :w makes it (a new one) or changes it.
 
-local FIELDS = { "name", "title", "account", "persona", "skin", "default", "credentials", "abilities" }
+local FIELDS = { "name", "title", "account", "model", "model_key", "persona", "skin", "default", "credentials", "abilities" }
 
 local function to_lines(b)
   local out = {}
@@ -242,7 +291,7 @@ local function from_lines(lines)
       local rest = vim.trim(l:sub(#"description:" + 1))
       if rest ~= "" then table.insert(desc, rest) end
     else
-      local k, v = l:match("^(%w+):%s*(.-)%s*$")
+      local k, v = l:match("^([%w_]+):%s*(.-)%s*$")
       if k then b[k] = v end
     end
   end
@@ -250,6 +299,8 @@ local function from_lines(lines)
   out.account = (b.account and b.account ~= "") and b.account or vim.NIL
   out.persona = (b.persona and b.persona ~= "") and b.persona or vim.NIL
   out.skin = (b.skin and b.skin ~= "") and b.skin or vim.NIL
+  out.model = (b.model and b.model ~= "") and b.model or vim.NIL
+  out.model_key = (b.model_key and b.model_key ~= "") and b.model_key or vim.NIL
   out.default = b.default == "true"
   for _, k in ipairs({ "credentials", "abilities" }) do
     out[k] = vim.iter(vim.split(b[k] or "", ",")):map(vim.trim):filter(function(x) return x ~= "" end):totable()
@@ -306,6 +357,7 @@ local function fields(b)
   return {
     name = b.name, title = b.title, description = nil_if_null(b.description) or "", account = nil_if_null(b.account),
     credentials = list(b.credentials), abilities = list(b.abilities), persona = nil_if_null(b.persona), skin = nil_if_null(b.skin), default = b.default == true,
+    model = nil_if_null(b.model), model_key = nil_if_null(b.model_key),
     updated = nil_if_null(b.updated),
   }
 end

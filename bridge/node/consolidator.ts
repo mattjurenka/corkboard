@@ -7,46 +7,34 @@
 // Every minute or so it looks at each brain on the node: once the episodes
 // waiting have been quiet for QUIET, it reads them, a few at a time; with
 // none waiting and a day turned over on a log not yet rolled up, it rewrites
-// the memory from it. The thinking is `think`: `claude -p` with no tools, on
-// the user's own account. After a run that failed, the next waits an hour,
-// then two, up to a day.
+// the memory from it. The thinking is `think` (lib/think.ts), with the
+// brain's own model and key: `claude -p` on the user's account where it
+// names none. After a run that failed, the next waits an hour, then two, up
+// to a day.
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { parseModel, think } from "../../lib/think";
 import { ATTEMPTS, DAY_CHARS, QUIET, ROLLUP_DAYS, bullets, flushInput, flushPrompt, parseRollup, render, rollupInput, rollupPrompt } from "../../lib/memory/consolidate";
 import type { Data } from "./data";
 import type { Episode, Episodes } from "./episodes";
 import type { Handoff } from "./handoff";
 import { before, logText } from "./search";
 
-// A system prompt and an input, to the text that comes back.
-export type Think = (prompt: string, input: string) => Promise<string>;
+// A system prompt and an input, to the text that comes back, for a brain.
+export type Think = (prompt: string, input: string, brain: string) => Promise<string>;
 
-const THINK_TIMEOUT = 10 * 60_000;
+// What a brain thinks with: its settings' model, and the secret of the hold
+// its model_key names, which stays on this machine.
+export type BrainModel = Record<string, unknown> & { model?: unknown; model_key?: unknown };
 
-// One Claude Code run with no tools, MCP servers or settings, in an empty
-// directory, the input on stdin; CORKBOARD_NO_MEMORY keeps its own hooks
-// from sending it back as an episode.
-export const claudeThink: Think = async (prompt, input) => {
-  const dir = mkdtempSync(join(tmpdir(), "corkboard-think-"));
-  try {
-    const file = join(dir, "system.md");
-    writeFileSync(file, prompt, { mode: 0o600 });
-    const p = Bun.spawn(
-      ["claude", "-p", "--tools", "", "--strict-mcp-config", "--setting-sources", "", "--system-prompt-file", file, "--output-format", "json"],
-      { cwd: dir, stdin: new Blob([input]), stdout: "pipe", stderr: "pipe", env: { ...process.env, CORKBOARD_NO_MEMORY: "1" } },
-    );
-    const timer = setTimeout(() => p.kill(), THINK_TIMEOUT);
-    const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]).finally(() => clearTimeout(timer));
-    if (code !== 0) throw new Error(`claude -p exited ${code}: ${(err || out).trim().slice(0, 500)}`);
-    const j = JSON.parse(out) as { result?: unknown; is_error?: boolean };
-    if (j.is_error || typeof j.result !== "string") throw new Error(`claude -p: ${String(j.result ?? "no result").slice(0, 500)}`);
-    return j.result;
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-};
+export function brainThink(settings: (brain: string) => BrainModel | undefined, secret: (hold: string) => string | undefined): Think {
+  return async (prompt, input, brain) => {
+    const b = settings(brain) ?? {};
+    const hold = typeof b.model_key === "string" ? b.model_key : undefined;
+    const key = hold && secret(hold);
+    if (hold && !key) throw new Error(`its model_key, ${hold}, has no secret on this machine`);
+    return (await think({ system: prompt, input, model: parseModel(typeof b.model === "string" ? b.model : null), key: key || undefined })).text;
+  };
+}
 
 // after: once a brain's run has finished (serve.ts embeds what it wrote).
 // leads: whether this node is the one to roll up, the account's others
@@ -76,7 +64,7 @@ export class Consolidator {
   constructor(private o: ConsolidatorOptions) {
     this.data = o.data;
     this.episodes = o.episodes;
-    this.think = o.think ?? claudeThink;
+    this.think = o.think ?? brainThink((brain) => o.data.brains().find((b) => b.name === brain), () => undefined);
     this.now = o.now ?? Date.now;
     // Read once it's quiet.
     o.episodes.onAdded = (brain) => o.episodes.setMeta(brain, "consolidate_at", String(this.now() + QUIET));
@@ -128,9 +116,9 @@ export class Consolidator {
     if (this.o.handoff && !(await this.leads())) return this.handOver(brain);
     for (;;) {
       const c = await this.consolidation(brain);
-      for (const e of c.episodes) await this.consolidated(brain, e.episode, await this.think(e.prompt, e.input));
+      for (const e of c.episodes) await this.consolidated(brain, e.episode, await this.think(e.prompt, e.input, brain));
       if (c.episodes.length) continue;
-      if (c.rollup) await this.rolledUp(brain, c.rollup.through, c.rollup.version, await this.think(c.rollup.prompt, c.rollup.input));
+      if (c.rollup) await this.rolledUp(brain, c.rollup.through, c.rollup.version, await this.think(c.rollup.prompt, c.rollup.input, brain));
       return;
     }
   }

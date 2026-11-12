@@ -256,9 +256,11 @@ end
 local buf
 local line_key = {} -- line number -> setting key
 local selected
--- { url, leader, devices = { { device, name, seen, me, connected, leader } } },
+-- { url, leader, forge, devices = { { device, name, seen, me, connected, leader } } },
 -- or nil: not asked yet, or this machine isn't in a relay's account.
 local devices
+-- The forge's line, which says who sees its pages.
+local FORGE_WEB = "Forge pages via relay (it sees them)"
 
 local function shown(v, item)
   if v == nil then return item.placeholder or "" end
@@ -323,6 +325,8 @@ local function render_text()
     table.insert(lines, "Devices")
     table.insert(lines, ("  %-38s %s"):format("Address", devices.url))
     map[#lines] = "devices.url"
+    table.insert(lines, ("  %-38s %s"):format(FORGE_WEB, devices.forge and "on" or "off"))
+    map[#lines] = "devices.forge"
     for _, d in ipairs(devices.devices) do
       local what = {}
       if d.leader then table.insert(what, "leader") end
@@ -366,8 +370,8 @@ function M.select(key, win)
   push()
 end
 
--- The devices from the bridge, after op (nodes_list, or nodes_leader with
--- a device or vim.NIL), redrawn when they come.
+-- The devices from the bridge, after op (nodes_list, nodes_leader with
+-- a device or vim.NIL, or nodes_forge with on or off), redrawn when they come.
 local function load_devices(op, ...)
   require("corkboard.cards.cloud").call_async(op or "nodes_list", function(err, res)
     vim.schedule(function()
@@ -378,13 +382,15 @@ local function load_devices(op, ...)
   end, ...)
 end
 
--- A device's line: it leads, or with the leader's, none does. The address's: copied.
+-- A device's line: it leads, or with the leader's, none does. The address's:
+-- copied. The forge's: its pages through the relay, or not.
 function M.device(key)
   if not devices then return end
   if key == "devices.url" then
     vim.fn.setreg("+", devices.url)
     return vim.notify("corkboard: copied " .. devices.url)
   end
+  if key == "devices.forge" then return load_devices("nodes_forge", not devices.forge) end
   local id = key:match("^devices%.(.+)")
   if id then load_devices("nodes_leader", id == devices.leader and vim.NIL or id) end
 end

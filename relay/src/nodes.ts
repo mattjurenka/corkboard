@@ -54,6 +54,18 @@ export class Nodes extends DurableObject {
     return this.status();
   }
 
+  // Forgejo's web pages through the tunnel (/n/<handle>/forge/), which the
+  // user turns on: a browser's session with the forge then passes here.
+  forgeWeb(): boolean {
+    return this.sql.exec("SELECT 1 FROM meta WHERE k = 'forge'").toArray().length > 0;
+  }
+
+  setForgeWeb(on: boolean): NodesView {
+    if (on) this.sql.exec("INSERT INTO meta (k, v) VALUES ('forge', '1') ON CONFLICT (k) DO NOTHING");
+    else this.sql.exec("DELETE FROM meta WHERE k = 'forge'");
+    return this.status();
+  }
+
   // Every node socket told which node the tunnel goes to now ("leader <device>",
   // or "leader -" with none), so a node knows at once whether it leads and
   // fleetd moves its channel, rather than waiting on their next look. Not
@@ -102,7 +114,7 @@ export class Nodes extends DurableObject {
 
   status(): NodesView {
     const known = this.sql.exec<{ device: string; name: string; seen: number }>("SELECT device, name, seen FROM devices ORDER BY seen DESC").toArray();
-    return { leader: this.leader(), connected: this.sockets().map(({ a }) => ({ device: a.device, since: a.since, ...(a.tunnel === false && { tunnel: false as const }) })), known };
+    return { leader: this.leader(), ...(this.forgeWeb() && { forge: true as const }), connected: this.sockets().map(({ a }) => ({ device: a.device, since: a.since, ...(a.tunnel === false && { tunnel: false as const }) })), known };
   }
 
   // The node a request goes to: the leader, or the newest.

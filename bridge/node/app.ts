@@ -4,11 +4,9 @@
 // boards.ts), and every local session's hooks and memory tools (the
 // environment server.ts gives Neovim).
 //
-// It runs when this machine is in an encrypted account, or isn't signed
-// in, when it makes an account here (e2ee init --local's, its key in the
-// keychain file; e2ee phrase shows its recovery phrase) with one brain,
-// the Worker's starter. Signed in with no account, memory is the Worker's
-// until it moves (step 7), and the node doesn't run.
+// It runs when this machine is in an encrypted account, and with none it
+// makes one here first (e2ee init --local's, its key in the keychain file;
+// e2ee phrase shows its recovery phrase) with one brain, the starter.
 //
 // <state>/node/session-token is the sessions' bearer (an assistant's,
 // minted once), and session-mcp.json their --mcp-config; owner-token is
@@ -30,7 +28,6 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { signedIn } from "../cloud";
 import { localAccount } from "../e2ee";
 import { Keystore } from "../keystore";
 import { goals } from "../../lib/model/goals";
@@ -38,7 +35,8 @@ import type { BoardEvent, Card } from "../../lib/model/cards";
 import { BRAIN_ONLY_KINDS, type Plan, blocks as checkBlocks, chatText, date as checkDate, note as checkNote, noteId } from "../../lib/model/plans";
 import { type Data, type FullCard, Invalid, now } from "./data";
 import { Conflict, type Message } from "./day";
-import { Conflict as HoldConflict } from "./fleet";
+import { Conflict as HoldConflict, LABEL } from "./fleet";
+import { parseModel } from "../../lib/think";
 import { DAY } from "./objects";
 import { NODE_DIR, NodeRunning, type StartedNode, startNode } from "./serve";
 import { touch } from "./leases";
@@ -51,9 +49,9 @@ const MCP_FILE = join(NODE_DIR, "session-mcp.json");
 export const OWNER_TOKEN_FILE = join(NODE_DIR, "owner-token");
 
 // The Worker's STARTER (corkboard-cloud's brains.ts).
-const STARTER = { title: "Pepper", description: "Your personal assistant.", account: null, credentials: [], abilities: ["chat"], persona: null, skin: null, default: true };
+const STARTER = { title: "Pepper", description: "Your personal assistant.", account: null, credentials: [], abilities: ["chat"], persona: null, skin: null, model: null, model_key: null, default: true };
 const NAME = /^[a-z][a-z0-9-]{0,31}$/;
-const FIELDS = ["title", "description", "account", "credentials", "abilities", "persona", "skin", "default"];
+const FIELDS = ["title", "description", "account", "credentials", "abilities", "persona", "skin", "model", "model_key", "default"];
 
 // The node as the bridge uses it, its own or another bridge's.
 export type AppNode = {
@@ -106,7 +104,6 @@ function kept(n: StartedNode, file: string, name: string, scope: "assistant" | "
 export async function startAppNode(): Promise<AppNode | undefined> {
   const store = new Keystore();
   if (!store.exists()) {
-    if (signedIn()) return;
     const { account } = await localAccount();
     console.log(`node: made the account ${account} on this machine (corkboard-bridge e2ee phrase shows its recovery phrase)`);
   }
@@ -323,18 +320,20 @@ async function runningNode(pid: number): Promise<AppNode | undefined> {
   };
 }
 
-// The account's devices as the relay knows them, this one first, and the
-// leader: nodes_list, and nodes_leader with a device's id, or null.
+// The account's devices as the relay knows them, this one first, the
+// leader, and whether Forgejo's pages go through the tunnel: nodes_list,
+// nodes_leader with a device's id, or null, and nodes_forge with on or off.
 async function nodes(n: StartedNode, op: string, args: any[]): Promise<unknown> {
   if (!n.tunnel || !n.relay) return null;
-  const v = op === "nodes_leader" ? await n.relay.setLeader(args[0] ?? null) : await n.relay.nodes();
+  const v = op === "nodes_leader" ? await n.relay.setLeader(args[0] ?? null) : op === "nodes_forge" ? await n.relay.setForgeWeb(args[0] === true) : await n.relay.nodes();
+  n.noteNodes(v);
   const up = new Map(v.connected.map((c) => [c.device, c.since]));
   const known = new Map((v.known ?? []).map((k) => [k.device, k]));
   for (const d of [n.device, ...up.keys(), ...(v.leader ? [v.leader] : [])]) if (!known.has(d)) known.set(d, { device: d, name: d.slice(0, 8), seen: up.get(d) ?? 0 });
   const devices = [...known.values()]
     .map((k) => ({ ...k, me: k.device === n.device, connected: up.has(k.device), leader: k.device === v.leader }))
     .sort((a, b) => Number(b.me) - Number(a.me) || b.seen - a.seen);
-  return { url: v.url, leader: v.leader, devices };
+  return { url: v.url, leader: v.leader, forge: !!v.forge, devices };
 }
 
 export async function notes(n: Pick<StartedNode, "data">, op: string, args: any[]): Promise<unknown> {
@@ -360,6 +359,19 @@ async function brains(n: StartedNode, op: string, args: any[]): Promise<unknown>
     if (f.title !== undefined && (typeof f.title !== "string" || !f.title.trim() || f.title.length > 100)) throw new Invalid("title must be a line of at most 100 characters");
     if (typeof f.title === "string") f.title = f.title.trim();
     if (typeof f.description === "string") f.description = f.description.trim();
+    // What it thinks with (lib/think.ts), and the hold whose secret is its key.
+    if (typeof f.model === "string") f.model = f.model.trim() || null;
+    if (f.model !== undefined && f.model !== null) {
+      if (typeof f.model !== "string" || f.model.length > 300) throw new Invalid("model must be a line of at most 300 characters, or null");
+      try {
+        parseModel(f.model);
+      } catch (e) {
+        throw new Invalid(`model: ${(e as Error).message}`);
+      }
+    }
+    if (typeof f.model_key === "string") f.model_key = f.model_key.trim() || null;
+    if (f.model_key !== undefined && f.model_key !== null && (typeof f.model_key !== "string" || !LABEL.test(f.model_key)))
+      throw new Invalid("model_key must name a hold, or be null");
     return f;
   };
   const brain = (op === "brains_get" || op.startsWith("brains_hold") || op === "brains_create") ? "" : known(args[0]).name;
@@ -425,18 +437,15 @@ async function brains(n: StartedNode, op: string, args: any[]): Promise<unknown>
     case "brains_recall":
       return search.recall(brain, String(args[1] ?? ""), 15, BRAIN_ONLY_KINDS);
     case "brains_holds": {
-      // Holds are the fleet's: the node's once it's sealed, else the Worker's.
-      if (!n.sealed.inUse()) return signedIn() ? undefined : { holds: [], waiting: [] };
+      // Holds are the fleet's, sealed on the node.
+      if (!n.sealed.inUse()) return { holds: [], waiting: [] };
       const [list, waiting] = await Promise.all([n.sealed.holdRoute("GET", undefined, async () => ({})), n.fleet()?.("GET", "/spawns?state=pending-approval&limit=50") ?? []]);
       return { holds: list.body, waiting: (waiting as any[]).map((s) => n.sealed.open(s)) };
     }
     case "brains_hold_create":
     case "brains_hold_update":
     case "brains_hold_delete": {
-      if (!n.sealed.inUse()) {
-        if (signedIn()) return undefined;
-        throw new Invalid("holds are the fleet's, which needs signing in");
-      }
+      if (!n.sealed.has()) throw new Invalid("holds are the fleet's, and this node has no fleet object");
       const [method, name, input] = op === "brains_hold_create" ? ["POST", undefined, args[0]] : op === "brains_hold_update" ? ["PATCH", String(args[0]), args[1]] : ["DELETE", String(args[0]), {}];
       try {
         const r = await n.sealed.holdRoute(method, name, async () => input ?? {});
@@ -452,8 +461,7 @@ async function brains(n: StartedNode, op: string, args: any[]): Promise<unknown>
       }
     }
     default:
-      if (signedIn()) return undefined;
-      throw new Invalid("holds are the fleet's, which needs signing in");
+      throw new Invalid(`no ${op}`);
   }
 }
 
@@ -466,8 +474,8 @@ async function fleet(n: StartedNode, op: string, args: any[]): Promise<unknown> 
   if (!f.inUse()) return undefined;
   switch (op) {
     case "fleet_session": {
-      const [environment, template, board, onNode] = args as [string, string, string?, boolean?];
-      return f.queue({ environment, template, interactive: true, ...(board && { board }), ...(onNode && { node: true }) });
+      const [environment, template, board, onNode, brain] = args as [string, string, string?, boolean?, string?];
+      return f.queue({ environment, template, interactive: true, ...(board && { board }), ...(onNode && { node: true }), ...(brain && { brain }) });
     }
     case "fleet_open": {
       const [got] = args as [{ environments: { name: string }[]; spawns: { id: string }[] }];

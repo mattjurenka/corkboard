@@ -54,12 +54,18 @@ export function Files() {
     load([root]);
   }, [root, load]);
 
-  // Re-read every open folder; files may have come or gone.
+  // Re-read every open folder; files may have come or gone. Not while
+  // folded: unfolding re-reads.
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
   useEffect(() => {
-    if (root && version) load([...expandedRef.current]);
-  }, [version, root, load]);
+    if (root && version && open) load([...expandedRef.current]);
+  }, [version, root, open, load]);
+
+  // Neovim watches the open folders, and says when one changes.
+  useEffect(() => {
+    nvim.notify("nvim_exec_lua", "require('corkboard').watch_dirs(...)", [[...expanded]]);
+  }, [expanded, nvim]);
 
   const toggle = (dir: string) => {
     const next = new Set(expanded);

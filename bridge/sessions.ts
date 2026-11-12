@@ -39,11 +39,27 @@ export type Hosted = {
 
 export type Answer = Record<string, unknown>;
 
+// What the phone answers a question with, one for each of its questions:
+// the options picked (from 0), or its own words.
+export type Answers = { picks: number[]; other?: string }[];
+
+// Answers as they're sent, or why they can't be.
+export function answers(a: unknown): Answers | string {
+  if (!Array.isArray(a) || !a.length || a.length > 8) return "answers must be a list, one for each question";
+  for (const x of a) {
+    if (!x || typeof x !== "object" || !Array.isArray(x.picks) || x.picks.length > 16 || !x.picks.every((p: unknown) => Number.isInteger(p) && (p as number) >= 0))
+      return "each answer needs picks, the options' numbers from 0";
+    if (x.other != null && (typeof x.other !== "string" || x.other.length > 2000)) return "other must be a string, under 2000 characters";
+  }
+  return a.map((x) => ({ picks: x.picks, ...(typeof x.other === "string" && x.other.trim() && { other: x.other }) }));
+}
+
 export type Source = {
   list(): Hosted[];
   // Called whenever the list may have changed.
   watch(fn: () => void): void;
-  say(key: string, text: string, keys: string[]): Promise<Answer>;
+  // answers: to the question it asks, in place of text and keys (Answers).
+  say(key: string, text: string, keys: string[], answers?: Answers): Promise<Answer>;
   screen?(key: string): Promise<Answer>;
   // A sentence said in its face's voice: { rate, audio } (16-bit samples, base64).
   speech?(sentence: unknown): Promise<Answer>;
@@ -88,7 +104,7 @@ export type Link = { receive(m: any): void; drop(): void };
 // and connect, called each time a link opens, with how to send down it.
 export type HubJoin = (hello: { id: string; machine: string; url?: string | null; environment: string }, connect: (send: (m: object) => void) => Link) => void;
 
-type Stream = { key: string; send(m: object): void; follower?: Follower; timer?: ReturnType<typeof setInterval> };
+type Stream = { key: string; send(m: object): void; follower?: Follower; state?: string; timer?: ReturnType<typeof setInterval> };
 
 // The protocol's bridge end, whatever it's linked to: each link hears the
 // list, is asked and is sent its own streams.
@@ -124,7 +140,12 @@ function core(environment: string, source: Source) {
           ? source.speech
             ? await source.speech(q.sentence)
             : { error: "no voice here" }
-          : await source.say(q.key, typeof q.text === "string" ? q.text : "", Array.isArray(q.keys) ? q.keys : []);
+          : q.answers !== undefined
+            ? await (async () => {
+                const a = answers(q.answers);
+                return typeof a === "string" ? { error: a } : source.say(q.key, "", [], a);
+              })()
+            : await source.say(q.key, typeof q.text === "string" ? q.text : "", Array.isArray(q.keys) ? q.keys : []);
     send({ ...a, type: "answer", ask: q.ask });
   };
 
@@ -156,10 +177,11 @@ function core(environment: string, source: Source) {
     terminals.open(stream, key);
   };
 
-  // In batches, each well under a socket message's limit.
-  const out = (s: Stream, stream: string, items: Item[], reset = false) => {
-    for (let i = 0; i < items.length || (reset && i === 0); i += 40) {
-      s.send({ type: "out", stream, data: JSON.stringify({ items: items.slice(i, i + 40), ...(reset && i === 0 && { reset: true }) }) });
+  // In batches, each well under a socket message's limit; the first with
+  // the session's state, when that's changed.
+  const out = (s: Stream, stream: string, items: Item[], reset = false, state?: string) => {
+    for (let i = 0; i < items.length || ((reset || state) && i === 0); i += 40) {
+      s.send({ type: "out", stream, data: JSON.stringify({ items: items.slice(i, i + 40), ...(reset && i === 0 && { reset: true }), ...(state && i === 0 && { state }) }) });
     }
   };
 
@@ -169,11 +191,12 @@ function core(environment: string, source: Source) {
     const look = () => {
       const session = source.list().find((x) => x.key === s.key);
       if (!session) return end(stream, "that session has ended");
-      if (!session.transcript) return source.screen ? end(stream, "that session has no conversation here") : undefined;
+      const state = session.state !== s.state ? (s.state = session.state) : undefined;
+      if (!session.transcript) return source.screen ? end(stream, "that session has no conversation here") : out(s, stream, [], false, state);
       if (s.follower?.path !== session.transcript) {
         s.follower = new Follower(session.transcript);
-        out(s, stream, s.follower.read().slice(-FIRST), true);
-      } else out(s, stream, s.follower.read());
+        out(s, stream, s.follower.read().slice(-FIRST), true, state);
+      } else out(s, stream, s.follower.read(), false, state);
     };
     look();
     if (streams.get(stream) === s) s.timer = setInterval(look, 500);

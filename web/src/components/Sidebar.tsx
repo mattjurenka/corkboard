@@ -48,7 +48,6 @@ export function Sidebar() {
         <div className="flex min-w-0 items-center justify-between gap-ch">
           <span className="truncate font-bold">{context ? context.cwd.split("/").at(-1) || "/" : ""}</span>
           <div className="flex shrink-0 items-center">
-            <SignIn />
             {assistant && (
               <HeaderButton title="Day plan, in its own window (<leader>p)" onClick={() => openPlan()}>
                 plan ↗
@@ -217,7 +216,7 @@ function NewSession({ off }: { off: boolean }) {
         disabled={off}
         size="cell"
         className="w-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-        onClick={() => nvim.lua("require('corkboard.claude').new_session()")}
+        onClick={() => nvim.lua("require('corkboard.session').new_session()")}
       >
         + New session
       </Button>
@@ -245,7 +244,8 @@ export function focusTab(end: "first" | "last", nvim: Nvim) {
 
 // File name bright, directory dimmed under it. A terminal
 // (term://<cwd>//<pid>:<cmd>) shows its program over the directory it runs in,
-// or Neovim's label for it (a Claude Code session's name) when it sent one.
+// or Neovim's label for it (a Claude Code session's name over where it runs)
+// when it sent one.
 // corkboard's own views by what they are rather than their agent:// names.
 const VIEW_TABS: Record<string, [string, string | null]> = {
   "agent://plan": ["Day plan", null],
@@ -301,7 +301,7 @@ function Thinking() {
 function tabParts(name: string, label?: Tab["label"]): [string, string | null] {
   const term = /^term:\/\/(.*?)\/\/\d+:(.*)$/.exec(name);
   if (VIEW_TABS[name]) return VIEW_TABS[name];
-  if (term) return [label?.title ?? term[2].split(" ")[0].split("/").at(-1)!, term[1]];
+  if (term) return [label?.title ?? term[2].split(" ")[0].split("/").at(-1)!, label?.where ?? term[1]];
   const slash = name.lastIndexOf("/");
   return [name.slice(slash + 1), slash > 0 ? name.slice(0, slash) : null];
 }
@@ -352,47 +352,6 @@ export function SectionHeader({ title, action }: { title: React.ReactNode; actio
       {title}
       {action}
     </header>
-  );
-}
-
-// The bridge's sign-in to the Worker, while it has none (bridge/server.ts's
-// /auth): the Worker's sign-in, in the browser, and gone once that's done.
-// A page with no bridge to ask never shows it.
-type Auth = { server: string; signedIn: boolean; pending: boolean };
-function SignIn() {
-  const nvim = useNvim();
-  const [auth, setAuth] = useState<Auth>();
-  const [error, setError] = useState<string>();
-  const check = () =>
-    nvim
-      .bridge("auth")
-      .then((r) => (r.ok ? (r.json() as Promise<Auth>) : undefined))
-      .then(setAuth, () => {});
-  useEffect(() => void check(), []);
-  // While a sign-in is under way, until the bridge has one or gives up.
-  useEffect(() => {
-    if (!auth?.pending) return;
-    const timer = setInterval(check, 2000);
-    return () => clearInterval(timer);
-  }, [auth?.pending]);
-  if (!auth || auth.signedIn) return null;
-  const start = async () => {
-    setError(undefined);
-    setAuth({ ...auth, pending: true });
-    try {
-      const r = await nvim.bridge("auth", { method: "POST" });
-      if (!r.ok) throw new Error((await r.text()).trim() || `${r.status}`);
-      const { url } = (await r.json()) as { url: string };
-      if (url) window.open(url, "_blank", "noopener");
-    } catch (e) {
-      setError((e as Error).message);
-    }
-    check();
-  };
-  return (
-    <HeaderButton title={error ?? auth.server} disabled={auth.pending} className={cn("text-muted-foreground", error && "text-destructive")} onClick={start}>
-      {auth.pending ? "signing in…" : "sign in ↗"}
-    </HeaderButton>
   );
 }
 

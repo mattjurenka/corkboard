@@ -63,7 +63,7 @@ local function flush(buf)
   end
 end
 
--- From its on_stdout (corkboard.claude), the way jobstart splits it.
+-- From its on_stdout (corkboard.session), the way jobstart splits it.
 function M.output(buf, data)
   if not vim.iter(pairs(hosted)):any(function(_, h) return h.buf == buf end) then return end
   if not pending[buf] then

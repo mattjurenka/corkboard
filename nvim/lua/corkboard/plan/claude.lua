@@ -29,12 +29,14 @@ local function start(opts)
     vim.notify("corkboard: no host for the assistant's session; set vim.g.corkboard_pepper_ssh or CORKBOARD_PEPPER", vim.log.levels.WARN)
     return nil
   end
-  return require("corkboard.claude").start(vim.tbl_extend("force", opts or {}, {
+  return require("corkboard.session").start(vim.tbl_extend("force", opts or {}, {
     attach = { "ssh", "-t", "-o", "ServerAliveInterval=30", to },
     vm = "pepper",
     brain = "pepper",
-    kind = "pepper",
-    args = { "--name", "Pepper" },
+    host = to:match("@(.+)$") or to,
+    dir = "/home/claude/pepper",
+    role = "pepper",
+    name = "Pepper",
   }))
 end
 

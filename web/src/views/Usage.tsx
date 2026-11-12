@@ -33,7 +33,6 @@ type Session = {
   agents: { type: string; description: string; requests: number; tokens: Tokens; cost: number }[];
 };
 type UsageState = {
-  root?: string;
   // The project's board, once Neovim has looked it up.
   board?: string;
   sessions: Session[];
@@ -73,7 +72,7 @@ export function Usage({ state, win, focused, nvim }: ViewProps<UsageState>) {
   return (
     <div className="@container/usage flex h-full flex-col px-2ch pt-row">
       <header className="flex justify-between gap-2ch pb-row text-muted-foreground">
-        <span className="min-w-0 truncate">{state.root ?? ""}</span>
+        <span className="font-bold text-foreground">Usage</span>
         <span className="flex-none @max-[80ch]/usage:hidden">j/k session · p period · s sort{assistant && " · a advice"} · R refresh</span>
       </header>
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(28ch,36ch)_1fr] gap-3ch @max-[80ch]/usage:grid-cols-1 @max-[80ch]/usage:grid-rows-[minmax(0,2fr)_minmax(0,3fr)] @max-[80ch]/usage:gap-y-row">

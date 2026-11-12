@@ -1,12 +1,11 @@
 // End-to-end encrypted boards from the command line, for now the only
 // client (see .agent/plans/e2ee.md):
 //
-//   corkboard-bridge e2ee init [--invite CODE | --admin | --local] [--name NAME] [--passphrase]
+//   corkboard-bridge e2ee init [--invite CODE | --local] [--name NAME] [--passphrase]
 //                              a new account, this machine its first device; prints
-//                              the recovery phrase, once. --admin: made with this
-//                              machine's sign-in (cloud.ts), an admin's, and no invite.
-//                              --local: on this machine only, with no relay, until publish
-//   corkboard-bridge e2ee publish [--invite CODE | --admin]
+//                              the recovery phrase, once. --local: on this machine
+//                              only, with no relay, until publish
+//   corkboard-bridge e2ee publish [--invite CODE]
 //                              an account made --local, onto the relay, and every change
 //                              it kept meanwhile pushed
 //   corkboard-bridge e2ee recover [--name NAME] [--passphrase]
@@ -15,9 +14,8 @@
 //                              this machine into an account another device approves
 //   corkboard-bridge e2ee approve CODE
 //                              let a pairing device in, on a device that's in
-//   corkboard-bridge e2ee push-board KEY [--local]
-//                              a board, encrypted into its log on the relay: the Worker's
-//                              plaintext board by that key, or --local, the card files'
+//   corkboard-bridge e2ee push-board KEY --local
+//                              a board's card files, encrypted into its log on the relay
 //   corkboard-bridge e2ee pull-board KEY
 //                              the board from its log, decrypted and merged, as JSON
 //   corkboard-bridge e2ee share KIND NAME ACCOUNT [read|write] | unshare KIND NAME ACCOUNT
@@ -45,19 +43,6 @@
 //   corkboard-bridge e2ee approve-connector
 //                              a one-time code (ten minutes) for approving a connector
 //                              at this machine's node's /authorize (bridge/node/)
-//   corkboard-bridge e2ee move-memory [--dry-run] [--passphrase]
-//                              this sign-in's memory off the Worker and into the account's
-//                              brains, the account made or published first if it must be;
-//                              --dry-run copies it and leaves the Worker's (node/move.ts)
-//   corkboard-bridge e2ee move-boards [--dry-run] [--passphrase]
-//                              this sign-in's boards off the Worker, cards, logs and files,
-//                              into the account's board replicas, the same way
-//   corkboard-bridge e2ee move-plans [--dry-run] [--passphrase]
-//                              the day plans and the chat into the account's day
-//                              object; the calendar stays the Worker's, lent to the node
-//   corkboard-bridge e2ee move-holds [--dry-run] [--passphrase]
-//                              the holds and their secrets into the fleet object; the
-//                              brains go on holding their names
 //
 // The relay is the server the bridge uses (cloud.ts). The passphrase, when there is
 // one, is CORKBOARD_E2EE_PASSPHRASE or asked for.
@@ -65,7 +50,7 @@
 import { existsSync, rmSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { CLOUD, signedIn as cloudSignedIn, token as googleToken } from "./cloud";
+import { CLOUD } from "./cloud";
 import { DATA_DIR } from "./dirs";
 import { Keystore } from "./keystore";
 import { type PlainCard, changesFor } from "./node/board";
@@ -81,7 +66,7 @@ import { Replica, memoryStore } from "../lib/e2ee/sync";
 import { type DeviceCert, type Role, type Signed, KEY, ROLES, fromB64url, normalizeCode, showCode } from "../lib/e2ee/wire";
 
 const USAGE =
-  "usage: corkboard-bridge e2ee init|publish|recover|pair|approve CODE|push-board KEY|pull-board KEY|share KIND NAME ACCOUNT [ROLE]|unshare KIND NAME ACCOUNT|shared|compact [KIND NAME]|rotate|rotated|status|phrase|revoke DEVICE|relay-device DEVICE BOX [--name NAME]|nodes|leader [this|DEVICE|none]|approve-connector|move-memory [--dry-run]|move-boards [--dry-run]|move-plans [--dry-run]|move-holds [--dry-run]";
+  "usage: corkboard-bridge e2ee init|publish|recover|pair|approve CODE|push-board KEY --local|pull-board KEY|share KIND NAME ACCOUNT [ROLE]|unshare KIND NAME ACCOUNT|shared|compact [KIND NAME]|rotate|rotated|status|phrase|revoke DEVICE|relay-device DEVICE BOX [--name NAME]|nodes|leader [this|DEVICE|none]|approve-connector";
 
 function option(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -125,7 +110,7 @@ async function keep(root: Uint8Array, device: Device, cert: Signed<DeviceCert>, 
 }
 
 // An account on this machine only, its key in the keychain: what init
-// --local makes, and the bridge when it starts signed out with none (node/app.ts).
+// --local makes, and the bridge when it starts with none (node/app.ts).
 export async function localAccount(name = hostname(), pass?: string) {
   refuseTwice();
   const root = newRoot();
@@ -150,7 +135,7 @@ async function init(args: string[]) {
   const cert = certify(keys, device, name);
   const relay = relayFor(device, cert);
   const invite = option(args, "--invite") ?? null;
-  await relay.createAccount(creation(keys, CLOUD, invite), cert, args.includes("--admin") ? await googleToken() : undefined);
+  await relay.createAccount(creation(keys, CLOUD, invite), cert);
   await keep(root, device, cert, name, args);
   await relay.signIn();
   console.log(`Made the account ${keys.id} on ${CLOUD}, with this machine (${name}) as its first device.\n`);
@@ -167,7 +152,7 @@ async function publish(args: string[]) {
   const root = await store.root(passphrase(args, false));
   const keys = accountKeys(root);
   const relay = relayFor(d.device, d.cert);
-  await relay.createAccount(creation(keys, CLOUD, option(args, "--invite") ?? null), d.cert, args.includes("--admin") ? await googleToken() : undefined);
+  await relay.createAccount(creation(keys, CLOUD, option(args, "--invite") ?? null), d.cert);
   store.saveDevice(CLOUD, d.name, d.device, d.cert);
   await relay.signIn();
   const me = await signedIn(args);
@@ -414,19 +399,13 @@ export async function forgeRevoke(hash: string) {
   return { name: g.name };
 }
 
-// A board as the Worker or the card files have it, as cards with their logs.
-async function plainBoard(key: string, local: boolean): Promise<PlainCard[]> {
-  if (local) {
-    const dir = join(DATA_DIR, "boards", key);
-    if (!existsSync(join(dir, "tasks"))) throw new Error(`no board ${key} in ${join(DATA_DIR, "boards")}`);
-    // Only now: mcp/cards.ts asks git where it is when it loads.
-    const { cardsOf } = await import("./import");
-    return cardsOf(dir);
-  }
-  const res = await fetch(`${CLOUD}/api/boards/${encodeURIComponent(key)}/cards?log=1`, { headers: { Authorization: `Bearer ${await googleToken()}` } });
-  const json = (await res.json().catch(() => ({}))) as PlainCard[] | { error?: string };
-  if (!res.ok || !Array.isArray(json)) throw new Error(`board ${key}: ${(json as { error?: string }).error ?? res.status}`);
-  return json;
+// A board as the card files have it, as cards with their logs.
+async function plainBoard(key: string): Promise<PlainCard[]> {
+  const dir = join(DATA_DIR, "boards", key);
+  if (!existsSync(join(dir, "tasks"))) throw new Error(`no board ${key} in ${join(DATA_DIR, "boards")}`);
+  // Only now: mcp/cards.ts asks git where it is when it loads.
+  const { cardsOf } = await import("./card-files");
+  return cardsOf(dir);
 }
 
 type Me = Awaited<ReturnType<typeof signedIn>>;
@@ -479,13 +458,13 @@ async function pushed(index: Replica, rep: Replica, kind: Kind, name: string) {
 
 async function pushBoard(args: string[]) {
   const key = args[1];
-  if (!key) throw new Error("push-board takes a board's key");
+  if (!key || !args.includes("--local")) throw new Error("push-board takes a board's key and --local (the card files')");
   const me = await signedIn(args);
   const index = await indexOf(me);
   const rep = await objectOf(me, index, "board", key);
   await rep.pull();
   const had = new Map(rep.cards().map((c) => [c.id, c]));
-  const changes = (await plainBoard(key, args.includes("--local"))).flatMap((c) => changesFor(c, had.get(c.id)));
+  const changes = (await plainBoard(key)).flatMap((c) => changesFor(c, had.get(c.id)));
   if (changes.length) await rep.change(...changes);
   const n = await rep.push();
   await pushed(index, rep, "board", key);
@@ -658,34 +637,6 @@ async function relayDevice(args: string[]) {
   console.log(JSON.stringify(cert));
 }
 
-// The bridge mustn't be serving a node meanwhile (serve.ts's lock), and is
-// restarted after, to serve this one.
-async function moveOff(args: string[], what: "memory" | "boards" | "plans" | "holds") {
-  if (!cloudSignedIn()) throw new Error("not signed in: corkboard-bridge login");
-  const d = store.device();
-  if (!d || !store.exists()) await init(args);
-  else if (d.relay === null) await publish(args);
-  if (store.needsPassphrase() && !process.env.CORKBOARD_E2EE_PASSPHRASE) process.env.CORKBOARD_E2EE_PASSPHRASE = passphrase(args, false);
-  const { startNode } = await import("./node/serve");
-  const { moveBoards, moveHolds, moveMemory, movePlans } = await import("./node/move");
-  const n = await startNode({ port: 0, host: "127.0.0.1", origin: undefined });
-  const dryRun = args.includes("--dry-run");
-  const worker = async (path: string, init: RequestInit = {}) =>
-    fetch(`${CLOUD}${path}`, { ...init, headers: { ...(init.headers as Record<string, string>), Authorization: `Bearer ${await googleToken()}` } });
-  try {
-    const move = { memory: moveMemory, boards: moveBoards, plans: movePlans, holds: moveHolds }[what];
-    await move(n, worker, { dryRun });
-  } finally {
-    await n.stop();
-  }
-  const It = { memory: "Memory is", boards: "The boards are", plans: "The day plans and chat are", holds: "The holds are" }[what];
-  console.log(
-    dryRun
-      ? `\nCopied into the account ${n.account}; the Worker keeps its ${what} (a dry run).`
-      : `\n${It} in the account ${n.account} now, and gone from ${CLOUD}. Restart the bridge to serve ${what === "memory" ? "it" : "them"}.`,
-  );
-}
-
 export async function cli(args: string[]) {
   const commands: Record<string, (a: string[]) => Promise<void>> = {
     init,
@@ -705,10 +656,6 @@ export async function cli(args: string[]) {
     phrase,
     revoke: revokeDevice,
     "relay-device": relayDevice,
-    "move-memory": (a) => moveOff(a, "memory"),
-    "move-boards": (a) => moveOff(a, "boards"),
-    "move-plans": (a) => moveOff(a, "plans"),
-    "move-holds": (a) => moveOff(a, "holds"),
     nodes: listNodes,
     leader: setLeader,
     "approve-connector": async () => console.log((await import("./node/serve")).approvalCode()),

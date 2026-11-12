@@ -22,6 +22,8 @@ type Card = {
   abilities: string[];
   persona?: string;
   skin?: string;
+  model?: string;
+  model_key?: string;
   memory: { notes: number; entries: number; episodes: number; last?: string };
 };
 type BrainsState = { cards: Card[]; selected?: string; asking?: { name: string }; problem?: string; loading?: boolean };
@@ -139,6 +141,10 @@ function BrainCard({
           )}
         </Field>
         {m.last && <Field label="active">{m.last}</Field>}
+        <Field label="thinks">
+          {c.model ?? <span className="text-muted-foreground">claude</span>}
+          {c.model_key && <span className="text-muted-foreground"> · key {c.model_key}</span>}
+        </Field>
         {fleet && <Field label="runs as">{c.account ?? <span className="text-muted-foreground">the machine's default account</span>}</Field>}
         {fleet && c.credentials.length > 0 && (
           <Field label="holds">

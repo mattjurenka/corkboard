@@ -94,3 +94,60 @@ export async function api<T = any>(path: string): Promise<T> {
   }
   throw new Error("signed out");
 }
+
+// The account's node, once its boards have moved off the Worker: the
+// portal's sign-in to it (the portal's node.ts, under its own key), read the
+// same way, through the relay's tunnel at /n/<handle>/. Its boards and its
+// repositories (bridge/node/git.ts) are there, not the Worker's.
+const NODE = "corkboard.portal.node";
+
+type NodeAuth = Auth & { handle?: string };
+
+function loadNode(): NodeAuth {
+  try {
+    return JSON.parse(localStorage.getItem(NODE) ?? "{}") ?? {};
+  } catch {
+    return {};
+  }
+}
+
+let nodePending: Promise<string> | null = null;
+
+// The node's tunnel base, and a current token for it. Signing in to it goes
+// by way of the portal, as the Worker's does.
+export async function node(stale = false): Promise<{ base: string; token: string }> {
+  const a = loadNode();
+  if (!a.handle) throw new Error("the portal isn't connected to your node");
+  const base = `${location.origin}/n/${encodeURIComponent(a.handle)}/`;
+  if (a.access_token && !stale && (a.expires_at ?? 0) > Date.now() + 60_000) return { base, token: a.access_token };
+  nodePending ??= (async () => {
+    if (a.refresh_token && a.client_id) {
+      const res = await fetch(`${base}token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ client_id: a.client_id, grant_type: "refresh_token", refresh_token: a.refresh_token }),
+      });
+      if (res.ok) {
+        const t = await res.json();
+        const next = { ...loadNode(), access_token: t.access_token, refresh_token: t.refresh_token ?? a.refresh_token, expires_at: Date.now() + t.expires_in * 1000 };
+        localStorage.setItem(NODE, JSON.stringify(next));
+        return next.access_token;
+      }
+    }
+    throw new Error("connect the portal to your node again");
+  })().finally(() => (nodePending = null));
+  return { base, token: await nodePending };
+}
+
+// The node's JSON (its /api/node/...), signed in.
+export async function nodeApi<T = any>(path: string): Promise<T> {
+  for (const stale of [false, true]) {
+    const { base, token } = await node(stale);
+    const res = await fetch(`${base}api/node/${path}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (res.status === 401 && !stale) continue;
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+    return json as T;
+  }
+  throw new Error("connect the portal to your node again");
+}

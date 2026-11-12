@@ -38,10 +38,9 @@ local function width() return math.min(56, math.floor(vim.o.columns / 3)) end
 
 local function valid_win(win) return win and vim.api.nvim_win_is_valid(win) end
 
--- A Claude Code session corkboard started that the panel goes beside.
+-- A session corkboard started that the panel goes beside.
 local function is_session(buf)
-  local kind = vim.b[buf].corkboard_claude
-  return kind ~= nil and kind ~= "pepper" and require("corkboard.terminal").alive(buf)
+  return vim.b[buf].corkboard_agent ~= nil and vim.b[buf].corkboard_role ~= "pepper" and require("corkboard.terminal").alive(buf)
 end
 
 -- The panel's two lists: the cards src's session works on (the card it was
@@ -461,7 +460,7 @@ end
 -- it moves to the top. Returns whether it's shown, and what to tell Claude.
 local count = 0
 function M.show_file(src, path, title)
-  if not (vim.api.nvim_buf_is_valid(src) and vim.b[src].corkboard_claude) then return false, "no session in terminal " .. src end
+  if not (vim.api.nvim_buf_is_valid(src) and vim.b[src].corkboard_agent) then return false, "no session in terminal " .. src end
   local stat = vim.uv.fs_stat(path)
   if not (stat and stat.type == "file") then return false, "no file at " .. path end
   if not shown[src] then

@@ -48,23 +48,23 @@ local function sessions()
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     -- One in a VM: what its VM says, or before that, there while its terminal is.
     local vm = vim.b[buf].corkboard_vm
-    local state = vim.b[buf].corkboard_claude and terminal.alive(buf) and (agents.state(buf) or (vm and (vm_state(vm, buf) or "attached")))
+    local state = vim.b[buf].corkboard_agent and terminal.alive(buf) and (agents.state(buf) or (vm and (vm_state(vm, buf) or "attached")))
     if state then
       table.insert(list, {
         buf = buf,
         project = project,
-        name = require("corkboard.claude").title(buf),
+        name = require("corkboard.session").title(buf),
         state = state,
         detail = vim.b[buf].corkboard_asking,
         typed = vim.b[buf].corkboard_typed,
         vm = vim.b[buf].corkboard_vm,
         -- For the fleet view's hover.
-        role = vim.b[buf].corkboard_claude,
+        role = vim.b[buf].corkboard_role,
         card = vim.b[buf].corkboard_card,
-        session = vim.b[buf].corkboard_claude_session,
+        session = vim.b[buf].corkboard_agent_session,
         context = vim.b[buf].corkboard_context,
         -- Its log, which the phone draws the conversation from (bridge/remote.ts).
-        transcript = vim.b[buf].corkboard_claude_transcript,
+        transcript = vim.b[buf].corkboard_agent_transcript,
         -- Its face on the phone (corkboard/avatar.lua's).
         persona = avatar.persona(buf),
         skin = avatar.skin(buf),
@@ -96,7 +96,7 @@ local function answer(q, a)
 end
 
 local function live(buf)
-  return vim.api.nvim_buf_is_valid(buf) and vim.b[buf].corkboard_claude and terminal.alive(buf)
+  return vim.api.nvim_buf_is_valid(buf) and vim.b[buf].corkboard_agent and terminal.alive(buf)
 end
 
 -- What its terminal shows, the last 300 lines of it, and their colors
@@ -117,11 +117,68 @@ end
 
 local KEYS = { enter = "\r", esc = "\27", up = "\27[A", down = "\27[B", tab = "\t", ["shift-tab"] = "\27[Z", ["ctrl-c"] = "\3" }
 
+-- An AskUserQuestion's answers ({ picks = { 0-based }, other = "its own
+-- words" } for each question) as the keys Claude Code's dialog takes, from
+-- its first question, each its own write. A single choice's number picks it
+-- and moves on; a question of several choices ticks each by its number, then
+-- goes down past its rows to Next. Its own words go in the row after the
+-- options. With more than one question, or several choices, a review comes
+-- last, whose first row submits. nil and why, for answers that don't fit.
+function M.answer_keys(questions, answers)
+  if type(questions) ~= "table" or #questions == 0 then return nil, "it isn't asking" end
+  if type(answers) ~= "table" or #answers ~= #questions then return nil, "answer each question" end
+  local out = {}
+  local review = #questions > 1
+  for i, q in ipairs(questions) do
+    local a, n = answers[i], #(q.options or {})
+    local picks = type(a) == "table" and type(a.picks) == "table" and a.picks or {}
+    local other = type(a) == "table" and type(a.other) == "string" and vim.trim((a.other:gsub("%s+", " "))) or ""
+    for _, p in ipairs(picks) do
+      if type(p) ~= "number" or p % 1 ~= 0 or p < 0 or p >= n then return nil, "no such option" end
+    end
+    if q.multiSelect then
+      review = true
+      for _, p in ipairs(picks) do table.insert(out, tostring(p + 1)) end
+      if other ~= "" then
+        table.insert(out, tostring(n + 1))
+        for _ = 1, n do table.insert(out, KEYS.down) end
+        vim.list_extend(out, { other, KEYS.down })
+      else
+        for _ = 1, n + 1 do table.insert(out, KEYS.down) end
+      end
+      table.insert(out, KEYS.enter)
+    elseif other ~= "" and #picks == 0 then
+      vim.list_extend(out, { tostring(n + 1), other, KEYS.enter })
+    elseif #picks == 1 and other == "" then
+      table.insert(out, tostring(picks[1] + 1))
+    else
+      return nil, "pick one: " .. (q.header or q.question or "")
+    end
+  end
+  if review then table.insert(out, "1") end
+  return out
+end
+
 -- Text typed into it, then keys. Text of more than a line goes as a paste,
 -- or its newlines would send it; the keys come a moment after, or Claude Code
--- takes them as more of the text.
-function M.say(q, buf, text, keys)
+-- takes them as more of the text. Or answers to what it asks, instead: they
+-- go a key at a time, after it's told they will.
+function M.say(q, buf, text, keys, answers)
   if not live(buf) then return answer(q, { error = "that session has ended", missing = true }) end
+  if answers ~= nil and answers ~= vim.NIL then
+    local writes, why = M.answer_keys(vim.b[buf].corkboard_questions, answers)
+    if not writes then return answer(q, { error = why }) end
+    answer(q, { ok = true })
+    local chan = terminal.job(buf)
+    local i = 0
+    local function next()
+      i = i + 1
+      if not writes[i] or not terminal.alive(buf) then return end
+      vim.fn.chansend(chan, writes[i])
+      vim.defer_fn(next, 100)
+    end
+    return next()
+  end
   local chan = terminal.job(buf)
   if text ~= "" then vim.fn.chansend(chan, text:find("\n") and ("\27[200~" .. text .. "\27[201~") or text) end
   local i = 0

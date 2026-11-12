@@ -56,6 +56,7 @@ import { waitingOn } from "../../lib/model/cards";
 import { Conflict, type Data, Invalid } from "./data";
 import { type Caller, type Consent, OAuthError, type OAuthStore, Redirect, SCOPES, boardBound, deniedUrl } from "./oauth";
 import { type Fleet, mcp } from "./mcp";
+import { gitViews } from "./git";
 import { Conflict as HoldConflict, type FleetRecords, SPAWN_ID } from "./fleet";
 import type { Search } from "./search";
 import type { CalendarConfig } from "./calendar";
@@ -76,7 +77,7 @@ export type NodeOptions = {
   origin?: string;
   // The calendar's config, for status: whether one is connected.
   calendar?: () => Promise<CalendarConfig | undefined> | CalendarConfig | undefined;
-  // The Worker's fleet queue while this machine is signed in to it: /mcp's spawn tools.
+  // The Worker's fleet queue, while this machine's account is on the relay: /mcp's spawn tools.
   fleet?: () => Fleet | undefined;
   // What the fleet keeps sealed from the Worker (fleet.ts): /api/node/fleet.
   sealed?: FleetRecords;
@@ -91,10 +92,13 @@ export type NodeOptions = {
   // Every hub of the account's, the account's devices' on channels: for
   // this machine's bridges, on loopback (/app/peers, /app/peer/:device/...).
   reach?: Reach;
-  // The account's forge (forge.ts), on channels under /forge/.
-  forge?: (req: Request, from: Signed<DeviceCert>) => Promise<Response>;
+  // The account's forge (forge.ts), on channels under /forge/, and its web
+  // pages with Forgejo's own login (from: null) on loopback (Caddy's, on the
+  // droplet) or through the tunnel while forgeWeb says the account has them on.
+  forge?: (req: Request, from: Signed<DeviceCert> | null) => Promise<Response>;
+  forgeWeb?: () => boolean;
   // A request to it wherever it is (serve.ts's toForge): for this machine's
-  // bridges, on loopback (/app/forge/...).
+  // bridges, on loopback (/app/forge/...), and the repositories' views (git.ts).
   toForge?: (path: string, init?: RequestInit) => Promise<Response>;
 };
 
@@ -106,7 +110,7 @@ export type AppEvents = (fn: (key: string | null, event: unknown) => void) => ()
 // The Worker's (cloud/src/api.ts's): a board's key, and a remote git clones from.
 const BOARD_KEY = /^[A-Za-z0-9._-]{1,128}$/;
 const REMOTE = /^(https?:\/\/|ssh:\/\/|git:\/\/|[\w.-]+@[\w.-]+:)[^\s]{1,500}$/;
-const APP_OPS = /^(brains_\w+|nodes_\w+|note_get|note_put|goals|fleet_(session|open)|plan_(get|say|accept|discard|day)|board_(board|resolve|boards|snapshot|subscribe|make|create|update|log|archive|delete|touch))$/;
+const APP_OPS = /^(brains_\w+|nodes_\w+|note_get|note_put|goals|fleet_(session|open)|plan_(get|say|accept|discard|day)|board_(board|resolve|boards|snapshot|subscribe|make|create|update|log|archive|delete|touch|token|revoke))$/;
 
 // What Bun.serve gives a fetch beside the request; a tunnel's and a test's
 // don't, so they're never loopback.
@@ -288,9 +292,16 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       headers: { "Content-Type": "application/json", "WWW-Authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource", scope="assistant"` },
     });
 
+  const git = o.toForge && gitViews(o.toForge);
   // sealed: it came on a channel or on loopback, never the plaintext tunnel.
   async function api(req: Request, path: string[], who: Caller, origin: string, sealed: boolean): Promise<Response> {
     const { data, search } = o;
+    // The forge's repositories (git.ts): the owner's, and through the
+    // tunnel only while the account has the forge's pages on.
+    if (path[0] === "git") {
+      if (!git || who.scope !== "owner" || !(sealed || o.forgeWeb?.())) return json({ error: "not found" }, 404);
+      return await git(req, path.slice(1));
+    }
     const url = new URL(req.url);
     const q = (k: string) => url.searchParams.get(k) ?? undefined;
     const body = async () => ((await req.json().catch(() => ({}))) ?? {}) as Record<string, any>;
@@ -569,9 +580,9 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
         return await o.media.upload(req, p.slice("/upload/".length));
       }
       if (p === "/forge" || p.startsWith("/forge/")) {
-        // Sealed only: the channel shows who's asking.
-        if (!o.forge || !from) return json({ error: "not found" }, 404);
-        return await o.forge(req, from);
+        // Sealed, the channel showing who's asking; else a browser's.
+        if (!o.forge || !(from || loopback(req, peer) || o.forgeWeb?.())) return json({ error: "not found" }, 404);
+        return await o.forge(req, from ?? null);
       }
       if (p === "/api/sessions" || p.startsWith("/api/sessions/")) {
         // Sealed, never the tunnel's: on a channel, from a device that's

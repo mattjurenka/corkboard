@@ -22,8 +22,9 @@ import * as remote from "./remote";
 import { speech } from "./speech";
 import * as wasm from "./wasm";
 import { startAppNode } from "./node/app";
+import { gitViews } from "./node/git";
 import { Peers } from "./peers";
-import { CLOUD, login, signedIn, token } from "./cloud";
+import { CLOUD, token } from "./cloud";
 import { COMPILED, RESOURCES, STATE_DIR, dirsEnv } from "./dirs";
 
 const HOST = process.env.CORKBOARD_HOST ?? "127.0.0.1";
@@ -615,20 +616,16 @@ function wasmPlugins(req: Request, url: URL): Response {
   return new Response(bundled.bytes, { headers: { ...ISOLATED, "content-type": "application/msgpack", "cache-control": IMMUTABLE } });
 }
 
-// /api/git/: the Worker's, with this bridge's sign-in, for a page with no
-// machine that this bridge serves. The Worker serving the page itself does
-// the same on its own origin (the hosted Worker's git.ts); the page asks either alike.
+// /api/git/: the account's repositories on its forge (node/git.ts), on
+// the node's channel to the leader, for a page with no machine that this
+// bridge serves.
+const GIT = NODE && gitViews(NODE.forge);
 async function gitProxy(req: Request, url: URL): Promise<Response> {
   const why = refuseFetch(req);
   if (why || (req.method !== "GET" && req.method !== "POST")) return new Response(why ?? "GET or POST", { status: 403 });
   if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
-  const headers = new Headers({ Authorization: `Bearer ${await token()}` });
-  for (const h of ["Content-Type", "Accept", "Git-Protocol", "Content-Encoding"]) {
-    const v = req.headers.get(h);
-    if (v) headers.set(h, v);
-  }
-  const res = await fetch(`${CLOUD}${url.pathname}${url.search}`, { method: req.method, headers, body: req.method === "POST" ? req.body : undefined });
-  return new Response(res.body, { status: res.status, headers: { "content-type": res.headers.get("content-type") ?? "application/octet-stream", "cache-control": "no-store" } });
+  if (!GIT) return new Response("this machine has no node", { status: 404 });
+  return GIT(req, url.pathname.slice("/api/git/".length).split("/").filter(Boolean).map(decodeURIComponent));
 }
 
 // /forge/: the account's forge, for git on this machine, on the node's
@@ -725,8 +722,7 @@ async function latency(req: Request): Promise<Response> {
 }
 
 // /media/<board>/<card>/<id>: a file an agent attached to a card, from the
-// node when it has it (node/media.ts), else the Worker with the bridge's
-// sign-in, for the page's media panel. The token
+// node (node/media.ts), for the page's media panel. The token
 // header is the guard: a page elsewhere can't send it without a preflight
 // the bridge never answers, and a same-origin GET carries no Origin.
 const MEDIA_PATH = /^\/media\/([A-Za-z0-9._-]{1,128})\/([A-Za-z]+-[0-9A-Za-z]+)\/([0-9a-f]{12})$/;
@@ -735,42 +731,14 @@ async function media(req: Request, url: URL): Promise<Response> {
   if (!TOKEN && !isLoopback(url.hostname)) return new Response(`wrong host: ${url.host}`, { status: 403 });
   const m = url.pathname.match(MEDIA_PATH);
   if (!m || req.method !== "GET") return new Response("not found", { status: 404 });
-  const res = (await NODE?.media(m[1], m[2], m[3]).catch((e) => void console.error(`node: media: ${(e as Error).message}`))) ?? (await fetch(`${CLOUD}/api/boards/${m[1]}/cards/${m[2]}/media/${m[3]}`, { headers: { Authorization: `Bearer ${await token()}` } }));
+  const res = await NODE?.media(m[1], m[2], m[3]).catch((e) => void console.error(`node: media: ${(e as Error).message}`));
+  if (!res) return new Response("not found", { status: 404 });
   const headers = new Headers({ "x-content-type-options": "nosniff" });
   for (const h of ["content-type", "content-length", "etag", "cache-control"]) {
     const v = res.headers.get(h);
     if (v) headers.set(h, v);
   }
   return new Response(res.body, { status: res.status, headers });
-}
-
-// /auth: whether this bridge is signed in to the Worker, for the page's
-// sign in (Sidebar.tsx). POST starts a sign-in, or joins the one under way,
-// and answers with the address for the page to open; once it's done, every
-// page's Neovim reads what it couldn't before.
-let signingIn: Promise<string> | undefined;
-async function auth(req: Request, url: URL): Promise<Response> {
-  if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
-  if (!TOKEN && !isLoopback(url.hostname)) return new Response(`wrong host: ${url.host}`, { status: 403 });
-  if (req.method === "GET") return Response.json({ server: CLOUD, signedIn: signedIn(), pending: !!signingIn });
-  if (req.method !== "POST") return new Response("GET or POST", { status: 405 });
-  if (!signingIn) {
-    let shown!: (url: string) => void;
-    const address = new Promise<string>((r) => (shown = r));
-    const run = login((u) => shown(u));
-    run.then(
-      () => {
-        for (const ws of pages) ws.data.page?.exec("require('corkboard').signed_in()");
-      },
-      (err) => console.error((err as Error).message),
-    ).finally(() => (signingIn = undefined));
-    signingIn = Promise.race([address, run.then(() => "")]);
-  }
-  try {
-    return Response.json({ url: await signingIn });
-  } catch (err) {
-    return new Response((err as Error).message, { status: 502 });
-  }
 }
 
 Bun.serve<Session, {}>({
@@ -821,7 +789,6 @@ Bun.serve<Session, {}>({
     if (url.pathname.startsWith("/api/git/")) return gitProxy(req, url);
     if (url.pathname.startsWith("/forge/")) return forgeProxy(req, url);
     if (url.pathname.startsWith("/media/")) return media(req, url);
-    if (url.pathname === "/auth") return auth(req, url);
     if (url.pathname === "/speech") {
       if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
       if (!TOKEN && !isLoopback(url.hostname)) return new Response(`wrong host: ${url.host}`, { status: 403 });

@@ -1,7 +1,7 @@
 // say: what the session says out loud, through the avatar panel beside it
 // (corkboard.avatar), which picks the calls out of the transcript. Written
 // for the ear, so the reply itself can stay written to be read. The
-// session is told to use it while the panel is open (hooks/claude-session.lua).
+// session is told to use it while the panel is open (hooks/session.lua).
 
 import type { Register } from 'claude-code'
 

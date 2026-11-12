@@ -68,9 +68,11 @@ async function api(method: string, path: string, body?: unknown) {
 
 class Gone extends Error {}
 
-// The chat: the Worker's, or the node's once the Worker's answers 410;
+// The chat: the node's when there is one (a relay-only device gets only the
+// queue from the Worker), else the Worker's until it answers 410;
 // node says which answered.
 async function chatApi(node: Node | undefined, method: string, path: string, body?: unknown): Promise<{ node: boolean; json: any }> {
+  if (node) return { node: true, json: await nodeApi(node, method, path, body) };
   try {
     return { node: false, json: await api(method, `/api${path}`, body) };
   } catch (e) {

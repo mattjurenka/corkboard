@@ -1,5 +1,5 @@
 -- How full a Claude Code session's context is, from its transcript. Used by
--- corkboard.agents in Neovim and by hooks/claude-session.lua in the session
+-- corkboard.agents in Neovim and by hooks/session.lua in the session
 -- (a `nvim --clean -l`, which reaches this file by path, so it needs nothing
 -- else of corkboard's).
 

@@ -248,7 +248,7 @@
           version = "0.1.0";
           src = pkgs.lib.fileset.toSource {
             root = ./.;
-            fileset = pkgs.lib.fileset.unions [ ./fleet/fleetd/fleet.ts ./fleet/fleetd/fleetd.ts ./fleet/fleetd/cli.ts ./fleet/fleetd/queue.ts ./fleet/fleetd/sessions.ts ./bridge/cloud.ts ./bridge/dirs.ts ./bridge/host.ts ./bridge/sessions.ts ./bridge/transcript.ts ./fleet/fleetd/assistant.ts ./fleet/fleetd/node.ts ./fleet/fleetd/forge.ts ./fleet/fleetd/actions.ts ./bridge/hub.ts ./lib/e2ee ];
+            fileset = pkgs.lib.fileset.unions [ ./fleet/fleetd/fleet.ts ./fleet/fleetd/fleetd.ts ./fleet/fleetd/cli.ts ./fleet/fleetd/queue.ts ./fleet/fleetd/sessions.ts ./bridge/cloud.ts ./bridge/dirs.ts ./bridge/host.ts ./bridge/sessions.ts ./bridge/transcript.ts ./fleet/fleetd/assistant.ts ./fleet/fleetd/node.ts ./fleet/fleetd/forge.ts ./fleet/fleetd/actions.ts ./bridge/hub.ts ./bridge/keystore.ts ./bridge/replicadb.ts ./lib/e2ee ];
           };
           # The channel's cryptography (lib/e2ee), as the bridge has it.
           crypto = [ "@noble/ciphers" "@noble/curves" "@noble/hashes" ];
@@ -257,7 +257,7 @@
             share=$out/share/corkboard-fleet
             mkdir -p $share/fleet/fleetd $share/bridge $share/lib
             cp fleet/fleetd/*.ts $share/fleet/fleetd/
-            cp bridge/cloud.ts bridge/dirs.ts bridge/host.ts bridge/hub.ts bridge/sessions.ts bridge/transcript.ts $share/bridge/
+            cp bridge/cloud.ts bridge/dirs.ts bridge/host.ts bridge/hub.ts bridge/keystore.ts bridge/replicadb.ts bridge/sessions.ts bridge/transcript.ts $share/bridge/
             cp -r lib/e2ee $share/lib/
             for p in $crypto; do
               mkdir -p $share/node_modules/$(dirname $p)

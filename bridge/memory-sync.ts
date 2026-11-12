@@ -15,12 +15,12 @@
 // changed. A file deleted here stays in the memory, and is listed.
 //
 // To the node the bridge runs (bridge/node/app.ts), as the user: its
-// address is in its session-mcp.json, and the token in its owner-token.
+// address and token node/local.ts reads.
 
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { STATE_DIR } from "./dirs";
+import { where } from "./node/local";
 
 const dry = process.argv.includes("--dry");
 const [brain, vault] = process.argv.slice(2).filter((a) => a !== "--dry");
@@ -138,13 +138,12 @@ if (dry) {
 
 let url: string, owner: string;
 try {
-  url = JSON.parse(readFileSync(join(STATE_DIR, "node", "session-mcp.json"), "utf8")).mcpServers["corkboard-memory"].url;
-  owner = readFileSync(join(STATE_DIR, "node", "owner-token"), "utf8").trim();
-} catch {
-  console.error("this machine's node hasn't run: start corkboard (its bridge runs the node)");
+  ({ url, owner } = where());
+} catch (e) {
+  console.error((e as Error).message);
   process.exit(1);
 }
-const base = `${new URL(url).origin}/api/node/brains/${encodeURIComponent(brain)}`;
+const base = `${url}/api/node/brains/${encodeURIComponent(brain)}`;
 const api = (path: string, init: RequestInit = {}) => fetch(`${base}${path}`, { ...init, headers: { Authorization: `Bearer ${owner}`, "Content-Type": "application/json" } });
 
 let changed = 0;

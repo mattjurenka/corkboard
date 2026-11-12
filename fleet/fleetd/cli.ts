@@ -17,11 +17,11 @@
 //   corkboard-fleet device cert [FILE] < cert.json
 //                                      keeps the cert that line printed
 
-import { existsSync } from "node:fs";
+import { accessSync, constants, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { CLOUD, token } from "../../bridge/cloud";
 import { accountFor, answer, MANIFEST, manifest, newId, read, schedule, SPAWNS, STATE, spawns, write, type Spawn } from "./fleet";
-import { makeDevice, storeCert } from "./node";
+import { makeDevice, storeCert, useDevice } from "./node";
 import { b64url } from "../../lib/e2ee/wire";
 
 const die = (msg: string): never => {
@@ -32,6 +32,15 @@ const die = (msg: string): never => {
 const [cmd, ...args] = process.argv.slice(2);
 
 async function cloud(method: string, path: string) {
+  // As fleetd's device, when this user can read it; else this machine's.
+  const device = (() => {
+    try {
+      const d = manifest().node?.device;
+      if (d) accessSync(d, constants.R_OK);
+      return d;
+    } catch {}
+  })();
+  if (device) useDevice(device);
   const res = await fetch(`${CLOUD}${path}`, { method, headers: { Authorization: `Bearer ${await token().catch((e) => die(e.message))}` } });
   const json = (await res.json().catch(() => ({}))) as any;
   if (!res.ok) die(json.error ?? `HTTP ${res.status}`);

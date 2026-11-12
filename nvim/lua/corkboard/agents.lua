@@ -1,8 +1,8 @@
 -- Agents on cards. Handing a card to an agent (the board's a) queues it;
 -- whenever the board changes, queued cards whose dependencies are done start,
 -- up to g:corkboard_max_agents at once (default 3). Each gets a git worktree
--- on branch card/task-<n> and Claude Code in a tab, told to work on the card
--- through the corkboard MCP.
+-- on branch card/task-<n> and the card's agent (corkboard.agent) in a tab,
+-- told to work on the card through the corkboard MCP.
 --
 -- Sessions belong to this Neovim and end with it; a card still queued then
 -- starts again the next time the board is open.
@@ -32,8 +32,8 @@ function M.session(id)
   sessions[id] = nil
 end
 
--- A Claude Code terminal's state, from its hooks: nil before the first, and
--- for a session run somewhere else (corkboard.claude's via), which has none.
+-- An agent's terminal's state, from its events: nil before the first, and
+-- for a session run somewhere else (corkboard.session's via), which has none.
 function M.state(buf) return live[buf] end
 
 -- The card's session state for the board: live's, "starting" before its
@@ -44,47 +44,28 @@ function M.live(id)
   return exited[id] and "exited" or nil
 end
 
+-- The state a session's event (corkboard's, as hooks/session.lua sends
+-- them) puts it in.
 local function event_state(ev)
-  if ev.event == "PreToolUse" and ev.tool_name == "AskUserQuestion" then return "asking" end
-  if ev.event == "Notification" then
-    local kind = ev.notification_type or ""
-    if kind == "permission_prompt" or (kind == "" and (ev.message or ""):lower():find("permission")) then return "permission" end
-    if kind == "idle_prompt" then return "settled" end
-    return nil
-  end
   return ({
-    SessionStart = "idle",
-    UserPromptSubmit = "working",
-    PreToolUse = "working",
-    PostToolUse = "working",
-    PermissionRequest = "permission",
-    Stop = "settled",
+    start = "idle",
+    turn = "working",
+    asking = "asking",
+    tool = "working",
+    tool_done = "working",
+    permission = "permission",
+    waiting = "settled",
+    settled = "settled",
   })[ev.event]
-end
-
--- The task-notifications in the transcript's end, by the tool call that
--- started each: one with a status is that work finished.
-local NOTES = 4 * 1024 * 1024
-local function finished_tasks(path)
-  local done = {}
-  local fd = path and vim.uv.fs_open(vim.fn.expand(path), "r", 0)
-  if not fd then return done end
-  local size = vim.uv.fs_fstat(fd).size
-  local text = vim.uv.fs_read(fd, math.min(size, NOTES), math.max(0, size - NOTES)) or ""
-  vim.uv.fs_close(fd)
-  for note in text:gmatch("<task%-notification>(.-)</task%-notification>") do
-    local id = note:match("<tool%-use%-id>([^<]+)</tool%-use%-id>")
-    if id and note:find("<status>", 1, true) then done[id] = true end
-  end
-  return done
 end
 
 -- Between turns: still at work while what it started in the background
 -- hasn't come back, or a /loop will wake it; otherwise waiting on you.
 local function settle(buf, ev)
   local mine = pending[buf]
-  if mine and next(mine) then
-    for id in pairs(finished_tasks(ev.transcript_path)) do mine[id] = nil end
+  local kind = require("corkboard.agent").of(buf)
+  if mine and next(mine) and kind then
+    for id in pairs(kind.read.background(ev.transcript)) do mine[id] = nil end
   end
   return ((mine and next(mine)) or waking[buf]) and "background" or "ready"
 end
@@ -113,7 +94,7 @@ local function remember(id, session_id, transcript)
 end
 
 -- Go to what the card's agent wants: its session, where the question is
--- Claude Code's own to answer, or the card when no session runs. Going also
+-- the agent's own to answer, or the card when no session runs. Going also
 -- lets it past a budget hold (corkboard.budget).
 function M.attend(id)
   board().set(id, { attention = "", budget_hold = "" })
@@ -124,9 +105,9 @@ end
 
 -- What the card should say while its session waits on the user.
 local function asking(ev)
-  if ev.event == "PreToolUse" and ev.tool_name == "AskUserQuestion" then
+  if ev.event == "asking" then
     return "asks: " .. (ev.question or "a question")
-  elseif ev.event == "PermissionRequest" then
+  elseif ev.event == "permission" and not ev.noticed then
     return "wants permission" .. (ev.tool_name and (" for " .. ev.tool_name) or "")
   end
 end
@@ -138,16 +119,17 @@ function M.context_limit() return require("corkboard.context").limit() end
 -- the session's context for its status line, and a word once when it
 -- passes the limit.
 local function track_context(buf, ev)
-  if ev.event == "SessionStart" then vim.b[buf].corkboard_context = nil end
-  if ev.event ~= "Stop" and ev.event ~= "PostToolUse" then return vim.cmd.redrawstatus({ bang = true }) end
+  if ev.event == "start" then vim.b[buf].corkboard_context = nil end
+  local kind = require("corkboard.agent").of(buf)
+  if (ev.event ~= "settled" and ev.event ~= "tool_done") or not kind then return vim.cmd.redrawstatus({ bang = true }) end
   local was = vim.b[buf].corkboard_context
-  local now = require("corkboard.context").last(ev.transcript_path)
+  local now = kind.read.context(ev.transcript)
   if not now then return end
   vim.b[buf].corkboard_context = now
   local limit = M.context_limit()
   if now >= limit and (was or 0) < limit then
     vim.notify(string.format(
-      "corkboard: this Claude session's context is %dk, past %dk, and it hasn't handed off. /clear it, or start a new session.",
+      "corkboard: this session's context is %dk, past %dk, and it hasn't handed off. /clear it, or start a new session.",
       math.floor(now / 1000 + 0.5), math.floor(limit / 1000)), vim.log.levels.WARN)
   end
   vim.cmd.redrawstatus({ bang = true })
@@ -193,19 +175,19 @@ local function clear(buf)
   if vim.b[buf].corkboard_card == id then M.link(buf, nil) end
   -- Its card is done, so there's nothing for a handoff to go on with.
   handing[buf], resuming[buf] = nil, nil
-  local session = vim.b[buf].corkboard_claude_session
+  local session = vim.b[buf].corkboard_agent_session
   if session then os.remove(handoff_path(session)) end
   type_line(buf, "/clear")
   vim.notify("corkboard: " .. id .. " is done, so its session was cleared for the next task")
 end
 
 -- A session near its context limit hands off (the corkboard MCP's handoff,
--- asked for by hooks/claude-session.lua): corkboard keeps what it wrote in a
+-- asked for by hooks/session.lua): corkboard keeps what it wrote in a
 -- file, types /clear once it's between turns, and starts the session that
 -- follows on it. It keeps its card.
 
 local function hand_off(buf, ev)
-  local path = handoff_path(ev.session_id or tostring(os.time()))
+  local path = handoff_path(ev.session or tostring(os.time()))
   vim.fn.mkdir(vim.fs.dirname(path), "p", tonumber("700", 8))
   local lines = vim.split(ev.handoff, "\n", { plain = true })
   -- Its heading is what the next session is called (resume), kept in the
@@ -213,7 +195,7 @@ local function hand_off(buf, ev)
   local title = vim.trim((ev.handoff_title or ""):gsub("%s+", " "))
   if title ~= "" then lines = vim.list_extend({ "# " .. title, "" }, lines) end
   vim.fn.writefile(lines, path)
-  handing[buf] = { path = path, session = ev.session_id }
+  handing[buf] = { path = path, session = ev.session }
 end
 
 local function restart(buf)
@@ -255,31 +237,31 @@ function M.finished(cards)
   end
 end
 
--- From a session's hook (hooks/claude-session.lua).
+-- A session's event, as corkboard's (hooks/session.lua sends Claude Code's).
 function M.hook(ev)
   local buf = ev.buf
   if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
   local id = vim.b[buf].corkboard_card
   -- What corkboard.restore resumes; a /clear starts another.
-  if ev.event == "SessionStart" and ev.session_id then
+  if ev.event == "start" and ev.session then
     -- A /clear of a session that handed off, typed by you or after a reload
     -- forgot the handoff, starts from it too.
-    local last = vim.b[buf].corkboard_claude_session
-    if ev.source == "clear" and last and last ~= ev.session_id and not resuming[buf] then
+    local last = vim.b[buf].corkboard_agent_session
+    if ev.source == "clear" and last and last ~= ev.session and not resuming[buf] then
       local path = handoff_path(last)
       if vim.uv.fs_stat(path) then resuming[buf] = { path = path, session = last } end
       handing[buf] = nil
     end
     if ev.source == "clear" and not resuming[buf] then vim.b[buf].corkboard_handoff_title = nil end
     -- A new session (a /clear) has none of the last one's background work.
-    if vim.b[buf].corkboard_claude_session ~= ev.session_id then pending[buf], waking[buf] = nil, nil end
-    vim.b[buf].corkboard_claude_session = ev.session_id
-    vim.b[buf].corkboard_claude_transcript = ev.transcript_path
+    if vim.b[buf].corkboard_agent_session ~= ev.session then pending[buf], waking[buf] = nil, nil end
+    vim.b[buf].corkboard_agent_session = ev.session
+    vim.b[buf].corkboard_agent_transcript = ev.transcript
     -- Saved now: a /clear changes no window, so nothing else would, and a
     -- reload would resume the session it cleared (a handoff's full one).
     require("corkboard.restore").save()
   end
-  if ev.event == "SessionStart" and id and ev.session_id then remember(id, ev.session_id, ev.transcript_path) end
+  if ev.event == "start" and id and ev.session then remember(id, ev.session, ev.transcript) end
   -- A session corkboard didn't start on a card took one (claim_card,
   -- next_card) or let it go (release_card) through the corkboard MCP.
   if ev.card and ev.corkboard_tool == "release_card" then
@@ -290,10 +272,16 @@ function M.hook(ev)
     id = ev.card
   end
   track_context(buf, ev)
+  -- A turn's edits may be in folders the file browser has shut, which color
+  -- by what changed inside them.
+  if ev.event == "settled" then require("corkboard").files_changed() end
   -- When you last said something to it, which away mode orders by.
-  if ev.event == "UserPromptSubmit" then vim.b[buf].corkboard_typed = os.time() * 1000 end
+  if ev.event == "turn" then vim.b[buf].corkboard_typed = os.time() * 1000 end
   local was = live[buf]
   local state = event_state(ev)
+  -- A question's dialog is its permission prompt too, and Claude Code says
+  -- so with a permission (a PermissionRequest, then a Notification) after it.
+  if state == "permission" and was == "asking" and (ev.tool_name == nil or ev.tool_name == "AskUserQuestion") then state = "asking" end
   -- A turn starting: whether it schedules another wakeup is up to it.
   if state == "working" and was ~= "working" then waking[buf] = nil end
   if ev.background and ev.tool_use_id then
@@ -314,6 +302,7 @@ function M.hook(ev)
     -- doesn't say.
     local waiting = state == "asking" or state == "permission"
     vim.b[buf].corkboard_asking = waiting and (asking(ev) or vim.b[buf].corkboard_asking) or nil
+    vim.b[buf].corkboard_questions = state == "asking" and (ev.questions or vim.b[buf].corkboard_questions) or nil
     require("corkboard.away").report()
     require("corkboard.avatar").changed(buf)
     -- The tab's mark: a session in a tab off screen draws nothing that
@@ -322,7 +311,7 @@ function M.hook(ev)
   end
   if ev.handoff then hand_off(buf, ev) end
   if handing[buf] and between_turns(buf) and not clearing[buf] then vim.schedule(function() restart(buf) end) end
-  if resuming[buf] and ev.event == "SessionStart" and ev.session_id ~= resuming[buf].session then
+  if resuming[buf] and ev.event == "start" and ev.session ~= resuming[buf].session then
     vim.schedule(function() resume(buf) end)
   end
   -- Its card was done while it was mid-turn.
@@ -412,9 +401,9 @@ end
 -- A cloud board's MCP server, with a token for this card's agent only. The
 -- config holds the token, so it's a file only this user can read, not an
 -- argument every process can see. Returns its path, and what undoes it.
-local function cloud_mcp_config(id)
+local function cloud_mcp_config(id, agent)
   local cards = require("corkboard.cards")
-  local grant = cards.agent_token(id, "claude")
+  local grant = cards.agent_token(id, agent)
   local dir = vim.fs.joinpath(vim.fn.stdpath("state"), "corkboard", "agents")
   vim.fn.mkdir(dir, "p", tonumber("700", 8))
   local path = vim.fs.joinpath(dir, util.project_key() .. "-" .. id:lower() .. ".json")
@@ -432,9 +421,9 @@ end
 -- cloud board, else mcp/board.ts over the card files: as the bridge says to
 -- start it (CORKBOARD_MCP_COMMAND, a JSON list: the compiled bridge's
 -- `mcp`, which needs no bun), or with bun from this checkout.
--- Returns the --mcp-config value, and what to do when the agent exits.
-local function mcp_config(id)
-  if require("corkboard.cards").cloud() then return cloud_mcp_config(id) end
+-- Returns its config (a file or JSON), and what to do when the agent exits.
+local function mcp_config(id, agent)
+  if require("corkboard.cards").cloud() then return cloud_mcp_config(id, agent) end
   local ok, given = pcall(vim.json.decode, vim.env.CORKBOARD_MCP_COMMAND or "")
   if ok and type(given) == "table" and given[1] then
     return vim.json.encode({ mcpServers = { corkboard = { command = given[1], args = vim.list_slice(given, 2) } } })
@@ -486,32 +475,31 @@ function M.start(id, opts)
     board().set(id, { agent_state = "blocked", attention = "could not make a worktree: " .. dir })
     return
   end
-  -- --mcp-config takes any number of values, so -- ends the options before
-  -- the prompt.
-  local args = {}
-  local made, config, cleanup = pcall(mcp_config, id)
+  -- The kind the card names, else the default one.
+  local kinds = require("corkboard.agent")
+  local agent = (card.agent and kinds.get(card.agent) or kinds.get()).name
+  local made, config, cleanup = pcall(mcp_config, id, agent)
   if not made then
     board().set(id, { agent_state = "blocked", attention = "could not give the agent the board: " .. config })
     return
   end
-  if config then vim.list_extend(args, { "--mcp-config", config }) end
-  vim.list_extend(args, { "--name", id .. " " .. card.title })
-  vim.list_extend(args, vim.g.corkboard_agent_args or {})
-  if opts and opts.resume then
-    vim.list_extend(args, { "--resume", opts.resume })
-  else
-    vim.list_extend(args, { "--", prompt(card, branch, opts and opts.sent_back, opts and opts.feedback) })
-  end
+  local resume = opts and opts.resume
 
   local buf
-  buf = require("corkboard.claude").start({
-    kind = "card",
-    args = args,
+  buf = require("corkboard.session").start({
+    agent = agent,
+    role = "card",
+    mcp = config,
+    name = id .. " " .. card.title,
+    args = vim.g.corkboard_agent_args,
+    resume = resume,
+    task = not resume and prompt(card, branch, opts and opts.sent_back, opts and opts.feedback) or nil,
     here = opts and opts.here,
+    brain = opts and opts.brain,
     cwd = dir,
     -- For the MCP server: who the agent is, and the board, which a worktree
     -- outside the repository couldn't find by itself.
-    env = { CORKBOARD_AGENT = "claude", CORKBOARD_CARD = id, CORKBOARD_BOARD = board().dir() },
+    env = { CORKBOARD_AGENT = agent, CORKBOARD_CARD = id, CORKBOARD_BOARD = board().dir() },
     on_exit = function()
       if cleanup then cleanup() end
       if sessions[id] == buf then
@@ -537,7 +525,7 @@ function M.start(id, opts)
   sessions[id] = buf
   exited[id] = nil
   keep_alive()
-  board().set(id, { agent = card.agent or "claude", worktree = dir or "", branch = branch or "" })
+  board().set(id, { agent = card.agent or agent, worktree = dir or "", branch = branch or "" })
 end
 
 -- Start what is queued and may run, up to the limit. Only with the page

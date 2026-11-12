@@ -381,7 +381,7 @@ export class Session {
       }
       // A session's conversation, as it goes, to the fleet view
       // (corkboard/conversation.lua) as { type: "conversation", bridge, key,
-      // items, reset } and, once it's over, { type: "conversation_end", why }.
+      // items, reset, state } and, once it's over, { type: "conversation_end", why }.
       case "fleet_follow": {
         const [bridge, key] = args as [string, string];
         const id = `${bridge}/${key}`;
@@ -396,7 +396,7 @@ export class Session {
           (m) => {
             if (m.type === "out") {
               const batch = JSON.parse(m.data);
-              this.listener(USER, { type: "conversation", bridge, key, items: batch.items ?? [], reset: !!batch.reset });
+              this.listener(USER, { type: "conversation", bridge, key, items: batch.items ?? [], reset: !!batch.reset, state: batch.state });
             } else if (m.type === "end") this.listener(USER, { type: "conversation_end", bridge, key, why: m.why ?? "ended" });
           },
           () => {
@@ -455,11 +455,12 @@ export class Session {
         ws?.close();
         return null;
       }
-      // Typed into a session: text, then keys (enter, esc, …).
+      // Typed into a session: text, then keys (enter, esc, …); or answers to
+      // the question it asks (bridge/sessions.ts's Answers).
       case "fleet_say": {
-        const [bridge, key, text, keys] = args as [string, string, string, string[]];
+        const [bridge, key, text, keys, answers] = args as [string, string, string, string[], unknown?];
         const path = `/api/sessions/${encodeURIComponent(bridge)}/${encodeURIComponent(key)}/say`;
-        const body = JSON.stringify({ text: text ?? "", keys: keys ?? [] });
+        const body = JSON.stringify(answers ? { answers } : { text: text ?? "", keys: keys ?? [] });
         const peers = this.cloud.link.peers?.();
         const res = peers?.has(bridge)
           ? await peers.fetch(bridge, path, { method: "POST", headers: { "Content-Type": "application/json" }, body })
@@ -472,8 +473,8 @@ export class Session {
       // board's project (its clone there), when one is named; onNode, a
       // board the node has (boards.ts), which hands out its grant.
       case "fleet_session": {
-        const [environment, template, board, onNode] = args as [string, string, string?, boolean?];
-        return send("POST", "/spawns", { environment, template, interactive: true, task: "", ...(board && { board }), ...(onNode && { node: true }) });
+        const [environment, template, board, onNode, brain] = args as [string, string, string?, boolean?, string?];
+        return send("POST", "/spawns", { environment, template, interactive: true, task: "", ...(board && { board }), ...(onNode && { node: true }), ...(brain && { brain }) });
       }
       case "fleet_approve":
       case "fleet_stop":

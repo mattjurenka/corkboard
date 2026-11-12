@@ -121,7 +121,6 @@ local function state()
   local agents = require("corkboard.agents")
   local autopilot = require("corkboard.autopilot")
   return {
-    root = require("corkboard.util").project_root(),
     none = require("corkboard.util").no_project() or nil,
     statuses = M.statuses,
     selected = selected,
@@ -174,7 +173,7 @@ end
 local function render_text()
   if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
   local agents = require("corkboard.agents")
-  local lines, map = { "Board  " .. vim.fn.getcwd(), "" }, {}
+  local lines, map = { "Board", "" }, {}
   for _, status in ipairs(M.statuses) do
     local col = column(status)
     table.insert(lines, string.format("%s (%d)", status:upper(), #col))

@@ -54,8 +54,8 @@ export function saveCalendar(path: string, c: CalendarConfig) {
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 
 // The Worker's connection, lent: an access token until it ends, and the
-// calendar and zone the Worker's settings name. ask is the signed-in POST
-// to /api/calendar/token, undefined while the node isn't signed in. None
+// calendar and zone the Worker's settings name. ask is the device's POST
+// to /api/calendar/token, undefined while the account isn't on the relay. None
 // connected there (404) is asked again in a minute.
 type Lent = { access_token: string; expires_at: string; calendar: string; timezone: string };
 export function lentCalendar(ask: () => Promise<Response> | undefined): () => Promise<CalendarConfig | undefined> {

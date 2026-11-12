@@ -290,9 +290,10 @@ function M.tab_labels()
     local buf = vim.api.nvim_win_get_buf(vim.fn.win_getid(1, nr))
     local name = vim.fn.bufname(buf)
     names[tostring(tab)] = name:sub(1, 1) == "/" and vim.fn.fnamemodify(name, ":~") or name
-    local kind = vim.b[buf].corkboard_claude
+    local kind = vim.b[buf].corkboard_agent and vim.b[buf].corkboard_role
     if kind then labels[tostring(tab)] = {
-        title = require("corkboard.claude").title(buf),
+        title = require("corkboard.session").title(buf),
+        where = require("corkboard.session").where(buf, true),
         kind = kind,
         state = require("corkboard.agents").state(buf),
       } end
@@ -415,7 +416,9 @@ local function git_status(dir)
   if prefix.code ~= 0 then return status end
   prefix = vim.trim(prefix.stdout)
   -- Porcelain paths are relative to the repository root, whatever the cwd.
-  local result = vim.system({ "git", "status", "--porcelain", "-z", "--untracked-files=normal", "--", "." }, { cwd = dir }):wait()
+  -- Without the index refreshed on disk: the browser watches it (watch_dirs),
+  -- and a session's own git may hold its lock.
+  local result = vim.system({ "git", "status", "--porcelain", "-z", "--untracked-files=normal", "--", "." }, { cwd = dir, env = { GIT_OPTIONAL_LOCKS = "0" } }):wait()
   local fields = vim.split(result.stdout or "", "\0", { plain = true, trimempty = true })
   local i = 1
   while i <= #fields do
@@ -461,6 +464,52 @@ function M.list_dir(dir)
     return a.name:lower() < b.name:lower()
   end)
   return entries
+end
+
+-- The folders the file browser has open, and the repository's index, watched
+-- so that what a session, git or a terminal does shows without a save here.
+local browser_dirs, browser_index, browser_watchers = {}, nil, {}
+
+local function watch_browser()
+  for _, w in ipairs(browser_watchers) do w:close() end
+  browser_watchers = {}
+  local function watch(path, on_event)
+    local w = vim.uv.new_fs_event()
+    if not w then return end
+    if w:start(path, {}, on_event) then table.insert(browser_watchers, w) else w:close() end
+  end
+  for _, dir in ipairs(browser_dirs) do
+    watch(dir, function() M.files_changed() end)
+  end
+  -- A commit, a stage or a checkout changes what git marks, and may touch
+  -- no folder that is open.
+  if browser_index then
+    watch(browser_index, function(_, name)
+      if name == nil or name == "index" then M.files_changed() end
+    end)
+  end
+end
+
+-- Tell the browser to re-read its folders. A build or a checkout touches
+-- many files at once, so settle first. The folders are watched afresh: one
+-- deleted and made again is a new folder to the watcher.
+local files_pending = false
+function M.files_changed()
+  if files_pending then return end
+  files_pending = true
+  vim.defer_fn(function()
+    files_pending = false
+    watch_browser()
+    M.notify("corkboard.files_changed")
+  end, 200)
+end
+
+-- The page says which folders it shows, each time one opens or shuts.
+function M.watch_dirs(dirs)
+  browser_dirs = dirs
+  local git = vim.system({ "git", "rev-parse", "--absolute-git-dir" }, { cwd = vim.fn.getcwd() }):wait()
+  browser_index = git.code == 0 and vim.trim(git.stdout) or nil
+  watch_browser()
 end
 
 -- An HTML panel such as the board or a markdown preview, as opposed to a
@@ -530,16 +579,6 @@ local function open_in_preview(path)
   M.push_preview()
 end
 
--- From the bridge, once the page's sign in has finished: what couldn't be
--- read signed out (the board, the fleet, brains and holds, the plan), read.
-function M.signed_in()
-  vim.schedule(function()
-    if M.window == "plan" then return require("corkboard.plan").cloud_event({ type = "reconnected" }) end
-    require("corkboard.board").push()
-    require("corkboard.fleet").cloud_event({ type = "reconnected" })
-  end)
-end
-
 -- A click on a file in the browser. With tab (the file explorer), it opens
 -- in the explorer's preview tab (above), or a tab of its own at the end, or
 -- goes to the window already showing it. Otherwise it opens in the current
@@ -598,9 +637,10 @@ local function corner(win)
   return best == win
 end
 
--- Each window's status line names what is in it: a terminal by its program
--- and directory, the board as "Board", a file by its path with ● for unsaved
--- changes. Line and column only where the cursor means something.
+-- Each window's status line names what is in it: a Claude Code session by
+-- where it runs, a terminal by its program and directory, the board as
+-- "Board", a file by its path with ● for unsaved changes. Line and column
+-- only where the cursor means something.
 function M.statusline()
   local win = vim.g.statusline_winid
   local buf = vim.api.nvim_win_get_buf(win)
@@ -611,15 +651,8 @@ function M.statusline()
   local cwd, cmd = name:match("^term://(.-)//%d+:(.*)$")
   if vim.b[buf].corkboard_plan_claude then
     title, detail, pos = "Pepper", "beside the day plan", false
-  elseif vim.b[buf].corkboard_vm then
-    -- A session elsewhere: its name, then the brain it runs as and its VM,
-    -- where they say more than the name does.
-    title, pos = vim.b[buf].corkboard_name or require("corkboard.claude").title(buf), false
-    local where = {}
-    for _, s in ipairs({ vim.b[buf].corkboard_brain or false, vim.b[buf].corkboard_vm }) do
-      if s and s:lower() ~= title:lower() and not vim.tbl_contains(where, s) then table.insert(where, s) end
-    end
-    detail = #where > 0 and table.concat(where, " · ") or nil
+  elseif vim.b[buf].corkboard_vm or vim.b[buf].corkboard_agent then
+    title, pos = require("corkboard.session").where(buf), false
   elseif cwd then
     title = vim.fs.basename(vim.split(cmd, " ", { trimempty = true })[1] or "terminal")
     detail, pos = vim.fn.fnamemodify(cwd, ":~"), false
@@ -850,7 +883,7 @@ function M.setup()
     vim.keymap.set({ "n", "i", "t" }, "<C-f>", picker.files, { desc = "corkboard: find file" })
     vim.keymap.set({ "n", "i", "t" }, "<D-p>", picker.files, { desc = "corkboard: find file" })
     vim.keymap.set({ "n", "i", "t" }, "<C-`>", require("corkboard.terminal").toggle, { desc = "corkboard: terminal" })
-    vim.keymap.set({ "n", "i", "t" }, "<C-.>", require("corkboard.claude").open, { desc = "corkboard: Claude Code" })
+    vim.keymap.set({ "n", "i", "t" }, "<C-.>", require("corkboard.session").open, { desc = "corkboard: new session" })
     vim.keymap.set("n", "<leader>f", function() Snacks.picker.files() end, { desc = "find file" })
     vim.keymap.set("n", "<leader>g", function() Snacks.picker.grep() end, { desc = "grep" })
     vim.keymap.set("n", "<leader>,", function() Snacks.picker.buffers() end, { desc = "buffers" })
@@ -974,7 +1007,7 @@ function M.setup()
     group = group,
     callback = function(args)
       local pid = vim.b[args.buf].terminal_job_pid
-      require("corkboard.claude").open_on_click(args.buf, function()
+      require("corkboard.session").open_on_click(args.buf, function()
         return pid and vim.uv.fs_readlink(("/proc/%d/cwd"):format(pid)) or vim.fn.getcwd()
       end)
     end,
@@ -1027,6 +1060,29 @@ function M.setup()
     end)
   end
   vim.keymap.set({ "n", "v", "i" }, "<ScrollWheelDown>", wheel_down)
+  -- The furthest right that still has the end of the longest line on screen
+  -- showing, clear of what the page draws over the window's edge. In the
+  -- current window.
+  local function last_left(win)
+    local longest = 0
+    for _, line in ipairs(vim.api.nvim_buf_get_lines(0, vim.fn.line("w0") - 1, vim.fn.line("w$"), false)) do
+      longest = math.max(longest, vim.fn.strdisplaywidth(line))
+    end
+    local text = vim.fn.winwidth(0) - vim.fn.getwininfo(win)[1].textoff - require("corkboard.minimap").covers(win)
+    return math.max(0, longest - text)
+  end
+  -- And across, in any window that doesn't wrap: past the content there is
+  -- nothing to see.
+  local function wheel_right()
+    local pos = vim.fn.getmousepos()
+    if pos.winid == 0 or not vim.api.nvim_win_is_valid(pos.winid) then return end
+    local steps = tonumber(vim.o.mousescroll:match("hor:(%d+)")) or 6
+    vim.api.nvim_win_call(pos.winid, function()
+      local n = math.min(steps, last_left(pos.winid) - vim.fn.winsaveview().leftcol)
+      if n > 0 then vim.cmd("normal! " .. n .. "zl") end
+    end)
+  end
+  vim.keymap.set({ "n", "v", "i" }, "<ScrollWheelRight>", wheel_right)
   -- Anything else is put back after the event, so the next scroll is
   -- measured from there and fires it again.
   local function clamp(win)
@@ -1059,9 +1115,11 @@ function M.setup()
     end,
   })
   -- A save can add a file, so the browser re-reads the folders it shows.
-  vim.api.nvim_create_autocmd("BufWritePost", {
+  -- Back from another window, anything may have changed, in folders that
+  -- aren't open (and so aren't watched) too.
+  vim.api.nvim_create_autocmd({ "BufWritePost", "FocusGained" }, {
     group = group,
-    callback = function() M.notify("corkboard.files_changed") end,
+    callback = function() M.files_changed() end,
   })
   -- An edit, or a closed tab, can end the explorer's preview.
   vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "TabClosed", "BufWinLeave" }, {

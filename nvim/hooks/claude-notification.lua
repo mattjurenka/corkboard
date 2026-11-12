@@ -1,5 +1,5 @@
 -- Claude Code's PostToolUse hook for PushNotification, set by
--- corkboard.claude. Runs as `nvim -l` and hands each notification, sent or
+-- corkboard.agent.claude. Runs as `nvim -l` and hands each notification, sent or
 -- not, to the Neovim whose terminal the session is in ($NVIM), which passes
 -- it to the page (corkboard.notification). Fails silently: a hook's error
 -- would only show up in the session.
@@ -24,7 +24,7 @@ pcall(vim.rpcrequest, chan, "nvim_exec_lua", "require('corkboard').notify('corkb
     cwd = input.cwd,
     sent = held == nil,
     reason = held,
-    -- The session's terminal, set by corkboard.claude.
+    -- The session's terminal, set by corkboard.session.
     buf = tonumber(os.getenv("CORKBOARD_BUF") or ""),
   },
 })

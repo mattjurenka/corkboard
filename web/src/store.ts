@@ -23,6 +23,8 @@ export type BrainFields = {
   abilities: string[];
   persona: string | null;
   skin: string | null;
+  model: string | null;
+  model_key: string | null;
   default: boolean;
   updated?: string;
 };
@@ -76,8 +78,9 @@ export type Minimap = { palette: string[]; lines: number[][] };
 export type Scroll = { bars: Bar[]; floats: Rect[] };
 
 // label: what Neovim calls it where the buffer name reads badly
-// (corkboard.tab_labels), with a Claude Code session's state from its hooks.
-export type Tab = { tab: Ext; name: string; label?: { title: string; kind: string; state?: string } };
+// (corkboard.tab_labels), with a Claude Code session's state from its hooks
+// and where it runs.
+export type Tab = { tab: Ext; name: string; label?: { title: string; where?: string; kind: string; state?: string } };
 
 // Away mode, from the bridge (bridge/away.ts): every page's Claude Code
 // sessions, each on page (the bridge's id for it) in terminal buf. at: when

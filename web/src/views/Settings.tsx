@@ -36,7 +36,7 @@ type Setting = {
   modified: boolean;
 };
 type Device = { device: string; name: string; seen: number; me: boolean; connected: boolean; leader: boolean };
-type Devices = { url: string; leader: string | null; devices: Device[] };
+type Devices = { url: string; leader: string | null; forge?: boolean; devices: Device[] };
 type SettingsState = { selected?: string; sections: { title: string; items: Setting[] }[]; devices: Devices | null; leader: string; palette: (string | undefined)[] };
 type Change = (v: Value) => void;
 
@@ -58,7 +58,7 @@ export function Settings({ state, win, focused, nvim }: ViewProps<SettingsState>
   const sections = state.sections
     .map((s) => ({ ...s, items: q ? s.items.filter((i) => searched(s.title, i, state.leader).toLowerCase().includes(q)) : s.items }))
     .filter((s) => s.items.length);
-  const devices = state.devices && (!q || ["devices", "address", "leader", ...state.devices.devices.map((d) => d.name)].some((w) => w.toLowerCase().includes(q))) ? state.devices : null;
+  const devices = state.devices && (!q || ["devices", "address", "leader", "forge", ...state.devices.devices.map((d) => d.name)].some((w) => w.toLowerCase().includes(q))) ? state.devices : null;
   const row = (key: string, label: string, control: React.ReactNode) => (
     <div
       key={key}
@@ -133,6 +133,7 @@ export function Settings({ state, win, focused, nvim }: ViewProps<SettingsState>
               </button>
             </>,
           )}
+          {row("devices.forge", "Forge pages via relay (it sees them)", <Check on={!!devices.forge} set={() => device("devices.forge")} />)}
           {devices.devices.map((d) =>
             row(
               `devices.${d.device}`,

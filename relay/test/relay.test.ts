@@ -777,6 +777,21 @@ describe("nodes and the tunnel", () => {
     expect((await a.relay.nodes()).connected).toHaveLength(1);
     expect((await worker(`/n/${handle}/x`)).headers.get("x-node")).toBe("second");
   });
+
+  it("pass Forgejo's pages, and its cookies, only while the account has them on", async () => {
+    const a = await account();
+    const handle = await nodeHandle(a.keys.id);
+    await node(a.relay, "laptop");
+    const cookie = "forge_session=s; _csrf=c; lang=en; other=x";
+    expect((await worker(`/n/${handle}/forge/`, { headers: { Cookie: cookie } })).status).toBe(404);
+    expect((await a.relay.setForgeWeb(true)).forge).toBe(true);
+    const got = (await (await worker(`/n/${handle}/forge/user/login`, { headers: { Cookie: cookie } })).json()) as { headers: Record<string, string> };
+    expect(got.headers.cookie).toBe("forge_session=s; _csrf=c; lang=en");
+    // Elsewhere, none.
+    expect(((await (await worker(`/n/${handle}/forgex`, { headers: { Cookie: cookie } })).json()) as { headers: Record<string, string> }).headers.cookie).toBeUndefined();
+    expect((await a.relay.setForgeWeb(false)).forge).toBeUndefined();
+    expect((await worker(`/n/${handle}/forge`)).status).toBe(404);
+  });
 });
 
 describe("channels", () => {

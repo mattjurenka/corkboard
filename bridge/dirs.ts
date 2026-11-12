@@ -1,6 +1,6 @@
 // Where corkboard keeps things on this machine, and where its own files are.
 //
-// state (auth.json, the projects opened, latency), data (boards, card
+// state (the account key, the projects opened, latency), data (boards, card
 // worktrees) and cache (the speech model): XDG's on Linux, as they always
 // were; ~/Library on macOS; %LOCALAPPDATA% on Windows. An XDG_* variable
 // that is set wins anywhere. The bridge hands them to Neovim as

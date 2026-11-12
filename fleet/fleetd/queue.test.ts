@@ -109,10 +109,6 @@ beforeAll(async () => {
   mkdirSync(join(dir, "state/corkboard"), { recursive: true });
   writeFileSync(join(dir, "node-token"), "nodeowner\n");
   writeFileSync(
-    join(dir, "state/corkboard/auth.json"),
-    JSON.stringify({ cloud: process.env.CORKBOARD_CLOUD, client_id: "c", access_token: "owner", refresh_token: "r", expires_at: Date.now() + 3600_000 }),
-  );
-  writeFileSync(
     process.env.CORKBOARD_FLEET_MANIFEST,
     JSON.stringify({
       flake: "",
@@ -144,7 +140,9 @@ beforeAll(async () => {
   fleet = await import("./fleet");
   // Paths are read at import: never let a module loaded earlier point this
   // at the real state.
-  if (!fleet.SPAWNS.startsWith(dir) || !(await import("../../bridge/cloud")).CLOUD.includes(String(server.port))) throw new Error("fleet's paths aren't the test's");
+  const cloud = await import("../../bridge/cloud");
+  if (!fleet.SPAWNS.startsWith(dir) || !cloud.CLOUD.includes(String(server.port))) throw new Error("fleet's paths aren't the test's");
+  cloud.setRelay({ token: async () => "owner" });
   queue = new (await import("./queue")).Queue();
 });
 afterAll(() => {
@@ -221,6 +219,15 @@ test("passes a stop on, and reports a run, fetching its commits and revoking its
   calls.length = 0;
   await queue.step();
   expect(calls.filter((c) => c.path.includes("/report"))).toEqual([]);
+});
+
+test("takes a spawn the Worker has forgotten as told, and still says what it runs", async () => {
+  fleet.write({ id: "gone001", template: "coding", agent: "coding-gone001", state: "failed", error: "x", reported: "running", remote: { board: null, card: null, agent: "coding-gone001", token: null } } as any);
+  calls.length = 0;
+  (queue as any).dirty = true;
+  await queue.step();
+  expect(fleet.read("gone001")!.reported).toBe("failed");
+  expect(calls.some((c) => c.method === "PUT" && c.path === "/api/fleet/environments/local")).toBe(true);
 });
 
 test("equips one on the node's board from the node, and writes how it goes on its card there", async () => {

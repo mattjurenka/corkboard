@@ -3,7 +3,7 @@
 // Same names, descriptions and rules, so a client moved from the Worker to
 // the node sees the same tools, less those with nothing on the node yet:
 // boards made over MCP, day plans and the chat. The fleet's spawn tools
-// queue on the Worker (Fleet), signed in to it.
+// queue on the Worker (Fleet), as a device of the account.
 //
 // Streamable HTTP, stateless, as the Worker's: each POST is a JSON-RPC
 // message (or a batch) answered with JSON; GET is 405. Every tool here
@@ -398,8 +398,8 @@ const MEMORY_INSTRUCTIONS = "Your memory, kept encrypted on the user's machines:
 
 // The fleet -----------------------------------------------------------------------------
 
-// The Worker's fleet queue (its /api/spawns and /api/fleet), as the user
-// signed in to it; it throws the Worker's error.
+// The Worker's fleet queue (its /api/spawns and /api/fleet), as a device
+// of the account; it throws the Worker's error.
 export type Fleet = (method: string, path: string, body?: unknown) => Promise<any>;
 
 type FleetCall = { data: Data; fleet: Fleet; me: string; sealed?: FleetRecords };

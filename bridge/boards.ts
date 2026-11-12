@@ -8,19 +8,13 @@
 // Neovim as nvim_exec_lua of corkboard.cards.cloud_event, so a change made
 // anywhere (another machine, an agent, the API) shows at once.
 //
-// A board the bridge's node keeps and the Worker doesn't (made here signed
-// out, or moved off the Worker) is the node's instead (node/app.ts's
-// boards), its events from the node's replica. One the node has a copy of
-// that the Worker still has too (e2ee push-board's) stays the Worker's, so
-// the two don't part, until it's moved (.agent/plans/local-boards.md, step 7).
-//
-// The day plan (plan.lua's plan_*) is the node's the same way: signed out,
-// or once the Worker's plans have moved (it answers 410), and its events
-// come from the node's day object as the Worker's user socket's would.
+// Boards are the bridge's node's (node/app.ts's boards), their events from
+// the node's replica, and so is the day plan (plan.lua's plan_*), its events
+// from the node's day object as the Worker's user socket's would be.
 
 import { hostname } from "node:os";
 import { Cloud, Session as CloudSession, type Listener, USER } from "./cloud-session";
-import { CLOUD, signedIn, token } from "./cloud";
+import { CLOUD, token } from "./cloud";
 import { host } from "./host";
 import * as remote from "./remote";
 import type { AppNode } from "./node/app";
@@ -28,12 +22,6 @@ import type { Peers } from "./peers";
 
 // cards/cloud.lua's board operations.
 const BOARD_OPS = new Set(["resolve", "boards", "subscribe", "make", "create", "update", "log", "archive", "delete", "touch", "token", "revoke"]);
-
-type Listed = { key: string; name: string; commit?: string | null };
-
-// The node's boards; none from a node older than its board_* (another
-// bridge's, on /app), whose boards are all the Worker's.
-const nodeBoards = (n: AppNode) => (n.boards("boards", []) as Promise<Listed[]>).catch(() => [] as Listed[]);
 
 // The environment this machine is, as its fleetd names it (fleet/fleetd/queue.ts).
 export const ENVIRONMENT = process.env.CORKBOARD_FLEET_ENVIRONMENT ?? hostname();
@@ -78,14 +66,10 @@ export const usePeers = (p: Peers) => (peers = p);
 // session stops its sockets once nobody else uses them. sessions: the fleet
 // view's (away.ts's list, for this Neovim's page).
 export class Session extends CloudSession {
-  // Whether each board the node keeps is the node's to answer.
-  private theNodes = new Map<string, Promise<boolean>>();
   // The node's boards this session follows, and the way to stop.
   private following = new Set<string>();
   private unfollow?: () => void;
-  // Whether the day plan is the node's, and when that was asked; the
-  // node's day events this session follows.
-  private dayNodes?: { at: number; is: Promise<boolean> };
+  // The node's day events this session follows.
   private unfollowDay?: () => void;
 
   constructor(listener: Listener, sessions?: () => unknown[]) {
@@ -98,16 +82,27 @@ export class Session extends CloudSession {
     if (op === "pair_status") return (await import("./e2ee")).pairStatus();
     if (op === "pair_approve") return (await import("./e2ee")).pairApprove(args[0], args[1]);
     if (op === "pair_confirm") return (await import("./e2ee")).pairConfirm(args[0], !!args[1]);
+    // The calendar's Google consent (Connect calendar): its address, to open.
+    if (op === "calendar_connect") {
+      const res = await fetch(`${CLOUD}/api/calendar/connect`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await token()}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      const json = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
+      if (!res.ok || !json.url) throw new Error(`the calendar: ${json.error ?? `HTTP ${res.status}`}`);
+      return json.url;
+    }
     // Git through the forge gate (Give git access).
     if (op === "forge_status") return (await import("./e2ee")).forgeStatus();
     if (op === "forge_grant") return (await import("./e2ee")).forgeGrant(args[0]);
     if (op === "forge_grants") return (await import("./e2ee")).forgeGrants();
     if (op === "forge_revoke") return (await import("./e2ee")).forgeRevoke(args[0]);
-    // A session on the node's board: queued with node: true, its grant the
-    // node's; and, once the fleet's sealed on the node, queued by the node.
+    // A session on a board: queued with node: true, its grant the node's;
+    // and, once the fleet's sealed on the node, queued by the node.
     if (node && op === "fleet_session") {
-      const onNode = !!args[2] && signedIn() && (await this.nodes(node, args[2]));
-      const asked = onNode ? [...args.slice(0, 3), true] : args;
+      const asked = args[2] ? [...args.slice(0, 3), true, ...args.slice(4)] : args;
       return (await node.fleet(op, asked)) ?? super.call(op, asked);
     }
     // The fleet view's, with what the node keeps sealed put back.
@@ -116,7 +111,7 @@ export class Session extends CloudSession {
       return (await node.fleet("fleet_open", [got])) ?? got;
     }
     if (node && (op === "note_get" || op === "note_put" || op === "goals")) return node.notes(op, args);
-    if (node && op.startsWith("plan_") && (await this.dayIsNodes())) {
+    if (node && op.startsWith("plan_")) {
       if (op === "plan_subscribe") {
         this.unfollowDay ??= node.onDay((event) => this.listener(USER, event));
         return null;
@@ -132,59 +127,11 @@ export class Session extends CloudSession {
     return here !== undefined ? here : super.call(op, args);
   }
 
-  // Signed in, the node's when it has the board and the Worker doesn't
-  // (404, or 410 once moved). Asked once per board it has.
-  private nodes(n: AppNode, key: string): Promise<boolean> {
-    const known = this.theNodes.get(key);
-    if (known) return known;
-    const p = (async () => {
-      if (!(await nodeBoards(n)).some((b) => b.key === key)) return false;
-      const { status } = await this.cloud.api("GET", `/${encodeURIComponent(key)}/cards`);
-      return status === 404 || status === 410;
-    })();
-    // A board the node doesn't have yet may be the node's later: not kept.
-    p.then((v) => v || this.theNodes.delete(key), () => this.theNodes.delete(key));
-    this.theNodes.set(key, p);
-    return p;
-  }
-
-  // Signed in, the node's once the Worker's plans answer 410 (moved); asked
-  // again after five minutes while they don't, and not kept on an error.
-  private dayIsNodes(): Promise<boolean> {
-    if (!signedIn()) return Promise.resolve(true);
-    if (this.dayNodes && Date.now() - this.dayNodes.at < 5 * 60_000) return this.dayNodes.is;
-    const is = (async () => {
-      const date = new Date().toISOString().slice(0, 10);
-      const res = await fetch(`${CLOUD}/api/plans/${date}`, { headers: { Authorization: `Bearer ${await token()}` }, signal: AbortSignal.timeout(10_000) });
-      return res.status === 410;
-    })();
-    const asked = { at: Date.now(), is };
-    is.then((v) => v && (asked.at = Infinity), () => this.dayNodes === asked && (this.dayNodes = undefined));
-    this.dayNodes = asked;
-    return is;
-  }
-
-  // A board operation answered by the node, or undefined for the Worker's.
+  // A board operation, answered by the node.
   private async board(n: AppNode, op: string, args: any[]): Promise<unknown> {
-    // Both lists, the Worker's row for a board in each.
-    if (op === "boards") {
-      const mine = await nodeBoards(n);
-      if (!signedIn()) return mine;
-      const theirs = (await super.call("boards", [])) as Listed[];
-      return [...theirs, ...mine.filter((b) => !theirs.some((t) => t.key === b.key))].sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
-    }
-    if (op === "resolve") {
-      const [pathKey, commit] = args;
-      const mine = signedIn() ? ((await n.boards("resolve", args).catch(() => null)) as string | null) : ((await n.boards("resolve", args)) as string | null);
-      if (!signedIn()) return mine ?? pathKey;
-      const theirs = ((await this.cloud.ok("GET", `?commit=${encodeURIComponent(commit)}`)) as Listed[]).filter((b) => b.commit === commit).map((b) => b.key);
-      const found = [...theirs, ...(mine ? [mine] : [])];
-      return found.includes(pathKey) ? pathKey : (found[0] ?? pathKey);
-    }
+    if (op === "resolve") return ((await n.boards("resolve", args)) as string | null) ?? args[0];
     const [key] = args;
-    if (typeof key !== "string" || !key) return undefined;
-    // Signed out, every board is the node's, a new one too.
-    if (signedIn() && !(await this.nodes(n, key))) return undefined;
+    if (op !== "boards" && (typeof key !== "string" || !key)) return undefined;
     if (op === "subscribe" || op === "make") {
       const [, name, here, make, commit] = args;
       const found = here ? await remotes(here) : [];

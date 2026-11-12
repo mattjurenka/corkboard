@@ -32,11 +32,6 @@
 #   /mnt/share/secrets/      optional: a file per hold the spawn has (its
 #                            brain's and its template's) whose secret is
 #                            kept in corkboard (the hosted Worker's holds.ts)
-#   /mnt/share/git-token     optional: a session's token at the forge gate
-#                            (forgeHost), for the repos its template's git
-#                            names; fleetd puts a new one here before the
-#                            last runs out, and git's credential helper
-#                            hands it over (fleet/fleetd/forge.ts)
 #   /mnt/share/shell.json    optional: the tools the spawner brought, built
 #                            here and run in: { "packages": [...] } from this
 #                            guest's nixpkgs, or { "flake": ref }'s devShell
@@ -81,14 +76,6 @@ let
   };
 
   env = claudeCodeEnv;
-
-  # The forge gate's session token as the password, read each time, since
-  # fleetd renews it as the spawn runs.
-  gitCredential = pkgs.writeShellScript "fleet-git-credential" ''
-    [ "$1" = get ] && [ -r /mnt/share/git-token ] || exit 0
-    echo username=fleet
-    echo "password=$(tr -d '\n' < /mnt/share/git-token)"
-  '';
 
   url = "https://${corkboardHost}";
 
@@ -170,14 +157,14 @@ let
   };
 
   # corkboard's session hook, which here only keeps the context under its
-  # limit and puts a handoff in $CORKBOARD_HANDOFF (nvim/hooks/claude-session.lua).
+  # limit and puts a handoff in $CORKBOARD_HANDOFF (nvim/hooks/session.lua).
   contextHook = {
     type = "command";
     command = "${pkgs.neovim-unwrapped}/bin/nvim --clean --headless -l ${pkgs.runCommand "corkboard-session-hook" { } ''
       mkdir -p $out/hooks $out/lua/corkboard
-      cp ${../../nvim/hooks/claude-session.lua} $out/hooks/claude-session.lua
+      cp ${../../nvim/hooks/session.lua} $out/hooks/session.lua
       cp ${../../nvim/lua/corkboard/context.lua} $out/lua/corkboard/context.lua
-    ''}/hooks/claude-session.lua";
+    ''}/hooks/session.lua";
   };
 
   runTask = pkgs.writeShellApplication {
@@ -206,6 +193,11 @@ let
 
       mcp=()
       if [ -f /mnt/share/mcp.json ]; then mcp=(--mcp-config /mnt/share/mcp.json); fi
+      handoff=''${#mcp[@]}
+      # The servers its capabilities bring (fleet/caps/browser.nix).
+      for f in /etc/fleet/mcp/*.json; do
+        if [ -e "$f" ]; then mcp+=(--mcp-config "$f"); fi
+      done
 
       # The spawner's tools, built first so a shell that doesn't build says
       # so rather than leaving Claude Code without them.
@@ -264,7 +256,7 @@ let
         # A task that fills its context hands off (the session hook keeps
         # what it wrote in handoff.md) and goes on in a fresh one, up to 10.
         # Without corkboard's MCP it has no handoff tool, so none of that.
-        if [ ''${#mcp[@]} -gt 0 ]; then export CORKBOARD_HANDOFF=$out/handoff.md; fi
+        if [ "$handoff" -gt 0 ]; then export CORKBOARD_HANDOFF=$out/handoff.md; fi
         prompt=$(cat /mnt/share/task.md)
         for n in $(seq 10); do
           rm -f "$out/handoff.md"
@@ -370,7 +362,10 @@ in
     fleet-task = {
       description = "The spawned agent's task";
       wantedBy = [ "multi-user.target" ];
-      after = [ "network-online.target" "mnt-share.mount" "mnt-outbox.mount" ];
+      # And its resolver: resolvconf restarts nscd as the address comes up,
+      # and a lookup meanwhile hangs, so the session began without its
+      # brain's memory (the SessionStart hook's curl timing out).
+      after = [ "network-online.target" "resolvconf.service" "nscd.service" "nss-lookup.target" "mnt-share.mount" "mnt-outbox.mount" ];
       wants = [ "network-online.target" ];
       # No task, no run and no power-off: a slot booted by hand stays up
       # to be looked at.
@@ -463,7 +458,10 @@ in
   programs.git = {
     enable = true;
     config.user = { name = "corkboard fleet (${template.name})"; email = "fleet@corkboard.invalid"; };
-    config.credential."https://${forgeHost}".helper = "${gitCredential}";
+    # The forge is fleetd's, on the gateway (fleet/fleetd/forge.ts's
+    # FORGE_PORT), which adds the spawn's grant: the guest holds nothing,
+    # and a clone URL at forgeHost goes there too.
+    config.url."http://fleet-gateway:8890/".insteadOf = "https://${forgeHost}/";
   };
 
   users.mutableUsers = false;

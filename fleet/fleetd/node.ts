@@ -10,7 +10,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { CLOUD } from "../../bridge/cloud";
+import { CLOUD, setRelay } from "../../bridge/cloud";
 import { type Channel, type Handler } from "../../lib/e2ee/channel";
 import { type Device, checkCert, fromSecrets, newDevice } from "../../lib/e2ee/device";
 import { Relay } from "../../lib/e2ee/relay";
@@ -47,7 +47,7 @@ export function storeCert(file: string, cert: unknown) {
 }
 
 // What a channel's opened with, and answered on: the relay's, or a test's.
-export type Opener = Pick<Relay, "nodes" | "channel"> & Partial<Pick<Relay, "serveTunnel">>;
+export type Opener = Pick<Relay, "nodes" | "channel"> & Partial<Pick<Relay, "serveTunnel" | "token">>;
 
 const channels = new Map<string, Promise<Channel>>();
 const openers = new Map<string, Opener>();
@@ -60,6 +60,18 @@ function opener(file: string): Opener {
     openers.set(file, (o = new Relay({ origin: CLOUD, device, cert })));
   }
   return o;
+}
+
+// The Worker's tokens (bridge/cloud.ts's token(), for the queue, /api/live
+// and the spawns) as the device at file, the same relay its channels use.
+export function useDevice(file: string) {
+  setRelay({
+    token: () => {
+      const o = opener(file);
+      if (!o.token) throw new Error(`${file}'s relay gives no tokens`);
+      return o.token();
+    },
+  });
 }
 
 // For tests: what opens the channels for file.

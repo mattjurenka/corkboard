@@ -1,7 +1,7 @@
--- Claude Code's hook for a session's own events, set by corkboard.claude.
--- Runs as `nvim -l` and hands each event to the Neovim whose terminal the
--- session is in ($NVIM, $CORKBOARD_BUF), where corkboard.agents keeps the
--- session's live state. Fails silently: a hook's error would only show up in
+-- Claude Code's hook for a session's own events, set by corkboard.agent.claude.
+-- Runs as `nvim -l` and hands each event, as corkboard's own (event, below),
+-- to the Neovim whose terminal the session is in ($NVIM, $CORKBOARD_BUF),
+-- where corkboard.agents keeps the session's live state. Fails silently: a hook's error would only show up in
 -- the session, and PreToolUse waits for it.
 --
 -- It also keeps the session's context under its limit (corkboard.context):
@@ -94,7 +94,7 @@ if not chan then return end
 local card
 if input.hook_event_name == "PostToolUse" and (tool == "claim_card" or tool == "release_card" or tool == "next_card") then
   local text = vim.F.npcall(vim.json.encode, input.tool_response) or ""
-  card = text:match('\\*"id\\*"%s*:%s*\\*"(%a+%-%d+)')
+  card = text:match('\\*"id\\*"%s*:%s*\\*"(%a+%-%w+)')
   card = card and card:upper()
 end
 
@@ -116,16 +116,40 @@ if input.hook_event_name == "PostToolUse" then
   wakeup = input.tool_name == "ScheduleWakeup" and args.stop ~= true
 end
 
+-- Claude Code's event as corkboard's: start, turn (a prompt), asking (a
+-- question for the user), tool, tool_done, permission, waiting (at its
+-- prompt with nothing to do), settled (the turn's over), or notice (none of
+-- these). permission comes from a Notification as well as a
+-- PermissionRequest; noticed says which.
+local function event()
+  local name = input.hook_event_name
+  if name == "PreToolUse" and input.tool_name == "AskUserQuestion" then return "asking" end
+  if name == "Notification" then
+    local kind = input.notification_type or ""
+    if kind == "permission_prompt" or (kind == "" and tostring(input.message or ""):lower():find("permission")) then return "permission", true end
+    if kind == "idle_prompt" then return "waiting" end
+    return "notice"
+  end
+  return ({
+    SessionStart = "start",
+    UserPromptSubmit = "turn",
+    PreToolUse = "tool",
+    PostToolUse = "tool_done",
+    PermissionRequest = "permission",
+    Stop = "settled",
+  })[name] or "notice"
+end
+local name, noticed = event()
+
 -- A notification, not a request: the session needn't wait on Neovim.
 pcall(vim.rpcnotify, chan, "nvim_exec_lua", "require('corkboard.agents').hook(...)", {
   {
     buf = buf,
-    event = input.hook_event_name,
-    session_id = input.session_id,
+    event = name,
+    noticed = noticed,
+    session = input.session_id,
     source = input.source,
-    transcript_path = input.transcript_path,
-    notification_type = input.notification_type,
-    message = input.message,
+    transcript = input.transcript_path,
     tool_name = input.tool_name,
     tool_use_id = input.tool_use_id,
     background = background or nil,
@@ -138,6 +162,9 @@ pcall(vim.rpcnotify, chan, "nvim_exec_lua", "require('corkboard.agents').hook(..
     -- AskUserQuestion's first question, for the card's attention.
     question = type(input.tool_input) == "table" and type(input.tool_input.questions) == "table"
       and type(input.tool_input.questions[1]) == "table" and input.tool_input.questions[1].question or nil,
+    -- All of them, for the phone's answers (corkboard/away.lua's).
+    questions = input.tool_name == "AskUserQuestion" and type(input.tool_input) == "table"
+      and type(input.tool_input.questions) == "table" and input.tool_input.questions or nil,
   },
 })
 -- rpcnotify only queues; this makes sure it went before the process ends.

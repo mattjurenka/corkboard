@@ -117,3 +117,37 @@ browser ── HTTPS ──▶ own domain ──▶ node's public port          
   listed through the socket as mattjurenka, hooks name the new app.ini, the GitHub push mirror
   syncs. SSH to git@git.corkboard.fyi is gone; the laptop's `origin` moves to the bridge's
   loopback /forge/ once a bridge runs 5073722.
+- 2026-11-11: step 4's code. A slot's guest has no credentials: its git rewrites
+  `https://git.corkboard.fyi/` to `http://fleet-gateway:8890/`, fleetd's slotForge, which adds the
+  spawn's chain and answer and carries the request to the leader's /forge/. fleetd keeps only the
+  grant (GitGrants, renewed 2h before it ends); the share's git-token and the credential helper are
+  gone, and so is git.corkboard.fyi from the coding capability's egress. A spawn on the node's
+  board on a host whose manifest names no node fails at once (`my.corkboard.fleet.node`). Not yet
+  deployed. The Actions runner still reaches Forgejo at its manifest url with its own token.
+- 2026-11-11: step 5's code (bridge/node/snapshots.ts, its test). The node running Forgejo bundles
+  each repo whose refs changed (looked at each minute, in keepForge) and dumps the DB (`VACUUM
+  INTO`, gzipped, with app.ini) at most every 15 min and once more when it hands off, as blobs
+  sealed with the fleet object's key, in parts under the blob limit; records `snapshot:db` and
+  `snapshot:repo:<hash>` in the fleet object say where, with a version the node keeps in
+  `<forge>/snapshots.json`. A node about to start Forgejo restores each record whose version
+  isn't its own, and doesn't start it if that fails. Not kept: attachments, LFS, avatars. Not
+  deployed, and the restore with the laptop as leader isn't checked yet.
+- 2026-11-11: step 6's code. The browser opt-in is the Nodes DO's `forge` meta key (`PUT
+  /e2ee/nodes/forge`, the Settings "Forge pages via relay" row, nvim's FORGE_WEB): with it on,
+  the tunnel passes `/n/<handle>/forge/…` with only Forgejo's cookies (`forge_session`,
+  `forge_remember`, `_csrf`, `lang`, `redirect_to`), and the node serves it with no user header,
+  so Forgejo's own login applies. The node's git views (bridge/node/git.ts, the shapes the
+  Worker's /api/git had) are `/api/node/git/…`, owner scope, sealed or with the opt-in on. The
+  portal's files, its add-a-project list and the Files tab read them (lib/node.ts nodeGit); the
+  `/edit/` page clones from them with the portal's node sign-in (web/src/cloud.ts node); a
+  bridge's `/api/git/` serves them from its channel to the leader. corkboard-cloud's
+  `/api/git` answers 410, and `features.git`, FORGEJO_ORIGIN and FORGEJO_TOKEN are gone. Not
+  deployed: the cloud Worker's corkboard clone needs bumping for the relay's part, and the
+  secret deleted after. The droplet's ROOT_URL stays git.corkboard.fyi until Caddy goes to the
+  node.
+- 2026-11-11: forge-gate stopped and disabled on the droplet. Caddy sends git.corkboard.fyi to
+  Forgejo's socket itself, stripping the reverse-proxy user header, as the gate did for requests
+  with no gate session (caddy is in `forgegate`; backup Caddyfile.bak-gate-stop-2026-11-11). The
+  forge/gate code stays (forge.ts and fleetd's tests import it); bridges' forgeBound and
+  sendRevocationToGate now get no answer at git.corkboard.fyi/gate/. Left: Caddy to the node's
+  /forge once step 6's node is deployed.

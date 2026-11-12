@@ -40,9 +40,9 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CLOUD, signedIn, token } from "./cloud";
 import { COMPILED, DATA_DIR, STATE_DIR } from "./dirs";
 import { type Heard, hear } from "./listen";
+import { nodeApi } from "./node/local";
 import { type Board, type Proposal, accept, propose } from "./propose";
 import { decode, RATE } from "./transcribe";
 
@@ -289,20 +289,13 @@ async function proposeFor(meeting: Meeting, save: () => void) {
   save();
 }
 
-// Done with a stopped meeting, all of it heard: sent to Pepper, and its
-// action items proposed.
+// Done with a stopped meeting, all of it heard: sent to its brain's notes,
+// and its action items proposed.
 async function conclude(meeting: Meeting, save: () => void) {
   meeting.transcribed ??= new Date().toISOString();
   if (!meeting.sent) {
     try {
-      if (!signedIn()) throw new Error("this machine isn't signed in to corkboard");
-      const res = await fetch(`${CLOUD}/api/notes/meeting-${meeting.id.toLowerCase()}`, {
-        method: "PUT",
-        headers: { Authorization: `Bearer ${await token()}`, "Content-Type": "application/json" },
-        body: JSON.stringify(note(meeting)),
-      });
-      const json = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+      await nodeApi("PUT", `/brains/${encodeURIComponent(meeting.brain)}/notes/meeting-${meeting.id.toLowerCase()}`, note(meeting));
       meeting.sent = new Date().toISOString();
       delete meeting.failed;
     } catch (err) {

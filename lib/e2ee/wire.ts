@@ -179,9 +179,10 @@ export const LIMITS = {
 // work happens (.agent/plans/local-memory.md, step 8).
 // known: every device that has connected, by the name its cert gives, and
 // when it last came or went (an older relay leaves it out).
+// forge: Forgejo's pages go through the tunnel (/n/<handle>/forge/).
 // tunnel: false, a device that answers channels and isn't a node (fleetd's,
 // ciphertext-relay.md step 3): the tunnel never goes to it.
-export type NodesView = { leader: string | null; connected: { device: string; since: number; tunnel?: false }[]; known?: { device: string; name: string; seen: number }[] };
+export type NodesView = { leader: string | null; forge?: true; connected: { device: string; since: number; tunnel?: false }[]; known?: { device: string; name: string; seen: number }[] };
 
 // The tunnel: a request to <relay>/n/<handle>/…, sent as this to a node
 // over its socket, and the node's answer. Bodies are base64url; headers

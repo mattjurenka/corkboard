@@ -22,6 +22,7 @@
 //                                 another account's, on an object it shares with this one)
 //   GET  /e2ee/nodes              the account's connected nodes and its leader (NodesView), its handle and url
 //   PUT  /e2ee/nodes/leader       { device | null }
+//   PUT  /e2ee/nodes/forge        { on }: Forgejo's pages through the tunnel
 //   GET  /e2ee/nodes/live         WebSocket: this device as a node, answering the tunnel's
 //                                 TunnelRequests (<relay>/n/<handle>/…) with TunnelResponses,
 //                                 and carrying the channels opened to it (binary, wire.ts's CHANNEL)
@@ -297,6 +298,10 @@ export class Relay implements PairTransport, LogTransport {
 
   setLeader(device: string | null) {
     return this.authed<Nodes>("PUT", "/e2ee/nodes/leader", { device });
+  }
+
+  setForgeWeb(on: boolean) {
+    return this.authed<Nodes>("PUT", "/e2ee/nodes/forge", { on });
   }
 
   // Channels ---------------------------------------------------------------------

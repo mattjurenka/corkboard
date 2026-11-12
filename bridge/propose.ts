@@ -1,15 +1,16 @@
 // A meeting's action items, proposed once it's transcribed (record.ts), and
 // made into cards when they're accepted in the Meetings tab.
 //
-// Claude (`claude -p`, the machine's own login, no tools) reads the
+// A model (lib/think.ts: CORKBOARD_PROPOSE_MODEL, else `claude -p` with
+// sonnet on the machine's own login, no tools) reads the
 // transcript beside the boards and their open cards, and proposes each thing
 // someone took on or that was agreed needs doing: who owns it, the board it
 // suggests, and the line it came from. Nothing is written to a board until
 // it's accepted (.agent/plans/meetings.md): anyone on the call is only text,
 // and "add a card for..." said by them is just something said.
 
-import { spawn } from "node:child_process";
-import { CLOUD, signedIn, token } from "./cloud";
+import { parseModel, type Schema, think } from "../lib/think";
+import { nodeApi } from "./node/local";
 import type { Meeting } from "./record";
 
 // owner: "me", or who it's for as the transcript names them. at: ms from
@@ -27,21 +28,12 @@ export type Proposal = {
 };
 export type Board = { key: string; name: string };
 
-const MODEL = process.env.CORKBOARD_PROPOSE_MODEL || "sonnet";
+const MODEL = process.env.CORKBOARD_PROPOSE_MODEL || "claude:sonnet";
 // Each board's open cards it's shown, newest first.
 const OPEN = 60;
 
-async function api(method: string, path: string, body?: unknown) {
-  if (!signedIn()) throw new Error("this machine isn't signed in to corkboard");
-  const res = await fetch(`${CLOUD}/api/boards${path}`, {
-    method,
-    headers: { Authorization: `Bearer ${await token()}`, "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const json = (await res.json().catch(() => ({}))) as any;
-  if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
-  return json;
-}
+// The boards this machine's node keeps.
+const api = (method: string, path: string, body?: unknown) => nodeApi(method, `/boards${path}`, body);
 
 type Card = { id: string; title: string; status: string; updated?: string };
 
@@ -97,28 +89,8 @@ const SCHEMA = {
 // [mm:ss] or [h:mm:ss] as ms.
 const ms = (at: string) => at.replace(/[[\]]/g, "").split(":").reduce((t, n) => t * 60 + (Number(n) || 0), 0) * 1000;
 
-function claude(input: string): Promise<any> {
-  const args = ["-p", "--model", MODEL, "--tools", "", "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence"];
-  args.push("--output-format", "json", "--system-prompt", SYSTEM, "--json-schema", JSON.stringify(SCHEMA));
-  return new Promise((resolve, reject) => {
-    const child = spawn("claude", args, { stdio: ["pipe", "pipe", "pipe"] });
-    let out = "", err = "";
-    child.stdout.on("data", (d) => (out += d));
-    child.stderr.on("data", (d) => (err += d));
-    const timer = setTimeout(() => child.kill(), 5 * 60_000);
-    child.on("error", (e) => reject(new Error(`claude: ${e.message}`)));
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      try {
-        const j = JSON.parse(out);
-        if (j.is_error || !j.structured_output) throw new Error(j.result || j.subtype || "no answer");
-        resolve(j.structured_output);
-      } catch (e) {
-        reject(new Error(`claude${code ? ` (exit ${code})` : ""}: ${err.trim().split("\n").pop() || (e as Error).message}`));
-      }
-    });
-    child.stdin.end(input);
-  });
+async function ask(input: string): Promise<any> {
+  return (await think({ system: SYSTEM, input, schema: SCHEMA as Schema, model: parseModel(MODEL), timeout: 5 * 60_000 })).json;
 }
 
 // The meeting's proposals, and the boards they could go on.
@@ -135,7 +107,7 @@ export async function propose(meeting: Meeting, transcript: string): Promise<{ p
     transcript,
   ].join("\n");
   const keys = new Set(all.map((b) => b.key));
-  const { items } = (await claude(input)) as { items: (Omit<Proposal, "at"> & { at: string })[] };
+  const { items } = (await ask(input)) as { items: (Omit<Proposal, "at"> & { at: string })[] };
   return {
     proposals: items.map((p) => ({
       title: p.title.trim(),

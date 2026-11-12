@@ -35,7 +35,7 @@ let
         targets = [ "vm" "oci" ];
         egress = [ "api.anthropic.com" "platform.claude.com" "claude.ai" "claude.com" "code.claude.com" ];
       };
-      inherit (fleetLib.capabilities) coding;
+      inherit (fleetLib.capabilities) coding browser;
     } // cfg.capabilities;
     environments.${cfg.environment} = { kind = "vm"; inherit (cfg) provides; };
     templates = lib.mapAttrs
@@ -156,6 +156,13 @@ in
       description = "The Claude account a brainless agent runs as when nobody says (a token in ~/.local/state/corkboard/fleet/accounts).";
     };
 
+    node = mkOption {
+      type = types.nullOr (types.attrsOf types.str);
+      default = null;
+      example = literalExpression ''{ url = "https://portal.corkboard.fyi/n/HANDLE"; device = "/home/me/.local/state/corkboard/fleet/device.json"; }'';
+      description = "The user's node, for spawns on its boards and brains' memory: its tunnel `url` and fleetd's relay-only `device` file (`corkboard-fleet device`), or an owner token's `tokenFile`.";
+    };
+
     guestModules = mkOption {
       type = types.listOf types.deferredModule;
       default = [ ];
@@ -171,7 +178,7 @@ in
 
   config = lib.mkIf cfg.enable {
     my.agentVms = {
-      inherit (cfg) owner memoryBudget offer defaultAccount;
+      inherit (cfg) owner memoryBudget offer defaultAccount node;
       inherit (fleet) templates bindings;
       plans = pool;
       instances = lib.mapAttrs

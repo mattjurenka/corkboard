@@ -15,6 +15,11 @@
 //   CORKBOARD_FORGEJO          the forgejo binary; without it, the node runs none
 //   CORKBOARD_FORGEJO_STATIC   its static files (nixpkgs' forgejo.data), for a
 //                              build without them embedded
+//   CORKBOARD_FORGE_URL        where browsers reach its pages (ROOT_URL); without
+//                              it, an app.ini with none gets the tunnel's /forge/
+//
+// The browser's cookies are named forge_* so the relay passes them through
+// the tunnel (relay/src/routes.ts's FORGE_COOKIE) and nothing else's.
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
@@ -26,6 +31,9 @@ export type ForgejoConfig = {
   dir: string;
   unix: string;
   userHeader: string;
+  // ROOT_URL: url always, else defaultUrl when app.ini has none.
+  url?: string;
+  defaultUrl?: string;
   // How long a crashed Forgejo waits to start again.
   restartMs?: number;
 };
@@ -64,8 +72,21 @@ export function setIni(text: string, set: Ini): string {
   return lines.join("\n") + "\n";
 }
 
-// What the node's Forgejo is, on every start.
-export function managed(o: ForgejoConfig, user = userInfo().username): Ini {
+// A [section] key's value, or undefined.
+export function getIni(text: string, section: string, key: string): string | undefined {
+  let in_ = section === "";
+  for (const l of text.split("\n")) {
+    if (/^\s*\[/.test(l)) in_ = l.trim() === `[${section}]`;
+    else if (in_) {
+      const m = l.match(new RegExp(`^\\s*${key}\\s*=\\s*(.*?)\\s*$`));
+      if (m) return m[1];
+    }
+  }
+}
+
+// What the node's Forgejo is, on every start (was: app.ini as it is).
+export function managed(o: ForgejoConfig, user = userInfo().username, was = ""): Ini {
+  const root = o.url ?? (getIni(was, "server", "ROOT_URL") ? undefined : o.defaultUrl);
   return {
     "": { RUN_USER: user, WORK_PATH: o.dir },
     server: {
@@ -73,13 +94,15 @@ export function managed(o: ForgejoConfig, user = userInfo().username): Ini {
       HTTP_ADDR: o.unix,
       APP_DATA_PATH: join(o.dir, "data"),
       ...(o.static && { STATIC_ROOT_PATH: o.static }),
+      ...(root && { ROOT_URL: root }),
       DISABLE_SSH: "true",
       START_SSH_SERVER: "false",
       SSH_CREATE_AUTHORIZED_KEYS_FILE: "false",
     },
     database: { DB_TYPE: "sqlite3", PATH: join(o.dir, "data", "forgejo.db") },
     repository: { ROOT: join(o.dir, "repos") },
-    security: { REVERSE_PROXY_AUTHENTICATION_USER: o.userHeader },
+    security: { REVERSE_PROXY_AUTHENTICATION_USER: o.userHeader, COOKIE_REMEMBER_NAME: "forge_remember" },
+    session: { COOKIE_NAME: "forge_session" },
     service: { ENABLE_REVERSE_PROXY_AUTHENTICATION: "true", ENABLE_REVERSE_PROXY_AUTHENTICATION_API: "true" },
     log: { MODE: "console" },
   };
@@ -134,7 +157,7 @@ export class Forgejo {
     const { dir, unix, bin } = this.o;
     for (const d of [dirname(this.ini), join(dir, "data"), join(dir, "repos"), dirname(unix)]) mkdirSync(d, { recursive: true, mode: 0o700 });
     const was = existsSync(this.ini) ? readFileSync(this.ini, "utf8") : await fresh(bin);
-    writeFileSync(this.ini, setIni(was, managed(this.o)), { mode: 0o600 });
+    writeFileSync(this.ini, setIni(was, managed(this.o, undefined, was)), { mode: 0o600 });
     const env = { ...process.env, HOME: dir, GITEA_WORK_DIR: dir, USER: userInfo().username };
     // The repos' hooks name the binary and app.ini, which a move or an
     // upgrade changes (as nixpkgs' module does on each start).

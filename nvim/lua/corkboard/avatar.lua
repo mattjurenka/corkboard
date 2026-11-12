@@ -2,7 +2,7 @@
 -- "avatar", web/src/views/Avatar.tsx) beside the session, where a VRM model
 -- says what Claude passes to the mod's say tool (claude-plugin/hooks/say.tsx)
 -- as it comes, out loud and as subtitles; its replies stay written to be
--- read. The session's log (b:corkboard_claude_transcript) is followed here;
+-- read. The session's log (b:corkboard_agent_transcript) is followed here;
 -- the page speaks what it hasn't seen before, so what was said before it
 -- opened is only shown.
 --
@@ -26,10 +26,10 @@ local panels = {} -- session buffer -> { buf, timer, path, offset, rest, said, m
 
 local function session_in_tab()
   local cur = vim.api.nvim_get_current_buf()
-  if vim.b[cur].corkboard_claude then return cur, vim.api.nvim_get_current_win() end
+  if vim.b[cur].corkboard_agent then return cur, vim.api.nvim_get_current_win() end
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
     local buf = vim.api.nvim_win_get_buf(win)
-    if vim.b[buf].corkboard_claude and vim.api.nvim_win_get_config(win).relative == "" then return buf, win end
+    if vim.b[buf].corkboard_agent and vim.api.nvim_win_get_config(win).relative == "" then return buf, win end
   end
 end
 
@@ -106,7 +106,7 @@ end
 -- starts over; the first read of one only remembers its last thing said.
 local function read(src)
   local a = panels[src]
-  local path = vim.b[src].corkboard_claude_transcript
+  local path = vim.b[src].corkboard_agent_transcript
   if not a then return end
   -- No log yet: all it says will be new.
   if not path then

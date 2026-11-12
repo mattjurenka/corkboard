@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Forgejo, managed, setIni } from "./forgejo";
+import { Forgejo, getIni, managed, setIni } from "./forgejo";
 
 describe("setIni", () => {
   it("sets keys where they are, adds the missing ones to their section, and keeps the rest", () => {
@@ -22,6 +22,15 @@ describe("setIni", () => {
     const o = { bin: "forgejo", dir: "/s/forge", unix: "/s/forge/forgejo.sock", userHeader: "X-U" };
     const once = setIni("[server]\nDOMAIN = d\n", managed(o, "node"));
     expect(setIni(once, managed(o, "node"))).toBe(once);
+  });
+
+  it("gives ROOT_URL the tunnel's only where there is none, and the one named always", () => {
+    const o = { bin: "forgejo", dir: "/s/forge", unix: "/s/forge/forgejo.sock", userHeader: "X-U", defaultUrl: "https://relay/n/h/forge/" };
+    const was = "[server]\nROOT_URL = https://git.example/\n";
+    expect(getIni(setIni(was, managed(o, "node", was)), "server", "ROOT_URL")).toBe("https://git.example/");
+    expect(getIni(setIni("", managed(o, "node", "")), "server", "ROOT_URL")).toBe("https://relay/n/h/forge/");
+    expect(getIni(setIni(was, managed({ ...o, url: "https://mine/" }, "node", was)), "server", "ROOT_URL")).toBe("https://mine/");
+    expect(getIni("[session]\nROOT_URL = x\n", "server", "ROOT_URL")).toBeUndefined();
   });
 });
 

@@ -13,7 +13,7 @@
 // given at init, or from the keychain. Keychain is the seam for the OS's
 // own (libsecret, the macOS keychain, DPAPI, Electron's safeStorage); for
 // now the only one is a file beside the root, so the root is only as safe
-// as this directory's permissions, as auth.json is.
+// as this directory's permissions.
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

@@ -12,7 +12,7 @@
 //                                        ndjson: { type: "bridges", bridges }, then
 //                                        each { type: "bridge", bridge } as it changes
 //   GET  /api/sessions/:b/:k             its screen
-//   POST /api/sessions/:b/:k/say         { text, keys }
+//   POST /api/sessions/:b/:k/say         { text, keys } or { answers }
 //   POST /api/sessions/:b/:k/speech      a sentence, in its face's voice: 16-bit samples
 //   GET|POST /api/sessions/:b/:k/attach[?terminal]
 //                                        ndjson both ways: { type: "out", data } and
@@ -21,7 +21,7 @@
 //
 // Nothing's kept: a bridge's list is the hub's while it's joined.
 
-import type { HubJoin, Link } from "./sessions";
+import { answers, type HubJoin, type Link } from "./sessions";
 
 // A bridge in this process joining hub.
 export const joinHub =
@@ -291,6 +291,11 @@ export class Hub {
       return new Response(Buffer.from(audio, "base64"), { headers });
     }
     const input = await body();
+    if (input.answers !== undefined) {
+      const a = answers(input.answers);
+      if (typeof a === "string") return error(400, a);
+      return reply(await this.ask(bridge, { type: "say", key, answers: a }));
+    }
     const text = input.text ?? "";
     if (typeof text !== "string" || text.length > 20_000) return error(400, "text must be a string, under 20000 characters");
     const keys = input.keys ?? [];

@@ -109,7 +109,8 @@ let
           # Started on demand in a slot, rather than a VM of its own.
           spawnable = t.spawnable or false;
           egress = unique (concatMap (c: c.egress) cs);
-          # What its spawns may do on the forge (git.corkboard.fyi), granted
+          # What its spawns may do on the forge (the leader's, which fleetd
+          # serves on the slot's gateway: fleet/fleetd/forge.ts), granted
           # to each at its claim (.agent/plans/forge-keys.md), or null:
           # { repos = [ "owner/name" "owner/*" ]; permissions = { contents =
           # "write"; pull_requests = "read"; ... }; refs ? [ "agent/*" ];
@@ -204,7 +205,6 @@ let
       egress = [
         "cache.nixos.org"
         "channels.nixos.org"
-        "git.corkboard.fyi"
         "github.com"
         "api.github.com"
         "codeload.github.com"
@@ -215,6 +215,14 @@ let
         "files.pythonhosted.org"
       ];
       targets = [ "vm" "oci" ];
+    };
+    # A headless Chromium its agent drives, with whichever extensions it
+    # asks for each run (fleet/caps/browser-mcp.ts).
+    browser = {
+      modules = [ ./caps/browser.nix ];
+      memory = 4096;
+      cores = 2;
+      disk = 16384;
     };
     # One Forgejo Actions job per VM (fleet/fleetd/actions.ts).
     actions = {

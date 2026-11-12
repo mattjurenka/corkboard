@@ -37,7 +37,7 @@ function menus(leader: string, files: boolean, { fleet, assistant }: Features, v
       [
         { label: "New…", bind: "tools", run: lua("require('corkboard.picker').tools()") },
         { label: "New terminal", project: true, run: lua("require('corkboard.terminal').tab()") },
-        { label: "New Claude Code session", bind: "claude code", project: true, run: lua("require('corkboard.claude').open()") },
+        { label: "New Claude Code session", bind: "claude code", project: true, run: lua("require('corkboard.session').open()") },
         "-",
         { label: "Open file…", bind: "find file", run: lua("require('corkboard.picker').files()") },
         { label: "Open project…", run: lua("require('corkboard.picker').projects()") },

@@ -146,4 +146,22 @@ describe("the node's forge", () => {
     ch.close();
     rmSync(dir, { recursive: true });
   });
+
+  it("is a browser's with Forgejo's own login, on loopback or through the tunnel while the account has it on", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "forge-"));
+    const none = {} as any;
+    let on = false;
+    const app = node({ data: none, search: none, oauth: new OAuthStore(join(dir, "oauth.json")), origin: "http://node.invalid", forge, forgeWeb: () => on });
+    const page = (peer?: { requestIP: () => { address: string } }) =>
+      app(new Request("http://node.invalid/forge/user/login", { headers: { [HEADER]: "someone", cookie: "forge_session=s" } }), peer as any);
+    // Through the tunnel (no peer), off; from another machine, never.
+    expect((await page()).status).toBe(404);
+    expect((await page({ requestIP: () => ({ address: "10.0.0.2" }) })).status).toBe(404);
+    expect((await page({ requestIP: () => ({ address: "127.0.0.1" }) })).status).toBe(200);
+    expect(last()).toMatchObject({ path: "/user/login", user: null });
+    on = true;
+    expect((await page()).status).toBe(200);
+    expect(last()).toMatchObject({ path: "/user/login", user: null });
+    rmSync(dir, { recursive: true });
+  });
 });

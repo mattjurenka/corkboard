@@ -57,7 +57,7 @@ const SESSION: Record<string, [string, string]> = {
   permission: ["asking permission", "text-blocked"],
   exited: ["session ended", "text-muted-foreground"],
 };
-type BoardState = { root?: string; none?: boolean; statuses: string[]; cards: BoardCard[]; selected?: string };
+type BoardState = { none?: boolean; statuses: string[]; cards: BoardCard[]; selected?: string };
 
 const STATE_LABEL: Record<string, string> = {
   queued: "queued",
@@ -147,7 +147,7 @@ export function Board({ state, win, focused, nvim }: ViewProps<BoardState>) {
 
   return (
     <div ref={ref} className="@container/board flex h-full flex-col px-2ch pt-row">
-      <header className="truncate pb-row text-muted-foreground">{state.root ?? ""}</header>
+      <header className="pb-row font-bold">Board</header>
       {turn.length > 0 && (
         <section className="mb-row max-h-[40%] shrink-0 overflow-y-auto border-b pb-row">
           <h2 className="mb-row text-blocked">

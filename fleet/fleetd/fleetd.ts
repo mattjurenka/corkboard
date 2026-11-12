@@ -21,16 +21,14 @@ import { join } from "node:path";
 import { coresOf, guestOf, manifest, memoryOf, newId, schedule, SPAWNS, spawns, tokenFor, write, type Manifest, type Spawn } from "./fleet";
 import { Actions, forgejo } from "./actions";
 import { assist } from "./assistant";
-import { GitSessions, SlotForges, gitNote, slotForge } from "./forge";
-import { nodeFetch, readDevice } from "./node";
+import { GitGrants, SlotForges, gitNote, slotForge } from "./forge";
+import { nodeFetch, readDevice, useDevice } from "./node";
 import { ENVIRONMENT, Queue, nodeApi } from "./queue";
 import { end, message, post, serveSessions } from "./sessions";
-import { CLOUD } from "../../bridge/cloud";
 
 const now = () => new Date().toISOString();
 // A spawn's next grant is the node's, as its first was (queue.ts's claim).
-const git = new GitSessions(
-  undefined,
+const git = new GitGrants(
   async (s, holder) => (await nodeApi(manifest(), "GET", `/fleet/spawns/${s.id}?${new URLSearchParams({ git: holder, environment: ENVIRONMENT })}`)).git,
   write,
 );
@@ -84,8 +82,9 @@ async function start(m: Manifest, s: Spawn, slot: string) {
     writeFileSync(join(sl.shareDir, "actions.json"), JSON.stringify({ url: a.url, uuid: s.actions.uuid, handle: s.actions.handle, labels: a.labels }) + "\n");
     writeFileSync(join(sl.shareDir, "runner-token"), s.actions.token + "\n", { mode: 0o600 });
   }
-  if (s.remote?.token) {
-    const mcp = { mcpServers: { corkboard: { type: "http", url: s.remote.mcp ?? `${CLOUD}/mcp`, headers: { Authorization: `Bearer ${s.remote.token}` } } } };
+  // The node's grant, at the node's /mcp.
+  if (s.remote?.token && s.remote.mcp) {
+    const mcp = { mcpServers: { corkboard: { type: "http", url: s.remote.mcp, headers: { Authorization: `Bearer ${s.remote.token}` } } } };
     writeFileSync(join(sl.shareDir, "mcp.json"), JSON.stringify(mcp, null, 2) + "\n", { mode: 0o600 });
   }
   if (s.remote?.brainToken) writeFileSync(join(sl.shareDir, "brain-token"), s.remote.brainToken + "\n", { mode: 0o600 });
@@ -98,8 +97,6 @@ async function start(m: Manifest, s: Spawn, slot: string) {
     const b = await run(["git", "-C", s.repo, "bundle", "create", join(sl.shareDir, "repo.bundle"), "HEAD", "--branches"]);
     if (!b.ok) throw new Error(`couldn't bundle ${s.repo}: ${b.out}`);
   }
-  // A token for the forge, if its template names repos; renewed as it runs.
-  await git.keep(sl.shareDir, s);
   if (s.shell) writeFileSync(join(sl.shareDir, "shell.json"), JSON.stringify(s.shell) + "\n");
   if (s.job) writeFileSync(join(sl.shareDir, "job"), s.job + "\n");
   writeFileSync(join(sl.stateDir, "template"), guestOf(m, s) + "\n");
@@ -208,6 +205,8 @@ async function tick() {
 }
 
 console.log("fleetd: watching", SPAWNS);
+// The Worker knows fleetd by its relay-only device.
+if (manifest().node?.device) useDevice(manifest().node!.device!);
 // The manifest's assistants as it is now: one added later waits for a restart.
 for (const [name, r] of Object.entries(manifest().residents)) {
   if (!r.assistant) continue;

@@ -556,7 +556,7 @@ let
         ${lib.optionalString (!(cfg.runners ? ${name})) ''rm -f "$TMPDIR"/store.img''}
       '') + (if cfg.runners ? ${name} then ''
 
-        exec ${cachedStoreImage name cfg.runners.${name}}/bin/run-${name}-vm "$@"
+        exec ${cachedStoreImage { inherit name; runner = cfg.runners.${name}; }}/bin/run-${name}-vm "$@"
       '' else ''
 
         runner=$(nix build --no-link --print-out-paths \
@@ -580,12 +580,19 @@ let
   # A runner with no store image (`ownsDisk`) passes through unchanged. One
   # that runs mkfs.erofs outside the markers fails the build: nixpkgs moved
   # them, and silently rebuilding on every start again is the thing to avoid.
-  cachedStoreImage = name: runner:
+  #
+  # With `shared`, the image is kept there as <key>.img for every VM of the
+  # runner (a slot's, whichever slot it is), published by a rename once it's
+  # whole, so two that pack at once just waste one pack. It's attached
+  # read-only: QEMU would otherwise take a write lock only one VM can hold,
+  # and a guest's root could write into what the next spawn boots. A runner
+  # that can't be made so fails the build.
+  cachedStoreImage = { name, runner, shared ? "" }:
     pkgs.runCommand "${name}-vm-cached-store" { nativeBuildInputs = [ pkgs.python3 ]; } ''
       mkdir -p $out/bin
-      python3 - ${runner}/bin/run-${name}-vm $out/bin/run-${name}-vm <<'EOF'
+      python3 - ${runner}/bin/run-${name}-vm $out/bin/run-${name}-vm ${lib.escapeShellArg shared} $out/store-image-key <<'EOF'
       import hashlib, re, sys
-      src, dst = sys.argv[1], sys.argv[2]
+      src, dst, shared, keyfile = sys.argv[1:5]
       text = open(src).read()
       block = re.compile(r'^echo "Creating Nix store image\.\.\."\n.*?^echo "Created Nix store image\."\n',
                          re.M | re.S)
@@ -601,6 +608,27 @@ let
           if not re.search(r'^set -e$', text[:m.start()], re.M):
               sys.exit(f"{src}: no `set -e` before the store image; a failed pack would be keyed")
           key = hashlib.sha256(m.group(0).encode()).hexdigest()
+          if shared:
+              attach = 'file="$TMPDIR"/store.img,'
+              if text.count(attach) != 1:
+                  sys.exit(f"{src}: no single store image drive to attach read-only; cachedStoreImage needs updating")
+              text = text[:m.start()] + f"""\
+      img={shared}/{key}.img
+      if [ -f "$img" ]; then
+          echo "Reusing Nix store image."
+      else
+          pack=$(mktemp -d {shared}/.pack.XXXXXX)
+          ( set -euo pipefail
+            TMPDIR=$pack
+      {m.group(0)}    )
+          mv -T "$pack"/store.img "$img"
+          rm -rf "$pack"
+      fi
+      ln -sfn "$img" "$TMPDIR"/store.img
+      """ + text[m.end():].replace(attach, attach + "readonly=on,")
+              open(keyfile, "w").write(key + "\n")
+              open(dst, "w").write(text)
+              sys.exit(0)
           text = text[:m.start()] + f"""\
       if [ -f "$TMPDIR"/store.img ] && [ "$(cat "$TMPDIR"/store.img.key 2>/dev/null)" = {key} ]; then
           echo "Reusing Nix store image."
@@ -628,7 +656,7 @@ let
     let vm = plans.${name}; in
     pkgs.writeShellApplication {
       name = "${name}-run";
-      runtimeInputs = [ config.nix.package pkgs.coreutils ];
+      runtimeInputs = [ config.nix.package pkgs.coreutils pkgs.findutils ];
       text = ''
         template=$(cat ${vm.stateDir}/template 2>/dev/null || true)
         known=(${lib.escapeShellArgs guests})
@@ -655,10 +683,18 @@ let
         mkdir -p "$TMPDIR"
         rm -f ${vm.spiceSocket} ${lib.concatStringsSep " " vm.consoleSockets} "$TMPDIR"/store.img ${vm.diskImage}
 
+        # What an earlier generation packed, and packs a killed start left.
+        # A VM still running on one keeps its open file.
+        find ${storeImageDir} -maxdepth 1 -name '.pack.*' -mmin +60 -exec rm -rf {} +
+        keep=" $(cat ${lib.concatMapStringsSep " " (r: "${r}/store-image-key") (lib.attrValues slotRunners)} | tr '\n' ' ')"
+        for f in ${storeImageDir}/*.img; do
+          if [ -e "$f" ] && [[ "$keep" != *" $(basename "$f" .img) "* ]]; then rm -f "$f"; fi
+        done
+
         case "$template" in
         ${lib.concatStrings (lib.mapAttrsToList (t: runner: ''
           ${lib.escapeShellArg t}) runner=${runner} ;;
-        '') cfg.slotRunners)}
+        '') slotRunners)}
           *) runner=$(nix build --no-link --print-out-paths \
                "${cfg.flake}#nixosConfigurations.\"$template@slot\".config.system.build.vm") ;;
         esac
@@ -668,6 +704,12 @@ let
 
   spawnable = lib.attrNames (lib.filterAttrs (_: t: t.spawnable or false) cfg.templates);
   # And each with a bound brain's memory.
+  # One image per guest, whichever slots run it (cachedStoreImage).
+  storeImageDir = "/var/lib/fleet-store-images";
+  slotRunners = lib.mapAttrs
+    (_: runner: cachedStoreImage { name = "agent"; inherit runner; shared = storeImageDir; })
+    cfg.slotRunners;
+
   guests = spawnable ++ lib.concatMap (t: map (b: "${t}+${b}") (lib.attrNames (lib.filterAttrs (_: b: b.shares != [ ]) cfg.bindings))) spawnable;
 
   # What the fleet view shows of a VM: where it is and what it may reach.
@@ -682,6 +724,7 @@ let
   # slot can take, and the budget itself.
   manifest = {
     inherit (cfg) flake owner memoryBudget bindings defaultAccount offer;
+    ${if cfg.node == null then null else "node"} = cfg.node;
     slots = lib.mapAttrs
       (name: inst:
         let vm = plans.${name}; in {
@@ -1420,7 +1463,8 @@ in
           # writable -- see vm.outboxDir in ../plan.nix.
           "d ${vm.outboxDir} 0755 ${cfg.owner} users -"
         ]
-        ++ map (d: "d ${d} 0755 ${cfg.owner} users -") inst.extraDirs)
+        ++ map (d: "d ${d} 0755 ${cfg.owner} users -") inst.extraDirs
+        ++ lib.optional inst.slot "d ${storeImageDir} 0755 ${cfg.owner} users -")
       active);
 
     # NetworkManager would otherwise try to autoconfigure the taps.

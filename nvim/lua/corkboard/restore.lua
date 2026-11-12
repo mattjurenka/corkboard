@@ -32,18 +32,21 @@ local function leaf(win)
   local l = { width = vim.api.nvim_win_get_width(win), height = vim.api.nvim_win_get_height(win) }
   l.focus = win == vim.api.nvim_get_current_win() or nil
   if vim.bo[buf].buftype == "terminal" then
-    if b.corkboard_plan_claude or b.corkboard_claude == "pepper" then return nil end
+    if b.corkboard_plan_claude or b.corkboard_role == "pepper" then return nil end
     l.cwd = name:match("^term://(.-)//%d+:")
-    if b.corkboard_claude then
-      if not b.corkboard_claude_session then return nil end
-      l.type, l.session = "claude", b.corkboard_claude_session
+    if b.corkboard_agent then
+      if not b.corkboard_agent_session then return nil end
+      l.type, l.agent, l.session = "agent", b.corkboard_agent, b.corkboard_agent_session
+      -- The brain it runs as, and so its account: resumed without it, it
+      -- would run as the default brain.
+      l.brain = b.corkboard_brain
       -- A card it was started on, or one it took later (agents.link).
       if b.corkboard_linked then
         l.linked = b.corkboard_card
       else
         l.card = b.corkboard_card
       end
-      l.transcript = b.corkboard_claude_transcript
+      l.transcript = b.corkboard_agent_transcript
       l.avatar = require("corkboard.avatar").kept(buf, vim.api.nvim_win_get_tabpage(win))
     else
       l.type = "terminal"
@@ -130,17 +133,18 @@ local function fill(win, l)
       vim.bo.bufhidden = "hide"
       vim.t.corkboard_terminal = vim.api.nvim_get_current_buf()
     end
-  elseif l.type == "claude" then
+  -- "claude": a layout saved before there were kinds of agent.
+  elseif l.type == "agent" or l.type == "claude" then
     -- A session that never got a prompt wrote no transcript, and --resume
     -- would only say there is no such session: a new one instead.
     local session = l.session
     if l.transcript and not vim.uv.fs_stat(vim.fn.expand(l.transcript)) then session = nil end
     if l.card then
       local ok, card = pcall(require("corkboard.board").get, l.card)
-      if ok and card then require("corkboard.agents").start(l.card, { resume = session, here = true }) end
+      if ok and card then require("corkboard.agents").start(l.card, { resume = session, here = true, brain = l.brain }) end
     else
       local cwd = l.cwd and vim.fn.expand(l.cwd)
-      local buf = require("corkboard.claude").start({ cwd = cwd, args = session and { "--resume", session } or nil, here = true })
+      local buf = require("corkboard.session").start({ agent = l.agent, brain = l.brain, cwd = cwd, resume = session, here = true })
       local ok, card = pcall(require("corkboard.board").get, l.linked or "")
       if buf and l.linked and ok and card and card.status ~= "done" then require("corkboard.agents").link(buf, l.linked) end
     end
@@ -215,7 +219,7 @@ local function put_back()
       -- After the sizes, as the avatar takes its room from the session's.
       for _, p in ipairs(placed) do
         local buf = vim.api.nvim_win_is_valid(p.win) and vim.api.nvim_win_get_buf(p.win)
-        if p.leaf.avatar and buf and vim.b[buf].corkboard_claude then require("corkboard.avatar").open(buf, p.win, p.leaf.avatar) end
+        if p.leaf.avatar and buf and vim.b[buf].corkboard_agent then require("corkboard.avatar").open(buf, p.win, p.leaf.avatar) end
       end
       for _, p in ipairs(placed) do
         if p.leaf.focus then focus = p.win end

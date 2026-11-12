@@ -1,7 +1,7 @@
 -- Pepper's hand_off, from the mod (claude-plugin/hooks/work.tsx). Runs as
 -- `nvim -l` with the request as JSON on stdin ({ task, project, name }) and
 -- asks a main corkboard window's Neovim to start Claude Code on it
--- (corkboard.claude.handoff): the one in that project first, else any with a
+-- (corkboard.session.handoff): the one in that project first, else any with a
 -- page. Each Neovim says where it is in its corkboard.live file. Prints what
 -- happened; exits 1 when nothing started.
 
@@ -33,7 +33,7 @@ for _, nvim in ipairs(found) do
   local chan = vim.F.npcall(vim.fn.sockconnect, "pipe", nvim.server, { rpc = true })
   if chan and chan ~= 0 then
     local called, result = pcall(vim.rpcrequest, chan, "nvim_exec_lua",
-      "return { require('corkboard.claude').handoff(...) }", { req })
+      "return { require('corkboard.session').handoff(...) }", { req })
     if called and type(result) == "table" then
       if result[1] then
         io.write(result[2])

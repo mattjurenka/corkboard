@@ -41,10 +41,11 @@
 
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CLOUD, signedIn, token } from "../cloud";
+import { CLOUD, token } from "../cloud";
 import { STATE_DIR } from "../dirs";
 import { Keystore } from "../keystore";
 import { Relay } from "../../lib/e2ee/relay";
+import { Invalid } from "../../lib/model/cards";
 import { indexId, indexKey } from "../../lib/e2ee/sharing";
 import { type LogTransport, Replica, offline } from "../../lib/e2ee/sync";
 import { accountObject, dayObject, fleetObject, listObjects } from "./objects";
@@ -56,8 +57,9 @@ import { Data } from "./data";
 import { Search } from "./search";
 import { LocalEmbedder } from "./embed";
 import { Episodes } from "./episodes";
-import { Consolidator } from "./consolidator";
+import { brainThink, Consolidator } from "./consolidator";
 import { Handoff } from "./handoff";
+import { ForgeSnapshots } from "./snapshots";
 import { Media } from "./media";
 import { startLeases } from "./leases";
 import { OAuthStore, SCOPES, type Scope, type Shared } from "./oauth";
@@ -65,6 +67,7 @@ import { type AppCall, type AppEvents, node } from "./server";
 import { Hub } from "../hub";
 import type { Reach } from "../peers";
 import type { Channel } from "../../lib/e2ee/channel";
+import type { NodesView } from "../../lib/e2ee/wire";
 import { lentCalendar, loadCalendar, login, saveCalendar, startCalendar } from "./calendar";
 
 export const NODE_DIR = join(STATE_DIR, "node");
@@ -93,12 +96,14 @@ async function fleetQueue(method: string, path: string, body?: unknown) {
     signal: AbortSignal.timeout(30_000),
   });
   const json = (await res.json().catch(() => ({}))) as any;
-  if (!res.ok) throw new Error(`the fleet: ${json.error ?? `HTTP ${res.status}`}`);
+  // What the queue refuses is the caller's to read; its failing is ours.
+  if (!res.ok) throw new (res.status < 500 ? Invalid : Error)(`the fleet: ${json.error ?? `HTTP ${res.status}`}`);
   return json;
 }
 
-// The calendar the node writes: its own (calendar-login), or the Worker's, lent.
-const lent = lentCalendar(() => (signedIn() ? token().then((t) => fetch(`${CLOUD}/api/calendar/token`, { method: "POST", headers: { Authorization: `Bearer ${t}` }, signal: AbortSignal.timeout(30_000) })) : undefined));
+// The calendar the node writes: its own (calendar-login), or the Worker's,
+// lent to the account's devices.
+const lent = lentCalendar(() => (new Keystore().device()?.relay ? token().then((t) => fetch(`${CLOUD}/api/calendar/token`, { method: "POST", headers: { Authorization: `Bearer ${t}` }, signal: AbortSignal.timeout(30_000) })) : undefined));
 const calendar = async () => loadCalendar(calendarPath) ?? (await lent());
 
 const localZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -174,11 +179,14 @@ export async function startNode(o: NodeOptions = {}) {
     // leading, this one's episodes are handed to it. The relay also says
     // when it changes (the tunnel's onLeader, below).
     let led: { at: number; to: string } | undefined;
+    // Whether the account has Forgejo's pages through the tunnel, as last looked.
+    let forgeWeb = false;
     // The node that leads: its device's id.
     const leader = async () => {
       if (!r || !tunnel) return d.device.id;
       if (led && Date.now() - led.at < 60_000) return led.to;
       const v = await r.nodes();
+      forgeWeb = !!v.forge;
       const nodes = v.connected.filter((c) => c.tunnel !== false);
       const to = nodes.find((c) => c.device === v.leader) ?? nodes.sort((a, b) => b.since - a.since)[0];
       led = { at: Date.now(), to: to?.device ?? d.device.id };
@@ -186,8 +194,6 @@ export async function startNode(o: NodeOptions = {}) {
     };
     const leads = async () => (await leader()) === d.device.id;
     const handoff = r && new Handoff({ replicas, episodes, blobs: r });
-    const consolidator = new Consolidator({ data, episodes, after: (brain) => search.share(brain), leads, handoff });
-    consolidator.start();
     // Working cards whose agents went quiet, blocked by the same node.
     const stopLeases = startLeases(data, leads);
     // Accepted days onto the calendar, by the same node.
@@ -203,11 +209,15 @@ export async function startNode(o: NodeOptions = {}) {
     const addBoard = (key: string) => replicas.add(listObjects(root, { boards: [key], brains: [] })[0]);
     // This machine's sessions, which its bridges join (ciphertext-relay.md step 3).
     const hub = new Hub();
-    const fleet = () => (signedIn() ? fleetQueue : undefined);
+    const fleet = () => (d.relay ? fleetQueue : undefined);
     // What the fleet keeps sealed from the Worker (fleet.ts).
     // This machine signs the fleet's git grants (forge-keys.md), as a device of the account's.
     const forge = () => (r?.account && d.cert.body.role !== "relay" ? { account: r.account, device: { id: d.device.id, sign: d.device.sign }, cert: d.cert, gate: FORGE_GATE } : undefined);
-    const sealed = new FleetRecords(replicas, fleet, forge);
+    const sealed = new FleetRecords(replicas, fleet, forge, data);
+    // Each brain thinks with its own model, its key a hold's secret here.
+    const think = brainThink((brain) => data.brains().find((b) => b.name === brain), (hold) => sealed.secrets([hold])[hold]);
+    const consolidator = new Consolidator({ data, episodes, think, after: (brain) => search.share(brain), leads, handoff });
+    consolidator.start();
     const forgeRecords = new ForgeRecords(replicas);
     const forgeUnix = process.env.CORKBOARD_FORGE_UNIX ?? join(NODE_DIR, "forge", "forgejo.sock");
     const forgeHeader = process.env.CORKBOARD_FORGE_USER_HEADER ?? "X-Corkboard-Forge-User";
@@ -265,7 +275,8 @@ export async function startNode(o: NodeOptions = {}) {
         // (ciphertext-relay.md step 2), at the tunnel's origin, so the
         // phone's tokens work on either; never loopback. One with no
         // token is its device's, the owner (fleetd's relay-only one).
-        const tunneled = node({ ...served, origin: nodes.url });
+        forgeWeb = !!nodes.forge;
+        const tunneled = node({ ...served, origin: nodes.url, forgeWeb: () => forgeWeb, toForge });
         // The relay says when the leader may have changed, so a move takes
         // effect at once rather than at the next minute's look.
         const told = (to: string | null) => (led = { at: Date.now(), to: to ?? d.device.id });
@@ -277,13 +288,24 @@ export async function startNode(o: NodeOptions = {}) {
     // (the tunnel going to another node meanwhile) doesn't stop it; with
     // none named, on the node the tunnel goes to. A failed look changes nothing.
     const forgeBin = process.env.CORKBOARD_FORGEJO;
-    const forgeProcess = forgeBin ? new Forgejo({ bin: forgeBin, static: process.env.CORKBOARD_FORGEJO_STATIC, dir: join(NODE_DIR, "forge"), unix: forgeUnix, userHeader: forgeHeader }) : undefined;
+    const forgeProcess = forgeBin ? new Forgejo({ bin: forgeBin, static: process.env.CORKBOARD_FORGEJO_STATIC, dir: join(NODE_DIR, "forge"), unix: forgeUnix, userHeader: forgeHeader, url: process.env.CORKBOARD_FORGE_URL, defaultUrl: tunnel && `${tunnel.url}/forge/` }) : undefined;
+    // Its state to the relay as it runs, and from it before it starts here (snapshots.ts).
+    const snapshots = forgeProcess && r && new ForgeSnapshots({ dir: join(NODE_DIR, "forge"), replicas, blobs: r });
     const keepForge = async () => {
       if (!forgeProcess) return;
       try {
         const named = r && tunnel ? (await r.nodes()).leader : null;
-        if (!(named ? named === d.device.id : await leads())) return await forgeProcess.stop();
+        if (!(named ? named === d.device.id : await leads())) {
+          if (!forgeProcess.running) return await forgeProcess.stop();
+          await forgeProcess.stop();
+          return await snapshots?.step(Date.now(), true);
+        }
+        if (!forgeProcess.running) {
+          const restored = await snapshots?.restore();
+          if (restored) console.log(`node: the forge: ${restored} restored from the relay`);
+        }
         await forgeProcess.start();
+        await snapshots?.step();
         // A forge moved in with no login recorded is its one admin's.
         if (!forgeRecords.user()) {
           const admins = await forgeProcess.admins();
@@ -316,7 +338,7 @@ export async function startNode(o: NodeOptions = {}) {
       addBoard,
       // The calendar the node writes accepted days to, if it has one.
       calendar,
-      // The Worker's fleet queue while signed in, and what the fleet keeps sealed here.
+      // The Worker's fleet queue while the account's on the relay, and what the fleet keeps sealed here.
       fleet,
       sealed,
       forge: forgeRecords,
@@ -324,6 +346,8 @@ export async function startNode(o: NodeOptions = {}) {
       hub,
       reach,
       toForge,
+      // The account's nodes as just told (app.ts's nodes_*).
+      noteNodes: (v: NodesView) => void (forgeWeb = !!v.forge),
       // The app's operations on the loopback /app (app.ts's), and its
       // boards' events on /app/events, not the tunnel's.
       serveApp: (f: AppCall, events: AppEvents) => void ((app = f), (appEvents = events)),

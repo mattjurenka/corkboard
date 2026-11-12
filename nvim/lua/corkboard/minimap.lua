@@ -205,4 +205,12 @@ vim.api.nvim_create_autocmd("ColorScheme", {
   end,
 })
 
+-- The columns the page draws over win's right edge (Scrollbars.tsx): the
+-- minimap's, in a window wide enough for one, the scrollbar's in a narrower
+-- one, none where it has neither (a terminal).
+function M.covers(win)
+  if sent[vim.api.nvim_win_get_buf(win)] == nil then return 0 end
+  return vim.api.nvim_win_get_width(win) >= 60 and 12 or 1
+end
+
 return M

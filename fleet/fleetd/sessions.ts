@@ -105,7 +105,8 @@ function list(): Hosted[] {
     });
 }
 
-async function say(key: string, text: string, keys: string[]) {
+async function say(key: string, text: string, keys: string[], answers?: unknown) {
+  if (answers) return { error: "a question here is answered in words" };
   const m = manifest();
   const s = spawns().find((x) => x.id === key && x.interactive && x.state === "running" && x.slot);
   if (!s) return { error: "that session has ended", missing: true };

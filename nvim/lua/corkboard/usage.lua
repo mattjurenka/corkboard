@@ -355,7 +355,7 @@ local function state()
   local periods = {}
   for _, p in ipairs(PERIODS) do table.insert(periods, { key = p.key, label = p.label }) end
   return {
-    root = util.project_root(), selected = selected, sessions = list,
+    selected = selected, sessions = list,
     board = board_at[util.project_root()] and board_at[util.project_root()].key or nil,
     loading = warmed[util.project_root()] ~= true or nil,
     period = period, periods = periods, sort = sort, total = period_total(),
@@ -382,7 +382,7 @@ end
 
 local function render_text()
   if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
-  local lines, map = { "Token usage  " .. util.project_root(), "" }, {}
+  local lines, map = { "Usage", "" }, {}
   table.insert(lines, string.format("SESSIONS (%d) · %s · by %s · %s      p period · s sort", #sessions,
     period == "all" and "all time" or ("last " .. period_of(period).label), sort, dollars(period_total())))
   for _, session in ipairs(sessions) do
