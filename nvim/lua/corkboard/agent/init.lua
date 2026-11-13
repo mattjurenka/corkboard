@@ -16,7 +16,7 @@ local M = {}
 
 M.DEFAULT = "claude"
 
-local KINDS = { claude = true, opencode = true, gemini = true, codex = true }
+local KINDS = { claude = true, opencode = true, agy = true, codex = true }
 
 -- An ACP kind's system prompt, before the session's own: corkboard-ui's
 -- ask and notify in place of Claude Code's AskUserQuestion and
@@ -38,7 +38,10 @@ end
 -- Every kind, the default first.
 function M.all()
   local names = vim.tbl_keys(KINDS)
-  table.sort(names, function(a, b) return (a == M.DEFAULT) ~= (b == M.DEFAULT) and a == M.DEFAULT or a < b end)
+  table.sort(names, function(a, b)
+    if (a == M.DEFAULT) ~= (b == M.DEFAULT) then return a == M.DEFAULT end
+    return a < b
+  end)
   return vim.tbl_map(M.get, names)
 end
 

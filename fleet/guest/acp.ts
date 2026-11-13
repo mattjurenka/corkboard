@@ -13,7 +13,7 @@
 // fleetd follows a session's.
 //
 // The kind's credential, /mnt/share/<kind>-credential, is KEY=value lines
-// for its environment: GEMINI_API_KEY=... for gemini, OPENAI_API_KEY=... for
+// for its environment: GEMINI_API_KEY=... for agy, OPENAI_API_KEY=... for
 // codex (given to codex-acp as its gateway, OpenAI's, since the adapter
 // only takes that key through a login: lib/acp/codex.ts). Every permission it asks
 // is allowed, as Claude Code runs here with --dangerously-skip-permissions.

@@ -84,7 +84,8 @@ const id = str("Card id, e.g. TASK-4");
 const strings = (description: string) => ({ type: "array", items: { type: "string" }, description });
 const labels = strings("Labels, replacing the card's");
 const dependencies = strings("Ids of cards this one waits on, e.g. TASK-4; replaces the card's");
-const priority = { type: "string", enum: [...PRIORITIES, ""], description: "high, medium or low; empty clears it, which counts as medium" };
+// No enum: Gemini's API refuses an empty string in one, and "" clears it.
+const priority = { type: "string", description: "high, medium or low; empty clears it, which counts as medium" };
 function priorityOf(v: unknown) {
   if (v === "" || v === null) return null;
   if (!PRIORITIES.includes(v as (typeof PRIORITIES)[number])) throw new ToolError(`priority must be one of ${PRIORITIES.join(", ")}`);

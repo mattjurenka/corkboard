@@ -290,17 +290,14 @@ think({ system, input, schema?, model?, tools?: [] }): Promise<{ text: string; j
    and `codex.ts`, in `lib/acp/kinds.ts`'s `KINDS` beside opencode (bridge/acp.ts and the fleet
    both take them from there), and `agent/gemini.lua` and `agent/codex.lua`, which read their
    transcripts as opencode's does. Each file's header says what was verified. In short:
-   - **Gemini CLI 0.47.0**, `gemini --acp`: corkboard's prompt is a `GEMINI.md` in an included
-     directory, added to Gemini's own; the MCP servers and that go in a settings file at
-     `GEMINI_CLI_SYSTEM_DEFAULTS_PATH` (the lowest layer, so `~/.gemini` is untouched), `trust`ed,
-     in a trusted workspace (untrusted, no MCP server starts). Auth is the user's Google login,
-     or `GEMINI_API_KEY` from a brain whose model is at generativelanguage.googleapis.com.
-     A built-in tool's title is what it does, its name only in the toolCallId, so a kind's
-     `names(title, id)` gets both. No `usage_update`: the prompt result's
-     `_meta.quota.token_count` is written as the turn's tokens, so its context reads unknown.
-     `session/load` is advertised but writes a fresh start over the session, so a restore
-     starts it afresh (`NO_RESUME`). nixpkgs flags 0.47.0 for removal: Google replaced Gemini CLI
-     with Antigravity CLI for unpaid and AI Pro/Ultra users.
+   - **Gemini CLI, replaced by Antigravity CLI the same day** (`lib/acp/agy.ts`, `agent/agy.lua`):
+     Google stopped serving Gemini CLI's personal sign-in (AI Plus/Pro/Ultra) on 2026-06-18, and
+     its `session/load` wrote over the session. **agy 1.5.3**, `agy acp`, with a real turn on an AI
+     Plus login: corkboard's prompt in session/new's `_meta.antigravity.systemPrompt.append`
+     (`Spec.meta`), the MCP servers in session/new as ACP's, stdio and HTTP, run without asking;
+     the user's keyring login, or `GEMINI_API_KEY` signed in with `authenticate` (`Spec.auth`).
+     ACP's `usage` on the prompt's result; `session/load` replays and keeps the prompt. The
+     fleet pins 1.5.3 in slot.nix: corkboard's nixpkgs has 1.4.1, which has no `acp`.
    - **Codex 0.167.0 through codex-acp 2.1.1**: everything in `CODEX_CONFIG`: the prompt as
      `developer_instructions`, the MCP servers with `default_tools_approval_mode = "approve"`
      (handed over in `session/new` they ask every call), and the brain's model.
@@ -324,7 +321,7 @@ think({ system, input, schema?, model?, tools?: [] }): Promise<{ text: string; j
 8. **Done 2026-11-12; opencode and Codex booted in a slot.** **The fleet**: a template's `agent` (fleet/lib.nix's
    `agents`, Claude Code's by default; any other throws) goes into the manifest, fleetd and
    `fleet_get`, so `<C-.>` lists each template, and each VM running one, under its own kind.
-   slot.nix installs the kind's CLI (`opencode`, `gemini-cli`, `codex-acp` wrapping nixpkgs'
+   slot.nix installs the kind's CLI (`opencode`, `agy`, `codex-acp` wrapping nixpkgs'
    codex) with `fleet-acp`: fleet/guest/acp.ts on lib/acp/, which runs a task (one turn on
    task.md, its `result.json`) or a session (the inbox fleetd fills, each turn's end a result
    line in `events.jsonl`, its transcript in `outbox/projects/acp/`) so fleetd reads it as

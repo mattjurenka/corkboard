@@ -245,7 +245,7 @@ export function focusTab(end: "first" | "last", nvim: Nvim) {
 // File name bright, directory dimmed under it. A terminal
 // (term://<cwd>//<pid>:<cmd>) shows its program over the directory it runs in,
 // or Neovim's label for it (a Claude Code session's name over where it runs)
-// when it sent one.
+// when it sent one, as any other tab with a label does.
 // corkboard's own views by what they are rather than their agent:// names.
 const VIEW_TABS: Record<string, [string, string | null]> = {
   "agent://plan": ["Day plan", null],
@@ -302,6 +302,8 @@ function tabParts(name: string, label?: Tab["label"]): [string, string | null] {
   const term = /^term:\/\/(.*?)\/\/\d+:(.*)$/.exec(name);
   if (VIEW_TABS[name]) return VIEW_TABS[name];
   if (term) return [label?.title ?? term[2].split(" ")[0].split("/").at(-1)!, label?.where ?? term[1]];
+  // An ACP agent's session (agent://acp/<n>), whose label Neovim sends.
+  if (label) return [label.title, label.where ?? null];
   const slash = name.lastIndexOf("/");
   return [name.slice(slash + 1), slash > 0 ? name.slice(0, slash) : null];
 }

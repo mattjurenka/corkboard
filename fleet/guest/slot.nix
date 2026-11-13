@@ -89,7 +89,17 @@ let
   kindPackages = {
     claude = [ ];
     opencode = [ pkgs.opencode ];
-    gemini = [ pkgs.gemini-cli ];
+    # `agy acp` is 1.5's; this nixpkgs has 1.4.1, so nixpkgs' later one's
+    # binary until the pin moves past it.
+    agy = [
+      (pkgs.antigravity-cli.overrideAttrs (old: {
+        version = "1.5.3";
+        src = pkgs.fetchurl {
+          url = "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.3-6604829099950080/linux-x64/cli_linux_x64.tar.gz";
+          hash = "sha256-G0hQWZzOc6F/lP+0It87+VMVMbd9vdxAwaQ14MLBaAc=";
+        };
+      }))
+    ];
     # codex-acp runs nixpkgs' codex, which it's wrapped with. Its exec tool
     # spawns codex-linux-sandbox from PATH, which nixpkgs' codex doesn't
     # have: it's codex itself under that name (codex dispatches on argv[0]).

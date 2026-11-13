@@ -160,7 +160,7 @@ export function credentialFor(m: Manifest, s: Spawn): { file: string; share: str
   if (s.job === "actions") return undefined;
   const kind = m.templates[s.template]?.agent ?? "claude";
   if (kind === "claude") return { file: tokenFor(s.account), share: "claude-token", how: "claude setup-token, signed in as it, then save it there" };
-  const keys: Record<string, string> = { gemini: "GEMINI_API_KEY=...", codex: "OPENAI_API_KEY=..." };
+  const keys: Record<string, string> = { agy: "GEMINI_API_KEY=...", codex: "OPENAI_API_KEY=..." };
   return { file: join(ACCOUNTS, `${s.account}.${kind}`), share: `${kind}-credential`, how: `its key as ${keys[kind] ?? "KEY=value"} lines there` };
 }
 

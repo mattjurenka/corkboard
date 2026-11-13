@@ -3,7 +3,7 @@
 
 import type { McpServer, Spec } from "./client";
 import { opencode, type ClaudeMcp } from "./opencode";
-import { gemini } from "./gemini";
+import { agy } from "./agy";
 import { codex } from "./codex";
 import type { Model } from "../think";
 
@@ -21,10 +21,6 @@ export type KindOptions = {
 
 export const KINDS: Record<string, (o: KindOptions) => Spec> = {
   opencode,
-  gemini,
+  agy,
   codex,
 };
-
-// Kinds whose session/load is advertised but doesn't work: gemini 0.47.0
-// writes a fresh start over the session before it reads it.
-export const NO_RESUME = new Set(["gemini"]);

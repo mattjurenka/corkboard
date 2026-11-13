@@ -19,7 +19,7 @@
 
 import { join } from "node:path";
 import { AcpSession, type Permission } from "../lib/acp/client";
-import { KINDS, NO_RESUME } from "../lib/acp/kinds";
+import { KINDS } from "../lib/acp/kinds";
 import type { Model } from "../lib/think";
 import { STATE_DIR } from "./dirs";
 import { Follower } from "./transcript";
@@ -105,8 +105,7 @@ export class Acp {
         open.session = session;
         this.open.set(buf, open);
         try {
-          // One that can't go on with a session starts a new one.
-          const id = await session.start(typeof o.resume === "string" && !NO_RESUME.has(o.kind) ? o.resume : undefined);
+          const id = await session.start(typeof o.resume === "string" ? o.resume : undefined);
           // A resumed one's history with it.
           if (session.transcriptPath) open.follower = new Follower(session.transcriptPath);
           this.draw(open);

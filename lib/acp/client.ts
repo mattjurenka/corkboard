@@ -27,7 +27,20 @@ export type McpServer =
 // quiet: a session/update the kind's agent sends that isn't the conversation's.
 // settle: ms to wait after the session opens before it's ready, for an agent
 // whose MCP tools join the session a moment after it says it's open.
-export type Spec = { command: string[]; env?: Record<string, string>; mcpServers?: McpServer[]; names?: (tool: string, id?: string) => string; files?: string[]; quiet?: (u: any) => boolean; settle?: number };
+// meta: the session/new (and session/load) _meta the kind's agent reads.
+// auth: the authenticate method to sign in with before the session, given
+// the env the kind's spec ends up with (a fleet slot's credential's too).
+export type Spec = {
+  command: string[];
+  env?: Record<string, string>;
+  mcpServers?: McpServer[];
+  names?: (tool: string, id?: string) => string;
+  files?: string[];
+  quiet?: (u: any) => boolean;
+  settle?: number;
+  meta?: object;
+  auth?: (env: Record<string, string>) => string | undefined;
+};
 
 // corkboard's event, as agents.lua's hook takes it.
 export type Event = {
@@ -112,19 +125,21 @@ export class AcpSession {
   async start(resume?: string): Promise<string> {
     const init = await this.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } });
     this.capabilities = init?.agentCapabilities ?? {};
-    const mcpServers = this.o.spec.mcpServers ?? [];
+    const method = this.o.spec.auth?.(this.o.spec.env ?? {});
+    if (method) await this.request("authenticate", { methodId: method });
+    const session = { cwd: this.o.cwd, mcpServers: this.o.spec.mcpServers ?? [], ...(this.o.spec.meta && { _meta: this.o.spec.meta }) };
     if (resume) {
       if (!this.capabilities.loadSession) throw new Error("this agent can't go on with a session");
       // What it replays of the session is in the transcript already.
       this.loading = true;
       try {
-        await this.request("session/load", { sessionId: resume, cwd: this.o.cwd, mcpServers });
+        await this.request("session/load", { sessionId: resume, ...session });
       } finally {
         this.loading = false;
       }
       this.id = resume;
     } else {
-      const got = await this.request("session/new", { cwd: this.o.cwd, mcpServers });
+      const got = await this.request("session/new", session);
       if (typeof got?.sessionId !== "string") throw new Error("the agent opened no session");
       this.id = got.sessionId;
     }
@@ -144,8 +159,7 @@ export class AcpSession {
     try {
       const got = await this.request("session/prompt", { sessionId: this.id, prompt: [{ type: "text", text }] });
       const stop = String(got?.stopReason ?? "end_turn");
-      // Gemini's tokens are in its _meta.
-      this.transcript!.turn(got?.usage ?? got?._meta?.quota?.token_count);
+      this.transcript!.turn(got?.usage);
       return stop;
     } catch (err) {
       this.transcript!.turn();

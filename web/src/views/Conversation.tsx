@@ -13,6 +13,7 @@ import { marked } from "marked";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import type { Nvim } from "@/nvim/context";
+import { MAC, toNvimKey, windowKey } from "@/nvim/input.js";
 import type { ViewProps } from "./index";
 
 type Option = { label?: string; description?: string };
@@ -282,6 +283,21 @@ function Tool({ item, result, open, toggle }: { item: Item; result?: Result; ope
   );
 }
 
+// The field's own editing chords (copy, paste, undo, by word), which stay
+// in it, with Ctrl, Alt or Cmd.
+const EDITING = new Set(["a", "c", "v", "x", "z", "y", "Backspace", "Delete", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"]);
+
+// A chord in the composer that is Neovim's, as Neovim key notation, or null:
+// Alt+h/j/k/l and any other Ctrl, Alt or Cmd chord bar EDITING's, and bar
+// Option alone on a Mac, which types.
+function neovimChord(e: KeyboardEvent): string | null {
+  if (windowKey(e)) return toNvimKey(e);
+  if (!e.ctrlKey && !e.altKey && !e.metaKey) return null;
+  if (MAC && e.altKey && !e.ctrlKey && !e.metaKey) return null;
+  if (EDITING.has(e.key.length === 1 ? e.key.toLowerCase() : e.key)) return null;
+  return toNvimKey(e);
+}
+
 function Composer({
   working,
   focus,
@@ -343,6 +359,14 @@ function Composer({
             } else if (e.key === "c" && e.ctrlKey && !text) {
               e.preventDefault();
               stop();
+            } else {
+              // Neovim's shortcuts work from here too, as from the window.
+              const key = neovimChord(e.nativeEvent);
+              if (!key) return;
+              e.preventDefault();
+              current();
+              nvim.refocus();
+              nvim.notify("nvim_input", key);
             }
           }}
           className="max-h-[calc(var(--cell-h)*8)] min-h-(--cell-h) flex-1 resize-none bg-transparent font-[inherit] outline-none"

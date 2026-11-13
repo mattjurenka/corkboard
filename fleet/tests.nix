@@ -103,7 +103,7 @@ let
       (fleet { c = { capabilities = [ "coding" ]; environments = [ "local" ]; }; }).templates.c.agent == "claude";
 
     agentIsTheTemplates =
-      (fleet { g = { capabilities = [ "coding" ]; environments = [ "local" ]; agent = "gemini"; }; }).templates.g.agent == "gemini";
+      (fleet { g = { capabilities = [ "coding" ]; environments = [ "local" ]; agent = "agy"; }; }).templates.g.agent == "agy";
 
     unknownAgentFails =
       fails (fleet { x = { capabilities = [ "coding" ]; environments = [ "local" ]; agent = "cursor"; }; }).templates.x;

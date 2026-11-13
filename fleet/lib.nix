@@ -15,7 +15,7 @@ let
   inherit (lib) concatMap concatStringsSep elem foldl' max subtractLists unique;
 
   # The agent kinds a template can run (its `agent`, Claude Code's by default).
-  agents = [ "claude" "opencode" "gemini" "codex" ];
+  agents = [ "claude" "opencode" "agy" "codex" ];
 
   capability = name: c: {
     inherit name;

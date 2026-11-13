@@ -90,12 +90,12 @@ test("a brain this host has memory for boots with it; any other, its template's 
 });
 
 test("an agent's credential: Claude Code's token, another kind's KEY=value file, none for a job", () => {
-  const withGemini = { ...m(null), templates: { ...m(null).templates, gem: { memory: 4096, cores: 2, needsApproval: false, capNames: [], agent: "gemini" } } };
+  const withAgy = { ...m(null), templates: { ...m(null).templates, gem: { memory: 4096, cores: 2, needsApproval: false, capNames: [], agent: "agy" } } };
   expect(credentialFor(m(null), spawn("coding"))).toMatchObject({ share: "claude-token" });
   expect(credentialFor(m(null), spawn("coding"))!.file).toMatch(/accounts\/personal$/);
-  const g = credentialFor(withGemini, spawn("gem"))!;
-  expect(g.share).toBe("gemini-credential");
-  expect(g.file).toMatch(/accounts\/personal\.gemini$/);
+  const g = credentialFor(withAgy, spawn("gem"))!;
+  expect(g.share).toBe("agy-credential");
+  expect(g.file).toMatch(/accounts\/personal\.agy$/);
   expect(g.how).toContain("GEMINI_API_KEY");
   expect(credentialFor(m(null), { ...spawn("coding"), job: "actions" })).toBeUndefined();
 });

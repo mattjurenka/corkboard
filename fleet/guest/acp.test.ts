@@ -75,7 +75,7 @@ describe("fleet acp", () => {
     expect(message("junk")).toBeNull();
     expect(credential("A=1\n# no\n\nB = 2\nC=x=y")).toEqual({ A: "1", C: "x=y" });
     expect(JSON.parse(credentialEnv("codex", "OPENAI_API_KEY=sk-1").DEFAULT_AUTH_REQUEST)._meta.gateway.headers).toEqual({ Authorization: "Bearer sk-1" });
-    expect(credentialEnv("gemini", "GEMINI_API_KEY=g")).toEqual({ GEMINI_API_KEY: "g" });
+    expect(credentialEnv("agy", "GEMINI_API_KEY=g")).toEqual({ GEMINI_API_KEY: "g" });
     expect(allow({ tool: { id: "", name: "", title: "" }, options: [{ optionId: "a", kind: "allow_once", name: "" }, { optionId: "b", kind: "allow_always", name: "" }] })).toBe("b");
   });
 
