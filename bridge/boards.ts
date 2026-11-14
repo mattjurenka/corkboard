@@ -99,6 +99,24 @@ export class Session extends CloudSession {
     if (op === "forge_grant") return (await import("./e2ee")).forgeGrant(args[0]);
     if (op === "forge_grants") return (await import("./e2ee")).forgeGrants();
     if (op === "forge_revoke") return (await import("./e2ee")).forgeRevoke(args[0]);
+    // A card's pull request (prs.ts): merged from review.lua's approve, by
+    // the user (args[2]) or by autopilot after its review, which it posts.
+    if (op === "pr_merge" || op === "pr_review") {
+      if (!node) throw new Error("there's no node here to reach the forge through");
+      const { PR_TOOLS } = await import("./node/prs");
+      if (op === "pr_review") return PR_TOOLS.review_pr.run({ repo: args[0], number: args[1], verdict: args[2], body: args[3] }, { forge: node.forge, me: "autopilot" });
+      return PR_TOOLS.merge_pr.run({ repo: args[0], number: args[1] }, { forge: node.forge, me: args[2] ? "user" : "autopilot", user: !!args[2] });
+    }
+    // The Git tab's forge: its repositories, CI and open PRs.
+    if (op === "git_forge") {
+      if (!node) throw new Error("there's no node here to reach the forge through");
+      return (await import("./node/prs")).overview({ forge: node.forge, me: "user" });
+    }
+    // Its files: repo, ref, path.
+    if (op === "git_files") {
+      if (!node) throw new Error("there's no node here to reach the forge through");
+      return (await import("./node/prs")).contents({ forge: node.forge, me: "user" }, args[0], args[1], args[2] ?? "");
+    }
     // A session on a board: queued with node: true, its grant the node's;
     // and, once the fleet's sealed on the node, queued by the node.
     if (node && op === "fleet_session") {

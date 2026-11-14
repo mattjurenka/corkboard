@@ -417,10 +417,15 @@ local function move(id, by)
   if status then M.set(id, { status = status }) end
 end
 
--- Archive or delete the card, and close its float if it's showing.
+-- Archive or delete the card, and close its float if it's showing. Its
+-- worktree goes too, unless there's work in it nowhere else
+-- (corkboard.worktree's drop).
 local function remove(id, op)
+  local card = cards.get(id)
   local ok, err = pcall(cards[op], id)
   if not ok then return vim.notify(tostring(err), vim.log.levels.ERROR) end
+  local kept = require("corkboard.worktree").drop(card.worktree, card.branch)
+  if kept then vim.notify("corkboard: " .. id .. ": " .. kept, vim.log.levels.WARN) end
   if rendered and rendered.id == id and card_win and vim.api.nvim_win_is_valid(card_win) then
     pcall(vim.api.nvim_win_close, card_win, true)
   end

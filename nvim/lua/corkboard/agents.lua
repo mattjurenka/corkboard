@@ -391,21 +391,14 @@ function M.link(buf, id)
   require("corkboard.claude.cards").push_all()
 end
 
--- The card's worktree and branch, made from the main checkout's HEAD the
--- first time; a card sent back from review gets the same one again. Outside
--- a repository the agent works in the project itself (both nil).
+-- The card's worktree and branch (agent/<id>/work, or the card/<id> it
+-- was on before), made from the main checkout's HEAD the first time; a card
+-- sent back from review gets the same one again. Outside a repository the
+-- agent works in the project itself (both nil).
 function M.worktree(id)
   local root = util.repo_root(vim.fn.getcwd())
   if not root then return nil, nil end
-  local dir = util.data_dir("worktrees", util.path_key(root), id:lower())
-  local branch = "card/" .. id:lower()
-  if vim.fn.isdirectory(dir) == 1 then return dir, branch end
-  vim.fn.mkdir(vim.fs.dirname(dir), "p")
-  local exists = util.git({ "rev-parse", "--verify", "--quiet", "refs/heads/" .. branch }, root)
-  local args = exists and { "worktree", "add", dir, branch } or { "worktree", "add", "-b", branch, dir }
-  local ok, _, err = util.git(args, root)
-  if not ok then error("git worktree add: " .. err, 0) end
-  return dir, branch
+  return require("corkboard.worktree").make(root, id:lower(), "card/" .. id:lower())
 end
 
 -- A cloud board's MCP server, with a token for this card's agent only. The
@@ -448,7 +441,8 @@ end
 -- to say what to change. feedback: the reviewer's (corkboard.autopilot), to
 -- act on.
 local function prompt(card, branch, sent_back, feedback)
-  local where = branch and ("in a git worktree of your own, on branch " .. branch .. ". Commit your work on that branch.")
+  local where = branch and ("in a git worktree of your own, on branch " .. branch .. ". Commit your work on that branch."
+      .. " When it's done, push it to origin and open a pull request for it with open_pr (if you have it), and give its number to submit_for_review.")
     or "in the project directory."
   return table.concat({
     string.format("You are working on corkboard card %s: %q, %s", card.id, card.title, where),

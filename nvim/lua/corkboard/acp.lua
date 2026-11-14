@@ -52,7 +52,8 @@ local function connect(buf)
   local o = s.opts
   local mcp = {}
   if o.mcp then table.insert(mcp, o.mcp) end
-  if vim.env.CORKBOARD_MEMORY_MCP_CONFIG then table.insert(mcp, vim.env.CORKBOARD_MEMORY_MCP_CONFIG) end
+  local node_mcp = o.node_mcp or vim.env.CORKBOARD_MEMORY_MCP_CONFIG
+  if node_mcp then table.insert(mcp, node_mcp) end
   local ui = require("corkboard.agent").ui_server(buf)
   local prompt = table.concat(vim.tbl_filter(function(p) return p ~= nil end, { require("corkboard.agent").PROMPT, o.prompt }), "\n\n")
   cloud().call_async("acp_start", function(err, got)

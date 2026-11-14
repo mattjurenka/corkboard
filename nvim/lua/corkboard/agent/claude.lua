@@ -129,7 +129,8 @@ end
 -- The command that runs a session, its environment, and the account it runs
 -- as. o: prompt (added to the system prompt after corkboard's), brain, mcp
 -- (an --mcp-config value: a file or JSON), name, task (its first prompt),
--- resume (a session id), args (more of claude's own), via (a command that
+-- resume (a session id), args (more of claude's own), node_mcp (the node's
+-- MCP config for it, in place of the shared one), via (a command that
 -- runs claude somewhere else: corkboard's hooks and mod are files on this
 -- machine, so that session goes without them), attach (a command that joins
 -- a session already running elsewhere, run as it is).
@@ -154,7 +155,8 @@ function M.command(o)
   local cmd = { "claude", "--settings", vim.json.encode(settings()), "--append-system-prompt", prompt }
   -- The memory tools, from the bridge's node (bridge/node/app.ts); with =,
   -- since --mcp-config otherwise takes as many values as follow it.
-  if vim.env.CORKBOARD_MEMORY_MCP_CONFIG then table.insert(cmd, 2, "--mcp-config=" .. vim.env.CORKBOARD_MEMORY_MCP_CONFIG) end
+  local node_mcp = o.node_mcp or vim.env.CORKBOARD_MEMORY_MCP_CONFIG
+  if node_mcp then table.insert(cmd, 2, "--mcp-config=" .. node_mcp) end
   -- The mod (claude-plugin/) that draws the transcript as corkboard's ledger,
   -- and Pepper's plan beside it.
   local mod = vim.api.nvim_get_runtime_file("claude-plugin/.claude-plugin/plugin.json", false)[1]

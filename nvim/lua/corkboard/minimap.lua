@@ -190,8 +190,10 @@ function M.check(bufs)
   end
 end
 
--- A new page has none; a new colorscheme changes every colour.
+-- A new page has none, and its columns are checked; a new colorscheme
+-- changes every colour.
 function M.reset()
+  vim.schedule(M.sync)
   for buf in pairs(sent) do sent[buf], armed[buf] = nil, nil end
 end
 
@@ -205,12 +207,144 @@ vim.api.nvim_create_autocmd("ColorScheme", {
   end,
 })
 
+-- The minimap's column: a split of its own to the right of each window of
+-- text at least MIN wide (with it), so the text wraps short of it rather
+-- than running under it. Empty; the page draws the minimap over it. It
+-- goes with its window, and the keys pass it by: entered from its window
+-- they go on past it, from anywhere else, back to its window.
+local COLS = 12
+local MIN = 60
+
+local function valid_win(win) return win and vim.api.nvim_win_is_valid(win) end
+
+local function is_column(win) return vim.w[win].corkboard_minimap_of ~= nil end
+
+-- A split showing text, as the scrollbars have: not a terminal or a panel.
+function M.text_win(win)
+  local buf = vim.api.nvim_win_get_buf(win)
+  return vim.api.nvim_win_get_config(win).relative == "" and not vim.b[buf].corkboard_view
+    and vim.bo[buf].buftype ~= "terminal" and not is_column(win)
+end
+
+-- win's minimap column, if it has one.
+function M.column(win)
+  local col = vim.w[win].corkboard_minimap
+  if valid_win(col) and vim.w[col].corkboard_minimap_of == win then return col end
+end
+
+local column_buf
+local function blank()
+  if column_buf and vim.api.nvim_buf_is_valid(column_buf) then return column_buf end
+  column_buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[column_buf].bufhidden = "hide"
+  vim.bo[column_buf].modifiable = false
+  return column_buf
+end
+
+local function close(col)
+  if not pcall(vim.api.nvim_win_close, col, true) then
+    -- The last window there is: it becomes an ordinary one.
+    vim.w[col].corkboard_minimap_of = nil
+    vim.api.nvim_win_set_buf(col, vim.api.nvim_create_buf(true, false))
+    vim.api.nvim_win_set_config(col, { focusable = true })
+  end
+end
+
+-- Straight to win's right, as tall as it: a split made to its right later
+-- (a markdown preview) comes between them, and the column moves back.
+local function beside(win, col)
+  local a, b = vim.fn.getwininfo(win)[1], vim.fn.getwininfo(col)[1]
+  return b.winrow == a.winrow and b.height == a.height and b.wincol == a.wincol + a.width + 1
+end
+
+function M.sync()
+  -- Only for a page, which draws in it.
+  local wide = require("corkboard").attached() and not require("corkboard").narrow()
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if valid_win(win) and is_column(win) then
+      local of = vim.w[win].corkboard_minimap_of
+      if not (valid_win(of) and M.text_win(of) and vim.w[of].corkboard_minimap == win and wide) then close(win) end
+    end
+  end
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if valid_win(win) and M.text_win(win) then
+      local col = M.column(win)
+      if col and not beside(win, col) then
+        close(col)
+        col = nil
+      end
+      local width = vim.api.nvim_win_get_width(win) + (col and COLS + 1 or 0)
+      if col and width < MIN then
+        close(col)
+      elseif not col and wide and width >= MIN then
+        col = vim.api.nvim_open_win(blank(), false, { split = "right", win = win, width = COLS, focusable = false, noautocmd = true })
+        vim.w[win].corkboard_minimap = col
+        vim.w[col].corkboard_minimap_of = win
+        for k, v in pairs({ winfixwidth = true, number = false, relativenumber = false, signcolumn = "no",
+          foldcolumn = "0", cursorline = false, list = false, statusline = " ", winbar = "" }) do
+          vim.wo[col][k] = v
+        end
+        vim.wo[col].fillchars = "eob: "
+      end
+    end
+  end
+end
+
+-- Once a turn: each change of window can be several events.
+local pending = false
+local function schedule()
+  if pending then return end
+  pending = true
+  vim.schedule(function()
+    pending = false
+    M.sync()
+  end)
+end
+
+local group = vim.api.nvim_create_augroup("corkboard.minimap.column", {})
+vim.api.nvim_create_autocmd({ "WinNew", "WinClosed", "WinResized", "VimResized", "BufWinEnter", "TabEnter" }, {
+  group = group,
+  callback = schedule,
+})
+vim.api.nvim_create_autocmd("User", { group = group, pattern = "CorkboardNarrow", callback = schedule })
+vim.api.nvim_create_autocmd("WinEnter", {
+  group = group,
+  callback = function()
+    local col = vim.api.nvim_get_current_win()
+    local of = vim.w[col].corkboard_minimap_of
+    if not valid_win(of) then return end
+    local from = vim.fn.win_getid(vim.fn.winnr("#"))
+    vim.schedule(function()
+      if vim.api.nvim_get_current_win() ~= col then return end
+      if from == of then vim.cmd("wincmd l") end
+      if vim.api.nvim_get_current_win() == col then vim.api.nvim_set_current_win(of) end
+    end)
+  end,
+})
+-- :q in the tab's last window of text quits it, or the tab, columns and all.
+vim.api.nvim_create_autocmd("QuitPre", {
+  group = group,
+  callback = function()
+    local cur = vim.api.nvim_get_current_win()
+    local cols = {}
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      if is_column(win) then
+        table.insert(cols, win)
+      elseif win ~= cur and vim.api.nvim_win_get_config(win).relative == "" then
+        return
+      end
+    end
+    for _, col in ipairs(cols) do pcall(vim.api.nvim_win_close, col, true) end
+  end,
+})
+schedule()
+
 -- The columns the page draws over win's right edge (Scrollbars.tsx): the
--- minimap's, in a window wide enough for one, the scrollbar's in a narrower
--- one, none where it has neither (a terminal).
+-- scrollbar's, in a window of text without a minimap column, none where it
+-- has one or neither (a terminal).
 function M.covers(win)
-  if sent[vim.api.nvim_win_get_buf(win)] == nil then return 0 end
-  return vim.api.nvim_win_get_width(win) >= 60 and 12 or 1
+  if sent[vim.api.nvim_win_get_buf(win)] == nil or M.column(win) then return 0 end
+  return 1
 end
 
 return M

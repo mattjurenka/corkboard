@@ -5,6 +5,7 @@ import { BrainMemory, Brains } from "./Brains";
 import { Cards } from "./Cards";
 import { Conversation } from "./Conversation";
 import { Fleet } from "./Fleet";
+import { Git } from "./Git";
 import { Holds } from "./Holds";
 import { Media } from "./Media";
 import { Meetings } from "./Meetings";
@@ -28,6 +29,7 @@ export const VIEWS: Record<string, React.ComponentType<ViewProps>> = {
   usage: Usage,
   settings: Settings,
   fleet: Fleet,
+  git: Git,
   brains: Brains,
   "brain-memory": BrainMemory,
   holds: Holds,

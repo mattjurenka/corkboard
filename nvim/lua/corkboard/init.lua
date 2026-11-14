@@ -307,15 +307,19 @@ end
 -- on screen, the cursor's line, the lines changed since the last commit
 -- (corkboard.gitlines),
 -- and the buffer and its length (its text goes to the minimap,
--- corkboard.minimap). Not terminals or panels.
+-- corkboard.minimap), with the minimap's column beside it, if it has one.
+-- Not terminals or panels.
 function M.scrollbars()
   local bars = {}
+  local minimap = require("corkboard.minimap")
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
     local buf = vim.api.nvim_win_get_buf(win)
-    if vim.api.nvim_win_get_config(win).relative == "" and not vim.b[buf].corkboard_view
-      and vim.bo[buf].buftype ~= "terminal" then
+    if minimap.text_win(win) then
       local info = vim.fn.getwininfo(win)[1]
+      local col = minimap.column(win)
+      local map = col and vim.fn.getwininfo(col)[1]
       table.insert(bars, {
+        map = map and { row = map.winrow - 1, col = map.wincol - 1, width = map.width, height = map.height } or nil,
         win = win,
         buf = buf,
         row = info.winrow - 1,
@@ -948,7 +952,7 @@ function M.setup()
   end
 
   -- Alt+1 to 9 (Cmd+1 to 9) go to that tab, as the sidebar numbers them:
-  -- projects, the board, usage, the fleet (while it's on), brains, then the agents.
+  -- projects, the board, git, usage, the fleet (while it's on), brains, then the agents.
   for i = 1, 9 do
     for _, mod in ipairs({ "A", "D" }) do
       vim.keymap.set({ "n", "i", "t" }, ("<%s-%d>"):format(mod, i), function()
@@ -1170,7 +1174,7 @@ function M.setup()
   })
   status_highlights()
   -- Anything that could have closed or moved a pinned tab: the plan in the
-  -- day plan's window, else projects, the board, usage, the fleet and brains, in order, so each finds the
+  -- day plan's window, else projects, the board, git, usage, the fleet and brains, in order, so each finds the
   -- ones before it already in place.
   vim.api.nvim_create_autocmd({ "VimEnter", "TabClosed", "TabNewEntered", "TabEnter", "WinClosed" }, {
     group = group,
@@ -1179,6 +1183,7 @@ function M.setup()
         if M.window == "plan" then return plan.ensure() end
         require("corkboard.projects").ensure()
         board.ensure()
+        require("corkboard.git").ensure()
         usage.ensure()
         fleet.ensure()
         brains.ensure()

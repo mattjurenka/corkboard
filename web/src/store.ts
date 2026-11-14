@@ -71,7 +71,8 @@ export type Layout = {
 // One window of text's scroll position (corkboard.scroll).
 // git: the lines changed since the last commit, as [first line, count, kind].
 export type GitRange = [number, number, "add" | "change" | "delete"];
-export type Bar = Rect & { win: number; buf: number; top: number; bottom: number; lines: number; cursor: number; git?: GitRange[] };
+// map: the minimap's column beside the window (corkboard.minimap).
+export type Bar = Rect & { win: number; buf: number; top: number; bottom: number; lines: number; cursor: number; git?: GitRange[]; map?: Rect };
 // A buffer's text for the minimap (corkboard.minimap): each line's runs of
 // characters as [column, width, colour] triples, colour indexing palette.
 export type Minimap = { palette: string[]; lines: number[][] };

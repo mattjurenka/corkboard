@@ -7,9 +7,10 @@
 -- closes; j/k and friends scroll it. A click on a diff line opens that file
 -- in a tab of its own, leaving the review over the board.
 --
--- Approving merges the card's branch into the main checkout's current
--- branch (--no-ff, so the card stays one merge), removes the worktree and
--- the branch, and moves the card to done. Sending it back takes you to the
+-- Approving merges the card's pull request on the forge when it has one,
+-- else its branch into the main checkout's current branch (--no-ff, so the
+-- card stays one merge); either way it removes the worktree and the branch,
+-- and moves the card to done. Sending it back takes you to the
 -- agent's session to say what to change, starting a new one in the same
 -- worktree if none is running.
 
@@ -184,6 +185,41 @@ local function close(buf)
   pcall(vim.api.nvim_buf_delete, buf, { force = true })
 end
 
+-- A card with a pull request (submit_for_review's pr) merges on the forge:
+-- by the user as they like, by autopilot only once its review approved the
+-- PR's head (bridge/node/prs.ts). Then the worktree and branch go and the
+-- main checkout comes up to date (corkboard.worktree's finish).
+local function merge_pr(id, card, src, repo, confirm, done)
+  -- What's committed in the worktree but not pushed would go with it.
+  if src.worktree and card.branch then
+    git({ "fetch", "--quiet", "origin", card.branch }, src.worktree)
+    local _, ahead = git({ "rev-list", "--count", "FETCH_HEAD..HEAD" }, src.worktree)
+    if (tonumber(vim.trim(ahead)) or 0) > 0 then
+      return vim.notify("corkboard: " .. id .. "'s worktree has commits not pushed to #" .. card.pr .. "; have the agent push them, or send it back", vim.log.levels.WARN)
+    end
+  end
+  local function merge()
+    require("corkboard.cards.cloud").call_async("pr_merge", function(err, got)
+      if err then
+        board().set(id, { attention = "merging #" .. card.pr .. " failed: " .. tostring(err) })
+        return vim.notify("corkboard: merging " .. id .. "'s #" .. card.pr .. " failed: " .. tostring(err), vim.log.levels.ERROR)
+      end
+      local left = require("corkboard.worktree").finish(src.root, src.worktree, card.branch, got.into)
+      local gone = not (src.worktree and vim.fn.isdirectory(src.worktree) == 1)
+      board().set(id, { status = "done", agent_state = "done", attention = "", worktree = gone and "" or src.worktree })
+      board().log(id, confirm and "user" or "reviewer", string.format("%s: merged #%s into %s (%s)%s",
+        confirm and "approved" or "low risk, merged by itself", card.pr, got.into, got.sha:sub(1, 10),
+        #left > 0 and ("; " .. table.concat(left, "; ")) or ""))
+      vim.notify("corkboard: " .. id .. "'s #" .. card.pr .. " merged into " .. got.into)
+      if done then done() end
+    end, repo, tonumber(card.pr), confirm)
+  end
+  if not confirm then return merge() end
+  vim.ui.select({ "Merge #" .. card.pr .. " (" .. (card.branch or "") .. ") on the forge and finish " .. id, "Cancel" }, { prompt = "Approve " .. id }, function(_, i)
+    if i == 1 then merge() end
+  end)
+end
+
 -- opts.confirm = false merges without asking (autopilot's low-risk merge).
 function M.approve(id, done, opts)
   local confirm = not (opts and opts.confirm == false)
@@ -200,6 +236,8 @@ function M.approve(id, done, opts)
     return vim.notify("corkboard: " .. id .. "'s worktree has uncommitted changes; have the agent commit them, or send it back", vim.log.levels.WARN)
   end
   local root, main = src.root, src.main
+  local repo = root and card.pr and card.pr ~= "" and require("corkboard.worktree").forge_repo(root)
+  if repo then return merge_pr(id, card, src, repo, confirm, done) end
   if not root or main == "" then
     return vim.notify("corkboard: the main checkout has no branch checked out to merge " .. id .. " into", vim.log.levels.WARN)
   end

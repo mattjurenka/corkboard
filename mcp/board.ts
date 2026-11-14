@@ -198,8 +198,14 @@ const TOOLS: Record<string, Tool> = {
     run: (a) => summary(change(a.id, (c) => ask(c, String(a.message), a.wait !== false))),
   },
   submit_for_review: {
-    description: "You finished a card: moves it to review. The user reads your summary to decide whether to merge, so keep it short and plain; the diff shows the details.",
-    properties: { id, summary: str("What changed, in a few short sentences or bullets. Name anything the user has to do or decide."), verification: str("How you checked it works, in a sentence or two, and what you couldn't check") },
+    description:
+      "You finished a card: moves it to review. The user reads your summary to decide whether to merge, so keep it short and plain; the diff shows the details. If you opened a pull request for it (open_pr), give its number.",
+    properties: {
+      id,
+      summary: str("What changed, in a few short sentences or bullets. Name anything the user has to do or decide."),
+      verification: str("How you checked it works, in a sentence or two, and what you couldn't check"),
+      pr: { type: "integer", description: "The pull request's number, from open_pr" },
+    },
     required: ["id", "summary", "verification"],
     run: (a) =>
       summary(
@@ -208,6 +214,7 @@ const TOOLS: Record<string, Tool> = {
           c.status = "review";
           c.agent_state = "needs-review";
           c.attention = "";
+          if (a.pr !== undefined) c.pr = Number(a.pr);
           log(c, `${a.summary}\nVerified: ${a.verification}`);
         }),
       ),
