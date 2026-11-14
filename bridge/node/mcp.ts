@@ -27,13 +27,17 @@ import { touch } from "./leases";
 import { MAX_INLINE, type Media, fileName, fileType } from "./media";
 import { type FileItem, type FileOffers, type ToFiles, filesJson } from "./files";
 import { type Kind, boardBound } from "./oauth";
+import type { ToForge } from "./git";
+import { PR_TOOLS } from "./prs";
 
-export type Caller = { scope: Kind; agent: string; brain?: string; board?: string; card?: string };
+// branch and repo: the session's worktree's, as its MCP config told them
+// (X-Corkboard-Branch, X-Corkboard-Repo), for the PR tools (prs.ts).
+export type Caller = { scope: Kind; agent: string; brain?: string; board?: string; card?: string; branch?: string; repo?: string };
 
 class ToolError extends Error {}
 
 type Draft = FullCard & { logs: string[] };
-const FIELDS = ["title", "status", "agent", "agent_state", "attention", "priority", "ordinal", "labels", "dependencies", "description"] as const;
+const FIELDS = ["title", "status", "agent", "agent_state", "attention", "priority", "ordinal", "labels", "dependencies", "description", "extra"] as const;
 
 // origin: where the call came in, which an upload's URL is at.
 type Call = { data: Data; search: Search; media?: Media; origin: string; board: string; me: string; caller: Caller; cards: () => FullCard[] };
@@ -230,8 +234,14 @@ const TOOLS: Record<string, Tool> = {
     run: async (a, c) => brief(c, await change(c, a.id, (x) => ask(x, c.me, String(a.message), a.wait !== false))),
   },
   submit_for_review: {
-    description: "You finished a card: moves it to review. The user reads your summary to decide whether to merge, so keep it short and plain; the diff shows the details.",
-    properties: { id, summary: str("What changed, in a few short sentences or bullets. Name anything the user has to do or decide."), verification: str("How you checked it works, in a sentence or two, and what you couldn't check") },
+    description:
+      "You finished a card: moves it to review. The user reads your summary to decide whether to merge, so keep it short and plain; the diff shows the details. If you opened a pull request for it (open_pr), give its number.",
+    properties: {
+      id,
+      summary: str("What changed, in a few short sentences or bullets. Name anything the user has to do or decide."),
+      verification: str("How you checked it works, in a sentence or two, and what you couldn't check"),
+      pr: { type: "integer", description: "The pull request's number, from open_pr" },
+    },
     required: ["id", "summary", "verification"],
     card: "own",
     run: async (a, c) =>
@@ -242,6 +252,7 @@ const TOOLS: Record<string, Tool> = {
           x.status = "review";
           x.agent_state = "needs-review";
           x.attention = null;
+          if (a.pr !== undefined) x.extra = { ...x.extra, pr: Number(a.pr) };
           x.logs.push(`${a.summary}\nVerified: ${a.verification}`);
         }),
       ),
@@ -828,7 +839,7 @@ const reaches = (name: string, caller: Caller) => (caller.scope === "session" ? 
 // memoryOnly: the memory tools alone, for a local session (app.ts), whose
 // board tools are its own board's. One held to a board, that board's tools
 // it reaches, with no board argument.
-function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryOnly = false, fleet?: Fleet, files?: ToFiles) {
+function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryOnly = false, fleet?: Fleet, files?: ToFiles, forge?: ToForge) {
   if (boardBound(caller))
     return Object.entries(memoryOnly ? {} : TOOLS)
       .filter(([name]) => reaches(name, caller))
@@ -866,6 +877,11 @@ function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryO
       description: t.description,
       inputSchema: { type: "object", properties: t.properties ?? {}, required: t.required ?? [] },
     })),
+    ...Object.entries(forge ? PR_TOOLS : {}).map(([name, t]) => ({
+      name,
+      description: t.description,
+      inputSchema: { type: "object", properties: t.properties ?? {}, required: t.required ?? [] },
+    })),
     ...Object.entries(pairs(caller) ? PAIR_TOOLS : {}).map(([name, t]) => ({
       name,
       description: t.description,
@@ -874,7 +890,8 @@ function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryO
   ];
 }
 
-export type Node = { data: Data; search: Search; media?: Media; files?: ToFiles; fileOffers?: FileOffers; origin: string; fleet?: Fleet; sealed?: FleetRecords };
+// forge: the account's forge (serve.ts's toForge), for the PR tools.
+export type Node = { data: Data; search: Search; media?: Media; files?: ToFiles; fileOffers?: FileOffers; origin: string; fleet?: Fleet; sealed?: FleetRecords; forge?: ToForge };
 
 async function callTool(node: Node, caller: Caller, name: string, args: any): Promise<unknown> {
   const { data, search, media, origin } = node;
@@ -891,6 +908,10 @@ async function callTool(node: Node, caller: Caller, name: string, args: any): Pr
   if (FILE_TOOLS[name] && node.files && !bound)
     return FILE_TOOLS[name].run({ ...args }, { files: node.files, offers: node.fileOffers, origin, me: caller.agent }).catch((e) => {
       throw e instanceof Invalid || e instanceof ToolError ? e : new ToolError((e as Error).message);
+    });
+  if (PR_TOOLS[name] && node.forge && !bound)
+    return PR_TOOLS[name].run({ ...args }, { forge: node.forge, me: caller.agent, branch: caller.branch, repo: caller.repo }).catch((e) => {
+      throw e instanceof ToolError ? e : new ToolError((e as Error).message);
     });
   if (DAY_TOOLS[name] && dayReaches(DAY_TOOLS[name], caller, data)) return DAY_TOOLS[name].run({ ...args }, { data, caller });
   // A brain's own agent sees its goals; the user's clients don't.
@@ -934,8 +955,10 @@ async function callTool(node: Node, caller: Caller, name: string, args: any): Pr
 type Message = { jsonrpc?: string; id?: string | number | null; method?: string; params?: any };
 
 // boardOnly: the rest, for a local session's corkboard server once its
-// boards are the node's (app.ts), beside corkboard-memory.
-async function handle(node: Node, caller: Caller, msg: Message, memoryOnly: boolean, boardOnly = false): Promise<object | undefined> {
+// boards are the node's (app.ts), beside corkboard-memory. forgeOnly: the
+// PR tools alone, for a session in a worktree (its corkboard-forge server,
+// corkboard.worktree's mcp_config), whatever its corkboard server is.
+async function handle(node: Node, caller: Caller, msg: Message, memoryOnly: boolean, boardOnly = false, forgeOnly = false): Promise<object | undefined> {
   const { id, method, params } = msg ?? {};
   const reply = (result: unknown) => ({ jsonrpc: "2.0", id, result });
   switch (method) {
@@ -949,11 +972,11 @@ async function handle(node: Node, caller: Caller, msg: Message, memoryOnly: bool
     case "ping":
       return reply({});
     case "tools/list":
-      return reply({ tools: toolsFor(node.data, caller, BRAIN_ONLY_KINDS, memoryOnly, node.fleet, node.files).filter((t) => !boardOnly || !MEMORY_TOOLS[t.name]) });
+      return reply({ tools: toolsFor(node.data, caller, BRAIN_ONLY_KINDS, memoryOnly, node.fleet, node.files, node.forge).filter((t) => (!boardOnly || !MEMORY_TOOLS[t.name]) && (!forgeOnly || !!PR_TOOLS[t.name])) });
     case "tools/call":
       try {
         const name = String(params?.name);
-        if ((memoryOnly && !MEMORY_TOOLS[name]) || (boardOnly && MEMORY_TOOLS[name])) throw new ToolError(`unknown tool ${name}`);
+        if ((memoryOnly && !MEMORY_TOOLS[name]) || (boardOnly && MEMORY_TOOLS[name]) || (forgeOnly && !PR_TOOLS[name])) throw new ToolError(`unknown tool ${name}`);
         const out = await callTool(node, caller, name, { ...(params?.arguments ?? {}) });
         if (out instanceof Content) return reply({ content: out.content });
         return reply({ content: [{ type: "text", text: typeof out === "string" ? out : JSON.stringify(out, null, 2) }] });
@@ -976,8 +999,12 @@ export async function mcp(request: Request, node: Node, caller: Caller): Promise
   }
   const memoryOnly = new URL(request.url).searchParams.get("tools") === "memory";
   const boardOnly = new URL(request.url).searchParams.get("tools") === "board";
+  const forgeOnly = new URL(request.url).searchParams.get("tools") === "forge";
+  const branch = request.headers.get("X-Corkboard-Branch") || undefined;
+  const repo = request.headers.get("X-Corkboard-Repo") || undefined;
+  if (branch || repo) caller = { ...caller, branch, repo };
   const batch = Array.isArray(body);
-  const answers = (await Promise.all((batch ? (body as unknown[]) : [body]).map((m) => handle(node, caller, m as Message, memoryOnly, boardOnly)))).filter(Boolean);
+  const answers = (await Promise.all((batch ? (body as unknown[]) : [body]).map((m) => handle(node, caller, m as Message, memoryOnly, boardOnly, forgeOnly)))).filter(Boolean);
   if (!answers.length) return new Response(null, { status: 202 });
   return Response.json(batch ? answers : answers[0]);
 }

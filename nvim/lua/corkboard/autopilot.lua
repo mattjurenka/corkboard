@@ -588,12 +588,23 @@ local function start_review(c, sha)
     local now = cards.get(c.id)
     board().log(c.id, "reviewer", (r.passed and ("passed, " .. r.risk .. " risk") or "sent back") .. "\n" .. r.summary
       .. (#r.problems > 0 and ("\n" .. table.concat(vim.tbl_map(function(p) return "- " .. p end, r.problems), "\n")) or ""))
+    -- On its pull request too, where it's the review merge_pr looks for.
+    local repo = now.pr and now.pr ~= "" and require("corkboard.worktree").forge_repo(c.worktree)
+    if repo then
+      require("corkboard.cards.cloud").call_async("pr_review", function(e)
+        if e then return board().log(c.id, "reviewer", "could not review #" .. now.pr .. " on the forge: " .. tostring(e)) end
+        if r.passed and r.risk == "low" and on("auto_merge", false) and cards.get(c.id).status == "review" then
+          require("corkboard.review").approve(c.id, nil, { confirm = false })
+        end
+      end, repo, tonumber(now.pr), r.passed and "approve" or "changes", r.summary
+        .. (#r.problems > 0 and ("\n\n" .. table.concat(vim.tbl_map(function(p) return "- " .. p end, r.problems), "\n")) or ""))
+    end
     -- The user may have acted on it meanwhile.
     if now.status ~= "review" then return board().push() end
     if not r.passed then
       if r.rounds <= (tonumber(vim.g.corkboard_review_rounds or 2) or 2) then return send_back(now, r) end
       board().set(c.id, { attention = "the reviewer still finds problems after " .. (r.rounds - 1) .. " rounds" })
-    elseif r.risk == "low" and on("auto_merge", false) then
+    elseif r.risk == "low" and on("auto_merge", false) and not repo then
       require("corkboard.review").approve(c.id, nil, { confirm = false })
     end
     board().push()

@@ -7,9 +7,9 @@
 // Each bar covers the window's last column and is clipped around floats
 // like a panel, so a picker over it is not drawn through. A window wide
 // enough, once its buffer's text has come (corkboard.minimap), has a
-// minimap instead: its last columns, the buffer a character a pixel, with
-// the lines on screen shaded, scrolling with the window when the buffer is
-// taller than it. Either is marked down its right edge where the file has
+// minimap instead: in the column Neovim keeps beside it, so the text wraps
+// short of it, the buffer a character a pixel, with the lines on screen
+// shaded, scrolling with the window when the buffer is taller than it. Either is marked down its right edge where the file has
 // changed since the last commit, in the files panel's colours, and across
 // at the cursor's line.
 
@@ -20,9 +20,6 @@ import { type Bar, type GitRange, type Minimap as Map, type Rect, useStore } fro
 import { box, holes } from "./Panels";
 
 const MIN_THUMB = 24; // px
-// The minimap's width in cells, in a window of at least MAP_MIN of them.
-const MAP_COLS = 12;
-const MAP_MIN = 60;
 // px a line, and a character.
 const LINE_H = 2;
 const CHAR_W = 1;
@@ -60,7 +57,7 @@ export function Scrollbars() {
   }, [nvim]);
   if (!scroll) return null;
   return scroll.bars.map((bar) =>
-    minimaps[bar.buf] && bar.width >= MAP_MIN ? (
+    minimaps[bar.buf] && bar.map ? (
       <Minimap
         key={bar.win}
         bar={bar}
@@ -182,8 +179,8 @@ function Minimap({
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [dragging, setDragging] = useState(false);
-  const edge = { row: bar.row, col: bar.col + bar.width - MAP_COLS, width: MAP_COLS, height: bar.height };
-  const w = MAP_COLS * cellW;
+  const edge = bar.map!;
+  const w = edge.width * cellW;
   const h = bar.height * cellH;
   const shown = Math.max(1, bar.bottom - bar.top + 1);
   const scrollable = Math.max(0, bar.lines - shown);

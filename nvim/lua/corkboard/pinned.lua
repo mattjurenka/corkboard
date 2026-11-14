@@ -32,10 +32,10 @@ local function empty_window(tab)
   return empty and wins[1] or nil
 end
 
--- A project's window's pinned tabs, in order: projects, the board, usage,
+-- A project's window's pinned tabs, in order: projects, the board, git, usage,
 -- the fleet while it's on (corkboard.features), then brains.
 function M.index(key)
-  local order = { "corkboard_projects", "corkboard_board", "corkboard_usage" }
+  local order = { "corkboard_projects", "corkboard_board", "corkboard_git", "corkboard_usage" }
   if require("corkboard.features").on("fleet") then table.insert(order, "corkboard_fleet") end
   table.insert(order, "corkboard_brains")
   for i, k in ipairs(order) do

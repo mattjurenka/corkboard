@@ -600,7 +600,7 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       if (p === "/mcp") {
         const who = caller(req, origin, from, true);
         if (!who) return unauthorized(origin);
-        return await mcp(req, { data: o.data, search: o.search, media: o.media, files: o.toFiles, fileOffers: o.fileOffers, origin, fleet: o.fleet?.(), sealed: o.sealed }, who);
+        return await mcp(req, { data: o.data, search: o.search, media: o.media, files: o.toFiles, fileOffers: o.fileOffers, origin, fleet: o.fleet?.(), sealed: o.sealed, forge: o.toForge }, who);
       }
       if (p.startsWith("/file-upload/") || p.startsWith("/file/")) {
         if (!o.fileOffers) return json({ error: "not found" }, 404);

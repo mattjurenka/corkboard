@@ -25,7 +25,7 @@ import { Spinner } from "./Spinner";
 import { openPlan } from "@/planWindow";
 
 // The pinned tabs, by position: the fleet's only while it's on (corkboard.features).
-const pinnedTabs = (fleet: boolean) => (fleet ? ["Projects", "Board", "Usage", "Fleet", "Brains"] : ["Projects", "Board", "Usage", "Brains"]);
+const pinnedTabs = (fleet: boolean) => (fleet ? ["Projects", "Board", "Git", "Usage", "Fleet", "Brains"] : ["Projects", "Board", "Git", "Usage", "Brains"]);
 
 // Each tab's ribbon down its left edge, by position, whatever the colorscheme;
 // neighbors far apart in hue.

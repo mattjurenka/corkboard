@@ -72,7 +72,8 @@ end
 -- brain's account), account (the account a VM's runs as, if not its
 -- brain's), host and dir (the machine that VM is on and the directory in
 -- it, for its status line), shell (a command for a shell where the session
--- runs, which <C-`> opens there). The tab closes with the session, unless a
+-- runs, which <C-`> opens there), worktree (false: start in cwd itself,
+-- not a worktree of its own). The tab closes with the session, unless a
 -- shell in it is still running.
 function M.start(opts)
   if require("corkboard.projects").need() then return end
@@ -87,6 +88,22 @@ function M.start(opts)
     vim.notify("corkboard: " .. exe .. " is not on PATH", vim.log.levels.ERROR)
     return nil
   end
+  -- A worktree of its own, when it would start in a repository's main
+  -- checkout (corkboard.worktree); one resumed goes on where it was.
+  if not (opts.via or opts.attach or opts.resume) and opts.worktree ~= false then
+    local ok, cwd, branch, note = pcall(require("corkboard.worktree").for_session, vim.fs.normalize(opts.cwd or vim.fn.getcwd()))
+    if not ok then
+      vim.notify("corkboard: " .. cwd, vim.log.levels.ERROR)
+      return nil
+    end
+    if cwd then
+      opts = vim.tbl_extend("force", opts, { cwd = cwd, branch = branch, prompt = opts.prompt and (note .. "\n\n" .. opts.prompt) or note })
+    end
+  end
+  -- The node's tools, told the worktree's branch (corkboard.worktree).
+  if not (opts.via or opts.attach) then
+    opts = vim.tbl_extend("force", opts, { node_mcp = require("corkboard.worktree").mcp_config(opts.cwd or vim.fn.getcwd()) })
+  end
   if kind.events == "acp" and not (opts.via or opts.attach) then
     if opts.here then vim.cmd.enew() elseif opts.split then vim.cmd("rightbelow vnew") else vim.cmd.tabnew() end
     local buf = vim.api.nvim_get_current_buf()
@@ -94,6 +111,7 @@ function M.start(opts)
     vim.b[buf].corkboard_role = opts.role or "project"
     vim.b[buf].corkboard_brain = opts.brain
     vim.b[buf].corkboard_name = opts.name
+    vim.b[buf].corkboard_branch = opts.branch
     return require("corkboard.acp").start(buf, kind, opts)
   end
   local cmd, kind_env, account = kind.command(opts)
@@ -115,6 +133,8 @@ function M.start(opts)
   vim.b[buf].corkboard_host = opts.host
   vim.b[buf].corkboard_dir = opts.dir
   vim.b[buf].corkboard_shell = opts.shell
+  -- Its worktree's branch, when it has one (corkboard.worktree).
+  vim.b[buf].corkboard_branch = opts.branch
   -- For away mode's list (corkboard.away).
   vim.b[buf].corkboard_name = opts.name
   vim.fn.jobstart(cmd, {
