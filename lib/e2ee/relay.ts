@@ -33,7 +33,7 @@
 // browser's socket, the corkboard.bearer.<base64url> subprotocol). A token
 // that's expired or refused is got again, once, from the device's keys.
 
-import { type Channel, type Handler, type Identity, initiate, pipe, respond, wsLink } from "./channel";
+import { type Channel, type Handler, type Identity, PING_MS, SILENT_MS, initiate, pipe, respond, wsLink } from "./channel";
 import { answer, checkCert, type Device } from "./device";
 import type { Delivery, MailboxView, PairTransport } from "./pairing";
 import { EpochChanged, type LogTransport } from "./sync";
@@ -377,9 +377,28 @@ export class Relay implements PairTransport, LogTransport {
       if (!t) return void setTimeout(connect, 5000);
       const q = new URLSearchParams({ ...(o.name && { name: o.name }), ...(o.tunnel === false && { tunnel: "0" }) }).toString();
       const sock = (ws = make(`${this.origin.replace(/^http/, "ws")}/e2ee/nodes/live${q ? `?${q}` : ""}`, ["corkboard", `corkboard.bearer.${b64url(utf8(t))}`]));
+      // Its end, once: the close event, or silence past SILENT_MS (wsLink's).
+      let heard = Date.now();
+      let ended = false;
+      const end = (code: number) => {
+        if (ended) return;
+        ended = true;
+        if (ping) clearInterval(ping);
+        for (const p of links.values()) p.end("the relay went away");
+        links.clear();
+        o.onState?.(false);
+        if (!stopped && code !== 4000) setTimeout(connect, 2000);
+      };
       sock.addEventListener("open", () => {
         o.onState?.(true);
-        ping = setInterval(() => sock.readyState === 1 && sock.send("ping"), 30_000);
+        ping = setInterval(() => {
+          if (Date.now() - heard < SILENT_MS) return void (sock.readyState === 1 && sock.send("ping"));
+          end(1006);
+          sock.close();
+        }, PING_MS);
+      });
+      sock.addEventListener("message", () => {
+        heard = Date.now();
       });
       sock.binaryType = "arraybuffer";
       // A channel's open, message or close.
@@ -428,13 +447,7 @@ export class Relay implements PairTransport, LogTransport {
         }
         void answer(r).then((a) => sock.readyState === 1 && sock.send(JSON.stringify(a)));
       });
-      sock.addEventListener("close", (e: CloseEvent) => {
-        if (ping) clearInterval(ping);
-        for (const p of links.values()) p.end("the relay went away");
-        links.clear();
-        o.onState?.(false);
-        if (!stopped && e.code !== 4000) setTimeout(connect, 2000);
-      });
+      sock.addEventListener("close", (e: CloseEvent) => end(e.code));
     };
     void connect();
     return () => {
