@@ -5,7 +5,7 @@
 # a new release is a new pkgver (packaging/aur/update.sh). _version is the
 # release's, which can have a -rc that pkgver can't.
 pkgname=corkboard-bin
-_version=0.1.0-rc9
+_version=0.1.0-rc10
 pkgver=${_version//-/}
 pkgrel=1
 pkgdesc="Neovim with Claude Code agents beside it"
@@ -25,8 +25,8 @@ source_x86_64=("corkboard-${_version}-linux-x64.tar.gz::${_release}/corkboard-${
 source_aarch64=("corkboard-${_version}-linux-arm64.tar.gz::${_release}/corkboard-${_version}-linux-arm64.tar.gz?r=aur")
 sha256sums=('72b13912c59995b96356ab8790dd8cc834c7369cd3bd1b66ccb8a0b09e65bb1f'
             '6256d201100e18a24b5ecaa0036cd75697ac7ce158d3fb1ab88224145ac208c1')
-sha256sums_x86_64=('d149ffcb115e36b0ebf1be14873412c1ad98cd06862d8461b3eb7c2299c1a21a')
-sha256sums_aarch64=('55db16e471e8984100649338d39185f468a0a90a647b23319e0b3501dc8df7e5')
+sha256sums_x86_64=('be911a15a69f9efb0c8f3bb62a6ec6ecad8c6b5de4c75f27d7a671ca02a058f3')
+sha256sums_aarch64=('1ea531f65ff168567bba1abd9797e42e4ed9339696f6122945b3e85251bf77ca')
 
 package() {
   local _arch=x64
