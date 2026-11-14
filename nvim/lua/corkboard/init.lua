@@ -307,15 +307,19 @@ end
 -- on screen, the cursor's line, the lines changed since the last commit
 -- (corkboard.gitlines),
 -- and the buffer and its length (its text goes to the minimap,
--- corkboard.minimap). Not terminals or panels.
+-- corkboard.minimap), with the minimap's column beside it, if it has one.
+-- Not terminals or panels.
 function M.scrollbars()
   local bars = {}
+  local minimap = require("corkboard.minimap")
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
     local buf = vim.api.nvim_win_get_buf(win)
-    if vim.api.nvim_win_get_config(win).relative == "" and not vim.b[buf].corkboard_view
-      and vim.bo[buf].buftype ~= "terminal" then
+    if minimap.text_win(win) then
       local info = vim.fn.getwininfo(win)[1]
+      local col = minimap.column(win)
+      local map = col and vim.fn.getwininfo(col)[1]
       table.insert(bars, {
+        map = map and { row = map.winrow - 1, col = map.wincol - 1, width = map.width, height = map.height } or nil,
         win = win,
         buf = buf,
         row = info.winrow - 1,
