@@ -149,6 +149,9 @@ const api = (path: string, init: RequestInit = {}) => fetch(`${base}${path}`, { 
 let changed = 0;
 for (const n of found) {
   const before = await (await api(`/notes/${n.id}`)).json<any>().catch(() => ({}));
+  // The long-term memory is the consolidator's once it has one: the vault's
+  // MEMORY.md only starts it, or each run puts the old one back over the rollup.
+  if (n.id === "memory" && before.version) continue;
   const res = await api(`/notes/${n.id}`, { method: "PUT", body: JSON.stringify({ kind: n.kind, title: n.title, body: n.body, path: n.path }) });
   if (!res.ok) throw new Error(`${n.path}: ${res.status} ${await res.text()}`);
   if ((await res.json<any>()).version !== before.version) changed++;
