@@ -35,7 +35,8 @@ function storedOf(m: MergedCard): StoredMedia | undefined {
   return { id: m.id.slice(MEDIA_PREFIX.length), card: m.card, name: String(m.name ?? ""), type: String(m.type ?? "application/octet-stream"), size: m.size, at: String(m.at ?? ""), who: String(m.who ?? ""), blobs: m.blobs as string[], epoch: Number(m.epoch) || 0 };
 }
 const itemOf = ({ card: _, blobs: __, epoch: ___, ...m }: StoredMedia): MediaItem => m;
-export type Entry = { id: string; at: string; day: string; who: string; text: string };
+// project: the repo of the session it came from (episodes.ts), when it had one.
+export type Entry = { id: string; at: string; day: string; who: string; text: string; project?: string };
 export type BrainSettings = { name: string; title: string; description: string; default: boolean; [k: string]: unknown };
 
 export const now = () => new Date().toISOString().replace(/\.\d+Z$/, "Z");
@@ -314,7 +315,7 @@ export class Data {
   entries(brain: string, from?: string, to = from): Entry[] {
     return this.records(brain)
       .filter((x) => x.r?.type === "entry" && typeof x.m.text === "string")
-      .map(({ m, r }) => ({ id: r!.id, at: String(m.at ?? ""), day: String(m.day ?? ""), who: String(m.who ?? ""), text: String(m.text) }))
+      .map(({ m, r }) => ({ id: r!.id, at: String(m.at ?? ""), day: String(m.day ?? ""), who: String(m.who ?? ""), text: String(m.text), ...(typeof m.project === "string" && m.project ? { project: m.project } : {}) }))
       .filter((e) => from === undefined || (e.day >= from && e.day <= to!))
       .sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
   }
@@ -327,14 +328,14 @@ export class Data {
   // Entries from one source (an episode's bullets), each kept once however
   // often it's written: its id is its time, its place in the list (so those
   // at one time keep their order) and a hash of its key.
-  async addEntries(brain: string, list: { at: string; who: string; text: string; key: string }[]): Promise<number> {
+  async addEntries(brain: string, list: { at: string; who: string; text: string; key: string; project?: string }[]): Promise<number> {
     const have = new Set(this.entries(brain).map((e) => e.id));
     const changes: CardChange[] = [];
     for (const [i, e] of list.entries()) {
       const id = `${Date.parse(e.at).toString(36)}-${String(i).padStart(2, "0")}${createHash("sha256").update(e.key).digest("base64url").slice(0, 8)}`;
       if (have.has(id)) continue;
       have.add(id);
-      changes.push({ t: "card", card: entryRecord(id), set: { at: e.at, day: this.dayOf(e.at), who: e.who, text: e.text.trim() } });
+      changes.push({ t: "card", card: entryRecord(id), set: { at: e.at, day: this.dayOf(e.at), who: e.who, text: e.text.trim(), ...(e.project ? { project: e.project } : {}) } });
     }
     if (changes.length) await this.replicas.change("brain", brain, ...changes);
     return changes.length;

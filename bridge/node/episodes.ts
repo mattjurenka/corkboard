@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS consolidated_sessions (brain TEXT NOT NULL, session T
 CREATE TABLE IF NOT EXISTS meta (brain TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (brain, key));
 `;
 
-export type Episode = { id: string; session: string; agent: string; trigger: string; at: string; bytes: number; consolidated: boolean; attempts: number };
+// project: the repo the session ran in (the hook's), when it said.
+export type Episode = { id: string; session: string; agent: string; trigger: string; at: string; bytes: number; consolidated: boolean; attempts: number; project?: string };
 
 export class TooBig extends Error {}
 
@@ -40,19 +41,21 @@ export class Episodes {
     this.db = new Database(path);
     if (path !== ":memory:") this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec(SCHEMA);
+    // Added 2026-11-16 (.agent/plans/brain-pages.md).
+    if (!this.db.query<{ name: string }, []>("PRAGMA table_info(episodes)").all().some((c) => c.name === "project")) this.db.exec("ALTER TABLE episodes ADD COLUMN project TEXT");
   }
 
   close() {
     this.db.close();
   }
 
-  add(brain: string, e: { session: string; agent: string; trigger: string; transcript: string }): { id: string; added: boolean } {
+  add(brain: string, e: { session: string; agent: string; trigger: string; transcript: string; project?: string }): { id: string; added: boolean } {
     if (e.transcript.length > EPISODE_MAX) throw new TooBig(`a transcript is at most ${EPISODE_MAX} characters`);
     const id = createHash("sha256").update(`${brain}\n${e.session}\n${e.transcript}`).digest("hex").slice(0, 32);
     if (this.db.query("SELECT 1 FROM episodes WHERE id = ?").get(id)) return { id, added: false };
     this.db.transaction(() => {
       this.db.run("DELETE FROM episodes WHERE brain = ? AND session = ? AND consolidated = 0", [brain, e.session]);
-      this.db.run("INSERT INTO episodes (id, brain, session, agent, trigger, at, bytes, transcript) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [
+      this.db.run("INSERT INTO episodes (id, brain, session, agent, trigger, at, bytes, transcript, project) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [
         id,
         brain,
         e.session,
@@ -61,6 +64,7 @@ export class Episodes {
         new Date().toISOString(),
         e.transcript.length,
         e.transcript,
+        e.project ?? null,
       ]);
     })();
     this.onAdded?.(brain);
@@ -75,11 +79,11 @@ export class Episodes {
   // yet consolidated.
   list(brain: string, limit = 50, pending = false, oldest = false): Episode[] {
     return this.db
-      .query<Omit<Episode, "consolidated"> & { consolidated: number }, [string, number]>(
-        `SELECT id, session, agent, trigger, at, bytes, consolidated, attempts FROM episodes WHERE brain = ?${pending ? " AND consolidated = 0" : ""} ORDER BY at ${oldest ? "ASC" : "DESC"} LIMIT ?`,
+      .query<Omit<Episode, "consolidated" | "project"> & { consolidated: number; project: string | null }, [string, number]>(
+        `SELECT id, session, agent, trigger, at, bytes, consolidated, attempts, project FROM episodes WHERE brain = ?${pending ? " AND consolidated = 0" : ""} ORDER BY at ${oldest ? "ASC" : "DESC"} LIMIT ?`,
       )
       .all(brain, limit)
-      .map((r) => ({ ...r, consolidated: !!r.consolidated }));
+      .map(({ project, ...r }) => ({ ...r, consolidated: !!r.consolidated, ...(project ? { project } : {}) }));
   }
 
   tried(brain: string, id: string) {
@@ -116,7 +120,7 @@ export class Episodes {
   // time and whether it's consolidated, so what's done isn't done again.
   restore(brain: string, e: Omit<Episode, "attempts"> & { attempts?: number; transcript: string }): boolean {
     if (this.db.query("SELECT 1 FROM episodes WHERE id = ?").get(e.id)) return false;
-    this.db.run("INSERT INTO episodes (id, brain, session, agent, trigger, at, bytes, transcript, consolidated, attempts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+    this.db.run("INSERT INTO episodes (id, brain, session, agent, trigger, at, bytes, transcript, consolidated, attempts, project) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
       e.id,
       brain,
       e.session,
@@ -127,6 +131,7 @@ export class Episodes {
       e.transcript,
       e.consolidated ? 1 : 0,
       e.attempts ?? 0,
+      e.project ?? null,
     ]);
     return true;
   }

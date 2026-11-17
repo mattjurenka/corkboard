@@ -740,6 +740,39 @@ describe("a session's hooks", () => {
     expect((await post({ session: "", transcript: "x" })).status).toBe(400);
     expect(n.episodes.waiting()).toEqual(["assistant"]);
   });
+
+  it("keep the project a session ran in", async () => {
+    expect((await post({ session: "s3", transcript: "{}\n{}\n", project: "corkboard" })).status).toBe(201);
+    expect(n.episodes.list("assistant", 10).find((e) => e.session === "s3")!.project).toBe("corkboard");
+    expect(n.episodes.list("assistant", 10).find((e) => e.session === "s2")!.project).toBeUndefined();
+    expect((await post({ session: "s4", transcript: "{}\n", project: "../etc" })).status).toBe(400);
+    expect((await n.call("/memory/context?project=a/b", { headers: auth })).status).toBe(400);
+  });
+
+  it("start a session in a project with that project's log, and only today's of the rest", async () => {
+    const now = Date.now();
+    const at = (daysAgo: number) => new Date(now - daysAgo * 86_400_000).toISOString();
+    await n.data.putNote("assistant", "project-corkboard", { kind: "memory", title: "Corkboard", body: "A board in Neovim." });
+    await n.data.addEntries("assistant", [
+      { at: at(0), who: "a", text: "Corkboard today.", key: "p0", project: "corkboard" },
+      { at: at(5), who: "a", text: "Corkboard last week.", key: "p5", project: "corkboard" },
+      { at: at(10), who: "a", text: "Corkboard long ago.", key: "p10", project: "corkboard" },
+      { at: at(0), who: "a", text: "Verse today.", key: "v0", project: "verse" },
+      { at: at(2), who: "a", text: "Verse before.", key: "v2", project: "verse" },
+    ]);
+    expect(n.data.entries("assistant").find((e) => e.text === "Verse today.")!.project).toBe("verse");
+    const scoped = await (await n.call("/memory/context?project=corkboard", { headers: auth })).text();
+    expect(scoped).toContain("Corkboard today.");
+    expect(scoped).toContain("Corkboard last week.");
+    expect(scoped).not.toContain("Corkboard long ago.");
+    expect(scoped).toContain("Verse today.");
+    expect(scoped).not.toContain("Verse before.");
+    expect(scoped.indexOf("A board in Neovim.")).toBeLessThan(scoped.indexOf("Corkboard today."));
+    expect(scoped.indexOf("Corkboard last week.")).toBeLessThan(scoped.indexOf("Verse today."));
+    const all = await (await n.call("/memory/context", { headers: auth })).text();
+    expect(all).toContain("Verse before.");
+    expect(all).not.toContain("Corkboard last week.");
+  });
 });
 
 describe("the consolidator", () => {
@@ -823,7 +856,7 @@ describe("the consolidator", () => {
   });
 
   it("wait longer after each run that failed", async () => {
-    n.episodes.add("assistant", { session: "s2", agent: "assistant", trigger: "end", transcript: said("user", "Something new.") });
+    n.episodes.add("assistant", { session: "s2", agent: "assistant", trigger: "end", transcript: said("user", "Something new."), project: "corkboard" });
     answer = new Error("rate limited");
     clock += QUIET + 1;
     await c.tick();
@@ -840,6 +873,8 @@ describe("the consolidator", () => {
     await c.tick();
     expect(n.episodes.list("assistant", 10, true)).toEqual([]);
     expect(n.episodes.meta("assistant", "consolidate_failures")).toBe("0");
+    expect(n.data.entries("assistant").find((e) => e.text === "Something new.")!.project).toBe("corkboard");
+    expect(n.data.entries("assistant")[0].project).toBeUndefined();
   });
 });
 
@@ -886,7 +921,7 @@ describe("episodes handed to the leader", () => {
     // Back, the desktop's given the rest of the session, sealed.
     away.now = false;
     clock += 60_000;
-    laptop.episodes.add("assistant", { session: "s1", agent: "assistant", trigger: "end", transcript: first + said("And monospace.") });
+    laptop.episodes.add("assistant", { session: "s1", agent: "assistant", trigger: "end", transcript: first + said("And monospace."), project: "corkboard" });
     clock += QUIET + 1;
     await laptop.c.tick();
     expect(laptop.asked.length).toBe(1);
@@ -905,6 +940,7 @@ describe("episodes handed to the leader", () => {
     expect(desktop.asked[0]).toContain("And monospace.");
     expect(desktop.asked[0]).not.toContain("Tabs, not spaces.");
     expect(desktop.data.entries("assistant").map((e) => e.text)).toEqual(["laptop read it.", "desktop read it."]);
+    expect(desktop.data.entries("assistant").map((e) => e.project)).toEqual([undefined, "corkboard"]);
 
     // Taken once.
     await desktop.c.tick();

@@ -207,7 +207,7 @@ export class Consolidator {
     const at = through ?? e.at;
     const added = await this.data.addEntries(
       brain,
-      bullets(text).map((b, n) => ({ at, who: e.agent, text: b, key: `episode:${e.id}:${n}` })),
+      bullets(text).map((b, n) => ({ at, who: e.agent, text: b, key: `episode:${e.id}:${n}`, project: e.project })),
     );
     this.episodes.finish(brain, e.id, e.session, through);
     return added;

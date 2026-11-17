@@ -24,7 +24,7 @@ export type Blobs = {
   deleteBlob(id: string): Promise<void>;
 };
 
-type Handed = { blob: string; epoch: number; session: string; agent: string; trigger: string; through: string | null };
+type Handed = { blob: string; epoch: number; session: string; agent: string; trigger: string; through: string | null; project?: string | null };
 
 export class Handoff {
   constructor(private o: { replicas: Replicas; episodes: Episodes; blobs: Blobs }) {}
@@ -45,7 +45,7 @@ export class Handoff {
     const sealed = sealBlob(key, blob, Bun.gzipSync(utf8(transcript)));
     if (sealed.length > LIMITS.blob) throw new Error(`episode ${e.id} is too big to hand over`);
     await this.o.blobs.putBlob(blob, sealed);
-    const handed: Handed = { blob, epoch, session: e.session, agent: e.agent, trigger: e.trigger, through: through ?? null };
+    const handed: Handed = { blob, epoch, session: e.session, agent: e.agent, trigger: e.trigger, through: through ?? null, project: e.project ?? null };
     await this.o.replicas.change("brain", brain, { t: "card", card: episodeRecord(e.id), set: handed });
   }
 
@@ -64,13 +64,13 @@ export class Handoff {
         if (bytes) {
           const transcript = fromUtf8(Bun.gunzipSync(openBlob(key, h.blob, bytes) as Uint8Array<ArrayBuffer>));
           if (h.through) this.o.episodes.restoreThrough(brain, h.session, h.through);
-          this.o.episodes.add(brain, { session: h.session, agent: h.agent, trigger: h.trigger, transcript });
+          this.o.episodes.add(brain, { session: h.session, agent: h.agent, trigger: h.trigger, transcript, ...(h.project ? { project: h.project } : {}) });
           took++;
         } else console.error(`handoff: ${brain}: episode ${c.id.slice(EPISODE_PREFIX.length)} is gone from the relay`);
         await this.o.replicas.change("brain", brain, {
           t: "card",
           card: c.id,
-          set: { blob: null, epoch: null, session: null, agent: null, trigger: null, through: null },
+          set: { blob: null, epoch: null, session: null, agent: null, trigger: null, through: null, project: null },
         });
         if (bytes) await this.o.blobs.deleteBlob(h.blob).catch((e) => console.error(`handoff: ${brain}: deleting blob: ${(e as Error).message}`));
       } catch (e) {

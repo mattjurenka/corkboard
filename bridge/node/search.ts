@@ -209,15 +209,20 @@ export class Search {
 
   // memory.ts's context: who it is and who the user is, the long-term
   // memory, the goals (to those who see them), the last days' log, the day
-  // records, then what else it has learned, cut to the budget.
-  context(brain: string, budget: number, hidden: readonly string[] = [], days = 3): string {
+  // records, then what else it has learned, cut to the budget. With a
+  // project (the repo the session runs in), the log is that project's of
+  // the last week, after its page (project-<name>) if it has one, and of the
+  // rest of the log only today's.
+  context(brain: string, budget: number, hidden: readonly string[] = [], days = 3, project?: string): string {
     const d = this.data.today();
     const notes = this.data.notes(brain).filter((n) => !hidden.includes(n.kind));
     const core = ["soul", "user", "memory"].map((id) => notes.find((n) => n.id === id)).filter((n): n is Note => !!n);
     const goals = notes.filter((n) => n.kind === "goal").sort((a, b) => a.id.localeCompare(b.id));
-    const learned = notes.filter((n) => n.kind === "memory" && !["soul", "user", "memory"].includes(n.id)).sort((a, b) => b.updated.localeCompare(a.updated));
+    const page = project ? notes.find((n) => n.id === `project-${project}`) : undefined;
+    const learned = notes.filter((n) => n.kind === "memory" && !["soul", "user", "memory"].includes(n.id) && n !== page).sort((a, b) => b.updated.localeCompare(a.updated));
     const dayNotes = [`day-${d}`, `day-${before(d, 1)}`].map((id) => notes.find((n) => n.id === id && n.kind === "day")).filter((n): n is Note => !!n);
-    const log = this.data.entries(brain, before(d, days - 1), d);
+    const log = project ? this.data.entries(brain, before(d, 6), d).filter((e) => e.project === project) : this.data.entries(brain, before(d, days - 1), d);
+    const elsewhere = project ? this.data.entries(brain, d).filter((e) => e.project !== project) : [];
 
     const sections: string[] = [];
     let left = budget;
@@ -230,7 +235,9 @@ export class Search {
     const asNote = (n: Note) => `## ${n.title} (${n.id})\n\n${n.body.trim()}\n`;
     core.forEach((n) => add(asNote(n)));
     goals.forEach((n) => add(asNote(n)));
-    if (log.length) add(`## Log, newest day first (day turns over at ${DAY_STARTS_HOUR}am)\n\n${logText(log, this.data.timeZone, true)}`);
+    if (page) add(asNote(page));
+    if (log.length) add(`## Log${project ? ` of ${project}` : ""}, newest day first (day turns over at ${DAY_STARTS_HOUR}am)\n\n${logText(log, this.data.timeZone, true)}`);
+    if (elsewhere.length) add(`## Log elsewhere, today\n\n${logText(elsewhere, this.data.timeZone, true, 4000)}`);
     dayNotes.forEach((n) => add(asNote(n)));
     learned.forEach((n) => add(asNote(n)));
     return `# Memory: ${brain}, today ${d}\n\n${sections.join("\n")}`;

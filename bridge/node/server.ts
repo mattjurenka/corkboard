@@ -47,8 +47,9 @@
 //     DELETE grants                    { token }: that token ended (owner)
 //   /memory/...                        a session's hooks, as the Worker's (fleet/memory-hooks.nix), with a
 //                                      token; the brain is ?brain= (or the body's), else the default:
-//     GET   context                    Markdown: what a session starts with; ?budget= characters
-//     POST  episodes                   { session, trigger?, transcript }: a session's transcript (episodes.ts)
+//     GET   context                    Markdown: what a session starts with; ?budget= characters,
+//                                      ?project= the repo it runs in (search.ts's context)
+//     POST  episodes                   { session, trigger?, transcript, project? }: a session's transcript (episodes.ts)
 //     GET   episodes                   ?pending=1 for those not yet consolidated, ?limit=
 //     GET   episodes/:id               { id, transcript }
 //
@@ -120,6 +121,8 @@ export type AppCall = (op: string, args: any[]) => Promise<unknown>;
 export type AppEvents = (fn: (key: string | null, event: unknown) => void) => () => void;
 // The Worker's (cloud/src/api.ts's): a board's key, and a remote git clones from.
 const BOARD_KEY = /^[A-Za-z0-9._-]{1,128}$/;
+// A repo's name, as the memory hook gives it (nvim/hooks/claude-memory.lua).
+const PROJECT = /^[A-Za-z0-9._-]{1,80}$/;
 const REMOTE = /^(https?:\/\/|ssh:\/\/|git:\/\/|[\w.-]+@[\w.-]+:)[^\s]{1,500}$/;
 const APP_OPS = /^(brains_\w+|nodes_\w+|note_get|note_put|goals|fleet_(session|open)|plan_(get|say|accept|discard|day)|board_(board|resolve|boards|snapshot|subscribe|make|create|update|log|archive|delete|touch|token|revoke))$/;
 
@@ -551,7 +554,9 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
     const [what, id] = path;
     if (what === "context" && !id && m === "GET") {
       const budget = Math.min(Math.max(Number(url.searchParams.get("budget")) || 24_000, 1000), 200_000);
-      return new Response(o.search.context(brain, budget, who.brain ? [] : BRAIN_ONLY_KINDS), { headers: { "Content-Type": "text/markdown; charset=utf-8", "Cache-Control": "no-store" } });
+      const project = url.searchParams.get("project") ?? undefined;
+      if (project !== undefined && !PROJECT.test(project)) throw new Invalid("project must be a repo's name");
+      return new Response(o.search.context(brain, budget, who.brain ? [] : BRAIN_ONLY_KINDS, undefined, project), { headers: { "Content-Type": "text/markdown; charset=utf-8", "Cache-Control": "no-store" } });
     }
     const episodes = o.episodes;
     if (what !== "episodes" || !episodes) return json({ error: "not found" }, 404);
@@ -561,8 +566,9 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       if (!session || session.length > 200) throw new Invalid("session must be the session's id");
       if (typeof b.transcript !== "string" || !b.transcript) throw new Invalid("transcript must be the session's transcript");
       const trigger = typeof b.trigger === "string" && /^[a-z-]{1,40}$/.test(b.trigger) ? b.trigger : "end";
+      if (b.project !== undefined && (typeof b.project !== "string" || !PROJECT.test(b.project))) throw new Invalid("project must be a repo's name");
       try {
-        const r = episodes.add(brain, { session, agent: who.agent, trigger, transcript: b.transcript });
+        const r = episodes.add(brain, { session, agent: who.agent, trigger, transcript: b.transcript, ...(b.project ? { project: b.project } : {}) });
         return json(r, r.added ? 201 : 200);
       } catch (e) {
         if (e instanceof TooBig) return json({ error: e.message }, 413);
