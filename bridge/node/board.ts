@@ -27,7 +27,7 @@ const EXTRA = "extra.";
 export function extraOf(m: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = m.extra && typeof m.extra === "object" && !Array.isArray(m.extra) ? { ...(m.extra as Record<string, unknown>) } : {};
   for (const [k, v] of Object.entries(m)) {
-    if (!k.startsWith(EXTRA)) continue;
+    if (!k.startsWith(EXTRA) || k === EXTRA + "__proto__") continue;
     if (v === null) delete out[k.slice(EXTRA.length)];
     else out[k.slice(EXTRA.length)] = v;
   }
@@ -77,7 +77,7 @@ export type PlainCard = { id: string; log?: { at: string; who: string; note: str
 export function changesFor(card: PlainCard, had: MergedCard | undefined): CardChange[] {
   const { id, log = [], version: _v, waiting_on: _w, extra, ...fields } = card;
   const set: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(fields)) if (JSON.stringify(had?.[k]) !== JSON.stringify(v)) set[k] = v;
+  for (const [k, v] of Object.entries(fields)) if (k !== "__proto__" && JSON.stringify(had?.[k]) !== JSON.stringify(v)) set[k] = v;
   if (extra && typeof extra === "object" && !Array.isArray(extra)) Object.assign(set, extraSet(had ? extraOf(had) : {}, extra as Record<string, unknown>));
   const seen = new Set((had?.log ?? []).map((e) => JSON.stringify([e.at, e.who, e.note])));
   const out: CardChange[] = Object.keys(set).length ? [{ t: "card", card: id, set }] : [];

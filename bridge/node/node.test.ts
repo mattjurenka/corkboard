@@ -10,13 +10,13 @@ import { type NewOp, type Snapshot, type TunnelRequest, type TunnelResponse, typ
 import { Relay } from "../../lib/e2ee/relay";
 import { type Identity, initiate, pipe, respond } from "../../lib/e2ee/channel";
 import { certify, checkCert, newDevice } from "../../lib/e2ee/device";
-import { DAY, dayObject, fleetObject, listObjects, noteRecord } from "./objects";
+import { DAY, SEP, dayObject, fleetObject, listObjects, noteRecord } from "./objects";
 import { type ForgeSigner, FleetRecords } from "./fleet";
 import { checkChain } from "../../lib/e2ee/forge";
 import { Conflict, feedsRecord, meditationRecord } from "./day";
 import { Replicas } from "./replicas";
 import { Data, Invalid, now } from "./data";
-import { isCard, newCardId } from "./board";
+import { changesFor, extraOf, isCard, newCardId } from "./board";
 import { Search } from "./search";
 import { Episodes } from "./episodes";
 import { Consolidator } from "./consolidator";
@@ -246,6 +246,24 @@ describe("the node's OAuth", () => {
     for (let i = 0; i < 5; i++) expect(store.spendApproval("ZZZZ-ZZZZ")).toBe(false);
     const good = store.newApproval();
     expect(() => store.spendApproval(good)).toThrow(/too many/);
+  });
+
+  it("knows no client or grant an object inherits", async () => {
+    const evil = { id: "evil", name: "evil", redirect_uris: ["https://evil.example/cb"], auth: "none" };
+    // Another device's record named __proto__ would be the clients' prototype, and evil a client.
+    const shared: Shared = { cards: () => [{ id: `client${SEP}__proto__`, row: { evil } }], change: () => {} };
+    const store = new OAuthStore(join(n.dir, "inherit.json"), shared);
+    for (const id of ["constructor", "toString", "__proto__", "evil"]) await expect(store.client(id)).rejects.toThrow(/no client/);
+    expect(store.revoke("constructor")).toBe(false);
+  });
+
+  it("keeps a card's extra its own", () => {
+    const m = JSON.parse('{"id":"c1","log":[],"extra.__proto__":{"pinned":true}}');
+    const extra = extraOf(m);
+    expect(Object.getPrototypeOf(extra)).toBe(Object.prototype);
+    expect(extra.pinned).toBeUndefined();
+    const [c] = changesFor(JSON.parse('{"id":"c1","__proto__":{"title":"x"}}'), undefined);
+    expect(c).toBeUndefined();
   });
 
   it("checks redirects and client document hosts", () => {

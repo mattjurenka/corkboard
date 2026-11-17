@@ -105,6 +105,9 @@ export type Shared = { cards(): { id: string; row?: unknown }[]; change(...c: Ca
 
 const recordId = (type: "client" | "grant" | "token", id: string) => `${type}${SEP}${type === "token" ? Buffer.from(id, "hex").toString("base64url") : id}`;
 
+// A record by its id, never one the object inherits: client_id=constructor isn't a client.
+const own = <T>(o: Record<string, T>, k: string): T | undefined => (Object.hasOwn(o, k) ? o[k] : undefined);
+
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const newToken = (prefix: string) => prefix + b64url(random(32));
 
@@ -176,7 +179,7 @@ export class OAuthStore {
     for (const [id, c] of Object.entries(f.clients)) ours.set(recordId("client", id), { row: c, drop: () => delete f.clients[id] });
     for (const [id, g] of Object.entries(f.grants)) ours.set(recordId("grant", id), { row: g, drop: () => delete f.grants[id] });
     for (const [hash, r] of Object.entries(f.tokens))
-      if (r.expires > t && (r.kind === "refresh" || f.grants[r.grant]?.client === "cli")) ours.set(recordId("token", hash), { row: r, drop: () => delete f.tokens[hash] });
+      if (r.expires > t && (r.kind === "refresh" || own(f.grants, r.grant)?.client === "cli")) ours.set(recordId("token", hash), { row: r, drop: () => delete f.tokens[hash] });
     const changes: CardChange[] = [];
     const set = (id: string, row: unknown) => changes.push({ t: "card", card: id, set: { row } });
     let changed = false;
@@ -199,6 +202,7 @@ export class OAuthStore {
         known.delete(id);
       } else {
         const [type, key] = [id.slice(0, id.indexOf(SEP)), id.slice(id.indexOf(SEP) + 1)];
+        if (key === "__proto__") continue;
         if (type === "client") f.clients[key] = row as Client;
         else if (type === "grant") f.grants[key] = row as Grant;
         else f.tokens[Buffer.from(key, "base64url").toString("hex")] = row as TokenRow;
@@ -297,7 +301,7 @@ export class OAuthStore {
 
   async client(id: string): Promise<Client> {
     if (/^https:\/\//.test(id)) return this.document(id);
-    const c = this.read().clients[id];
+    const c = own(this.read().clients, id);
     if (!c) throw new OAuthError("invalid_client", `no client ${id}`, 401);
     return c;
   }
@@ -373,7 +377,7 @@ export class OAuthStore {
     const grant: Grant = { id: b64url(random(12)), client: c.client.id, name: c.client.name, scope: c.scope, resource: c.resource, created: Date.now() };
     this.change((f) => {
       f.codes[sha(code)] = { grant, redirect_uri: c.redirect_uri, challenge: c.challenge, expires: Date.now() + CODE_TTL };
-      if (f.clients[c.client.id]) f.clients[c.client.id].used = Date.now();
+      if (own(f.clients, c.client.id)) f.clients[c.client.id].used = Date.now();
     });
     const url = new URL(c.redirect_uri);
     url.searchParams.set("code", code);
@@ -420,7 +424,7 @@ export class OAuthStore {
       const refresh = p.get("refresh_token") ?? "";
       return this.change((f) => {
         const row = f.tokens[sha(refresh)];
-        const grant = row && f.grants[row.grant];
+        const grant = row && own(f.grants, row.grant);
         if (!row || row.kind !== "refresh" || row.expires < Date.now() || !grant || grant.client !== client.id) throw new OAuthError("invalid_grant", "the refresh token is wrong, used or expired");
         if (resource !== null && grant.resource !== null && resource !== grant.resource) throw new OAuthError("invalid_target", "resource isn't the one authorized");
         // Rotated: the old one is good no more.
@@ -438,7 +442,7 @@ export class OAuthStore {
     if (!bearer.startsWith("cbn_")) return;
     const f = this.read();
     const row = f.tokens[sha(bearer)];
-    const grant = row && f.grants[row.grant];
+    const grant = row && own(f.grants, row.grant);
     if (!row || row.kind !== "access" || row.expires < Date.now() || !grant) return;
     if (grant.resource !== null && !ours(grant.resource, origin)) return;
     return {
@@ -486,7 +490,7 @@ export class OAuthStore {
   // A grant ended: its tokens with it.
   revoke(id: string): boolean {
     return this.change((f) => {
-      if (!f.grants[id]) return false;
+      if (!own(f.grants, id)) return false;
       delete f.grants[id];
       for (const [k, t] of Object.entries(f.tokens)) if (t.grant === id) delete f.tokens[k];
       return true;
@@ -500,7 +504,7 @@ export class OAuthStore {
       const row = f.tokens[sha(token)];
       if (!row) return false;
       delete f.tokens[sha(token)];
-      const g = f.grants[row.grant];
+      const g = own(f.grants, row.grant);
       if (g && (boardBound(g) || g.client === "cli") && !Object.values(f.tokens).some((t) => t.grant === g.id)) delete f.grants[g.id];
       return true;
     });

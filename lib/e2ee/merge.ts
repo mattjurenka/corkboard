@@ -94,7 +94,8 @@ export function cards(state: BoardState): MergedCard[] {
     .map((id) => {
       const c = state.cards[id];
       const out: MergedCard = { id, log: [] };
-      for (const k of Object.keys(c.fields).sort()) out[k] = c.fields[k].value;
+      // A store loads state from JSON, where "__proto__" is an own key; set, it would be the card's prototype.
+      for (const k of Object.keys(c.fields).sort()) if (k !== "__proto__") out[k] = c.fields[k].value;
       out.log = Object.values(c.log)
         .sort((a, b) => compare(a.stamp, b.stamp))
         .map((l) => l.entry);
