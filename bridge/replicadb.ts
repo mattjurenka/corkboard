@@ -10,7 +10,8 @@
 import { Database } from "bun:sqlite";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { NewOp } from "../lib/e2ee/wire";
-import type { ReplicaStore, Saved } from "../lib/e2ee/sync";
+import { stateOf } from "../lib/e2ee/merge";
+import type { KeptSaved, ReplicaStore, Saved } from "../lib/e2ee/sync";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS replicas (object TEXT PRIMARY KEY, cursor INTEGER NOT NULL, seq INTEGER NOT NULL, epoch INTEGER, clock INTEGER NOT NULL, rejected TEXT NOT NULL);
@@ -42,13 +43,13 @@ export class ReplicaDb {
       load: async () => {
         const s = this.load(object);
         if (s || !legacy || !existsSync(legacy)) return s;
-        let old: Saved;
+        let old: KeptSaved;
         try {
           old = JSON.parse(readFileSync(legacy, "utf8"));
         } catch {
           return undefined;
         }
-        this.save(object, old);
+        this.save(object, { ...old, state: stateOf(old.state) });
         rmSync(legacy, { force: true });
         return this.load(object);
       },
@@ -56,11 +57,10 @@ export class ReplicaDb {
     };
   }
 
-  private load(object: string): Saved | undefined {
+  private load(object: string): KeptSaved | undefined {
     const m = this.db.query<Meta, [string]>("SELECT cursor, seq, epoch, clock, rejected FROM replicas WHERE object = ?").get(object);
     if (!m) return undefined;
-    const cards: Saved["state"]["cards"] = {};
-    for (const r of this.db.query<{ id: string; state: string }, [string]>("SELECT id, state FROM cards WHERE object = ?").all(object)) cards[r.id] = JSON.parse(r.state);
+    const cards = Object.fromEntries(this.db.query<{ id: string; state: string }, [string]>("SELECT id, state FROM cards WHERE object = ?").all(object).map((r) => [r.id, JSON.parse(r.state)]));
     const outbox = this.db
       .query<{ op: string }, [string]>("SELECT op FROM outbox WHERE object = ? ORDER BY seq")
       .all(object)

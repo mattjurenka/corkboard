@@ -23,6 +23,7 @@ import { Files } from "./Files";
 import { Notifications } from "./Notifications";
 import { Spinner } from "./Spinner";
 import { openPlan } from "@/planWindow";
+import { hasKey, own } from "../../../lib/dict";
 
 // The pinned tabs, by position: the fleet's only while it's on (corkboard.features).
 const pinnedTabs = (fleet: boolean) => (fleet ? ["Projects", "Board", "Git", "Usage", "Fleet", "Brains"] : ["Projects", "Board", "Git", "Usage", "Brains"]);
@@ -271,7 +272,7 @@ function TabMark({ name, label }: { name: string; label?: Tab["label"] }) {
   const glyph =
     label ? "✻"
     : name.startsWith("term://") ? "$"
-    : VIEW_TABS[name] ? "◷"
+    : hasKey(VIEW_TABS, name) ? "◷"
     : "·";
   return (
     <span
@@ -300,7 +301,8 @@ function Thinking() {
 
 function tabParts(name: string, label?: Tab["label"]): [string, string | null] {
   const term = /^term:\/\/(.*?)\/\/\d+:(.*)$/.exec(name);
-  if (VIEW_TABS[name]) return VIEW_TABS[name];
+  const view = own(VIEW_TABS, name);
+  if (view) return view;
   if (term) return [label?.title ?? term[2].split(" ")[0].split("/").at(-1)!, label?.where ?? term[1]];
   // An ACP agent's session (agent://acp/<n>), whose label Neovim sends.
   if (label) return [label.title, label.where ?? null];

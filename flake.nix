@@ -124,7 +124,7 @@
             root = ./.;
             # The page answers Neovim's cloud requests itself when it has no
             # machine, with the bridge's own code for it.
-            fileset = pkgs.lib.fileset.unions [ ./package.json ./tsconfig.json ./web/index.html ./web/vite.config.ts ./web/src ./web/public ./bridge/cloud-session.ts ./bridge/kokoro-voices.ts ./bridge/kokoro-timing.ts ];
+            fileset = pkgs.lib.fileset.unions [ ./package.json ./tsconfig.json ./web/index.html ./web/vite.config.ts ./web/src ./web/public ./lib/harden.ts ./lib/dict.ts ./bridge/cloud-session.ts ./bridge/kokoro-voices.ts ./bridge/kokoro-timing.ts ];
           };
           nativeBuildInputs = [ pkgs.bun ];
           buildPhase = ''

@@ -250,20 +250,23 @@ describe("the node's OAuth", () => {
 
   it("knows no client or grant an object inherits", async () => {
     const evil = { id: "evil", name: "evil", redirect_uris: ["https://evil.example/cb"], auth: "none" };
-    // Another device's record named __proto__ would be the clients' prototype, and evil a client.
+    // Another device's record named __proto__ is a client of that name, not the clients' prototype.
     const shared: Shared = { cards: () => [{ id: `client${SEP}__proto__`, row: { evil } }], change: () => {} };
     const store = new OAuthStore(join(n.dir, "inherit.json"), shared);
-    for (const id of ["constructor", "toString", "__proto__", "evil"]) await expect(store.client(id)).rejects.toThrow(/no client/);
+    for (const id of ["constructor", "toString", "hasOwnProperty", "evil"]) await expect(store.client(id)).rejects.toThrow(/no client/);
     expect(store.revoke("constructor")).toBe(false);
   });
 
   it("keeps a card's extra its own", () => {
     const m = JSON.parse('{"id":"c1","log":[],"extra.__proto__":{"pinned":true}}');
     const extra = extraOf(m);
-    expect(Object.getPrototypeOf(extra)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(extra)).toBeNull();
     expect(extra.pinned).toBeUndefined();
+    // A field like any other.
     const [c] = changesFor(JSON.parse('{"id":"c1","__proto__":{"title":"x"}}'), undefined);
-    expect(c).toBeUndefined();
+    const set = c.t === "card" ? c.set : {};
+    expect(Object.keys(set)).toEqual(["__proto__"]);
+    expect(set.title).toBeUndefined();
   });
 
   it("checks redirects and client document hosts", () => {

@@ -18,6 +18,7 @@
 
 import { decode, encode } from "@msgpack/msgpack";
 import { caller } from "./machine/link";
+import { dict, own } from "../../../../lib/dict";
 
 export type Start = {
   type: "start";
@@ -177,7 +178,7 @@ self.onmessage = (e: MessageEvent<Start>) => {
       };
       const fs = (op: string, ...args: unknown[]): any => {
         const res = local(op, args) ?? remote(op, args);
-        if (res[0]) throw new FS.ErrnoError(ERRNO[res[0]] ?? ERRNO.EIO);
+        if (res[0]) throw new FS.ErrnoError(own(ERRNO, res[0]) ?? ERRNO.EIO);
         return res[1];
       };
       mountHost(FS, fs, head, start.mounts);
@@ -233,7 +234,9 @@ const S_IFDIR = 0o040000;
 // fds of their own (below zero, which the bridge never gives).
 function snapshotFs(bytes: Uint8Array | null) {
   if (!bytes) return () => undefined;
-  const { roots, entries } = decode(bytes) as { roots: string[]; entries: Record<string, [number[], unknown]> };
+  const snapshot = decode(bytes) as { roots: string[]; entries: Record<string, [number[], unknown]> };
+  const { roots } = snapshot;
+  const entries = dict(snapshot.entries);
   const under = (p: unknown) => typeof p === "string" && roots.some((r) => p === r || p.startsWith(r + "/"));
   const fds = new Map<number, [number[], Uint8Array]>();
   let next = -2;

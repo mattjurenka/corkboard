@@ -23,6 +23,7 @@
 // times, so they line up with a machine-wide recorder; `bun run latency`
 // summarises that file. window.__latency has the last ones, for the console.
 
+import { dict } from "../../lib/dict";
 type Sample = {
   t: number; // wall clock, ms
   key: string;
@@ -150,7 +151,7 @@ export function startLatency(send: (samples: Sample[]) => void) {
   (window as any).__latency = {
     recent,
     summary() {
-      const rows: Record<string, { n: number; p50: number; p95: number; max: number }> = {};
+      const rows = dict<{ n: number; p50: number; p95: number; max: number }>();
       const by = new Map<string, Sample[]>();
       for (const s of recent) if (s.paint !== null && !s.busy) by.set(s.key, [...(by.get(s.key) ?? []), s]);
       for (const [key, xs] of by) {

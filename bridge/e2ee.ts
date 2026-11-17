@@ -53,6 +53,7 @@ import { join } from "node:path";
 import { CLOUD } from "./cloud";
 import { DATA_DIR } from "./dirs";
 import { Keystore } from "./keystore";
+import { own } from "../lib/dict";
 import { type PlainCard, changesFor } from "./node/board";
 import { type ObjectKind, accountKeys, newRoot, objectId, objectKey } from "../lib/e2ee/keys";
 import { certify, checkCert, creation, newDevice, revoke, type Device } from "../lib/e2ee/device";
@@ -660,7 +661,7 @@ export async function cli(args: string[]) {
     leader: setLeader,
     "approve-connector": async () => console.log((await import("./node/serve")).approvalCode()),
   };
-  const run = commands[args[0]];
+  const run = own(commands, args[0]);
   if (!run) {
     console.error(USAGE);
     process.exit(2);

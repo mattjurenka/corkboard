@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNvim } from "@/nvim/context";
 import { store, useStore } from "@/store";
 import { Palette, Row, Search, matches, step } from "./Palette";
+import { own } from "../../../lib/dict";
 
 const MAC = /Mac/.test(navigator.platform);
 const NAMED: Record<string, string> = { C: "Ctrl", A: MAC ? "Option" : "Alt", M: MAC ? "Option" : "Alt", S: "Shift", D: "Cmd" };
@@ -17,7 +18,7 @@ const ON_MAC: Record<string, string> = { "<C-f>": "<D-p>", F5: "<D-r>" };
 
 // "<C-f>" to Ctrl F, "<leader>c" to the leader then C, "F5" as it is.
 function keys(hint: string, leader: string): string[] {
-  if (MAC) hint = ON_MAC[hint] ?? hint;
+  if (MAC) hint = own(ON_MAC, hint) ?? hint;
   if (!hint.includes("<")) return [hint];
   const out: string[] = [];
   for (const [, special, plain] of hint.matchAll(/<([^>]+)>|(.)/g)) {
@@ -26,7 +27,7 @@ function keys(hint: string, leader: string): string[] {
     else {
       const parts = special.split("-");
       const key = parts.pop()!;
-      out.push(...parts.map((m) => NAMED[m.toUpperCase()] ?? m), key.length === 1 ? key.toUpperCase() : key);
+      out.push(...parts.map((m) => own(NAMED, m.toUpperCase()) ?? m), key.length === 1 ? key.toUpperCase() : key);
     }
   }
   return out;

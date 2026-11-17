@@ -11,6 +11,7 @@ import { useNvim } from "@/nvim/context";
 import { toNvimKey, windowKey } from "@/nvim/input.js";
 import { store, useStore } from "@/store";
 import { edgeWindow, Fold, focusTab, HeaderButton, Section, SectionHeader } from "./Sidebar";
+import { own } from "../../../lib/dict";
 
 type Entry = { name: string; dir?: boolean; ignored?: boolean; git?: "modified" | "added" };
 
@@ -295,6 +296,6 @@ const BY_EXT: Record<string, Icon> = {
 function FileIcon({ entry, open }: { entry: Entry; open: boolean }) {
   const dot = entry.name.lastIndexOf(".");
   const ext = dot > 0 ? entry.name.slice(dot + 1).toLowerCase() : "";
-  const [glyph, color] = entry.dir ? (open ? FOLDER_OPEN : FOLDER) : (BY_NAME[entry.name] ?? BY_EXT[ext] ?? FILE);
+  const [glyph, color] = entry.dir ? (open ? FOLDER_OPEN : FOLDER) : (own(BY_NAME, entry.name) ?? own(BY_EXT, ext) ?? FILE);
   return <span className={cn("w-ch flex-none text-center", color)}>{glyph}</span>;
 }

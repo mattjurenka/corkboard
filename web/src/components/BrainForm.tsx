@@ -13,6 +13,7 @@ import { useNvim } from "@/nvim/context";
 import { type BrainFields, store, useStore } from "@/store";
 import { cn } from "@/lib/utils";
 import { PERSONAS } from "@/avatar/personas";
+import { own } from "../../../lib/dict";
 
 type Draft = Omit<BrainFields, "updated">;
 
@@ -317,7 +318,7 @@ function Portrait({ id, on, onClick }: { id: string; on: boolean; onClick: () =>
     >
       <img src={`personas/${id}.png`} alt="" draggable={false} className={cn("aspect-[4/5] w-full object-cover object-top", !on && "opacity-70")} />
       <span className="truncate border-t px-ch text-left">
-        {on ? "●" : "○"} {(PERSONAS as Record<string, { title: string }>)[id]?.title.toLowerCase() ?? id}
+        {on ? "●" : "○"} {own(PERSONAS as Record<string, { title: string }>, id)?.title.toLowerCase() ?? id}
       </span>
     </button>
   );

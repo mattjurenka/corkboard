@@ -13,6 +13,7 @@
 // Each reads its arguments from process.argv as if run on its own, so the
 // subcommand comes out of it first.
 
+import "../lib/harden";
 const command = process.argv[2];
 const own = () => process.argv.splice(2, 1);
 

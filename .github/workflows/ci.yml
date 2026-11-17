@@ -37,6 +37,9 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run test
+      # No lookup by a key an object might inherit (scripts/lint-keys.ts), everywhere: here, where both sets of types are.
+      - run: bun run lint:keys
+        working-directory: .
 
   bridge:
     strategy:

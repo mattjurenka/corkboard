@@ -41,12 +41,9 @@ export const OPAQUE = /^[A-Za-z0-9_-]{16,64}$/;
 type Flat = Record<string, string | number | null>;
 
 export function canonical(o: Flat): string {
-  const keys = Object.keys(o).sort();
-  for (const k of keys) {
-    const v = o[k];
-    if (v !== null && typeof v !== "string" && !(typeof v === "number" && Number.isSafeInteger(v))) throw new Error(`${k}: only strings, integers and null are signed`);
-  }
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${JSON.stringify(o[k])}`).join(",")}}`;
+  const entries = Object.entries(o).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  for (const [k, v] of entries) if (v !== null && typeof v !== "string" && !(typeof v === "number" && Number.isSafeInteger(v))) throw new Error(`${k}: only strings, integers and null are signed`);
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${JSON.stringify(v)}`).join(",")}}`;
 }
 
 // The bytes a signature covers: what it is, then the statement.

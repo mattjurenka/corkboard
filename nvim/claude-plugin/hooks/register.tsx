@@ -44,11 +44,11 @@ function toolName(tool: string) {
 function gist(input: unknown, cwd: string) {
   if (typeof input !== 'object' || input === null) return ''
   const fields = input as Record<string, unknown>
-  for (const key of ['file_path', 'notebook_path', 'path']) {
+  for (const key of ['file_path', 'notebook_path', 'path'] as const) {
     const value = fields[key]
     if (typeof value === 'string' && value) return value.startsWith(cwd + '/') ? value.slice(cwd.length + 1) : value
   }
-  for (const key of ['command', 'pattern', 'url', 'query', 'skill', 'description', 'prompt']) {
+  for (const key of ['command', 'pattern', 'url', 'query', 'skill', 'description', 'prompt'] as const) {
     const value = fields[key]
     if (typeof value === 'string' && value) return value.split('\n')[0] ?? ''
   }

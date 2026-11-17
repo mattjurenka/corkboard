@@ -2,6 +2,7 @@
 // Mac, Ctrl+Shift+P elsewhere, <leader> as the leader key.
 
 import { MAC } from "@/nvim/input.js";
+import { own } from "../../../lib/dict";
 
 const MODS: Record<string, [mac: string, other: string]> = {
   C: ["⌃", "Ctrl+"],
@@ -27,9 +28,9 @@ function chord(token: string, leader: string): string {
   // chord's letter as a capital whether shifted or not (<C-T>).
   if (/^[A-Z]$/.test(key) && mods.length && !mods.includes("S") && !mods.includes("C")) mods.push("S");
   if (/^[a-z]$/.test(key) && mods.length) key = key.toUpperCase();
-  key = NAMES[key] ?? key;
+  key = own(NAMES, key) ?? key;
   mods.sort((a, b) => "CAMSD".indexOf(a) - "CAMSD".indexOf(b));
-  return mods.map((x) => MODS[x][MAC ? 0 : 1]).join("") + key;
+  return mods.map((x) => own(MODS, x)![MAC ? 0 : 1]).join("") + key;
 }
 
 export function prettyKeys(lhs: string, leader = "\\"): string {

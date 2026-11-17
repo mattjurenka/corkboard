@@ -10,6 +10,7 @@ import { Fragment, useEffect, useRef } from "react";
 import { Spinner } from "@/components/Spinner";
 import { cn } from "@/lib/utils";
 import type { ViewProps } from "./index";
+import { own } from "../../../lib/dict";
 
 type Worktree = {
   key: string;
@@ -123,7 +124,7 @@ export function Git({ state, win, focused, nvim }: ViewProps<GitState>) {
       <Box title="Repositories" aside={f?.version && `Forgejo ${f.version}`}>
         {f?.error && <p className="px-ch whitespace-pre-wrap text-destructive">{f.error}</p>}
         {(f?.repos ?? []).map((r) => {
-          const [mark, color] = (r.ci && CHECK[r.ci.status]) || [" ", ""];
+          const [mark, color] = (r.ci && own(CHECK, r.ci.status)) || [" ", ""];
           return row(
             r.key,
             "grid-cols-[minmax(16ch,32ch)_5ch_2ch_1fr_4ch] @max-[90ch]/git:grid-cols-[1fr_5ch_2ch_4ch]",
@@ -161,7 +162,7 @@ export function Git({ state, win, focused, nvim }: ViewProps<GitState>) {
       <Box title="Pull requests" aside={state.prs.length || undefined}>
         {state.prs.length === 0 && !state.loading && <p className="px-ch text-muted-foreground">none open</p>}
         {state.prs.map((p) => {
-          const [mark, color] = (p.checks && CHECK[p.checks]) || [" ", ""];
+          const [mark, color] = (p.checks && own(CHECK, p.checks)) || [" ", ""];
           const r = p.review;
           return row(
             p.key,

@@ -10,6 +10,7 @@
 // phone's face to say or do (corkboard/avatar.lua's panel, there).
 
 import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { own } from "../lib/dict";
 
 // A question AskUserQuestion asks, whole, for the phone to answer it there.
 export type Question = { question: string; header: string; multiSelect: boolean; options: { label: string; description: string }[] };
@@ -34,7 +35,10 @@ const unwrap = (s: string) => s.replace(/<system-reminder>[\s\S]*?<\/system-remi
 
 // A tool call in a line: what it was about.
 function detail(name: string, input: Record<string, unknown>): string {
-  const str = (k: string) => (typeof input[k] === "string" ? (input[k] as string) : undefined);
+  const str = (k: string) => {
+    const v = own(input, k);
+    return typeof v === "string" ? v : undefined;
+  };
   if (name === "Bash") return str("description") ?? str("command") ?? "";
   if (name === "AskUserQuestion" && Array.isArray(input.questions)) return input.questions.map((q: any) => q?.question ?? "").join("\n");
   const d = str("file_path") ?? str("notebook_path") ?? str("path") ?? str("description") ?? str("pattern") ?? str("url") ?? str("query") ?? str("prompt") ?? str("skill");

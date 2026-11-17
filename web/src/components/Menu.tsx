@@ -14,6 +14,7 @@ import { MAC } from "@/nvim/input.js";
 import { keysFor, prettyKeys } from "@/lib/keys";
 import { openPlan } from "@/planWindow";
 import { type State, store, useStore } from "@/store";
+import { own } from "../../../lib/dict";
 
 type Features = State["features"];
 // project: needs one open, so greyed out while there's none.
@@ -175,7 +176,7 @@ export function Menu() {
                     <span className="w-2ch flex-none text-center text-focus">{item.checked ? "✓" : ""}</span>
                     <span className="flex-1">{item.label}</span>
                     {(() => {
-                      const lhs = item.bind ? keysFor(bound[item.bind]) : undefined;
+                      const lhs = item.bind ? keysFor(own(bound, item.bind)) : undefined;
                       const keys = lhs ? prettyKeys(lhs, leader) : item.keys;
                       return keys && <span className="text-muted-foreground">{keys}</span>;
                     })()}

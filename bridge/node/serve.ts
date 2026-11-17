@@ -70,6 +70,7 @@ import type { Reach } from "../peers";
 import type { Channel } from "../../lib/e2ee/channel";
 import type { NodesView } from "../../lib/e2ee/wire";
 import { lentCalendar, loadCalendar, login, saveCalendar, startCalendar } from "./calendar";
+import { own } from "../../lib/dict";
 
 export const NODE_DIR = join(STATE_DIR, "node");
 const oauthStore = (shared?: Shared) => new OAuthStore(join(NODE_DIR, "oauth.json"), shared);
@@ -448,7 +449,7 @@ export async function cli(args: string[]) {
     revoke: (a) => console.log(oauthStore().revoke(a[1] ?? "") ? "Revoked." : "No such grant (serve grants lists them)."),
     "calendar-login": calendarLogin,
   };
-  const go = commands[sub];
+  const go = own(commands, sub);
   if (!go) {
     console.error("usage: corkboard-bridge serve [--port N] [--host H] [--origin URL] [--board KEY]... [--brain NAME]... | token | grants | revoke GRANT | calendar-login");
     process.exit(2);

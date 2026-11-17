@@ -16,6 +16,7 @@
 // A resident that is an assistant gets its token and the phone's chat
 // (assistant.ts).
 
+import "../../lib/harden";
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { coresOf, credentialFor, guestOf, manifest, memoryOf, newId, schedule, SPAWNS, spawns, write, type Manifest, type Spawn } from "./fleet";

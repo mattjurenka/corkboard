@@ -8,6 +8,7 @@
 // the bridge can't say is subtitles only. Tapped or patted, she reacts, as
 // on meet.
 
+import "../../../lib/harden";
 import "./phone.css";
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";

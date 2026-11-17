@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { ViewProps } from "./index";
+import { own } from "../../../lib/dict";
 
 type Kind = "work" | "fixed" | "off" | "play";
 type Project = { key: string; name: string; color: "accent" | "review" | "working" | "special" };
@@ -253,7 +254,7 @@ export function PlanPriority({ state, win, focused, nvim }: ViewProps<PlanState>
           {state.inputs.map((x) => (
             <div key={x.label} className="contents">
               <dt className="text-muted-foreground">{x.label}</dt>
-              <dd style={{ color: x.tone ? VAR[x.tone] : undefined }}>{x.value}</dd>
+              <dd style={{ color: x.tone ? own(VAR, x.tone) : undefined }}>{x.value}</dd>
             </div>
           ))}
         </dl>
@@ -399,7 +400,7 @@ export function PlanDiff({ state, win, focused, nvim }: ViewProps<DiffState>) {
           {state.reasons.map((r, i) => (
             <li key={i} className="flex gap-ch">
               {/* A reason with no tone is the calendar's, marked as its events are. */}
-              <span style={{ color: r.tone ? VAR[r.tone] : undefined }}>{r.tone ? "●" : "◇"}</span>
+              <span style={{ color: r.tone ? own(VAR, r.tone) : undefined }}>{r.tone ? "●" : "◇"}</span>
               <span className="min-w-0 flex-1">
                 {r.text} <span className="text-muted-foreground">({r.source})</span>
               </span>

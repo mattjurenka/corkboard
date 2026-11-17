@@ -10,6 +10,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { type Dict, dict, own } from "../../lib/dict";
 import type { Git } from "./forge";
 import type { NodeLink } from "./node";
 
@@ -37,7 +38,7 @@ export type Manifest = {
   // The most one spawn's VM may ask for (MiB, vCPUs), or null for no more
   // than the budget (and the host's cores).
   offer?: { memory: number | null; cores: number | null };
-  slots: Record<string, { guestAddress: string; hostAddress?: string; stateDir: string; shareDir: string; outboxDir: string; unit: string; network?: Network }>;
+  slots: Dict<{ guestAddress: string; hostAddress?: string; stateDir: string; shareDir: string; outboxDir: string; unit: string; network?: Network }>;
   // VMs that are always there: they count against the budget while up.
   residents: Record<
     string,
@@ -47,12 +48,12 @@ export type Manifest = {
   // (forge.ts), as fleet/lib.nix's template git says.
   // agent: the kind its guest runs (fleet/lib.nix's agents), Claude Code's
   // when it doesn't say.
-  templates: Record<string, { memory: number; cores: number; needsApproval: boolean; capNames: string[]; credentials?: string[]; git?: GitTerms | null; agent?: string }>;
+  templates: Dict<{ memory: number; cores: number; needsApproval: boolean; capNames: string[]; credentials?: string[]; git?: GitTerms | null; agent?: string }>;
   // The brains whose memory this host has, by name: the shares a spawn for
   // one mounts, in the guest `<template>+<brain>`. A brain with none runs
   // here in its template's own guest. Absent from a manifest written before
   // brains were spawns'.
-  bindings?: Record<string, { shares: string[] }>;
+  bindings?: Dict<{ shares: string[] }>;
   // The account a spawn runs as when nothing says.
   defaultAccount: string | null;
   // The user's node, through the relay's tunnel (<portal>/n/<handle>), and
@@ -161,14 +162,16 @@ export function credentialFor(m: Manifest, s: Spawn): { file: string; share: str
   const kind = m.templates[s.template]?.agent ?? "claude";
   if (kind === "claude") return { file: tokenFor(s.account), share: "claude-token", how: "claude setup-token, signed in as it, then save it there" };
   const keys: Record<string, string> = { agy: "GEMINI_API_KEY=...", codex: "OPENAI_API_KEY=..." };
-  return { file: join(ACCOUNTS, `${s.account}.${kind}`), share: `${kind}-credential`, how: `its key as ${keys[kind] ?? "KEY=value"} lines there` };
+  return { file: join(ACCOUNTS, `${s.account}.${kind}`), share: `${kind}-credential`, how: `its key as ${own(keys, kind) ?? "KEY=value"} lines there` };
 }
 
 // QEMU's own allocations on top of the guest's RAM, per running slot.
 export const OVERHEAD = 512;
 
+// Its maps by name are Dicts: a spawn's template comes from the Worker's queue.
 export function manifest(): Manifest {
-  return JSON.parse(readFileSync(MANIFEST, "utf8"));
+  const m = JSON.parse(readFileSync(MANIFEST, "utf8"));
+  return { ...m, slots: dict(m.slots), templates: dict(m.templates), bindings: m.bindings && dict(m.bindings) };
 }
 
 export function spawns(): Spawn[] {

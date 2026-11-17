@@ -149,6 +149,7 @@ export class Grid {
 
   on_grid_scroll(_grid, top, bot, left, right, rows) {
     const move = (to, from) => {
+      // keys: row and column numbers
       for (let c = left; c < right; c++) this.cells[to][c] = this.cells[from][c];
       this.dirty.add(to);
     };

@@ -18,17 +18,19 @@
 // only takes that key through a login: lib/acp/codex.ts). Every permission it asks
 // is allowed, as Claude Code runs here with --dangerously-skip-permissions.
 
+import "../../lib/harden";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AcpSession, type Permission } from "../../lib/acp/client";
 import { KINDS } from "../../lib/acp/kinds";
+import { dict, own } from "../../lib/dict";
 
 const SHARE = process.env.FLEET_SHARE ?? "/mnt/share";
 const OUT = process.env.FLEET_OUTBOX ?? "/mnt/outbox";
 
 // KEY=value lines, # comments and blank lines skipped.
 export function credential(text: string): Record<string, string> {
-  const env: Record<string, string> = {};
+  const env = dict<string>();
   for (const line of text.split("\n")) {
     const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
     if (m) env[m[1]] = m[2].trim();
@@ -84,7 +86,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function main(argv: string[]): Promise<number> {
   const o = args(argv);
-  const make = KINDS[o.kind];
+  const make = own(KINDS, o.kind);
   if (!make || (o.mode !== "task" && o.mode !== "session")) {
     console.error(`fleet-acp: usage: <${Object.keys(KINDS).join("|")}> task|session [--mcp-config file]... [--prompt-file file]`);
     return 2;

@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { reference, speech } from "../bridge/speech";
 import { PERSONAS } from "./src/avatar/personas";
 import { askKey, asks, type Ask, type SaidAhead } from "./src/avatar/voice";
+import { dict } from "../lib/dict";
 
 const out = `${new URL(".", import.meta.url).pathname}public/voices/said`;
 await mkdir(out, { recursive: true });
@@ -32,7 +33,7 @@ const ENCODE = `import sys, numpy, soundfile
 soundfile.write(sys.argv[1], numpy.frombuffer(sys.stdin.buffer.read(), dtype="<f4"), int(sys.argv[2]), format="OGG", subtype="OPUS")`;
 
 // What's still said, kept as it was if it's there.
-const index = Object.fromEntries(Object.entries(old).filter(([k]) => wanted.has(k)));
+const index = dict(Object.entries(old).filter(([k]) => wanted.has(k)));
 const save = () => Bun.write(indexFile, JSON.stringify(Object.fromEntries(Object.entries(index).sort()), null, 2) + "\n");
 let n = 0;
 for (const [key, a] of wanted) {

@@ -9,6 +9,7 @@
 // binds to loopback unless told otherwise, and then wants a token (see
 // TOKEN). Either way the socket only opens for this bridge's own page.
 
+import "../lib/harden";
 import { decodeMultiStream, decode, encode, ExtensionCodec } from "@msgpack/msgpack";
 import type { Subprocess } from "bun";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -27,6 +28,7 @@ import { gitViews } from "./node/git";
 import { Peers } from "./peers";
 import { CLOUD, token } from "./cloud";
 import { COMPILED, RESOURCES, STATE_DIR, dirsEnv } from "./dirs";
+import { dict, own } from "../lib/dict";
 
 const HOST = process.env.CORKBOARD_HOST ?? "127.0.0.1";
 const PORT = Number(process.env.CORKBOARD_PORT ?? 7777);
@@ -171,9 +173,9 @@ for (const type of [0, 1, 2]) {
 // first, so the far side needs Nix and a login, not an install.
 type Remote = { target: string; options?: string[] };
 const remotesRaw = process.env.CORKBOARD_REMOTES ?? "{}";
-const REMOTES: Record<string, Remote> = JSON.parse(
+const REMOTES = dict<Remote>(JSON.parse(
   remotesRaw.trimStart().startsWith("{") ? remotesRaw : readFileSync(remotesRaw, "utf8"),
-);
+));
 const REMOTE_NVIM = process.env.CORKBOARD_REMOTE_NVIM;
 
 type Session = {
@@ -281,7 +283,7 @@ async function open(ticket: string): Promise<Response> {
   if (board.node) {
     const s = (await NODE?.boards("board", [board.key]).catch(() => null)) as { name?: string; root?: string | null; roots?: Record<string, string>; remotes?: string[] } | null | undefined;
     if (!s) return plain(404, `this machine's node doesn't have the board ${board.key}`);
-    Object.assign(board, { name: s.name ?? board.key, root: s.roots?.[boards.ENVIRONMENT] ?? s.root ?? null, remotes: s.remotes ?? [] });
+    Object.assign(board, { name: s.name ?? board.key, root: own(s.roots ?? {}, boards.ENVIRONMENT) ?? s.root ?? null, remotes: s.remotes ?? [] });
   }
   let cwd = board.root && isDir(board.root) ? board.root : undefined;
   if (!cwd) {
@@ -409,7 +411,7 @@ function deliver(data: Session, msg: unknown) {
 // Bytes in JSON, for the page to turn back into bytes ([9, ...] messages).
 // The value as it was, before a Buffer's toJSON had it.
 function toJson(this: any, key: string, value: unknown) {
-  const raw = this[key];
+  const raw = this[key]; // keys: JSON.stringify's own keys of this
   return raw instanceof Uint8Array ? { $b: Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength).toString("base64") } : value;
 }
 

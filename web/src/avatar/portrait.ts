@@ -1,6 +1,7 @@
 // portrait.html: ?persona=<id>'s model on a stage, at rest, posted back as
 // a PNG to portraits.ts once its hair has settled.
 
+import "../../../lib/harden";
 import { modelAt, persona } from "./personas";
 import { Stage } from "./stage";
 import { Voice } from "./voice";

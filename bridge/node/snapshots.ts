@@ -28,6 +28,7 @@ import { join } from "node:path";
 import { random } from "../../lib/e2ee/keys";
 import { openBlob, sealBlob } from "../../lib/e2ee/record";
 import { LIMITS, b64url } from "../../lib/e2ee/wire";
+import { type Dict, dict } from "../../lib/dict";
 import type { Blobs } from "./handoff";
 import { FLEET, SEP } from "./objects";
 import type { Replicas } from "./replicas";
@@ -69,11 +70,11 @@ export class ForgeSnapshots {
   private get localFile() {
     return join(this.o.dir, "snapshots.json");
   }
-  private local(): Record<string, string> {
+  private local(): Dict<string> {
     try {
-      return JSON.parse(readFileSync(this.localFile, "utf8"));
+      return dict(JSON.parse(readFileSync(this.localFile, "utf8")) as Record<string, string>);
     } catch {
-      return {};
+      return dict();
     }
   }
   private setLocal(id: string, v: string) {

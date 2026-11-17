@@ -4,6 +4,7 @@
 
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import { dict } from "../lib/dict";
 import { AGENT_STATES, PRIORITIES, STATUSES, parse, split } from "../mcp/cards";
 
 const KNOWN = new Set(["id", "title", "status", "assignee", "created_date", "updated_date", "labels", "dependencies", "priority", "ordinal", "agent_state", "attention", "path", "body", "agent"]);
@@ -36,7 +37,7 @@ export function cardsOf(dir: string) {
     const c = parse(join(tasks, name))!;
     const { description, log } = split(c.body ?? "");
     const created = iso(c.created_date, new Date().toISOString().replace(/\.\d+Z$/, "Z"));
-    const extra: Record<string, unknown> = {};
+    const extra = dict<unknown>();
     for (const [k, v] of Object.entries(c)) if (!KNOWN.has(k) && v !== undefined && v !== "") extra[k] = v;
     // More than one assignee: the first is the agent, the rest are kept.
     if ((c.assignee ?? []).length > 1) extra.assignee = c.assignee;

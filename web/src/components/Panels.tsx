@@ -18,6 +18,7 @@ import { Spinner } from "@/components/Spinner";
 import { keepFocus, useNvim } from "@/nvim/context";
 import { type Layout, type Rect, useStore } from "@/store";
 import { VIEWS } from "@/views";
+import { own } from "../../../lib/dict";
 
 export function Panels() {
   const nvim = useNvim();
@@ -30,8 +31,8 @@ export function Panels() {
   return (
     <>
       {layout.views.map((w) => {
-        const View = VIEWS[w.view];
-        const state = bufs[w.buf] ?? views[w.view];
+        const View = own(VIEWS, w.view);
+        const state = bufs[w.buf] ?? own(views, w.view);
         return (
           <div
             // Another kind of view in the window (an image, then a PDF) is a

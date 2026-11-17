@@ -29,6 +29,7 @@ import { type FileItem, type FileOffers, type ToFiles, filesJson } from "./files
 import { type Kind, boardBound } from "./oauth";
 import type { ToForge } from "./git";
 import { PR_TOOLS } from "./prs";
+import { dict, own } from "../../lib/dict";
 
 // branch and repo: the session's worktree's, as its MCP config told them
 // (X-Corkboard-Branch, X-Corkboard-Repo), for the PR tools (prs.ts).
@@ -133,7 +134,7 @@ const read = (c: Call, cardId: string) => full(c.data.card(c.board, cardId));
 const brief = (c: Call, card: Card) => summary(card, c.cards());
 const HANDED_OFF = "Handed off. End your turn now: this session will be cleared and the next started from your handoff.";
 
-const TOOLS: Record<string, Tool> = {
+const TOOLS = dict<Tool>({
   list_cards: {
     description: "List cards (without their bodies), ordered by priority (high first; none is medium), then ordinal, then id. Filters are optional and combine.",
     properties: {
@@ -398,7 +399,7 @@ const TOOLS: Record<string, Tool> = {
       return brief(c, card);
     },
   },
-};
+});
 
 const INSTRUCTIONS = (me: string) => `The corkboard project board: one card per task. You are "${me}".
 To pick up work, call next_card (or claim_card for a specific card). While working, log progress with log.
@@ -457,7 +458,7 @@ async function queue(c: FleetCall, a: Record<string, unknown>) {
 }
 
 // The Worker's spawn tools, with the same names and descriptions.
-const FLEET_TOOLS: Record<string, FleetTool> = {
+const FLEET_TOOLS = dict<FleetTool>({
   spawn_agent: {
     description:
       "Start an agent on a task, in a VM of its own: a coding agent to fix something, a brain's agent to work with its memory. It makes no card: its state and answer are in spawn_status. Name a card (and its board) and it works on that card, leaving its answer there; name only a board and it can read it and make cards for work worth tracking. With a board that is a project, it works in that project's repo and its commits come back as the branch fleet/<id>. spawn_status lists the templates and where they run. Bring its tools with packages or shell (built inside its VM), and size it with memory and cores, within what its machine offers. It may wait for room on the machine; it doesn't wait for you.",
@@ -505,14 +506,14 @@ const FLEET_TOOLS: Record<string, FleetTool> = {
     required: ["id"],
     run: (a, c) => c.fleet("POST", `/spawns/${encodeURIComponent(String(a.id))}/stop`),
   },
-};
+});
 
 // Pairing ------------------------------------------------------------------------------
 
 // A new device let into the account from chat, as :AgentPair does
 // (bridge/e2ee.ts): the owner's own clients only.
 type PairTool = { description: string; properties?: Record<string, object>; required?: string[]; run: (a: any) => Promise<unknown> };
-const PAIR_TOOLS: Record<string, PairTool> = {
+const PAIR_TOOLS = dict<PairTool>({
   pair_device: {
     description:
       "Let a new device (a phone, another computer) into the user's encrypted account. Only with a code the user gave you in this conversation: it's the ten characters the new device shows (case, dashes and spaces don't matter). Answers once the device has joined, with six digits: show them to the user and ask whether the new device shows the same, then call pair_confirm with their answer. Never guess the answer.",
@@ -534,7 +535,7 @@ const PAIR_TOOLS: Record<string, PairTool> = {
       return { paired: name };
     },
   },
-};
+});
 const pairs = (caller: Caller) => caller.scope === "owner" && !caller.brain && !boardBound(caller);
 
 // The user's own clients spawn, as on the Worker: not a brain's token, nor
@@ -558,7 +559,7 @@ function writable(id: string, c: MemoryCall) {
   if (OWNER_ONLY_NOTES.has(id) && c.caller.scope !== "owner") throw new ToolError(`only the user writes the ${id} note`);
 }
 
-const MEMORY_TOOLS: Record<string, MemoryTool> = {
+const MEMORY_TOOLS = dict<MemoryTool>({
   notes_search: {
     description:
       "Search your notes: day records, decisions, projects, people, reviews, memory, drafts, and whatever else kind lists. With no query, the newest. Every word must match.",
@@ -670,7 +671,7 @@ const MEMORY_TOOLS: Record<string, MemoryTool> = {
       return { ...c.data.brain(name), memory: { notes: c.data.notes(name).length, entries: c.data.entries(name).length } };
     },
   },
-};
+});
 
 // Day plans and the chat (day.ts) ------------------------------------------------------
 
@@ -704,7 +705,7 @@ const blockSchema = {
   },
 };
 
-const DAY_TOOLS: Record<string, DayTool> = {
+const DAY_TOOLS = dict<DayTool>({
   plan_read: {
     description:
       "Read a day's plan: the day as accepted (its blocks, the ranked work, what's not today), any proposal waiting for the user, and asked: what the user has said to change since your last proposal.",
@@ -745,7 +746,7 @@ const DAY_TOOLS: Record<string, DayTool> = {
     ability: "chat",
     run: (a, c) => c.data.post(c.caller.brain ?? "assistant", chatText(a.text)),
   },
-};
+});
 
 // Not to one held to a board, nor with no day object; a tool of an
 // ability, only to a brain that has it (its settings, read each call).
@@ -773,7 +774,7 @@ const SEE_TEXT = 256 * 1024;
 const SEEN_IMAGES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 const isText = (type: string) => type.startsWith("text/") || type === "application/json";
 
-const FILE_TOOLS: Record<string, FileTool> = {
+const FILE_TOOLS = dict<FileTool>({
   list_files: {
     description:
       "List the user's files: what they sent from their phone or the page, and what agents kept with keep_file, newest first. Not the files attached to cards (read_card has those). read_file reads one.",
@@ -826,7 +827,7 @@ const FILE_TOOLS: Record<string, FileTool> = {
       return filesJson<FileItem>(c.files, `/files?${q}`, { method: "PUT", body: Buffer.from(clean, "base64") });
     },
   },
-};
+});
 
 // Tools and calls ------------------------------------------------------------------------
 
@@ -909,8 +910,9 @@ async function callTool(node: Node, caller: Caller, name: string, args: any): Pr
     return FILE_TOOLS[name].run({ ...args }, { files: node.files, offers: node.fileOffers, origin, me: caller.agent }).catch((e) => {
       throw e instanceof Invalid || e instanceof ToolError ? e : new ToolError((e as Error).message);
     });
-  if (PR_TOOLS[name] && node.forge && !bound)
-    return PR_TOOLS[name].run({ ...args }, { forge: node.forge, me: caller.agent, branch: caller.branch, repo: caller.repo }).catch((e) => {
+  const pr = own(PR_TOOLS, name);
+  if (pr && node.forge && !bound)
+    return pr.run({ ...args }, { forge: node.forge, me: caller.agent, branch: caller.branch, repo: caller.repo }).catch((e) => {
       throw e instanceof ToolError ? e : new ToolError((e as Error).message);
     });
   if (DAY_TOOLS[name] && dayReaches(DAY_TOOLS[name], caller, data)) return DAY_TOOLS[name].run({ ...args }, { data, caller });
@@ -972,11 +974,11 @@ async function handle(node: Node, caller: Caller, msg: Message, memoryOnly: bool
     case "ping":
       return reply({});
     case "tools/list":
-      return reply({ tools: toolsFor(node.data, caller, BRAIN_ONLY_KINDS, memoryOnly, node.fleet, node.files, node.forge).filter((t) => (!boardOnly || !MEMORY_TOOLS[t.name]) && (!forgeOnly || !!PR_TOOLS[t.name])) });
+      return reply({ tools: toolsFor(node.data, caller, BRAIN_ONLY_KINDS, memoryOnly, node.fleet, node.files, node.forge).filter((t) => (!boardOnly || !MEMORY_TOOLS[t.name]) && (!forgeOnly || !!own(PR_TOOLS, t.name))) });
     case "tools/call":
       try {
         const name = String(params?.name);
-        if ((memoryOnly && !MEMORY_TOOLS[name]) || (boardOnly && MEMORY_TOOLS[name]) || (forgeOnly && !PR_TOOLS[name])) throw new ToolError(`unknown tool ${name}`);
+        if ((memoryOnly && !MEMORY_TOOLS[name]) || (boardOnly && MEMORY_TOOLS[name]) || (forgeOnly && !own(PR_TOOLS, name))) throw new ToolError(`unknown tool ${name}`);
         const out = await callTool(node, caller, name, { ...(params?.arguments ?? {}) });
         if (out instanceof Content) return reply({ content: out.content });
         return reply({ content: [{ type: "text", text: typeof out === "string" ? out : JSON.stringify(out, null, 2) }] });

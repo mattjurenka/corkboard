@@ -1,6 +1,7 @@
 // fleetd's scheduling: which queued spawns start, given slots, residents and
 // the memory budget.   bun test fleet/fleetd
 import { expect, test } from "bun:test";
+import { dict } from "../../lib/dict";
 import { accountFor, credentialFor, egressOf, guestOf, occupancy, OVERHEAD, schedule, type Manifest, type Network, type Spawn } from "./fleet";
 
 const slot = (n: number) => ({ guestAddress: `10.${80 + n}.0.2`, stateDir: "", shareDir: "", outboxDir: "", unit: `agent-${n}.service` });
@@ -9,13 +10,13 @@ const m = (budget: number | null): Manifest => ({
   flake: "",
   owner: "matthew",
   memoryBudget: budget,
-  slots: { "agent-0": slot(0), "agent-1": slot(1) },
+  slots: dict({ "agent-0": slot(0), "agent-1": slot(1) }),
   residents: { "brain-vm": { unit: "brain-vm.service", memory: 14336 } },
-  templates: {
+  templates: dict({
     coding: { memory: 4096, cores: 2, needsApproval: false, capNames: ["coding"] },
     big: { memory: 12288, cores: 4, needsApproval: false, capNames: [] },
-  },
-  bindings: { work: { shares: ["vault"] }, pepper: { shares: [] } },
+  }),
+  bindings: dict({ work: { shares: ["vault"] }, pepper: { shares: [] } }),
   defaultAccount: "personal",
 });
 
@@ -90,7 +91,7 @@ test("a brain this host has memory for boots with it; any other, its template's 
 });
 
 test("an agent's credential: Claude Code's token, another kind's KEY=value file, none for a job", () => {
-  const withAgy = { ...m(null), templates: { ...m(null).templates, gem: { memory: 4096, cores: 2, needsApproval: false, capNames: [], agent: "agy" } } };
+  const withAgy = { ...m(null), templates: dict({ ...m(null).templates, gem: { memory: 4096, cores: 2, needsApproval: false, capNames: [], agent: "agy" } }) };
   expect(credentialFor(m(null), spawn("coding"))).toMatchObject({ share: "claude-token" });
   expect(credentialFor(m(null), spawn("coding"))!.file).toMatch(/accounts\/personal$/);
   const g = credentialFor(withAgy, spawn("gem"))!;
@@ -102,12 +103,12 @@ test("an agent's credential: Claude Code's token, another kind's KEY=value file,
 
 test("what every slot may reach: what they all allow, open if they all are, unknown if one doesn't say", () => {
   const net = (egress: Network["egress"], allowedDomains: string[], allowedDomainSuffixes: string[] = []): Network => ({ address: null, egress, allowedDomains, allowedDomainSuffixes, routedEgress: [] });
-  const with2 = (a?: Network, b?: Network): Manifest => ({ ...m(null), slots: { "agent-0": { ...slot(0), network: a }, "agent-1": { ...slot(1), network: b } } });
+  const with2 = (a?: Network, b?: Network): Manifest => ({ ...m(null), slots: dict({ "agent-0": { ...slot(0), network: a }, "agent-1": { ...slot(1), network: b } }) });
   expect(egressOf(with2(net("allowlist", ["a.com", "b.com"], ["x.org"]), net("allowlist", ["b.com"], ["x.org"])))).toEqual({ open: false, domains: ["b.com"], suffixes: ["x.org"] });
   expect(egressOf(with2(net("open", []), net("allowlist", ["b.com"])))).toEqual({ open: false, domains: ["b.com"], suffixes: [] });
   expect(egressOf(with2(net("open", []), net("open", [])))).toEqual({ open: true, domains: [], suffixes: [] });
   expect(egressOf(with2(net("open", []), undefined))).toBeUndefined();
-  expect(egressOf({ ...m(null), slots: {} })).toBeUndefined();
+  expect(egressOf({ ...m(null), slots: dict() })).toBeUndefined();
 });
 
 test("what's up: residents while their unit is, and each slot's spawn", () => {
@@ -130,7 +131,7 @@ test("each VM's config: a resident's own, a slot's as the template it runs", () 
   const base = m(null);
   const man: Manifest = {
     ...base,
-    slots: { "agent-0": { ...slot(0), network }, "agent-1": { ...slot(1), network } },
+    slots: dict({ "agent-0": { ...slot(0), network }, "agent-1": { ...slot(1), network } }),
     residents: { "brain-vm": { unit: "brain-vm.service", memory: 14336, brain: "work", account: "work", cores: 4, capNames: ["coding"], network } },
   };
   const a = { ...spawn("coding", "running", "agent-0"), brain: "work" };

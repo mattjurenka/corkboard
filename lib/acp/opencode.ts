@@ -19,6 +19,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { McpServer, Spec } from "./client";
 import type { Model } from "../think";
+import { dict } from "../dict";
 
 // A Claude Code --mcp-config value: a file, or the JSON itself.
 export type ClaudeMcp = string;
@@ -77,7 +78,7 @@ export type OpencodeOptions = {
 };
 
 export function opencode(o: OpencodeOptions): Spec {
-  const mcp: Record<string, Entry> = {};
+  const mcp = dict<Entry>();
   for (const v of o.mcp ?? []) Object.assign(mcp, readMcp(v));
   for (const s of o.servers ?? []) {
     const [name, e] = fromAcp(s);

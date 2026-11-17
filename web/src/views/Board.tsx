@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { ViewProps } from "./index";
+import { own } from "../../../lib/dict";
 
 export type BoardCard = {
   id: string;
@@ -245,14 +246,14 @@ export function BoardCardView({
       {...handlers}
     >
       <span className="absolute -top-half left-ch bg-background px-ch whitespace-nowrap text-muted-foreground">
-        <span className={STATE_DOT[s] ?? "text-border"}>●</span>
+        <span className={own(STATE_DOT, s) ?? "text-border"}>●</span>
         {number ? ` ${number}` : ""}
-        {card.priority && <span className={PRIORITY[card.priority]}> {card.priority}</span>}
+        {card.priority && <span className={own(PRIORITY, card.priority)}> {card.priority}</span>}
       </span>
       <div className={cn(selected && focused && "font-bold", card.waiting && "text-muted-foreground")}>{card.title}</div>
       {(card.agent || card.agent_state) && (
-        <div className={STATE_AGENT[s] ?? "text-muted-foreground"}>
-          {card.agent ?? "agent"} · {STATE_LABEL[s] ?? s}
+        <div className={own(STATE_AGENT, s) ?? "text-muted-foreground"}>
+          {card.agent ?? "agent"} · {own(STATE_LABEL, s) ?? s}
         </div>
       )}
       {card.session && (
@@ -273,7 +274,7 @@ export function BoardCardView({
       {card.review && card.review.state !== "reviewing" && (
         <div className="text-muted-foreground">
           {card.review.state === "passed" ? (
-            <span className={RISK[card.review.risk ?? ""] ?? "text-muted-foreground"}>✓ {card.review.risk} risk</span>
+            <span className={own(RISK, card.review.risk ?? "") ?? "text-muted-foreground"}>✓ {card.review.risk} risk</span>
           ) : card.review.state === "failed" ? (
             <span className="text-blocked">✗ {card.review.problems?.length ?? 0} problems</span>
           ) : (

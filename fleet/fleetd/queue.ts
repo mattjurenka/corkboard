@@ -29,6 +29,7 @@ import { CLOUD, token } from "../../bridge/cloud";
 import { host, steady, type Host } from "../../bridge/host";
 import { type Git, newHolder } from "./forge";
 import { nodeFetch } from "./node";
+import { own } from "../../lib/dict";
 import { accountFor, answer, egressOf, manifest, occupancy, OVERHEAD, read, SPAWNS, spawns, write, type Manifest, type Occupancy, type Spawn, type State } from "./fleet";
 
 // This machine's name, unless told otherwise.
@@ -326,7 +327,7 @@ export class Queue {
       r.token = g.token;
       r.mcp = g.url;
       const b = await nodeApi(m, "GET", `/boards/${encodeURIComponent(spawn.board)}`);
-      const root = b.roots?.[ENVIRONMENT] ?? b.root;
+      const root = (b.roots && own(b.roots, ENVIRONMENT)) ?? b.root;
       if (typeof root === "string" && existsSync(join(root, ".git"))) s.repo = root;
       if (spawn.card && String((await nodeApi(m, "GET", cardPath(r))).attention ?? "").startsWith("approve:")) await onCard(m, r, "approved", () => ({ attention: null }));
     }

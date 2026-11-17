@@ -1,0 +1,6 @@
+# lib/harden.ts before anything else, for whatever bun runs here; an entry
+# point that runs elsewhere (compiled, a Worker, the page) imports it first.
+preload = ["./lib/harden.ts"]
+
+[test]
+preload = ["./lib/harden.ts"]

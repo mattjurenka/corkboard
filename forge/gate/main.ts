@@ -9,6 +9,7 @@
 //   GATE_CORS         origins allowed to call it from a page, comma-separated
 //   GATE_DB           where to keep bindings and revocations
 
+import "../../lib/harden";
 import { createGate } from "./gate";
 import { Store } from "./store";
 

@@ -1,3 +1,4 @@
+import "../../lib/harden";
 import "./index.css";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
@@ -8,6 +9,7 @@ import { Rpc } from "./nvim/rpc.js";
 import { EphemeralRpc, WasmRpc } from "./nvim/wasm/rpc";
 import { makeNvim, NvimContext } from "./nvim/context";
 import { NARROW, store, type Tab, type Toast } from "./store";
+import { own } from "../../lib/dict";
 import { askPermissionOnGesture, notifyAttention, notifyBack, notifyClaude, notifyMessage } from "./attention";
 import { chime } from "./chime";
 import { openPlan } from "./planWindow";
@@ -228,7 +230,7 @@ rpc.on("corkboard.plan_goals", ([state]: any[]) => store.set({ views: { ...store
 // A state without text (a markdown preview's scroll) keeps the last text.
 rpc.on("corkboard.view", ([buf, state]: any[]) => {
   const bufs = store.get().bufs;
-  store.set({ bufs: { ...bufs, [buf]: { ...bufs[buf], ...state } } });
+  store.set({ bufs: { ...bufs, [buf]: { ...own(bufs, buf), ...state } } });
 });
 // A copy to "+ or "* (Neovim's clipboard provider is this page; see clip_copy
 // in corkboard/init.lua). Loopback is a secure context, so writeText needs
@@ -271,7 +273,7 @@ rpc.on("corkboard.open", ([{ cwd }]: any[]) => {
 let pageFont: { family: string; px: number } | undefined;
 rpc.on("corkboard.theme", async ([theme]: any[]) => {
   const style = document.documentElement.style;
-  for (const name of ["focus", "selection", "accent", "working", "blocked", "review", "special"]) {
+  for (const name of ["focus", "selection", "accent", "working", "blocked", "review", "special"] as const) {
     if (theme[name]) style.setProperty(`--nv-${name}`, theme[name]);
   }
   // Either field alone changes that one; none, the page's own font again.

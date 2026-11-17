@@ -1,0 +1,5 @@
+// What the root tsconfig doesn't typecheck, for scripts/lint-keys.ts to read the types of.
+{
+  "extends": "../tsconfig.json",
+  "include": ["../bridge/*.ts", "../fleet/guest", "../fleet/caps", "../nvim", "../web/*.ts", "../wasm/*.ts", "../scripts"]
+}

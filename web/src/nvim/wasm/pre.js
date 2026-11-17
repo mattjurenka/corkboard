@@ -28,6 +28,7 @@ Module.preRun = (Module.preRun || []).concat(() => {
       const r = head[1];
       const n = Math.min(length, available());
       if (n === 0) throw new FS.ErrnoError(EAGAIN);
+      // keys: byte offsets
       for (let i = 0; i < n; i++) buffer[offset + i] = data[(r + i) & mask];
       Atomics.store(head, 1, (r + n) | 0);
       return n;

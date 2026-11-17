@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { DATA_DIR, pathKey } from "../bridge/dirs";
+import { type Dict, dict, own } from "../lib/dict";
 
 export const STATUSES = ["backlog", "ready", "doing", "review", "done"];
 export const AGENT_STATES = ["queued", "working", "blocked", "needs-review", "done"];
@@ -45,7 +46,7 @@ const TASKS = join(DIR, "tasks");
 
 // Front matter fields are strings, or string lists for LISTS. agent is the
 // first assignee: one agent per card.
-export type Card = { id: string; path: string; body: string; agent?: string; [key: string]: any };
+export type Card = Dict<any> & { id: string; path: string; body: string; agent?: string };
 
 // Quoted whenever YAML could read it as something else (a number, date,
 // boolean, list or mapping), the way Backlog.md quotes its dates.
@@ -95,7 +96,7 @@ export function parse(path: string): Card | undefined {
   try {
     front = (m && (Bun.YAML.parse(m[1]) as Record<string, unknown>)) || {};
   } catch {} // a half-edited file reads as a card with no fields
-  const card: Card = { id: "", path, body: m ? m[2] : text };
+  const card: Card = Object.assign(dict<any>(), { id: "", path, body: m ? m[2] : text });
   for (const [k, v] of Object.entries(front)) {
     const items = (Array.isArray(v) ? v : v == null ? [] : [v]).map(String);
     card[k] = LISTS.includes(k) ? items : items[0];
@@ -111,7 +112,7 @@ export function parse(path: string): Card | undefined {
 export function serialize(card: Card): string {
   const lines = ["---"];
   const seen = new Set(["path", "body", "agent"]);
-  const fields: Card = { ...card, assignee: [...(card.agent ? [card.agent] : []), ...(card.assignee ?? []).slice(1)] };
+  const fields: Card = Object.assign(dict<any>(), card, { assignee: [...(card.agent ? [card.agent] : []), ...(card.assignee ?? []).slice(1)] });
   const emit = (k: string) => {
     const v = fields[k];
     seen.add(k);
@@ -145,7 +146,7 @@ export function list(): Card[] {
     .map((n) => parse(join(TASKS, n)))
     .filter((c): c is Card => !!c);
   // High first, low last, anything else medium; then ordinal, then number.
-  const rank = (c: Card) => ({ high: 0, low: 2 })[c.priority as string] ?? 1;
+  const rank = (c: Card) => own({ high: 0, low: 2 }, String(c.priority)) ?? 1;
   const ordinal = (c: Card) =>
     c.ordinal !== undefined && c.ordinal !== "" && !isNaN(Number(c.ordinal)) ? Number(c.ordinal) : Infinity;
   return cards.sort((a, b) => rank(a) - rank(b) || ordinal(a) - ordinal(b) || number(a.id) - number(b.id));
@@ -205,7 +206,7 @@ export function create(title: string, body = "", status = "backlog", extra: Part
   return locked("new", () => {
     const n = Math.max(0, ...tasks().map((name) => number(name.split(" - ")[0])));
     const id = `TASK-${n + 1}`;
-    const card: Card = {
+    const card: Card = Object.assign(dict<any>(), {
       labels: [],
       dependencies: [],
       ...extra,
@@ -216,7 +217,7 @@ export function create(title: string, body = "", status = "backlog", extra: Part
       created_date: now(),
       updated_date: now(),
       body: sections(body, ""),
-    };
+    });
     write(card);
     return card;
   });
