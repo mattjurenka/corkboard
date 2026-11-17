@@ -20,6 +20,7 @@
 import { join } from "node:path";
 import { AcpSession, type Permission } from "../lib/acp/client";
 import { KINDS } from "../lib/acp/kinds";
+import { own } from "../lib/dict";
 import type { Model } from "../lib/think";
 import { STATE_DIR } from "./dirs";
 import { Follower } from "./transcript";
@@ -75,7 +76,7 @@ export class Acp {
     switch (op) {
       case "acp_start": {
         const o = args[1] ?? {};
-        const kind = KINDS[o.kind];
+        const kind = own(KINDS, String(o.kind));
         if (!kind) throw new Error(`corkboard acp: no agent called ${o.kind}`);
         if (typeof o.cwd !== "string") throw new Error("corkboard acp: where?");
         this.stop(buf);

@@ -25,6 +25,7 @@
 
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { hasKey, own } from "../lib/dict";
 
 const ROOT = join(import.meta.dir, "..");
 const OUT = join(ROOT, "dist", "bridge");
@@ -69,9 +70,9 @@ const wanted = (option("--target") ?? HERE).replace(/\bos\b/, OS[process.platfor
 // An OS alone is all its targets.
 const names = wanted.split(",").flatMap((n) => {
   const of = Object.keys(TARGETS).filter((k) => n === "all" || k.startsWith(`${n}-`));
-  return TARGETS[n] || !of.length ? [n] : of;
+  return hasKey(TARGETS, n) || !of.length ? [n] : of;
 });
-for (const n of names) if (!TARGETS[n]) throw new Error(`no such target: ${n} (${Object.keys(TARGETS).join(", ")})`);
+for (const n of names) if (!hasKey(TARGETS, n)) throw new Error(`no such target: ${n} (${Object.keys(TARGETS).join(", ")})`);
 
 function run(cmd: string[], cwd = ROOT) {
   const proc = Bun.spawnSync(cmd, { cwd, stdout: "inherit", stderr: "inherit" });
@@ -141,7 +142,7 @@ if (!existsSync(snacks)) {
 }
 
 for (const name of names) {
-  const t = TARGETS[name];
+  const t = own(TARGETS, name)!;
   const dir = join(OUT, name);
   const res = join(dir, "resources");
   console.log(`\n${name}: ${dir}`);

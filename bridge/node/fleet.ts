@@ -33,6 +33,7 @@ import { FLEET, environmentRecord, holdRecord, spawnRecord } from "./objects";
 import { ForgeRecords } from "./forge";
 import type { Data } from "./data";
 import type { Replicas } from "./replicas";
+import { type Dict, dict, own } from "../../lib/dict";
 
 export type Shell = { packages: string[] } | { flake: string };
 export type SealedSpawn = { id: string; task: string; shell: Shell | null; result: string | null; error: string | null; at: string };
@@ -193,7 +194,7 @@ export class FleetRecords {
     if (typeof m.environment === "string" && m.environment !== environment) throw new Invalid(`${id} is ${m.environment}'s, not ${environment}'s`);
     const template = str(m.template);
     const env = this.environments().find((e) => e.name === environment);
-    const terms = template ? ((env?.templates as Record<string, { git?: GitTerms }> | undefined)?.[template]?.git ?? null) : null;
+    const terms = template && env?.templates ? (own(env.templates as Record<string, { git?: GitTerms }>, template)?.git ?? null) : null;
     if (!terms) return;
     if (m.gitOver) throw new Invalid(`${id}'s git access is over`);
     const f = this.forge?.();
@@ -267,8 +268,8 @@ export class FleetRecords {
   }
 
   // The secrets of the holds named, those set here: a claim's.
-  secrets(names: string[]): Record<string, string> {
-    const out: Record<string, string> = {};
+  secrets(names: string[]): Dict<string> {
+    const out = dict<string>();
     for (const n of new Set(names)) {
       const v = LABEL.test(n) ? this.hold(n)?.value : null;
       if (v) out[n] = v;
@@ -363,7 +364,7 @@ export class FleetRecords {
     const moved: string[] = [];
     for (const [name, r] of Object.entries(d.records ?? {})) {
       if (!LABEL.test(name) || this.hold(name)) continue;
-      const v = d.secrets?.[name] ?? null;
+      const v = own(d.secrets ?? {}, name) ?? null;
       await this.set(holdRecord(name), { about: r.about ?? "", where: r.where ?? null, secret: v, secret_at: v === null ? null : (r.secret ?? r.updated), created: r.created, updated: r.updated, deleted: null });
       moved.push(name);
     }

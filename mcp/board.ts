@@ -6,10 +6,12 @@
 // CORKBOARD_AGENT: who this agent is; every claim and log entry carries it.
 // CORKBOARD_BOARD: see cards.ts.
 
+import "../lib/harden";
 import { createInterface } from "node:readline";
 import {
   AGENT_STATES, PRIORITIES, STATUSES, type Card, appendLog, change, create, find, list, sections, split, waitingOn,
 } from "./cards";
+import { dict } from "../lib/dict";
 
 const ME = process.env.CORKBOARD_AGENT || "claude";
 
@@ -52,7 +54,7 @@ function summary(c: Card, cards?: Card[]) {
 
 function full(c: Card) {
   const { description, log } = split(c.body ?? "");
-  const fields: Record<string, unknown> = {};
+  const fields = dict<unknown>();
   for (const [k, v] of Object.entries(c)) if (!["id", "path", "body"].includes(k)) fields[k] = v;
   return { id: c.id, ...fields, description: description.trim(), log: log.trim() };
 }
@@ -96,7 +98,7 @@ function priorityOf(v: unknown) {
 }
 const cleanList = (v: unknown) => (Array.isArray(v) ? v.map((s) => String(s).trim()).filter(Boolean) : []);
 
-const TOOLS: Record<string, Tool> = {
+const TOOLS = dict<Tool>({
   list_cards: {
     description: "List cards (without their bodies), ordered by priority (high first; none is medium), then ordinal, then id. Filters are optional and combine.",
     properties: {
@@ -291,7 +293,7 @@ const TOOLS: Record<string, Tool> = {
       return summary(change(card.id, (c) => log(c, `created from ${a.parent}`)));
     },
   },
-};
+});
 
 // budget_hold: corkboard's budget guard (corkboard/budget.lua) stopped the
 // agent on this card. Until the user answers, the agent may still read the
@@ -343,7 +345,7 @@ function handle(msg: any) {
         })),
       });
     case "tools/call": {
-      const tool = TOOLS[params?.name];
+      const tool = TOOLS[String(params?.name)];
       if (!tool) return fail(id, -32602, `unknown tool ${params?.name}`);
       try {
         held(params.name, params.arguments ?? {});

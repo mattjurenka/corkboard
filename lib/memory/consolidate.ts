@@ -232,7 +232,7 @@ export function render(transcript: string, after?: string | null): { text: strin
         if (b?.type === "text" && typeof b.text === "string" && b.text.trim()) texts.push(b.text);
         else if (b?.type === "tool_use") {
           const input = b.input ?? {};
-          const hint = ["file_path", "path", "command", "pattern", "url", "query", "skill"].map((k) => input[k]).find((v) => typeof v === "string" && v);
+          const hint = (["file_path", "path", "command", "pattern", "url", "query", "skill"] as const).map((k) => input[k]).find((v) => typeof v === "string" && v);
           texts.push(`[tool: ${b.name ?? "tool"}${hint ? ` ${String(hint).slice(0, 160)}` : ""}]`);
         }
       }

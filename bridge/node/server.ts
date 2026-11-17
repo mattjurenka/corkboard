@@ -72,6 +72,7 @@ import type { FileOffers, Files, ToFiles } from "./files";
 import type { DeviceCert, Signed } from "../../lib/e2ee/wire";
 import type { Hub, Joined } from "../hub";
 import type { Reach } from "../peers";
+import { own } from "../../lib/dict";
 
 export type NodeOptions = {
   data: Data;
@@ -386,8 +387,9 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       if (m === "DELETE") return json({ revoked: typeof b.token === "string" && o.oauth.revokeToken(b.token) });
       if (m !== "POST") return json({ error: "not found" }, 404);
       const str = (k: string) => {
-        if (typeof b[k] !== "string" || !b[k].trim()) throw new Invalid(`${k} must be a non-empty string`);
-        return b[k].trim() as string;
+        const v = own(b, k);
+        if (typeof v !== "string" || !v.trim()) throw new Invalid(`${k} must be a non-empty string`);
+        return v.trim();
       };
       if (b.scope === "brain") {
         const brain = brainOf(str("brain"));

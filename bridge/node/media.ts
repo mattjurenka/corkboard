@@ -26,6 +26,7 @@ import { random } from "../../lib/e2ee/keys";
 import { b64url } from "../../lib/e2ee/wire";
 import { type Data, type MediaItem, type StoredMedia, Invalid, now } from "./data";
 import type { Blobs } from "./handoff";
+import { own } from "../../lib/dict";
 
 export const MAX_BYTES = 100 * 1024 * 1024;
 // Inline, base64 in the tool call itself.
@@ -74,7 +75,7 @@ export function fileType(name: string, given?: unknown): string {
     if (!/^[\w.+-]+\/[\w.+-]+$/.test(t)) throw new Invalid(`${given} isn't a MIME type, like image/png`);
     return t;
   }
-  return TYPES[(name.match(/\.([^.]+)$/)?.[1] ?? "").toLowerCase()] ?? "application/octet-stream";
+  return own(TYPES, (name.match(/\.([^.]+)$/)?.[1] ?? "").toLowerCase()) ?? "application/octet-stream";
 }
 
 export function size(bytes: number) {

@@ -15,6 +15,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { hasKey, own } from "./dict";
 
 export type Model = { provider: "claude"; model?: string } | { provider: "openai"; model: string; base: string };
 
@@ -60,10 +61,10 @@ export function parseModel(s: string | null | undefined): Model {
   const provider = v.slice(0, colon);
   const rest = v.slice(colon + 1);
   if (provider === "claude") return rest ? { provider: "claude", model: rest } : { provider: "claude" };
-  if (!(provider in BASES)) throw new Error(`no provider ${provider}: claude, ${Object.keys(BASES).join(", ")}`);
+  if (!hasKey(BASES, provider)) throw new Error(`no provider ${provider}: claude, ${Object.keys(BASES).join(", ")}`);
   const at = rest.lastIndexOf("@");
   const model = at < 0 ? rest : rest.slice(0, at);
-  const base = at < 0 ? BASES[provider] : rest.slice(at + 1);
+  const base = at < 0 ? own(BASES, provider)! : rest.slice(at + 1);
   if (!model) throw new Error(`${v} names no model`);
   if (!/^https?:\/\/[^/]/.test(base)) throw new Error(`${base} isn't an http(s) URL`);
   return { provider: "openai", model, base: base.replace(/\/+$/, "") };
@@ -86,10 +87,10 @@ export function check(value: unknown, schema: Schema, path = "$"): string | null
   }
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const o = value as Record<string, unknown>;
-    for (const k of schema.required ?? []) if (!(k in o)) return `${path}.${k} is missing`;
+    for (const k of schema.required ?? []) if (!hasKey(o, k)) return `${path}.${k} is missing`;
     for (const [k, s] of Object.entries(schema.properties ?? {})) {
-      if (!(k in o)) continue;
-      const bad = check(o[k], s, `${path}.${k}`);
+      if (!hasKey(o, k)) continue;
+      const bad = check(own(o, k), s, `${path}.${k}`);
       if (bad) return bad;
     }
   }

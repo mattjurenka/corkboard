@@ -4,6 +4,8 @@
 // range of days, from today where the user is (plans.ts's today, which
 // turns over at 4am).
 
+import { own } from "../dict";
+
 export type Range = { from: string; to: string; said: string };
 
 const DAY_MS = 86_400_000;
@@ -17,7 +19,7 @@ const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "satur
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 const NUMBERS: Record<string, number> = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
 
-const count = (w: string) => NUMBERS[w] ?? Number(w);
+const count = (w: string) => own(NUMBERS, w) ?? Number(w);
 
 // The first date the question names, or null.
 export function range(question: string, today: string): Range | null {

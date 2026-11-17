@@ -14,6 +14,7 @@
 // voices/said, and a line can be made ready before it's said (Voice.warm).
 
 import { FRAME, type Timing } from "../../../bridge/kokoro-timing";
+import { type Dict, dict, own } from "../../../lib/dict";
 
 export type Viseme = "aa" | "ih" | "ou" | "ee" | "oh";
 
@@ -245,7 +246,7 @@ function recording(name: string, rate: number): Promise<Float32Array> {
 // recording if it's one.
 export type Ask = { text: string; voice: string; speed: number; mood?: Mood; recorded?: string };
 function ask(s: string, voice: string, mood?: Mood): Ask {
-  const p = PITCHED[voice];
+  const p = own(PITCHED, voice);
   return {
     text: respell(s),
     voice: p?.voice ?? voice,
@@ -268,14 +269,15 @@ export const askKey = (a: Ask) => [a.voice, a.speed, a.mood ?? "", a.text].join(
 // its rate, and its phonemes if it has them.
 // (ref is what bun run lines knows the recording it was cloned from by.)
 export type SaidAhead = { file: string; rate: number; phonemes?: string; frames?: number[]; ref?: string };
-let saidAhead: Promise<Record<string, SaidAhead>> | undefined;
+let saidAhead: Promise<Dict<SaidAhead>> | undefined;
 
 // A sentence: said ahead of time if it was, else made now, unless only
 // what was said ahead will do.
 async function made(a: Ask, bridge: Bridge | undefined, only: boolean): Promise<Synth> {
   saidAhead ??= fetch(new URL("voices/said/index.json", document.baseURI))
     .then((res) => (res.ok ? res.json() : {}))
-    .catch(() => ({}));
+    .then((said: Record<string, SaidAhead>) => dict(said))
+    .catch(() => dict<SaidAhead>());
   const s = (await saidAhead)[askKey(a)];
   if (s) {
     try {
@@ -318,7 +320,7 @@ function stretch(x: Float32Array, by: number, rate: number): Float32Array {
 
 // A line's audio; with only, from what was said ahead of time, or none.
 async function clip(text: string, voice: string, effect: Effect | undefined, mood: Mood | undefined, bridge: Bridge | undefined, failed: (why: string) => void, only = false): Promise<Clip | null> {
-  const p = PITCHED[voice];
+  const p = own(PITCHED, voice);
   // Pitched up by the effect too, each sentence made as much longer first.
   const by = effect === "ring" ? RING.pitch : 1;
   const m = mood && MOODS[mood];

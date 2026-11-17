@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import type { Nvim } from "@/nvim/context";
 import { MAC, toNvimKey, windowKey } from "@/nvim/input.js";
 import type { ViewProps } from "./index";
+import { own as owned } from "../../../lib/dict";
 
 type Option = { label?: string; description?: string };
 type Question = { header?: string; question?: string; multiSelect?: boolean; options?: Option[] };
@@ -132,9 +133,9 @@ export function Conversation({ state, win, buf, nvim }: ViewProps<State>) {
               <Tool
                 key={t.id}
                 item={t}
-                result={t.call ? results[t.call] : undefined}
-                open={!!opened[t.id]}
-                toggle={() => setOpened((o) => ({ ...o, [t.id]: !o[t.id] }))}
+                result={t.call ? owned(results, t.call) : undefined}
+                open={!!owned(opened, t.id)}
+                toggle={() => setOpened((o) => ({ ...o, [t.id]: !owned(o, t.id) }))}
               />
             ),
           )}

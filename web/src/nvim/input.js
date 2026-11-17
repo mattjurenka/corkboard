@@ -57,6 +57,7 @@ export function toNvimKey(e, any = false) {
   const digit = /^Digit(\d)$/.exec(e.code);
   if (digit && e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) return `<A-${digit[1]}>`;
   // A chord on the numpad's 0 is its own key (reset zoom, settings.lua).
+  // keys: KeyboardEvent key names, none of them Object's
   let key = SPECIAL[e.key] ?? ((e.ctrlKey || e.metaKey) && e.code === "Numpad0" ? "k0" : undefined);
   const special = key !== undefined;
   if (!special) {
@@ -88,8 +89,9 @@ export function toNvimKey(e, any = false) {
 // there (@ and brackets, on many), bar macOS's editing keys; Cmd chords go
 // by the key pressed, and only those in CMD.
 function macKey(e, any) {
-  const special = SPECIAL[e.key];
+  const special = SPECIAL[e.key]; // keys: KeyboardEvent key names
   if (!e.metaKey && !e.ctrlKey && !special) return [...e.key].length === 1 ? (e.key === "<" ? "<lt>" : e.key) : null;
+  // keys: KeyboardEvent codes, none of them Object's
   const key = special ?? ON_CODE[e.code] ?? fromCode(e.code);
   if (key == null) return null;
   const mods = [e.ctrlKey && "C", e.altKey && "A", e.metaKey && "D", e.shiftKey && "S"].filter(Boolean);
@@ -105,6 +107,7 @@ function macKey(e, any) {
 // Alt+h/j/k/l or Alt+arrow, Cmd+Option on a Mac. Null for any other key.
 export function windowKey(e) {
   if (!e.altKey || e.ctrlKey || e.metaKey !== MAC) return null;
+  // keys: KeyboardEvent key names
   const key = { ArrowLeft: "h", ArrowDown: "j", ArrowUp: "k", ArrowRight: "l" }[e.key] ?? (MAC ? fromCode(e.code) : e.key.toLowerCase());
   return key && /^[hjkl]$/.test(key) ? key : null;
 }
@@ -267,22 +270,23 @@ export function attachInput(canvas, keys, grid, rpc, wins) {
   // deltas where a wheel sends one big one a notch. Each step scrolls
   // 'mousescroll' lines (3), so the deltas are summed and a step goes in for
   // every three cells' worth; a notch, bigger than that alone, is one step.
-  const wheel = { x: 0, y: 0 };
+  const wheel = new Map([["x", 0], ["y", 0]]);
   const STEP_CELLS = 3;
   const scroll = (axis, delta, cell, neg, pos, e) => {
     if (!delta) return;
-    if (Math.sign(delta) !== Math.sign(wheel[axis])) wheel[axis] = 0;
+    if (Math.sign(delta) !== Math.sign(wheel.get(axis))) wheel.set(axis, 0);
     const step = STEP_CELLS * cell;
     if (Math.abs(delta) >= step) {
-      wheel[axis] = 0;
+      wheel.set(axis, 0);
       mouse("wheel", delta > 0 ? pos : neg, e);
       return;
     }
-    wheel[axis] += delta;
-    while (Math.abs(wheel[axis]) >= step) {
-      mouse("wheel", wheel[axis] > 0 ? pos : neg, e);
-      wheel[axis] -= Math.sign(wheel[axis]) * step;
+    let sum = wheel.get(axis) + delta;
+    while (Math.abs(sum) >= step) {
+      mouse("wheel", sum > 0 ? pos : neg, e);
+      sum -= Math.sign(sum) * step;
     }
+    wheel.set(axis, sum);
   };
   canvas.addEventListener(
     "wheel",

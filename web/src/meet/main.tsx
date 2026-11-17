@@ -5,6 +5,7 @@
 // voices/said (bun run lines), so no bridge is needed. Picked, she says her
 // intro. Models are fetched as they're picked, with how much has come.
 
+import "../../../lib/harden";
 import "./meet.css";
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";

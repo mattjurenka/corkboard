@@ -21,6 +21,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { where } from "./node/local";
+import { dict, own } from "../lib/dict";
 
 const dry = process.argv.includes("--dry");
 const [brain, vault] = process.argv.slice(2).filter((a) => a !== "--dry");
@@ -48,7 +49,8 @@ const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 // The ids are lowercase-and-dashes, at most 80 long; a longer one
 // keeps its start and a hash, so it stays the same each run.
 function idOf(path: string) {
-  if (NAMED[path]) return NAMED[path];
+  const named = own(NAMED, path);
+  if (named) return named;
   const id = path.replace(/\.md$/, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "note";
   return id.length <= 80 ? id : `${id.slice(0, 71).replace(/-+$/, "")}-${hash(path).slice(0, 8)}`;
 }
@@ -129,7 +131,7 @@ for (const file of files(vault)) {
 }
 
 if (dry) {
-  const kinds = found.reduce((m, n) => ((m[n.kind] = (m[n.kind] ?? 0) + 1), m), {} as Record<string, number>);
+  const kinds = found.reduce((m, n) => ((m[n.kind] = (m[n.kind] ?? 0) + 1), m), dict<number>());
   console.log(`${brain}: would send ${found.length} notes ${JSON.stringify(kinds)}, ${log.length} log entries on ${new Set(log.map((e) => e.day)).size} days`);
   for (const n of found) console.log(`  ${n.kind.padEnd(9)} ${n.id}  ${n.title.slice(0, 60)}`);
   for (const e of log.slice(-3)) console.log(`  entry ${e.day} ${e.at} ${e.who}: ${e.text.slice(0, 100).replace(/\n/g, " ⏎ ")}`);

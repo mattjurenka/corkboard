@@ -10,6 +10,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { Spinner } from "@/components/Spinner";
 import { cn } from "@/lib/utils";
 import type { ViewProps } from "./index";
+import { own } from "../../../lib/dict";
 
 type Spawn = {
   id: string;
@@ -170,7 +171,7 @@ export function Fleet({ state, win, focused, nvim }: ViewProps<FleetState>) {
                   )}
                 >
                   <div className="grid grid-cols-[17ch_14ch_10ch_1fr_8ch] gap-x-ch @max-[80ch]/fleet:grid-cols-[17ch_1fr]">
-                    <span className={STATE_CLASS[s.state]}>{s.state}</span>
+                    <span className={own(STATE_CLASS, s.state)}>{s.state}</span>
                     <span className="truncate @max-[80ch]/fleet:hidden">{s.template}</span>
                     <span className="truncate text-muted-foreground @max-[80ch]/fleet:hidden">{s.environment}</span>
                     <span className={cn("truncate", on && focused && "font-bold")}>{s.task}</span>
@@ -331,14 +332,14 @@ function MachineCard({ card, selected, focused, onPick }: { card: Card; selected
               )}
             >
               <div className="grid grid-cols-[2ch_1fr_auto] gap-x-ch">
-                <span className={STATE_CLASS[r.state] ?? "text-working"}>{r.state === "idle" ? "○" : "●"}</span>
+                <span className={own(STATE_CLASS, r.state) ?? "text-working"}>{r.state === "idle" ? "○" : "●"}</span>
                 <span className={cn("truncate", on && focused && "font-bold")}>{r.title}</span>
                 <span className="text-muted-foreground">{r.ago}</span>
               </div>
               <div className="grid grid-cols-[2ch_1fr] gap-x-ch text-muted-foreground">
                 <span />
                 <span className="truncate">
-                  <span className={STATE_CLASS[r.state]}>{r.state}</span>
+                  <span className={own(STATE_CLASS, r.state)}>{r.state}</span>
                   {" · "}
                   {r.where ?? [r.project, r.card].filter(Boolean).join(" · ")}
                 </span>

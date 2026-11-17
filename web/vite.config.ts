@@ -20,6 +20,7 @@ export default defineConfig({
     {
       name: "no-ort-wasm",
       generateBundle(_, bundle) {
+        // keys: the bundle's own, from Object.keys
         for (const name of Object.keys(bundle)) if (/ort-wasm.*\.wasm$/.test(name)) delete bundle[name];
       },
     },

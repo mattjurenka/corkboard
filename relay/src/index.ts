@@ -7,6 +7,7 @@
 // may have one here (a creation names it as its invite). Without it, nobody
 // can make an account.
 
+import "../../lib/harden";
 import { RelayAccounts } from "./accounts";
 import type { Log } from "./log";
 import type { Mailbox } from "./mailbox";

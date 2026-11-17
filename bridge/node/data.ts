@@ -11,6 +11,7 @@
 import { type AgentState, type Card, type Fields, type LogEntry, type Priority, type Status, Invalid, fields as checkFields } from "../../lib/model/cards";
 import { createHash } from "node:crypto";
 import { type Block, type ChatMessage, DAY_STARTS_HOUR, type Note, type NoteInput, type Plan, type Proposal, today } from "../../lib/model/plans";
+import { dict } from "../../lib/dict";
 import type { CardChange, MergedCard } from "../../lib/e2ee/merge";
 import { b64url } from "../../lib/e2ee/wire";
 import { random } from "../../lib/e2ee/keys";
@@ -110,7 +111,7 @@ export class Data {
 
   // The fields given set; null clears one.
   async putBoard(board: string, set: BoardSettings): Promise<BoardSettings> {
-    const had = this.board(board);
+    const had = dict(this.board(board));
     const changed = Object.fromEntries(Object.entries(set).filter(([k, v]) => JSON.stringify(had[k] ?? null) !== JSON.stringify(v ?? null)));
     if (Object.keys(changed).length) await this.replicas.change("board", board, { t: "card", card: BOARD_RECORD, set: changed });
     return this.board(board);

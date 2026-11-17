@@ -9,6 +9,7 @@ import { md } from "@/lib/markdown";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/store";
 import type { ViewProps } from "./index";
+import { own } from "../../../lib/dict";
 
 type Entry = { time?: string; who?: string; text: string };
 type DiffLine = [kind: "@" | "+" | "-" | " ", text: string, line: number | null];
@@ -118,7 +119,7 @@ export function Review({ state, nvim }: ViewProps<ReviewState>) {
               {state.reviewer.error ? (
                 <span className="text-blocked">✗ not reviewed</span>
               ) : (
-                state.reviewer.risk && <span className={RISK[state.reviewer.risk]}>{state.reviewer.risk} risk</span>
+                state.reviewer.risk && <span className={own(RISK, state.reviewer.risk)}>{state.reviewer.risk} risk</span>
               )}
             </H>
             <article className="markdown-body" dangerouslySetInnerHTML={md(state.reviewer.summary)} />
@@ -158,17 +159,17 @@ export function Review({ state, nvim }: ViewProps<ReviewState>) {
               <div key={f.path}>
                 <button
                   type="button"
-                  onClick={() => setOpen((o) => ({ ...o, [f.path]: !o[f.path] }))}
+                  onClick={() => setOpen((o) => ({ ...o, [f.path]: !own(o, f.path) }))}
                   className="flex w-full cursor-pointer gap-ch text-left hover:bg-accent"
                 >
-                  <span className="text-muted-foreground">{open[f.path] ? "▾" : "▸"}</span>
-                  <span className={STATUS[f.status]}>{f.status}</span>
+                  <span className="text-muted-foreground">{own(open, f.path) ? "▾" : "▸"}</span>
+                  <span className={own(STATUS, f.status)}>{f.status}</span>
                   <span className="min-w-0 flex-1 truncate">{f.path}</span>
                   <span className="tabular-nums">
                     <span className="text-working">+{f.added}</span> <span className="text-blocked">−{f.removed}</span>
                   </span>
                 </button>
-                {open[f.path] && <Diff file={f} onLine={(line) => openFile(f.path, line)} />}
+                {own(open, f.path) && <Diff file={f} onLine={(line) => openFile(f.path, line)} />}
               </div>
             ))}
           </section>

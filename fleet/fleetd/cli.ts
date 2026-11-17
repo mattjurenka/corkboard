@@ -17,6 +17,7 @@
 //   corkboard-fleet device cert [FILE] < cert.json
 //                                      keeps the cert that line printed
 
+import "../../lib/harden";
 import { accessSync, constants, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { CLOUD, token } from "../../bridge/cloud";

@@ -78,7 +78,7 @@ describe("merging", () => {
     apply(s, "o2", { v: 1, clock: 1, device: "b", change: { t: "card", card: "c", set: { title: "old", priority: "high" } } });
     apply(s, "o3", { v: 1, clock: 3, device: "b", change: { t: "log", card: "c", entry: { at: "2", who: "b", note: "second" } } });
     apply(s, "o4", { v: 1, clock: 1, device: "a", change: { t: "log", card: "c", entry: { at: "1", who: "a", note: "first" } } });
-    expect(cards(s)).toEqual([{ id: "c", title: "new", status: "doing", priority: "high", log: [{ at: "1", who: "a", note: "first" }, { at: "2", who: "b", note: "second" }] }]);
+    expect<unknown>(cards(s)).toEqual([{ id: "c", title: "new", status: "doing", priority: "high", log: [{ at: "1", who: "a", note: "first" }, { at: "2", who: "b", note: "second" }] }]);
     expect(s.clock).toBe(3);
   });
 

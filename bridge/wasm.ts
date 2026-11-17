@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { decode, decodeMultiStream, encode } from "@msgpack/msgpack";
+import { type Dict, dict, own } from "../lib/dict";
 
 // To Neovim: Lua to run there, with its arguments. Bytes go as they are
 // (the page sends them on as msgpack bin, which Neovim takes as a string).
@@ -54,7 +55,7 @@ export function snapshotRoots(dirs: string[]): string[] {
   return [...new Set(dirs.map((d) => realpathSync(d)).filter((d) => d.startsWith("/nix/store/")))];
 }
 export function snapshot(roots: string[]): Uint8Array {
-  const entries: Record<string, [number[], unknown]> = {};
+  const entries = dict<[number[], unknown]>();
   const walk = (path: string) => {
     const s = lstatSync(path);
     if (s.isSymbolicLink()) entries[path] = [stat(s), readlinkSync(path)];
@@ -74,12 +75,12 @@ export function snapshot(roots: string[]): Uint8Array {
 // from a plugin: snacks.nvim's tests alone are 18 MB.
 const RUNTIME_DIRS = new Set(["lua", "plugin", "colors", "after", "ftplugin", "ftdetect", "indent", "syntax", "autoload", "queries"]);
 export function bundle(dirs: string[]): { names: string[]; bytes: Uint8Array } {
-  const plugins: Record<string, Record<string, [number, unknown]>> = {};
+  const plugins = dict<Dict<[number, unknown]>>();
   for (const dir of dirs) {
     const root = realpathSync(dir);
     let name = root.split("/").at(-1)!;
     while (plugins[name]) name += "_";
-    const files: Record<string, [number, unknown]> = (plugins[name] = {});
+    const files = (plugins[name] = dict<[number, unknown]>());
     const walk = (rel: string) => {
       const s = lstatSync(`${root}/${rel}`);
       if (s.isSymbolicLink()) files[rel] = [s.mode, readlinkSync(`${root}/${rel}`)];
@@ -108,7 +109,7 @@ export function seeds(cwd: string, home: string, env: Record<string, string | un
   for (const p of [cwd, home, `${config}/nvim`, `${data}/nvim/site/after`, `${state}/nvim/shada`]) above(p);
   for (const d of (env.XDG_CONFIG_DIRS ?? "/etc/xdg").split(":")) above(`${d}/nvim/after`);
   for (const d of (env.XDG_DATA_DIRS ?? "/usr/local/share:/usr/share").split(":")) if (!d.startsWith("/usr/")) above(`${d}/nvim/site/after`);
-  const out: Record<string, [string | null, number[] | null]> = {};
+  const out = dict<[string | null, number[] | null]>();
   for (const p of paths) {
     try {
       out[p] = [null, stat(lstatSync(p))];
@@ -375,7 +376,7 @@ const decoder = new TextDecoder();
 const text = (b: unknown) => (b instanceof Uint8Array ? decoder.decode(b) : String(b));
 
 function spec(raw: any): Spec {
-  const env: Record<string, string> = {};
+  const env = dict<string>();
   if (raw.env) for (const [k, v] of Object.entries(raw.env)) env[k] = text(v);
   return {
     cmd: (raw.cmd as Uint8Array[]).map(text),
@@ -389,4 +390,4 @@ function spec(raw: any): Spec {
   };
 }
 
-const signalNumber = (name: string) => (constants.os?.signals as Record<string, number> | undefined)?.[name] ?? 0;
+const signalNumber = (name: string) => own((constants.os?.signals ?? {}) as Record<string, number>, name) ?? 0;

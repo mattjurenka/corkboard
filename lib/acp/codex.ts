@@ -38,6 +38,7 @@
 import type { McpServer, Spec } from "./client";
 import { fromAcp, readMcp, type ClaudeMcp } from "./opencode";
 import type { Model } from "../think";
+import { dict } from "../dict";
 
 type Entry = ReturnType<typeof readMcp>[string];
 
@@ -67,7 +68,7 @@ export type CodexOptions = {
 };
 
 export function codex(o: CodexOptions): Spec {
-  const mcp: Record<string, Entry> = {};
+  const mcp = dict<Entry>();
   for (const v of o.mcp ?? []) Object.assign(mcp, readMcp(v));
   for (const s of o.servers ?? []) {
     const [name, e] = fromAcp(s);

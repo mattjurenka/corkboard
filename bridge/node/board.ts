@@ -9,6 +9,7 @@
 // is a key taken out. A whole `extra`, as a card written before this has it,
 // is what they're laid over.
 
+import { type Dict, dict } from "../../lib/dict";
 import type { CardChange, MergedCard } from "../../lib/e2ee/merge";
 import { random } from "../../lib/e2ee/keys";
 import { CODE_ALPHABET } from "../../lib/e2ee/wire";
@@ -24,10 +25,10 @@ export const isCard = (id: string) => id !== BOARD_RECORD && !id.includes(SEP);
 const EXTRA = "extra.";
 
 // The card's extra, laid together.
-export function extraOf(m: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = m.extra && typeof m.extra === "object" && !Array.isArray(m.extra) ? { ...(m.extra as Record<string, unknown>) } : {};
+export function extraOf(m: Record<string, unknown>): Dict<unknown> {
+  const out = dict(m.extra && typeof m.extra === "object" && !Array.isArray(m.extra) ? (m.extra as Record<string, unknown>) : {});
   for (const [k, v] of Object.entries(m)) {
-    if (!k.startsWith(EXTRA) || k === EXTRA + "__proto__") continue;
+    if (!k.startsWith(EXTRA)) continue;
     if (v === null) delete out[k.slice(EXTRA.length)];
     else out[k.slice(EXTRA.length)] = v;
   }
@@ -38,10 +39,11 @@ export const isExtraField = (k: string) => k.startsWith(EXTRA);
 
 // The fields that make a card's extra `next`, from `had`: each key that
 // changed, and null for each that's gone.
-export function extraSet(had: Record<string, unknown>, next: Record<string, unknown>): Record<string, unknown> {
-  const set: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(next)) if (JSON.stringify(had[k]) !== JSON.stringify(v)) set[EXTRA + k] = v ?? null;
-  for (const k of Object.keys(had)) if (!(k in next)) set[EXTRA + k] = null;
+export function extraSet(had: Record<string, unknown>, next: Record<string, unknown>): Dict<unknown> {
+  const was = dict(had);
+  const set = dict<unknown>();
+  for (const [k, v] of Object.entries(next)) if (JSON.stringify(was[k]) !== JSON.stringify(v)) set[EXTRA + k] = v ?? null;
+  for (const k of Object.keys(had)) if (!Object.hasOwn(next, k)) set[EXTRA + k] = null;
   return set;
 }
 
@@ -76,8 +78,8 @@ export function settingsOf(cards: MergedCard[]): BoardSettings {
 export type PlainCard = { id: string; log?: { at: string; who: string; note: string }[]; [k: string]: unknown };
 export function changesFor(card: PlainCard, had: MergedCard | undefined): CardChange[] {
   const { id, log = [], version: _v, waiting_on: _w, extra, ...fields } = card;
-  const set: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(fields)) if (k !== "__proto__" && JSON.stringify(had?.[k]) !== JSON.stringify(v)) set[k] = v;
+  const set = dict<unknown>();
+  for (const [k, v] of Object.entries(fields)) if (JSON.stringify(had?.[k]) !== JSON.stringify(v)) set[k] = v;
   if (extra && typeof extra === "object" && !Array.isArray(extra)) Object.assign(set, extraSet(had ? extraOf(had) : {}, extra as Record<string, unknown>));
   const seen = new Set((had?.log ?? []).map((e) => JSON.stringify([e.at, e.who, e.note])));
   const out: CardChange[] = Object.keys(set).length ? [{ t: "card", card: id, set }] : [];

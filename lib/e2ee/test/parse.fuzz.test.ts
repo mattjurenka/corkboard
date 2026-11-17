@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test";
 import { openSealed, sealTo } from "../box";
 import { boxPair } from "../keys";
-import { type Op, apply, cards, empty, join } from "../merge";
+import { type Op, apply, cards, empty, join, stateOf } from "../merge";
 import { Tampered, open, openBlob, openRecord } from "../record";
 import { CODE_ALPHABET, b64url, canonical, fromB64url, isCert, isGrant, isRevocation, isRotation, normalizeCode, showCode } from "../wire";
 import { type Gen, fuzz } from "../../testing/fuzz";
@@ -41,7 +41,7 @@ describe("parsing, fuzzed", () => {
         const s = empty();
         for (const [id, o] of order) apply(s, id, o);
         // And as a store keeps it: JSON, and back.
-        return JSON.stringify(cards(JSON.parse(JSON.stringify(s))));
+        return JSON.stringify(cards(stateOf(JSON.parse(JSON.stringify(s)))));
       };
       const want = merged(ops);
       expect(merged(g.shuffle([...ops, ...ops.filter(() => g.bool(0.3))]))).toBe(want);
@@ -57,7 +57,7 @@ describe("parsing, fuzzed", () => {
       const state = (xs: readonly (readonly [string, Op])[]) => {
         const s = empty();
         for (const [id, o] of xs) apply(s, id, o);
-        return JSON.parse(JSON.stringify(s)) as ReturnType<typeof empty>;
+        return stateOf(JSON.parse(JSON.stringify(s)));
       };
       const [x, y] = [ops.filter(() => g.bool()), ops.filter(() => g.bool())];
       const joined = state(x);
@@ -74,13 +74,13 @@ describe("parsing, fuzzed", () => {
   );
 
   fuzz(
-    "a state as a store loads it gives no card a prototype of its own",
+    "a state as a store loads it gives no card a prototype",
     (g) => {
       const fields: Record<string, unknown> = {};
       for (let n = g.size(6); n > 0; n--) Object.defineProperty(fields, g.key(["title", "status"]), { value: { value: g.json(2, ["title", "status"]), stamp: { clock: 1, device: "a", op: "x" } }, enumerable: true, writable: true, configurable: true });
       // Through text, as a store keeps it: "__proto__" comes back an own key.
-      const state = JSON.parse(JSON.stringify({ clock: 1, cards: { c1: { fields, log: {} } } }));
-      for (const c of cards(state)) expect(Object.getPrototypeOf(c)).toBe(Object.prototype);
+      const state = stateOf(JSON.parse(JSON.stringify({ clock: 1, cards: { c1: { fields, log: {} } } })));
+      for (const c of cards(state)) expect(Object.getPrototypeOf(c)).toBeNull();
     },
     { runs: 2000 },
   );

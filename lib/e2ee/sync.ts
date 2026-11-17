@@ -19,7 +19,7 @@
 // for its epoch gets the new key (keyOf), seals the queue again under it,
 // and goes again.
 
-import { type BoardState, type CardChange, type Op, apply, cards, empty, join } from "./merge";
+import { type BoardState, type CardChange, type KeptState, type Op, apply, cards, empty, join, stateOf } from "./merge";
 import { openRecord, sealRecord } from "./record";
 import { random } from "./keys";
 import { type LogRead, type NewOp, type Snapshot, type WireOp, LIMITS, b64url, fromB64url } from "./wire";
@@ -62,7 +62,9 @@ export type Saved = { cursor: number; seq: number; epoch?: number; state: BoardS
 // keeps each card apart (SQLite) writes only those; undefined is any of
 // them (a snapshot taken). The rest of Saved is small, but for the queue,
 // which such a store matches up by op id.
-export type ReplicaStore = { load(): Promise<Saved | undefined>; save(s: Saved, changed?: ReadonlySet<string>): Promise<void> };
+// What load gives back is as kept: its state's maps plain objects.
+export type KeptSaved = Omit<Saved, "state"> & { state: KeptState };
+export type ReplicaStore = { load(): Promise<KeptSaved | undefined>; save(s: Saved, changed?: ReadonlySet<string>): Promise<void> };
 
 export const memoryStore = (): ReplicaStore & { saved?: Saved } => {
   const s: ReplicaStore & { saved?: Saved } = {
@@ -77,8 +79,8 @@ export const newOpId = () => b64url(random(16));
 // What a snapshot's record is bound to, beside its object.
 export const snapshotLabel = (epoch: number, upTo: number) => `snapshot:${epoch}:${upTo}`;
 
-function isState(s: unknown): s is BoardState {
-  const o = s as BoardState;
+function isState(s: unknown): s is KeptState {
+  const o = s as KeptState;
   return !!o && typeof o === "object" && Number.isSafeInteger(o.clock) && !!o.cards && typeof o.cards === "object" && !Array.isArray(o.cards);
 }
 
@@ -114,7 +116,8 @@ export class Replica {
 
   static async open(o: ReplicaOptions): Promise<Replica> {
     const store = o.store ?? memoryStore();
-    const s = (await store.load()) ?? { cursor: 0, seq: 0, state: empty(), outbox: [], rejected: [] };
+    const loaded = await store.load();
+    const s: Saved = loaded ? { ...loaded, state: stateOf(loaded.state) } : { cursor: 0, seq: 0, state: empty(), outbox: [], rejected: [] };
     return new Replica(o, store, s);
   }
 

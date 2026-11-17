@@ -119,6 +119,8 @@ let
       exec bun ${pkgs.runCommand "corkboard-fleet-acp" { } ''
         mkdir -p $out/lib $out/fleet/guest
         cp -r ${../../lib/acp} $out/lib/acp
+        cp ${../../lib/harden.ts} $out/lib/harden.ts
+        cp ${../../lib/dict.ts} $out/lib/dict.ts
         cp ${./acp.ts} $out/fleet/guest/acp.ts
       ''}/fleet/guest/acp.ts "$@"
     '';

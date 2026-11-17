@@ -57,6 +57,7 @@ import {
   revocationBytes,
   rotationBytes,
 } from "../../lib/e2ee/wire";
+import { dict } from "../../lib/dict";
 
 // What the routes need of the Worker serving them. ORIGIN is its own
 // origin, no trailing slash: creations and challenges name it. MEDIA holds
@@ -390,7 +391,7 @@ export async function e2ee(request: Request, env: RelayEnv, r: Accounts): Promis
     // The devices kept: a cert from the new key, and the new root sealed to it, each.
     if (!Array.isArray(certs) || !certs.length || certs.length > LIMITS.members) return error(400, `certs must be 1 to ${LIMITS.members} certificates from the new key`);
     if (!roots || typeof roots !== "object" || Array.isArray(roots)) return error(400, "roots must map each device kept to its sealed root");
-    const sealed = roots as Record<string, unknown>;
+    const sealed = dict(roots as Record<string, unknown>);
     const bundles: { cert: Signed<DeviceCert>; root: string }[] = [];
     for (const cert of certs) {
       const bad = await certProblem(cert);
