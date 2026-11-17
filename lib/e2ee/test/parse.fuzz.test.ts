@@ -74,6 +74,18 @@ describe("parsing, fuzzed", () => {
   );
 
   fuzz(
+    "a state as a store loads it gives no card a prototype of its own",
+    (g) => {
+      const fields: Record<string, unknown> = {};
+      for (let n = g.size(6); n > 0; n--) Object.defineProperty(fields, g.key(["title", "status"]), { value: { value: g.json(2, ["title", "status"]), stamp: { clock: 1, device: "a", op: "x" } }, enumerable: true, writable: true, configurable: true });
+      // Through text, as a store keeps it: "__proto__" comes back an own key.
+      const state = JSON.parse(JSON.stringify({ clock: 1, cards: { c1: { fields, log: {} } } }));
+      for (const c of cards(state)) expect(Object.getPrototypeOf(c)).toBe(Object.prototype);
+    },
+    { runs: 2000 },
+  );
+
+  fuzz(
     "validators answer true or false for any JSON",
     (g) => {
       const v = g.json(3, ["v", "account", "device", "box", "name", "issued", "role", "owner", "object", "member", "epoch", "wrapped", "at", "from", "to"]);
