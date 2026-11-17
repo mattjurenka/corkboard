@@ -18,7 +18,8 @@
     "latency": "bun bridge/latency.ts",
     "login": "bun bridge/cloud.ts login",
     "test:fleet": "bun test --isolate fleet/fleetd fleet/guest",
-    "test:e2ee": "bun test lib/e2ee bridge/keystore bridge/forge bridge/node forge"
+    "test:e2ee": "bun test lib/e2ee bridge/keystore bridge/forge bridge/node forge",
+    "fuzz": "FUZZ_RUNS=${FUZZ_RUNS:-3000} bun test --timeout 0 lib/e2ee/test/*.fuzz.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
