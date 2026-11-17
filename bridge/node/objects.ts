@@ -90,6 +90,8 @@ export const SEP = probe() ? ":" : ".";
 
 export const noteRecord = (id: string) => `note${SEP}${id}`;
 export const entryRecord = (id: string) => `entry${SEP}${id}`;
+// Something owed, by the user or an agent (.agent/plans/brain-pages.md, step 3).
+export const itemRecord = (id: string) => `item${SEP}${id}`;
 export const vectorRecord = (hash: string) => `vector${SEP}${hash}`;
 export const VECTOR_PREFIX = vectorRecord("");
 // An episode handed to the node that leads (handoff.ts).
@@ -105,11 +107,11 @@ export const environmentRecord = (name: string) => `env${SEP}${name}`;
 // so two machines of the account don't both roll up the same days.
 export const ROLLUP_RECORD = "rollup";
 
-// What a brain's record id is: its settings, a note or an entry, and whose id.
-export function recordOf(id: string): { type: "brain" | "note" | "entry"; id: string } | undefined {
+// What a brain's record id is: its settings, a note, an entry or an item, and whose id.
+export function recordOf(id: string): { type: "brain" | "note" | "entry" | "item"; id: string } | undefined {
   if (id === BRAIN_RECORD) return { type: "brain", id: "" };
   const at = id.indexOf(SEP);
   const type = id.slice(0, at);
-  if (at > 0 && (type === "note" || type === "entry")) return { type, id: id.slice(at + 1) };
+  if (at > 0 && (type === "note" || type === "entry" || type === "item")) return { type, id: id.slice(at + 1) };
   return undefined;
 }

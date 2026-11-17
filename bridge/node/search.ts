@@ -212,7 +212,8 @@ export class Search {
   // records, then what else it has learned, cut to the budget. With a
   // project (the repo the session runs in), the log is that project's of
   // the last week, after its page (project-<name>) if it has one, and of the
-  // rest of the log only today's.
+  // rest of the log only today's. Either way, the open items (the project's,
+  // or those in none) before the log.
   context(brain: string, budget: number, hidden: readonly string[] = [], days = 3, project?: string): string {
     const d = this.data.today();
     const notes = this.data.notes(brain).filter((n) => !hidden.includes(n.kind));
@@ -222,6 +223,7 @@ export class Search {
     const learned = notes.filter((n) => n.kind === "memory" && !["soul", "user", "memory"].includes(n.id) && n !== page).sort((a, b) => b.updated.localeCompare(a.updated));
     const dayNotes = [`day-${d}`, `day-${before(d, 1)}`].map((id) => notes.find((n) => n.id === id && n.kind === "day")).filter((n): n is Note => !!n);
     const log = project ? this.data.entries(brain, before(d, 6), d).filter((e) => e.project === project) : this.data.entries(brain, before(d, days - 1), d);
+    const items = this.data.items(brain, project ?? null, true);
     const elsewhere = project ? this.data.entries(brain, d).filter((e) => e.project !== project) : [];
 
     const sections: string[] = [];
@@ -236,6 +238,8 @@ export class Search {
     core.forEach((n) => add(asNote(n)));
     goals.forEach((n) => add(asNote(n)));
     if (page) add(asNote(page));
+    if (items.length)
+      add(`## Open items${project ? ` in ${project}` : ""} (items_close when one's done)\n\n${items.map((i) => `- ${i.id}, ${i.owner === "user" ? "the user's" : "an agent's"}, since ${this.data.dayOf(i.opened)}: ${i.text}`).join("\n")}\n`);
     if (log.length) add(`## Log${project ? ` of ${project}` : ""}, newest day first (day turns over at ${DAY_STARTS_HOUR}am)\n\n${logText(log, this.data.timeZone, true)}`);
     if (elsewhere.length) add(`## Log elsewhere, today\n\n${logText(elsewhere, this.data.timeZone, true, 4000)}`);
     dayNotes.forEach((n) => add(asNote(n)));

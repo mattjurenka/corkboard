@@ -32,6 +32,7 @@ export const MIN_RETAIN = 0.45;
 export const NOTHING = "NOTHING";
 export const MEMORY_FENCE = "===MEMORY===";
 export const SOUL_FENCE = "===SOUL-SUGGESTIONS===";
+export const ITEMS_FENCE = "===ITEMS===";
 
 export type Who = { name: string; title: string; description: string; timezone: string };
 
@@ -75,13 +76,25 @@ Rules:
   acted on is an open item, not a completed one. Attribute decisions to whoever made them.
 - Nest a \`**Why:**\` sub-bullet under a decision when the reasoning is not already in the line.
 - Times are in ${w.timezone}.
-- **If nothing in the session is worth keeping, output exactly \`${NOTHING}\` and nothing else.**
+- **If nothing in the session is worth keeping and no item opens or closes, output exactly
+  \`${NOTHING}\` and nothing else.**
+
+Open items: after the bullets, you may add a line \`${ITEMS_FENCE}\` and under it, one per line:
+- \`open user: <what>\` or \`open agent: <what>\`: something the session left owed, by the user or
+  by an agent: a reply to send, a change to make, a question to answer. Say it so it makes sense
+  on its own. Not ideas, not wishes; only what someone has to do.
+- \`close <id>: <how>\`: one of the open items you are given, which the session did or made moot.
+Leave the section out when nothing opens or closes. With items but no bullets, write only the
+section.
 
 ${external("transcript")}
 `;
 
-export const flushInput = (memory: string, transcript: string) =>
+export type OpenItem = { id: string; owner: string; text: string };
+
+export const flushInput = (memory: string, transcript: string, items: OpenItem[] = []) =>
   `The brain's long-term memory, for what it already knows:\n\n${memory.trim() || "(empty)"}\n\n` +
+  `The open items, which the session may close:\n\n${items.map((i) => `- ${i.id} (${i.owner}): ${i.text.replace(/\n/g, " ")}`).join("\n") || "(none)"}\n\n` +
   `The transcript:\n\n${wrap(transcript, "session transcript")}\n\nWrite the log bullets, following your instructions exactly.`;
 
 export const rollupPrompt = (w: Who) => `\
@@ -201,6 +214,23 @@ export function bullets(text: string): string[] {
     .map((g) => g.join("\n").replace(/\s+$/, "").replace(/^\n+/, ""))
     .filter((g) => g.trim() && g.trim() !== NOTHING)
     .slice(0, 20);
+}
+
+// A flush's whole answer: its bullets, and the items it opened and closed.
+// A line in the items it can't read is let go of.
+export function parseFlush(text: string): { bullets: string[]; opened: { owner: "user" | "agent"; text: string }[]; closed: { id: string; how: string }[] } {
+  const i = text.indexOf(ITEMS_FENCE);
+  const opened: { owner: "user" | "agent"; text: string }[] = [];
+  const closed: { id: string; how: string }[] = [];
+  if (i >= 0)
+    for (const line of text.slice(i + ITEMS_FENCE.length).split("\n")) {
+      const l = line.trim().replace(/^[-*] /, "").replace(/^`|`$/g, "");
+      const o = /^open (user|agent): (.+)$/i.exec(l);
+      const c = /^close ([\w-]{1,64})(?:: (.*))?$/i.exec(l);
+      if (o) opened.push({ owner: o[1].toLowerCase() as "user" | "agent", text: o[2].trim() });
+      else if (c) closed.push({ id: c[1], how: (c[2] ?? "").trim() });
+    }
+  return { bullets: bullets(i >= 0 ? text.slice(0, i).replace(/\n```[a-z]*\s*$/, "") : text), opened: opened.slice(0, 10), closed };
 }
 
 // A rollup's answer: the new memory, and any suggestions for the soul. A

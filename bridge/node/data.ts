@@ -14,7 +14,7 @@ import { type Block, type ChatMessage, DAY_STARTS_HOUR, type Note, type NoteInpu
 import type { CardChange, MergedCard } from "../../lib/e2ee/merge";
 import { b64url } from "../../lib/e2ee/wire";
 import { random } from "../../lib/e2ee/keys";
-import { BRAIN_RECORD, DAY, ROLLUP_RECORD, VECTOR_PREFIX, entryRecord, noteRecord, recordOf, vectorRecord } from "./objects";
+import { BRAIN_RECORD, DAY, ROLLUP_RECORD, VECTOR_PREFIX, entryRecord, itemRecord, noteRecord, recordOf, vectorRecord } from "./objects";
 import { CHAT_PREFIX, Conflict, type FeedDevice, type Feeds, type Meditation, type Message, PLAN_PREFIX, askKey, chatRecord, feedsOf, feedsRecord, importedMessageId, meditationOf, meditationRecord, messageOf, planOf, planRecord, versionOf } from "./day";
 import { BOARD_RECORD, type BoardSettings, MEDIA_PREFIX, extraOf, extraSet, isCard, isExtraField, leaseRecord, mediaRecord, newCardId, settingsOf } from "./board";
 import type { Replicas } from "./replicas";
@@ -37,6 +37,9 @@ function storedOf(m: MergedCard): StoredMedia | undefined {
 const itemOf = ({ card: _, blobs: __, epoch: ___, ...m }: StoredMedia): MediaItem => m;
 // project: the repo of the session it came from (episodes.ts), when it had one.
 export type Entry = { id: string; at: string; day: string; who: string; text: string; project?: string };
+// Something owed: by the user or an agent, in a project or none; by, who
+// opened it; closed and how, when someone did it, and who.
+export type Item = { id: string; owner: "user" | "agent"; text: string; opened: string; by: string; project?: string; closed?: string; how?: string; closedBy?: string };
 export type BrainSettings = { name: string; title: string; description: string; default: boolean; [k: string]: unknown };
 
 export const now = () => new Date().toISOString().replace(/\.\d+Z$/, "Z");
@@ -339,6 +342,45 @@ export class Data {
     }
     if (changes.length) await this.replicas.change("brain", brain, ...changes);
     return changes.length;
+  }
+
+  // The items, oldest first; with project, only that project's (null: those in none).
+  items(brain: string, project?: string | null, open = false): Item[] {
+    return this.records(brain)
+      .filter((x) => x.r?.type === "item" && typeof x.m.text === "string")
+      .map(({ m, r }): Item => {
+        const s = (k: string) => (typeof m[k] === "string" && m[k] ? { [k]: m[k] as string } : {});
+        return { id: r!.id, owner: m.owner === "agent" ? "agent" : "user", text: String(m.text), opened: String(m.opened ?? ""), by: String(m.by ?? ""), ...s("project"), ...s("closed"), ...s("how"), ...s("closedBy") };
+      })
+      .filter((i) => (project === undefined || (i.project ?? null) === project) && (!open || !i.closed))
+      .sort((a, b) => a.opened.localeCompare(b.opened) || a.id.localeCompare(b.id));
+  }
+
+  // Items from one source (an episode's flush), each kept once however often
+  // it's written: its id a hash of its key.
+  async openItems(brain: string, list: { at: string; by: string; owner: "user" | "agent"; text: string; key: string; project?: string }[]): Promise<Item[]> {
+    const have = new Set(this.items(brain).map((i) => i.id));
+    const ids: string[] = [];
+    const changes: CardChange[] = [];
+    for (const e of list) {
+      const id = createHash("sha256").update(e.key).digest("hex").slice(0, 8);
+      if (have.has(id)) continue;
+      have.add(id);
+      ids.push(id);
+      changes.push({ t: "card", card: itemRecord(id), set: { owner: e.owner, text: e.text.trim(), opened: e.at, by: e.by, ...(e.project ? { project: e.project } : {}) } });
+    }
+    if (changes.length) await this.replicas.change("brain", brain, ...changes);
+    const items = this.items(brain);
+    return ids.map((id) => items.find((i) => i.id === id)!);
+  }
+
+  // An item done, or made moot; closed once.
+  async closeItem(brain: string, id: string, by: string, how = "", at = now()): Promise<Item> {
+    const was = this.items(brain).find((i) => i.id === id);
+    if (!was) throw new Invalid(`no item ${id}`);
+    if (was.closed) return was;
+    await this.replicas.change("brain", brain, { t: "card", card: itemRecord(id), set: { closed: at, closedBy: by, ...(how.trim() ? { how: how.trim() } : {}) } });
+    return this.items(brain).find((i) => i.id === id)!;
   }
 
   // Entries as another store kept them, by their ids there (move.ts's

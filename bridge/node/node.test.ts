@@ -384,6 +384,12 @@ describe("the node's MCP tools, over replicas", () => {
     expect(ctx).toContain("# Memory: assistant");
     expect(ctx).toContain("phone reads boards");
 
+    const [item] = await n.data.openItems("assistant", [{ at: new Date().toISOString(), by: "x", owner: "user", text: "Rotate the key.", key: "k" }]);
+    expect((await tool("memory_context", {})).text).toContain("Rotate the key.");
+    expect((await tool("items_close", { id: "nope" })).error).toBe(true);
+    expect(JSON.parse((await tool("items_close", { id: item.id, how: "Rotated." })).text).closed).toBeTruthy();
+    expect((await tool("memory_context", {})).text).not.toContain("Rotate the key.");
+
     // The records are the plan's: note:<id> (or note.<id>, until merge.ts takes colons).
     expect(n.replicas.get("brain", "assistant")!.state.cards[noteRecord("node-rollout")]).toBeDefined();
   });
@@ -875,6 +881,38 @@ describe("the consolidator", () => {
     expect(n.episodes.meta("assistant", "consolidate_failures")).toBe("0");
     expect(n.data.entries("assistant").find((e) => e.text === "Something new.")!.project).toBe("corkboard");
     expect(n.data.entries("assistant")[0].project).toBeUndefined();
+  });
+
+  it("open items from a session, and close only its project's", async () => {
+    const entries = n.data.entries("assistant").length;
+    const flush = async (session: string, project: string, text: string) => {
+      n.episodes.add("assistant", { session, agent: "assistant", trigger: "end", transcript: said("user", `On ${session}.`), project });
+      answer = text;
+      clock += QUIET + 1;
+      await c.tick();
+    };
+    await flush("s5", "corkboard", "- Shipped the hook.\n===ITEMS===\n- open user: Reply to Winston about the audit.\nopen agent: Add tests for items.\nnot an item");
+    const opened = n.data.items("assistant", "corkboard", true);
+    expect(opened.map((i) => [i.owner, i.text, i.by])).toEqual([
+      ["user", "Reply to Winston about the audit.", "assistant"],
+      ["agent", "Add tests for items.", "assistant"],
+    ]);
+    expect(n.data.entries("assistant").length).toBe(entries + 1);
+
+    await flush("s6", "verse", `===ITEMS===\nclose ${opened[1].id}: Not this project's.`);
+    expect(asked.at(-1)!.input).not.toContain("Add tests for items.");
+    expect(n.data.items("assistant", "corkboard", true).length).toBe(2);
+
+    await flush("s7", "corkboard", `===ITEMS===\nclose ${opened[0].id}: Sent it.\nclose nope`);
+    expect(asked.at(-1)!.input).toContain(`${opened[0].id} (user): Reply to Winston`);
+    const [done] = n.data.items("assistant", "corkboard").filter((i) => i.closed);
+    expect([done.id, done.how, done.closedBy]).toEqual([opened[0].id, "Sent it.", "assistant"]);
+    expect(n.data.entries("assistant").length).toBe(entries + 1);
+
+    const ctx = n.search.context("assistant", 24_000, [], 3, "corkboard");
+    expect(ctx).toContain(`${opened[1].id}, an agent's, since`);
+    expect(ctx).not.toContain("Reply to Winston");
+    expect(n.search.context("assistant", 24_000)).not.toContain("Add tests for items.");
   });
 });
 

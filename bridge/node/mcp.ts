@@ -647,6 +647,16 @@ const MEMORY_TOOLS: Record<string, MemoryTool> = {
       return { from, to, entries: c.data.entries(c.brain, from, to) };
     },
   },
+  items_close: {
+    description: "Close an open item from your context once it's done, or no longer needed: say how.",
+    properties: { id: str("The item's id"), how: str("How it was done, or why it's moot, in a sentence") },
+    required: ["id"],
+    run: (a, c) => {
+      const id = String(a.id ?? "");
+      if (!c.data.items(c.brain).some((i) => i.id === id)) throw new ToolError(`no item ${id}`);
+      return c.data.closeItem(c.brain, id, c.caller.agent, typeof a.how === "string" ? a.how.slice(0, 1000) : "");
+    },
+  },
   memory_grep: {
     description: "Every line in your notes and log that contains this text, case ignored, newest notes first. For when you know the exact words.",
     properties: { text: str("The text to find"), limit: { type: "integer", description: "At most this many lines (default 50)" } },

@@ -13,7 +13,7 @@
 // to a day.
 
 import { type Model, parseModel, sessionEnv, think } from "../../lib/think";
-import { ATTEMPTS, DAY_CHARS, QUIET, ROLLUP_DAYS, bullets, flushInput, flushPrompt, parseRollup, render, rollupInput, rollupPrompt } from "../../lib/memory/consolidate";
+import { ATTEMPTS, DAY_CHARS, QUIET, ROLLUP_DAYS, flushInput, flushPrompt, parseFlush, parseRollup, render, rollupInput, rollupPrompt } from "../../lib/memory/consolidate";
 import type { Data } from "./data";
 import type { Episode, Episodes } from "./episodes";
 import type { Handoff } from "./handoff";
@@ -184,7 +184,7 @@ export class Consolidator {
         continue;
       }
       this.episodes.tried(brain, e.id);
-      episodes.push({ episode: e, prompt: flushPrompt(who), input: flushInput(memory?.body ?? "", text) });
+      episodes.push({ episode: e, prompt: flushPrompt(who), input: flushInput(memory?.body ?? "", text, this.data.items(brain, e.project ?? null, true)) });
     }
     if (episodes.length) return { episodes, rollup: null };
 
@@ -198,17 +198,25 @@ export class Consolidator {
   }
 
   // An episode's answer: its bullets in the log, on the day its part of the
-  // session ended, each kept once however often it's written. An episode a
+  // session ended, each kept once however often it's written, and the items
+  // it opened and closed (only its project's open ones close). An episode a
   // newer upload of its session replaced meanwhile is let be.
   async consolidated(brain: string, e: Episode, text: string): Promise<number> {
     const transcript = this.episodes.transcript(brain, e.id);
     if (transcript === undefined) return 0;
     const { through } = render(transcript, this.episodes.through(brain, e.session));
     const at = through ?? e.at;
+    const flush = parseFlush(text);
+    const open = new Set(this.data.items(brain, e.project ?? null, true).map((i) => i.id));
     const added = await this.data.addEntries(
       brain,
-      bullets(text).map((b, n) => ({ at, who: e.agent, text: b, key: `episode:${e.id}:${n}`, project: e.project })),
+      flush.bullets.map((b, n) => ({ at, who: e.agent, text: b, key: `episode:${e.id}:${n}`, project: e.project })),
     );
+    await this.data.openItems(
+      brain,
+      flush.opened.map((i, n) => ({ at, by: e.agent, owner: i.owner, text: i.text, key: `episode:${e.id}:item:${n}`, project: e.project })),
+    );
+    for (const c of flush.closed) if (open.has(c.id)) await this.data.closeItem(brain, c.id, e.agent, c.how, at);
     this.episodes.finish(brain, e.id, e.session, through);
     return added;
   }
