@@ -286,15 +286,25 @@ export class Data {
   }
 
   // Written whole; with a version, only over that one (0: only if new).
-  async putNote(brain: string, id: string, n: NoteInput, version?: number): Promise<Note> {
+  // keep: the body it replaces kept beside it (previous()), for what the
+  // consolidator rewrites; any other write lets go of it.
+  async putNote(brain: string, id: string, n: NoteInput, version?: number, keep = false): Promise<Note> {
     const was = this.note(brain, id);
     if (version !== undefined && (was?.version ?? 0) !== version) throw new Invalid(`note ${id} is at version ${was?.version ?? 0}, not ${version}`);
     if (was && was.kind === n.kind && was.title === n.title && was.body === n.body && (n.path === undefined || n.path === was.path)) return was;
     const t = now();
     const set: Record<string, unknown> = { kind: n.kind, title: n.title, body: n.body, updated: t, version: (was?.version ?? 0) + 1, ...(was ? {} : { created: t }) };
     if (n.path !== undefined) set.path = n.path;
+    if (keep) set.previous = was?.body ?? "";
+    else if (this.previous(brain, id) !== undefined) set.previous = null;
     await this.replicas.change("brain", brain, { t: "card", card: noteRecord(id), set });
     return this.note(brain, id)!;
+  }
+
+  // The body a note had before the consolidator last rewrote it.
+  previous(brain: string, id: string): string | undefined {
+    const p = this.records(brain).find((x) => x.r?.type === "note" && x.r.id === id)?.m.previous;
+    return typeof p === "string" ? p : undefined;
   }
 
   // A note as another store kept it (move.ts, from the Worker): its own

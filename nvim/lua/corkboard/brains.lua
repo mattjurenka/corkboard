@@ -456,7 +456,7 @@ end
 -- One buffer per brain, its state in mem[buf]: what the Worker gave, which
 -- line is which item, the selected one, and the last recall.
 
-local mem = {} -- buf -> { name, title, notes, days, episodes, recall, lines, selected, problem }
+local mem = {} -- buf -> { name, title, notes, days, episodes, learned, recall, lines, selected, problem }
 
 local function size(bytes)
   bytes = tonumber(bytes) or 0
@@ -479,12 +479,25 @@ local function memory_state(b)
     table.insert(by[n.kind], { key = "note:" .. n.id, id = n.id, title = n.title, ago = ago(n.updated) })
   end
   table.sort(kinds)
+  -- Today's: pages rewritten, items opened and closed.
+  local l = m.learned or {}
+  local learned = {}
+  for _, n in ipairs(list(l.pages)) do
+    table.insert(learned, { key = "page:" .. n.id, mark = n.version == 1 and "+" or "~", text = n.title, label = "v" .. tostring(n.version) })
+  end
+  local function item(i, mark)
+    local label = (i.owner == "user" and "yours" or "an agent's") .. (type(i.project) == "string" and (" · " .. i.project) or "")
+    table.insert(learned, { key = "item:" .. i.id, mark = mark, text = i.text, label = label })
+  end
+  for _, i in ipairs(list(l.opened)) do item(i, "○") end
+  for _, i in ipairs(list(l.closed)) do item(i, "●") end
   return {
     buf = b,
     name = m.name,
     title = m.title,
     notes = vim.tbl_map(function(k) return { kind = k, notes = by[k] } end, kinds),
     days = vim.tbl_map(function(d) return { key = "day:" .. d.day, day = d.day, entries = d.entries } end, m.days or {}),
+    learned = { day = l.day, items = learned },
     episodes = vim.tbl_map(function(e)
       return { key = "episode:" .. e.id, ago = ago(e.at), agent = e.agent, trigger = e.trigger, size = size(e.bytes), pending = e.consolidated == 0 or nil }
     end, m.episodes or {}),
@@ -525,6 +538,10 @@ local function render_memory(b)
     table.insert(lines, "")
   end
   if not s.loading then
+    table.insert(lines, "Learned" .. (s.learned.day and (" " .. s.learned.day) or ""))
+    if #s.learned.items == 0 then table.insert(lines, "  none") end
+    for _, x in ipairs(s.learned.items) do item(x.key, string.format("  %s %-60s %s", x.mark, x.text:gsub("\n", " "):sub(1, 60), x.label)) end
+    table.insert(lines, "")
     table.insert(lines, "Notes")
     if #s.notes == 0 then table.insert(lines, "  none") end
     for _, k in ipairs(s.notes) do
@@ -569,18 +586,19 @@ local function load_memory(b)
   local m = mem[b]
   if not m then return end
   m.loads = (m.loads or 0) + 1
-  local n, got, left, problem = m.loads, {}, 3, nil
-  for _, what in ipairs({ "notes", "days", "episodes" }) do
+  local n, got, left, problem = m.loads, {}, 4, nil
+  for _, what in ipairs({ "notes", "days", "episodes", "learned" }) do
     cloud().call_async("brains_" .. what, function(err, res)
       if mem[b] ~= m or m.loads ~= n then return end
-      if err then problem = problem or tostring(err) end
+      -- The Worker's brains have nothing learned to show.
+      if err and what ~= "learned" then problem = problem or tostring(err) end
       got[what] = res
       left = left - 1
       if left > 0 then return end
       if problem then
         m.problem = problem
       else
-        m.notes, m.days, m.episodes, m.problem = got.notes, got.days, got.episodes, nil
+        m.notes, m.days, m.episodes, m.learned, m.problem = got.notes, got.days, got.episodes, got.learned, nil
       end
       redraw_memory(b)
     end, m.name)
@@ -659,7 +677,26 @@ local function open_item(b, key)
     if h.type == "entry" then return open_day(m, h.day) end
     kind, id = "note", h.id
   end
-  if kind == "note" then
+  if kind == "page" then
+    local n = call("brains_note", m.name, id)
+    if not n then return end
+    local was, now = n.previous or "", n.body or ""
+    local function nl(s) return s:sub(-1) == "\n" and s or s .. "\n" end
+    local diff = vim.diff(nl(was), nl(now), { ctxlen = 3 })
+    local lines = { "# " .. n.title .. " · v" .. tostring(n.version), "" }
+    vim.list_extend(lines, vim.split(diff ~= "" and diff or now, "\n", { plain = true, trimempty = true }))
+    scratch("agent://brains/" .. m.name .. "/learned/" .. id, lines)
+    vim.bo.filetype = "diff"
+  elseif kind == "item" then
+    local l = m.learned or {}
+    local i = vim.iter(vim.list_extend(vim.list_extend({}, list(l.opened)), list(l.closed))):find(function(x) return x.id == id end)
+    if not i then return end
+    local lines = { "# " .. i.id, "", i.text, "", "- owed by " .. (i.owner == "user" and "you" or "an agent") }
+    if type(i.project) == "string" then table.insert(lines, "- in " .. i.project) end
+    table.insert(lines, "- opened " .. (i.opened or "") .. " by " .. (i.by or ""))
+    if type(i.closed) == "string" then table.insert(lines, "- closed " .. i.closed .. " by " .. (i.closedBy or "") .. (type(i.how) == "string" and (": " .. i.how) or "")) end
+    scratch("agent://brains/" .. m.name .. "/item/" .. id, lines)
+  elseif kind == "note" then
     local n = call("brains_note", m.name, id)
     if not n then return end
     local lines = { "# " .. n.title, "" }

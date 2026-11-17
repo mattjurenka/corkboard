@@ -450,7 +450,8 @@ export async function brains(n: StartedNode, op: string, args: any[]): Promise<u
     case "brains_note": {
       const note = data.note(brain, String(args[1]));
       if (!note || BRAIN_ONLY_KINDS.includes(note.kind)) throw new Invalid(`no note ${args[1]}`);
-      return note;
+      const previous = data.previous(brain, note.id);
+      return previous === undefined ? note : { ...note, previous };
     }
     case "brains_days": {
       const days = new Map<string, number>();
@@ -459,6 +460,21 @@ export async function brains(n: StartedNode, op: string, args: any[]): Promise<u
     }
     case "brains_entries":
       return data.entries(brain, String(args[1]));
+    case "brains_learned": {
+      // Today's: the pages and memory the consolidator rewrote, the items opened and closed.
+      const day = data.today();
+      const on = (at?: string) => !!at && data.dayOf(at) === day;
+      const items = data.items(brain);
+      return {
+        day,
+        pages: data
+          .notes(brain)
+          .filter((x) => on(x.updated) && data.previous(brain, x.id) !== undefined)
+          .map(({ body: _, ...x }) => x),
+        opened: items.filter((i) => on(i.opened)),
+        closed: items.filter((i) => on(i.closed)),
+      };
+    }
     case "brains_episodes":
       return episodes.list(brain, 50).map((e) => ({ ...e, consolidated: e.consolidated ? 1 : 0 }));
     case "brains_episode": {

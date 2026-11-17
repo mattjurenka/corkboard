@@ -252,6 +252,7 @@ type MemoryState = {
   title: string;
   notes: { kind: string; notes: (Item & { id: string; title: string; ago?: string })[] }[];
   days: (Item & { day: string; entries: number })[];
+  learned: { day?: string; items: (Item & { mark: string; text: string; label: string })[] };
   episodes: (Item & { ago?: string; agent: string; trigger: string; size: string; pending?: boolean })[];
   recall?: { query: string; hits: (Item & { title: string; kind?: string; snippet?: string; ago?: string })[] };
   selected?: string;
@@ -329,6 +330,26 @@ export function BrainMemory({ state, win, focused, nvim }: ViewProps<MemoryState
         )}
       {!state.loading && (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(40ch,1fr))] items-start gap-x-2ch gap-y-row">
+          {box(
+            "learned",
+            state.learned.items.length ? (
+              <ul>
+                {state.learned.items.map((x) =>
+                  row(
+                    x.key,
+                    <>
+                      <span className={cn("w-ch flex-none", x.mark === "○" ? "text-primary" : "text-muted-foreground")}>{x.mark}</span>
+                      <span className="min-w-0 flex-1 truncate">{x.text}</span>
+                      <span className="flex-none text-muted-foreground">{x.label}</span>
+                    </>,
+                  ),
+                )}
+              </ul>
+            ) : (
+              none
+            ),
+            state.learned.day,
+          )}
           {box(
             "notes",
             state.notes.length

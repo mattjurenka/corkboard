@@ -274,7 +274,7 @@ export class Consolidator {
     const r = parsePage(text, was?.body ?? "", new Set(ids));
     if (!r) return was;
     if ("error" in r) throw new Error(r.error);
-    return this.data.putNote(brain, id, { kind: "project", title: was?.title ?? project, body: r.page }, version);
+    return this.data.putNote(brain, id, { kind: "project", title: was?.title ?? project, body: r.page }, version, true);
   }
 
   // A rollup's answer: the long-term memory rewritten, over the version it
@@ -286,7 +286,7 @@ export class Consolidator {
     const was = this.data.note(brain, "memory");
     const r = parseRollup(text, was?.body ?? "");
     if ("error" in r) throw new Error(r.error);
-    const put = await this.data.putNote(brain, "memory", { kind: "memory", title: was?.title ?? "Long-term memory", body: r.memory }, version);
+    const put = await this.data.putNote(brain, "memory", { kind: "memory", title: was?.title ?? "Long-term memory", body: r.memory }, version, true);
     const at = new Date(this.now()).toISOString();
     await this.data.addEntries(
       brain,
