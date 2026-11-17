@@ -681,7 +681,7 @@ local function open_item(b, key)
     local n = call("brains_note", m.name, id)
     if not n then return end
     local was, now = n.previous or "", n.body or ""
-    local function nl(s) return s:sub(-1) == "\n" and s or s .. "\n" end
+    local function nl(s) return (s == "" or s:sub(-1) == "\n") and s or s .. "\n" end
     local diff = vim.diff(nl(was), nl(now), { ctxlen = 3 })
     local lines = { "# " .. n.title .. " · v" .. tostring(n.version), "" }
     vim.list_extend(lines, vim.split(diff ~= "" and diff or now, "\n", { plain = true, trimempty = true }))

@@ -27,11 +27,12 @@ import { QUIET, parsePage } from "../../lib/memory/consolidate";
 import { OAuthStore, type Shared, publicAddress, redirectAllowed, sameRedirect } from "./oauth";
 import type { CardChange } from "../../lib/e2ee/merge";
 import { node, originOf } from "./server";
+import type { StartedNode } from "./serve";
 import { Hub, joinHub } from "../hub";
 import { type Hosted, type TerminalOut, serve } from "../sessions";
 import { type PeerEvent, type Reach, Peers } from "../peers";
 import type { Fleet } from "./mcp";
-import { type DayEvent, boardEvents, boards, dayEvents, notes, plans } from "./app";
+import { type DayEvent, boardEvents, boards, brains, dayEvents, notes, plans } from "./app";
 import { LEASE_MS, sweep, touch } from "./leases";
 import { lentCalendar, startCalendar, writeAccepted } from "./calendar";
 import { type Block, type ChatMessage, type Plan, today } from "../../lib/model/plans";
@@ -451,6 +452,33 @@ describe("the app's operations, for another bridge", () => {
     expect((await as(n.oauth.mint("session", 1, "assistant"), { op: "brains_get" })).status).toBe(404);
     expect((await app(new Request(`${ORIGIN}/app`, { method: "POST" }))).status).toBe(401);
     expect(asked).toEqual([["brains_notes", ["assistant"]], ["brains_holds", []], ["board_boards", []], ["board_token", []], ["board_revoke", []]]);
+    await n.stop();
+  });
+
+  it("tells what the day learned: the consolidator's rewrites, the items opened and closed", async () => {
+    const n = await setup();
+    const op = (name: string, ...args: unknown[]) => brains(n as unknown as StartedNode, name, ["assistant", ...args]);
+    await n.data.putNote("assistant", "memory", { kind: "memory", title: "Long-term memory", body: "- old\n" });
+    await n.data.putNote("assistant", "memory", { kind: "memory", title: "Long-term memory", body: "- new\n" }, undefined, true);
+    await n.data.putNote("assistant", "project-corkboard", { kind: "project", title: "corkboard", body: "A page [e:1]\n" }, undefined, true);
+    await n.data.putNote("assistant", "scratch", { kind: "reference", title: "Scratch", body: "mine\n" });
+    const [a, b] = await n.data.openItems("assistant", [
+      { at: now(), by: "assistant", owner: "user", text: "Rebuild and switch", key: "k1", project: "corkboard" },
+      { at: now(), by: "assistant", owner: "agent", text: "Test the page", key: "k2" },
+    ]);
+    await n.data.closeItem("assistant", b.id, "assistant", "tested");
+    const learned = (await op("brains_learned")) as { day: string; pages: { id: string; body?: string }[]; opened: { id: string }[]; closed: { id: string; how?: string }[] };
+    expect(learned.day).toBe(n.data.today());
+    expect(learned.pages.map((p) => p.id).sort()).toEqual(["memory", "project-corkboard"]);
+    expect(learned.pages.every((p) => p.body === undefined)).toBe(true);
+    expect(learned.opened.map((i) => i.id).sort()).toEqual([a.id, b.id].sort());
+    expect(learned.closed).toMatchObject([{ id: b.id, how: "tested" }]);
+    expect(await op("brains_note", "memory")).toMatchObject({ body: "- new\n", previous: "- old\n" });
+    expect(await op("brains_note", "project-corkboard")).toMatchObject({ previous: "" });
+    // Anyone else's write lets go of what it was.
+    await n.data.putNote("assistant", "memory", { kind: "memory", title: "Long-term memory", body: "- mine\n" });
+    expect(await op("brains_note", "memory")).not.toHaveProperty("previous");
+    expect(((await op("brains_learned")) as { pages: { id: string }[] }).pages.map((p) => p.id)).toEqual(["project-corkboard"]);
     await n.stop();
   });
 
