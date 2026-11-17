@@ -23,7 +23,7 @@ import { Consolidator } from "./consolidator";
 import { type Blobs, Handoff } from "./handoff";
 import { Media, PIECE } from "./media";
 import { type Embed, LocalEmbedder, dequantize, pieces, quantize } from "./embed";
-import { QUIET } from "../../lib/memory/consolidate";
+import { QUIET, parsePage } from "../../lib/memory/consolidate";
 import { OAuthStore, type Shared, publicAddress, redirectAllowed, sameRedirect } from "./oauth";
 import type { CardChange } from "../../lib/e2ee/merge";
 import { node, originOf } from "./server";
@@ -367,6 +367,7 @@ describe("the node's MCP tools, over replicas", () => {
     const stale = await tool("note_write", { id: "node-rollout", kind: "project", title: "Node rollout", body: "x", version: 0 });
     expect(stale.error).toBe(true);
     expect((await tool("note_write", { id: "soul", kind: "memory", title: "Soul", body: "x" })).text).toContain("only the user");
+    expect((await tool("note_write", { id: "project-corkboard", kind: "project", title: "corkboard", body: "x" })).text).toContain("compiled from the log");
     expect((await tool("note_write", { kind: "goal", title: "Secret goal", body: "x" })).error).toBe(true);
     await tool("note_append", { id: "node-rollout", text: "Tested on the droplet." });
     await tool("memory_remember", { text: "Decided the phone reads boards from the relay directly." });
@@ -788,7 +789,7 @@ describe("the consolidator", () => {
   // due, and it's behind the real time: what the log stamps with that stays
   // on the day rolled up, and after what the clock stamps.
   let clock = Math.floor((Date.now() - 4 * 3600_000) / 86_400_000) * 86_400_000 + 4 * 3600_000 + 60_000;
-  let answer: string | Error = "";
+  let answer: string | Error | ((prompt: string, input: string) => string) = "";
   let leading = true;
   const asked: { prompt: string; input: string }[] = [];
   let c: Consolidator;
@@ -804,7 +805,7 @@ describe("the consolidator", () => {
       think: async (prompt, input) => {
         asked.push({ prompt, input });
         if (answer instanceof Error) throw answer;
-        return answer;
+        return typeof answer === "function" ? answer(prompt, input) : answer;
       },
     });
   });
@@ -913,6 +914,43 @@ describe("the consolidator", () => {
     expect(ctx).toContain(`${opened[1].id}, an agent's, since`);
     expect(ctx).not.toContain("Reply to Winston");
     expect(n.search.context("assistant", 24_000)).not.toContain("Add tests for items.");
+  });
+
+  it("compile each project's page at the rollup, citing its entries", async () => {
+    const shipped = n.data.entries("assistant").find((e) => e.text === "Shipped the hook.")!;
+    const pages: string[] = [];
+    answer = (prompt, input) => {
+      if (!prompt.includes("You compile the page")) return "===MEMORY===\n- Likes monospace, and tabs.\n- Works on corkboard.\n===SOUL-SUGGESTIONS===\nNOTHING";
+      pages.push(input);
+      return `## Where it stands\n\n- The memory hook sends the session's project. [e:${shipped.id}]\n`;
+    };
+    clock += 86_400_000;
+    await c.tick();
+    expect(pages.length).toBe(1);
+    expect(pages[0]).toContain(`[e:${shipped.id}]`);
+    expect(pages[0]).toContain("(empty: this is its first compile)");
+    const page = n.data.note("assistant", "project-corkboard")!;
+    expect([page.kind, page.title, page.version]).toEqual(["project", "corkboard", 1]);
+    expect(page.body).toContain("sends the session's project");
+    const rollup = asked.at(-1)!.input;
+    expect(rollup).toContain("assistant (corkboard): Shipped the hook.");
+    expect(rollup).toContain("The projects with a page: corkboard.");
+    expect(n.data.note("assistant", "memory")!.body).toContain("Works on corkboard.");
+    expect(n.search.context("assistant", 24_000, [], 3, "corkboard")).toContain("sends the session's project");
+  });
+});
+
+describe("a project's page, as compiled", () => {
+  const known = new Set(["a-1", "b-2"]);
+  it("take a page that cites what it was given", () => {
+    expect(parsePage("NOTHING", "", known)).toBeNull();
+    expect(parsePage("- X. [e:a-1]", "", known)).toEqual({ page: "- X. [e:a-1]\n" });
+    expect(parsePage("- X. [e:old-0] [e:b-2]", "- X. [e:old-0]", known)).toEqual({ page: "- X. [e:old-0] [e:b-2]\n" });
+  });
+  it("refuse one that cites nothing, invents an entry, or throws the page away", () => {
+    expect(parsePage("- X.", "", known)).toEqual({ error: "the page cites no entries" });
+    expect((parsePage("- X. [e:zzz]", "", known) as { error: string }).error).toContain("e:zzz");
+    expect((parsePage("- X. [e:a-1]", "y".repeat(3000), known) as { error: string }).error).toContain("thrown away");
   });
 });
 

@@ -556,6 +556,7 @@ function visible(id: string, c: MemoryCall) {
 
 function writable(id: string, c: MemoryCall) {
   if (OWNER_ONLY_NOTES.has(id) && c.caller.scope !== "owner") throw new ToolError(`only the user writes the ${id} note`);
+  if (id.startsWith("project-") && c.caller.scope !== "owner") throw new ToolError(`${id} is a project's page, compiled from the log; remember what it should say instead`);
 }
 
 const MEMORY_TOOLS: Record<string, MemoryTool> = {

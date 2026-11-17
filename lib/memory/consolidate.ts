@@ -28,6 +28,11 @@ export const DAY_CHARS = 30_000;
 export const MEMORY_TARGET = 12_000;
 export const MEMORY_MAX = 20_000;
 export const MIN_RETAIN = 0.45;
+// A project's page (.agent/plans/brain-pages.md, step 4): its target and ceiling.
+export const PAGE_TARGET = 6_000;
+export const PAGE_MAX = 10_000;
+// At most this many projects' pages compiled in a rollup.
+export const PAGES_MAX = 6;
 
 export const NOTHING = "NOTHING";
 export const MEMORY_FENCE = "===MEMORY===";
@@ -92,6 +97,37 @@ ${external("transcript")}
 
 export type OpenItem = { id: string; owner: string; text: string };
 
+export const pagePrompt = (w: Who, project: string) => `\
+${intro(w)} You compile the page of one of its projects, the repo ${project}. The page is
+loaded into every session that runs in that repo, before its first message, so it says
+what an engineer starting there would need: what the project is, where it stands now, the
+decisions that hold (with why), the traps, the conventions, and who is involved. You are
+given the page as it stands and the project's log since it was last compiled. You return
+the complete new page.
+
+You have no tools. You produce text, nothing else.
+
+Rules:
+- **Every claim cites its entries**: end each bullet or line with the ids of the log
+  entries it came from, as \`[e:<id>]\`. A claim kept from the page keeps its citations.
+  Never invent an id; a page citing an id it was not given is rejected.
+- **Newer wins.** When the log contradicts the page, keep the newer fact and move the older
+  one, a line with its date, under a final \`## History\` section. Drop history that no
+  longer helps anyone.
+- **State, not narrative.** What is true now, not the story of how it got there.
+- **Never invent.** A proposal is a proposal until the log says it was done or decided.
+- Markdown, headings as fit the project. No title line; the page has one.
+- **Target under ${PAGE_TARGET.toLocaleString("en")} characters.** Hard ceiling ${PAGE_MAX.toLocaleString("en")}.
+- Times are in ${w.timezone}.
+- **If the log adds nothing to the page, output exactly \`${NOTHING}\` and nothing else.**
+
+${external("log")}
+`;
+
+export const pageInput = (page: string, log: string) =>
+  `The page as it stands:\n\n${page.trim() || "(empty: this is its first compile)"}\n\n` +
+  `The project's log since:\n\n${wrap(log, "log")}\n\nReturn the complete new page, following your instructions exactly.`;
+
 export const flushInput = (memory: string, transcript: string, items: OpenItem[] = []) =>
   `The brain's long-term memory, for what it already knows:\n\n${memory.trim() || "(empty)"}\n\n` +
   `The open items, which the session may close:\n\n${items.map((i) => `- ${i.id} (${i.owner}): ${i.text.replace(/\n/g, " ")}`).join("\n") || "(none)"}\n\n` +
@@ -138,6 +174,14 @@ searchable; this holds what matters.
 - Times are in ${w.timezone}.
 - Prefer deleting a weak entry to keeping it. The memory earns its place by being short.
 
+## Projects
+
+A log entry may name its project, a repo, in parentheses after who wrote it. Each project
+has a page of its own, compiled from its entries and loaded into the sessions that run in
+it. Keep in the long-term memory what is the account's: the user, the people around them,
+how they work, and what crosses projects. A project's detail belongs on its page; here it
+shrinks to a line, and goes once the page has it.
+
 ## Identity changes
 
 You cannot change the brain's soul (who it is and how it behaves), and that is deliberate.
@@ -154,8 +198,9 @@ ${SOUL_FENCE}
 ${external("log")}
 `;
 
-export const rollupInput = (memory: string, log: string) =>
+export const rollupInput = (memory: string, log: string, pages: string[] = []) =>
   `The long-term memory as it stands:\n\n${MEMORY_FENCE}\n${memory.trim() || "(empty)"}\n\n` +
+  (pages.length ? `The projects with a page: ${pages.join(", ")}.\n\n` : "") +
   `And the log to reflect on:\n\n${wrap(log, "log")}\n\nRewrite the memory following your instructions exactly, and use the output format exactly.`;
 
 // A Claude Code transcript (JSONL) as the lines worth reading: what the user
@@ -231,6 +276,24 @@ export function parseFlush(text: string): { bullets: string[]; opened: { owner: 
       else if (c) closed.push({ id: c[1], how: (c[2] ?? "").trim() });
     }
   return { bullets: bullets(i >= 0 ? text.slice(0, i).replace(/\n```[a-z]*\s*$/, "") : text), opened: opened.slice(0, 10), closed };
+}
+
+// A page's answer: the new page, or null when the log added nothing. A page
+// too long, one that throws most of the old away, or one citing an entry it
+// wasn't given or the old page didn't cite, is refused.
+export function parsePage(text: string, was: string, known: Set<string>): { page: string } | { error: string } | null {
+  const page = text.trim().replace(/^```[a-z]*\n/, "").replace(/\n```$/, "").trim();
+  if (page === NOTHING) return null;
+  if (!page) return { error: "the page came back empty" };
+  if (page.length > PAGE_MAX) return { error: `the page came back at ${page.length} characters, over ${PAGE_MAX}` };
+  if (was.trim().length > 2000 && page.length < was.trim().length * MIN_RETAIN)
+    return { error: `the page came back at ${page.length} characters, from ${was.trim().length}: too much thrown away` };
+  const cited = [...page.matchAll(/\[e:([\w-]+)\]/g)].map((m) => m[1]);
+  if (!cited.length) return { error: "the page cites no entries" };
+  const had = new Set([...was.matchAll(/\[e:([\w-]+)\]/g)].map((m) => m[1]));
+  const invented = cited.find((id) => !known.has(id) && !had.has(id));
+  if (invented) return { error: `the page cites e:${invented}, which it wasn't given` };
+  return { page: page + "\n" };
 }
 
 // A rollup's answer: the new memory, and any suggestions for the soul. A

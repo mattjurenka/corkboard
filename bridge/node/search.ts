@@ -12,7 +12,7 @@
 
 import { Database } from "bun:sqlite";
 import { range } from "../../lib/model/dates";
-import { DAY_STARTS_HOUR, type Note } from "../../lib/model/plans";
+import { DAY_STARTS_HOUR, type Note, slug } from "../../lib/model/plans";
 import type { Data, Entry } from "./data";
 
 export type Hit = { type: "note" | "entry"; id: string; title: string; kind?: string; day?: string; at: string; snippet: string };
@@ -219,7 +219,7 @@ export class Search {
     const notes = this.data.notes(brain).filter((n) => !hidden.includes(n.kind));
     const core = ["soul", "user", "memory"].map((id) => notes.find((n) => n.id === id)).filter((n): n is Note => !!n);
     const goals = notes.filter((n) => n.kind === "goal").sort((a, b) => a.id.localeCompare(b.id));
-    const page = project ? notes.find((n) => n.id === `project-${project}`) : undefined;
+    const page = project ? notes.find((n) => n.id === pageId(project)) : undefined;
     const learned = notes.filter((n) => n.kind === "memory" && !["soul", "user", "memory"].includes(n.id) && n !== page).sort((a, b) => b.updated.localeCompare(a.updated));
     const dayNotes = [`day-${d}`, `day-${before(d, 1)}`].map((id) => notes.find((n) => n.id === id && n.kind === "day")).filter((n): n is Note => !!n);
     const log = project ? this.data.entries(brain, before(d, 6), d).filter((e) => e.project === project) : this.data.entries(brain, before(d, days - 1), d);
@@ -237,11 +237,12 @@ export class Search {
     const asNote = (n: Note) => `## ${n.title} (${n.id})\n\n${n.body.trim()}\n`;
     core.forEach((n) => add(asNote(n)));
     goals.forEach((n) => add(asNote(n)));
-    if (page) add(asNote(page));
+    // Not compiled for three weeks: shown as what it is.
+    if (page) add(asNote(page.updated < before(d, 21) ? { ...page, title: `${page.title}, as of ${page.updated.slice(0, 10)}; may be stale` } : page));
     if (items.length)
       add(`## Open items${project ? ` in ${project}` : ""} (items_close when one's done)\n\n${items.map((i) => `- ${i.id}, ${i.owner === "user" ? "the user's" : "an agent's"}, since ${this.data.dayOf(i.opened)}: ${i.text}`).join("\n")}\n`);
-    if (log.length) add(`## Log${project ? ` of ${project}` : ""}, newest day first (day turns over at ${DAY_STARTS_HOUR}am)\n\n${logText(log, this.data.timeZone, true)}`);
-    if (elsewhere.length) add(`## Log elsewhere, today\n\n${logText(elsewhere, this.data.timeZone, true, 4000)}`);
+    if (log.length) add(`## Log${project ? ` of ${project}` : ""}, newest day first (day turns over at ${DAY_STARTS_HOUR}am)\n\n${logText(log, this.data.timeZone, true, Infinity, !project)}`);
+    if (elsewhere.length) add(`## Log elsewhere, today\n\n${logText(elsewhere, this.data.timeZone, true, 4000, true)}`);
     dayNotes.forEach((n) => add(asNote(n)));
     learned.forEach((n) => add(asNote(n)));
     return `# Memory: ${brain}, today ${d}\n\n${sections.join("\n")}`;
@@ -249,8 +250,12 @@ export class Search {
 
 }
 
-// Entries as Markdown, a heading a day, each day cut to `cap` characters.
-export function logText(log: Entry[], timeZone: string, newestFirst: boolean, cap = Infinity) {
+// A project's page (.agent/plans/brain-pages.md): its note's id.
+export const pageId = (project: string) => `project-${slug(project)}`.slice(0, 80);
+
+// Entries as Markdown, a heading a day, each day cut to `cap` characters;
+// tagged, each with its project.
+export function logText(log: Entry[], timeZone: string, newestFirst: boolean, cap = Infinity, tagged = false) {
   const clock = new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", minute: "2-digit" });
   const byDay = new Map<string, Entry[]>();
   for (const e of log) byDay.set(e.day, [...(byDay.get(e.day) ?? []), e]);
@@ -258,7 +263,7 @@ export function logText(log: Entry[], timeZone: string, newestFirst: boolean, ca
   if (newestFirst) days.reverse();
   return days
     .map(([day, es]) => {
-      const text = es.map((e) => `- ${clock.format(new Date(e.at))} ${e.who}: ${e.text.replace(/\n/g, "\n  ")}`).join("\n");
+      const text = es.map((e) => `- ${clock.format(new Date(e.at))} ${e.who}${tagged && e.project ? ` (${e.project})` : ""}: ${e.text.replace(/\n/g, "\n  ")}`).join("\n");
       return `### ${day}\n\n${text.length > cap ? text.slice(0, cap) + "\n…(cut)" : text}\n`;
     })
     .join("\n");

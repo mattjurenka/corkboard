@@ -13,11 +13,11 @@
 // to a day.
 
 import { type Model, parseModel, sessionEnv, think } from "../../lib/think";
-import { ATTEMPTS, DAY_CHARS, QUIET, ROLLUP_DAYS, flushInput, flushPrompt, parseFlush, parseRollup, render, rollupInput, rollupPrompt } from "../../lib/memory/consolidate";
+import { ATTEMPTS, DAY_CHARS, PAGES_MAX, QUIET, ROLLUP_DAYS, flushInput, flushPrompt, pageInput, pagePrompt, parseFlush, parsePage, parseRollup, render, rollupInput, rollupPrompt } from "../../lib/memory/consolidate";
 import type { Data } from "./data";
 import type { Episode, Episodes } from "./episodes";
 import type { Handoff } from "./handoff";
-import { before, logText } from "./search";
+import { before, logText, pageId } from "./search";
 
 // A system prompt and an input, to the text that comes back, for a brain.
 export type Think = (prompt: string, input: string, brain: string) => Promise<string>;
@@ -128,7 +128,15 @@ export class Consolidator {
       const c = await this.consolidation(brain);
       for (const e of c.episodes) await this.consolidated(brain, e.episode, await this.think(e.prompt, e.input, brain));
       if (c.episodes.length) continue;
-      if (c.rollup) await this.rolledUp(brain, c.rollup.through, c.rollup.version, await this.think(c.rollup.prompt, c.rollup.input, brain));
+      if (!c.rollup) return;
+      // A page that fails is let be till the next rollup; the memory isn't.
+      for (const p of c.rollup.pages)
+        try {
+          await this.compiled(brain, p.project, p.version, p.ids, await this.think(p.prompt, p.input, brain));
+        } catch (e) {
+          console.error(`consolidate: ${brain}: page ${p.project}: ${e instanceof Error ? e.message : e}`);
+        }
+      await this.rolledUp(brain, c.rollup.through, c.rollup.version, await this.think(c.rollup.prompt, c.rollup.input(), brain));
       return;
     }
   }
@@ -191,9 +199,33 @@ export class Consolidator {
     const days = this.rollupDays(brain);
     const log = days ? this.data.entries(brain, days.from, days.through) : [];
     if (!days || !log.length || !(await this.leads())) return { episodes, rollup: null };
+    // The projects the days' log names, those with the most entries first.
+    const counts = new Map<string, number>();
+    for (const e of log) if (e.project) counts.set(e.project, (counts.get(e.project) ?? 0) + 1);
+    const pages = [...counts]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, PAGES_MAX)
+      .map(([project]) => {
+        const page = this.data.note(brain, pageId(project));
+        const theirs = log.filter((e) => e.project === project);
+        const text = theirs.map((e) => `- [e:${e.id}] ${e.day} ${e.who}: ${e.text.replace(/\n/g, "\n  ")}`).join("\n").slice(-DAY_CHARS);
+        return { project, version: page?.version ?? 0, ids: theirs.map((e) => e.id), prompt: pagePrompt(who, project), input: pageInput(page?.body ?? "", text) };
+      });
     return {
       episodes,
-      rollup: { through: days.through, version: memory?.version ?? 0, prompt: rollupPrompt(who), input: rollupInput(memory?.body ?? "", logText(log, this.data.timeZone, false, DAY_CHARS)) },
+      rollup: {
+        through: days.through,
+        version: memory?.version ?? 0,
+        pages,
+        prompt: rollupPrompt(who),
+        // After the pages, so it knows which there are.
+        input: () =>
+          rollupInput(
+            memory?.body ?? "",
+            logText(log, this.data.timeZone, false, DAY_CHARS, true),
+            this.data.notes(brain).filter((n) => n.id.startsWith("project-") && n.kind === "project").map((n) => n.id.slice("project-".length)),
+          ),
+      },
     };
   }
 
@@ -232,6 +264,17 @@ export class Consolidator {
       if (text.trim()) await this.o.handoff!.give(brain, e, transcript, was);
       this.episodes.finish(brain, e.id, e.session, through);
     }
+  }
+
+  // A page's answer: the project's page rewritten, over the version it was
+  // given; nothing, when the log added nothing to it.
+  async compiled(brain: string, project: string, version: number, ids: string[], text: string) {
+    const id = pageId(project);
+    const was = this.data.note(brain, id);
+    const r = parsePage(text, was?.body ?? "", new Set(ids));
+    if (!r) return was;
+    if ("error" in r) throw new Error(r.error);
+    return this.data.putNote(brain, id, { kind: "project", title: was?.title ?? project, body: r.page }, version);
   }
 
   // A rollup's answer: the long-term memory rewritten, over the version it
