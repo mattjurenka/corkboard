@@ -19,7 +19,7 @@
 // for its epoch gets the new key (keyOf), seals the queue again under it,
 // and goes again.
 
-import { type BoardState, type CardChange, type Op, apply, cards, empty } from "./merge";
+import { type BoardState, type CardChange, type Op, apply, cards, empty, join } from "./merge";
 import { openRecord, sealRecord } from "./record";
 import { random } from "./keys";
 import { type LogRead, type NewOp, type Snapshot, type WireOp, LIMITS, b64url, fromB64url } from "./wire";
@@ -249,7 +249,9 @@ export class Replica {
     return sent;
   }
 
-  // The state a snapshot holds, with this replica's queue on top again.
+  // The state a snapshot holds, joined to this replica's: what it has past
+  // the snapshot (its queue, and its own ops pushed since the snapshot was
+  // sealed but not read back yet) stays.
   private async takeSnapshot(snap: Snapshot): Promise<boolean> {
     if (snap.upTo <= this.s.cursor) return false;
     const key = await this.keyFor(snap.epoch);
@@ -265,11 +267,7 @@ export class Replica {
       this.s.rejected.push(snapshotLabel(snap.epoch, snap.upTo));
       return false;
     }
-    for (const n of this.s.outbox) {
-      const op = await this.openOp(n);
-      if (op) apply(state, n.id, op);
-    }
-    this.s.state = state;
+    join(this.s.state, state);
     this.dirty = undefined;
     this.s.cursor = snap.upTo;
     if (snap.epoch > this.epoch) await this.useEpoch(snap.epoch);

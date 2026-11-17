@@ -31,22 +31,27 @@ export const empty = (): BoardState => ({ cards: {}, clock: 0 });
 // A record's id: a card's, or a brain's note:<id> and entry:<id>.
 const CARD = /^[\w.:-]{1,64}$/;
 
+// Ids and field names are the writer's to choose, so only a key of the
+// object's own counts: constructor, toString and the like aren't a write.
+const own = <T>(o: Record<string, T>, k: string): T | undefined => (Object.hasOwn(o, k) ? o[k] : undefined);
+
 // Applies one op (opened, with its id); false if it's not one this
 // understands, which is skipped, not fatal: a newer client may write more.
 export function apply(state: BoardState, id: string, op: Op): boolean {
   const c = op?.change;
-  if (op?.v !== 1 || !Number.isSafeInteger(op.clock) || op.clock < 0 || typeof op.device !== "string" || !c || typeof c.card !== "string" || !CARD.test(c.card)) return false;
+  if (op?.v !== 1 || !Number.isSafeInteger(op.clock) || op.clock < 0 || typeof op.device !== "string" || !c || typeof c.card !== "string" || !CARD.test(c.card) || c.card === "__proto__" || id === "__proto__")
+    return false;
   const stamp: Stamp = { clock: op.clock, device: op.device, op: id };
   state.clock = Math.max(state.clock, op.clock);
   // Setting nothing makes no record: what a fresh log's first op is, to
   // give a snapshot a position to cover (Replica.seed).
   if (c.t === "card" && c.set && typeof c.set === "object" && !Object.keys(c.set).length) return true;
-  const card = (state.cards[c.card] ??= { fields: {}, log: {} });
+  const card = own(state.cards, c.card) ?? (state.cards[c.card] = { fields: {}, log: {} });
   if (c.t === "card") {
     if (!c.set || typeof c.set !== "object") return false;
     for (const [k, value] of Object.entries(c.set)) {
       if (k === "log" || k === "id" || k === "__proto__") continue;
-      const had = card.fields[k];
+      const had = own(card.fields, k);
       if (!had || compare(stamp, had.stamp) > 0) card.fields[k] = { value, stamp };
     }
     return true;
@@ -54,11 +59,30 @@ export function apply(state: BoardState, id: string, op: Op): boolean {
   if (c.t === "log") {
     const e = c.entry;
     if (!e || typeof e.note !== "string") return false;
-    card.log[id] ??= { stamp, entry: { at: String(e.at ?? ""), who: String(e.who ?? ""), note: e.note } };
+    if (!own(card.log, id)) card.log[id] = { stamp, entry: { at: String(e.at ?? ""), who: String(e.who ?? ""), note: e.note } };
     return true;
   }
   return false;
 }
+
+// Another replica's state merged into this one, as if its ops were applied
+// here: a snapshot, taken without losing what this replica has past it
+// (its own ops already pushed, that the snapshot came too soon for).
+export function join(into: BoardState, from: BoardState) {
+  into.clock = Math.max(into.clock, from.clock);
+  for (const [id, c] of Object.entries(from.cards)) {
+    if (!CARD.test(id) || id === "__proto__" || !c || typeof c !== "object") continue;
+    const card = own(into.cards, id) ?? (into.cards[id] = { fields: {}, log: {} });
+    for (const [k, f] of Object.entries(c.fields ?? {})) {
+      if (k === "__proto__" || !isStamp(f?.stamp)) continue;
+      const had = own(card.fields, k);
+      if (!had || compare(f.stamp, had.stamp) > 0) card.fields[k] = f;
+    }
+    for (const [op, l] of Object.entries(c.log ?? {})) if (op !== "__proto__" && isStamp(l?.stamp) && typeof l.entry?.note === "string" && !own(card.log, op)) card.log[op] = l;
+  }
+}
+
+const isStamp = (s: Stamp | undefined): s is Stamp => !!s && Number.isSafeInteger(s.clock) && typeof s.device === "string" && typeof s.op === "string";
 
 export type MergedCard = { id: string; log: LogEntry[]; [field: string]: unknown };
 

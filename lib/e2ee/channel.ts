@@ -357,7 +357,8 @@ export class Channel {
     if (!s) return;
     if (type === T.head) {
       const h = parse<Head>(payload);
-      if (!s.head || !h || !Number.isInteger(h.status) || !Array.isArray(h.headers)) return this.reset(s, "a bad answer");
+      // What a Response takes, or fetch would throw that instead, and leave the stream.
+      if (!s.head || !h || !Number.isInteger(h.status) || h.status < 200 || h.status > 599 || !headersOk(h.headers)) return this.reset(s, "a bad answer");
       s.head.ok(h);
       s.head = undefined;
     } else if (type === T.data) {
@@ -384,9 +385,10 @@ export class Channel {
     if (!h || typeof h.method !== "string" || typeof h.path !== "string" || !h.path.startsWith("/") || !Array.isArray(h.headers)) return this.reset(s, "a bad request");
     if (!this.handler) return this.reset(s, "nothing is served on this channel");
     let res: Response;
+    let req: Request | undefined;
     try {
       const hasBody = !/^(GET|HEAD)$/i.test(h.method);
-      const req = new Request(`http://channel.invalid${h.path}`, { method: h.method, headers: h.headers, ...(hasBody && { body: this.body(s), duplex: "half" }) } as RequestInit);
+      req = new Request(`http://channel.invalid${h.path}`, { method: h.method, headers: h.headers, ...(hasBody && { body: this.body(s), duplex: "half" }) } as RequestInit);
       res = await this.handler(req, this);
     } catch (e) {
       res = Response.json({ error: (e as Error).message }, { status: 500 });
@@ -394,6 +396,9 @@ export class Channel {
     if (s.dead) return void res.body?.cancel().catch(() => {});
     this.frame(T.head, s.id, utf8(JSON.stringify({ status: res.status, headers: [...res.headers] } satisfies Head)));
     await this.pump(s, h.method.toUpperCase() === "HEAD" || NULL_BODY.has(res.status) ? null : res.body);
+    // Answered, and the request's body left unread: nothing will take the
+    // rest, so the sender would wait on the window, and the stream stay, for good.
+    if (!s.dead && !s.remoteEnd && !req?.body?.locked) this.reset(s, "answered without reading the body");
   }
 
   // The other side's body, read as it comes; what's read is let in again.
@@ -408,7 +413,7 @@ export class Channel {
             c.enqueue(b as Uint8Array<ArrayBuffer>);
             s.allowed += b.length;
             if (!s.dead) this.frame(T.window, s.id, u32(b.length));
-          } else if (s.dead) c.error(s.dead);
+          } else if (s.dead && !s.remoteEnd) c.error(s.dead);
           else c.close();
         },
         cancel: () => this.reset(s, "the reader stopped"),
@@ -466,6 +471,16 @@ export class Channel {
     s.head?.fail(e);
     s.head = undefined;
     this.streams.delete(s.id);
+  }
+}
+
+function headersOk(h: unknown): boolean {
+  if (!Array.isArray(h)) return false;
+  try {
+    new Headers(h as [string, string][]);
+    return true;
+  } catch {
+    return false;
   }
 }
 
