@@ -210,7 +210,7 @@ export async function speech(req: Request): Promise<Response> {
       headers["x-phonemes"] = encodeURIComponent(phonemes);
       headers["x-frames"] = frames.join(",");
     }
-    return new Response(audio, { headers });
+    return new Response(audio as Float32Array<ArrayBuffer>, { headers });
   } catch (err) {
     return new Response(`speech: ${err instanceof Error ? err.message : err}`, { status: 503 });
   }

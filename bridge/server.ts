@@ -600,7 +600,7 @@ function snapshotFile(req: Request, url: URL): Response {
   if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
   if (url.pathname !== `/host/snapshot/${SNAPSHOT_KEY}` || !SNAPSHOT_ROOTS.length) return new Response("not found", { status: 404 });
   snapshotBytes ??= wasm.snapshot(SNAPSHOT_ROOTS);
-  return new Response(snapshotBytes, { headers: { ...ISOLATED, "content-type": "application/msgpack", "cache-control": IMMUTABLE } });
+  return new Response(snapshotBytes as Uint8Array<ArrayBuffer>, { headers: { ...ISOLATED, "content-type": "application/msgpack", "cache-control": IMMUTABLE } });
 }
 
 // For a page with no machine (?wasm=ephemeral, web/src/nvim/wasm/machine):
@@ -619,7 +619,7 @@ function wasmManifest(req: Request): Response {
 function wasmPlugins(req: Request, url: URL): Response {
   if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
   if (!bundled || url.pathname !== `/wasm/plugins/${bundled.key}`) return new Response("not found", { status: 404 });
-  return new Response(bundled.bytes, { headers: { ...ISOLATED, "content-type": "application/msgpack", "cache-control": IMMUTABLE } });
+  return new Response(bundled.bytes as Uint8Array<ArrayBuffer>, { headers: { ...ISOLATED, "content-type": "application/msgpack", "cache-control": IMMUTABLE } });
 }
 
 // /api/git/: the account's repositories on its forge (node/git.ts), on
@@ -709,7 +709,7 @@ async function hostCall(req: Request, url: URL): Promise<Response> {
   if (!host) return new Response("no such page", { status: 404 });
   const body = new Uint8Array(await req.arrayBuffer());
   const out = url.pathname === "/host/fs" ? host.fs(body) : await host.lua(body);
-  return new Response(out, { headers: { "content-type": "application/msgpack" } });
+  return new Response(out as Uint8Array<ArrayBuffer>, { headers: { "content-type": "application/msgpack" } });
 }
 
 // /latency: a page's key-to-pixels timings (web/src/latency.ts), one line
@@ -767,7 +767,7 @@ async function files(req: Request, url: URL): Promise<Response> {
   return new Response(res.body, { status: res.status, headers });
 }
 
-Bun.serve<Session, {}>({
+Bun.serve<Session>({
   hostname: HOST,
   port: PORT,
   // A file for the leader (/files) is up to 1 GB.

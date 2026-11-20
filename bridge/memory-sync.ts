@@ -150,23 +150,23 @@ const api = (path: string, init: RequestInit = {}) => fetch(`${base}${path}`, { 
 
 let changed = 0;
 for (const n of found) {
-  const before = await (await api(`/notes/${n.id}`)).json<any>().catch(() => ({}));
+  const before = await (await api(`/notes/${n.id}`)).json().catch(() => ({}));
   // The long-term memory is the consolidator's once it has one: the vault's
   // MEMORY.md only starts it, or each run puts the old one back over the rollup.
   if (n.id === "memory" && before.version) continue;
   const res = await api(`/notes/${n.id}`, { method: "PUT", body: JSON.stringify({ kind: n.kind, title: n.title, body: n.body, path: n.path }) });
   if (!res.ok) throw new Error(`${n.path}: ${res.status} ${await res.text()}`);
-  if ((await res.json<any>()).version !== before.version) changed++;
+  if ((await res.json()).version !== before.version) changed++;
 }
 
 let added = 0;
 for (let i = 0; i < log.length; i += 500) {
   const res = await api("/entries", { method: "POST", body: JSON.stringify({ entries: log.slice(i, i + 500) }) });
   if (!res.ok) throw new Error(`entries: ${res.status} ${await res.text()}`);
-  added += (await res.json<any>()).added;
+  added += (await res.json()).added;
 }
 
 const ids = new Set(found.map((n) => n.id));
-const gone = (await (await api("/notes?limit=200")).json<any[]>()).map((n) => n.id).filter((id) => !ids.has(id));
+const gone = ((await (await api("/notes?limit=200")).json()) as { id: string }[]).map((n) => n.id).filter((id) => !ids.has(id));
 console.log(`${brain}: ${found.length} notes (${changed} changed${skipped ? `, ${skipped} skipped` : ""}), ${log.length} log entries (${added} new)`);
 if (gone.length) console.log(`in the memory but not the vault: ${gone.join(", ")}`);

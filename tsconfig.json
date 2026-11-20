@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
@@ -12,5 +12,5 @@
     "types": ["bun", "vite/client"],
     "paths": { "@/*": ["./web/src/*"] }
   },
-  "include": ["web/src", "web/vite.config.ts", "mcp", "fleet/fleetd", "lib", "bridge/node", "forge"]
+  "include": ["web/src", "web/vite.config.ts", "mcp", "fleet/fleetd", "fleet/guest", "fleet/caps", "lib", "bridge", "forge", "nvim/*.ts", "nvim/hooks"]
 }

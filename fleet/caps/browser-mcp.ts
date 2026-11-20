@@ -233,13 +233,13 @@ if (import.meta.main) {
   }) as typeof process.stdout.write;
 
   await connect();
-  let queue: Promise<void> = Promise.resolve();
+  let queue: Promise<unknown> = Promise.resolve();
   createInterface({ input: process.stdin }).on("line", (line) => {
     if (!line.trim()) return;
     const m: Message = JSON.parse(line);
     if (m.method === "tools/list" && m.id !== undefined) listing.add(m.id);
     queue = queue.then(() => handle(m)).catch((e) => process.stderr.write(`${e}\n`));
   }).on("close", () => {
-    void context?.close().finally(() => process.exit(0)) ?? process.exit(0);
+    void (context?.close().finally(() => process.exit(0)) ?? process.exit(0));
   });
 }

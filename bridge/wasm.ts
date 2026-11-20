@@ -13,9 +13,9 @@
 // the RPC calls from Claude Code's hooks, which dial $NVIM: here, a socket
 // per page that stands in for Neovim's own server.
 
-import { closeSync, constants, fstatSync, readFileSync, realpathSync, ftruncateSync, futimesSync, lstatSync, mkdirSync, openSync, readdirSync, readlinkSync, readSync, renameSync, rmdirSync, statfsSync, symlinkSync, truncateSync, unlinkSync, utimesSync, chmodSync, writeFileSync, writeSync, fchmodSync, watch, type FSWatcher, type Stats, rmSync } from "node:fs";
+import { closeSync, fstatSync, readFileSync, realpathSync, ftruncateSync, futimesSync, lstatSync, mkdirSync, openSync, readdirSync, readlinkSync, readSync, renameSync, rmdirSync, statfsSync, symlinkSync, truncateSync, unlinkSync, utimesSync, chmodSync, writeFileSync, writeSync, fchmodSync, watch, type FSWatcher, type Stats, rmSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
-import { tmpdir } from "node:os";
+import { constants as os, tmpdir } from "node:os";
 import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { decode, decodeMultiStream, encode } from "@msgpack/msgpack";
@@ -390,4 +390,5 @@ function spec(raw: any): Spec {
   };
 }
 
-const signalNumber = (name: string) => own((constants.os?.signals ?? {}) as Record<string, number>, name) ?? 0;
+// Bun names the signal; the wire wants its number.
+const signalNumber = (s: NodeJS.Signals | number) => typeof s === "number" ? s : own(os.signals as Record<string, number>, s) ?? 0;
