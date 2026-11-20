@@ -96,6 +96,13 @@ export function sandbox(opts: { repo?: boolean; forge?: boolean } = {}): Sandbox
     return p;
   };
 
+  // The agents' commands, as ones that do nothing: what the plugin would
+  // start is never the real one on the machine. A test stubs its own.
+  for (const name of ["claude", "codex-acp", "opencode", "agy"]) {
+    writeFileSync(join(bin, name), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(bin, name), 0o755);
+  }
+
   let server: ReturnType<typeof Bun.spawn> | undefined;
   let remote = origin;
   if (opts.repo !== false) {
