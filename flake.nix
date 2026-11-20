@@ -83,6 +83,8 @@
         '';
       in {
         fleet = import ./fleet/tests.nix { inherit pkgs; inherit (pkgs) lib; };
+        # host.nix on a sample host, evaluated (fleet/host/tests.nix).
+        fleet-host = import ./fleet/host/tests.nix { inherit pkgs; inherit (pkgs) lib; inherit (nixpkgs.lib) nixosSystem; fleetHost = self.nixosModules.fleetHost; };
         fleet-package = imports p.fleet [ "fleet/fleetd/fleetd.ts" "fleet/fleetd/cli.ts" ];
         forge-gate-package = imports p.forge-gate [ "forge/gate/main.ts" ];
       } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {

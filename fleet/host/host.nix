@@ -1414,6 +1414,16 @@ in
         '';
       }
       {
+        # The resolver is services.dnsmasq, of which there is one: it
+        # answers the first such instance only, and a second would find
+        # port 53 open on its gateway and nothing there.
+        assertion = lib.length (lib.attrNames routed) <= 1;
+        message = ''
+          my.agentVms: routedEgress on more than one instance (${lib.concatStringsSep ", " (lib.attrNames routed)}).
+          The gateway's resolver is one dnsmasq, for one of them.
+        '';
+      }
+      {
         # Half a hole is worse than none: a destination set with no ports
         # (or ports with no destinations) silently generates no rule at
         # all, and the guest looks blocked for no visible reason.
@@ -1483,16 +1493,18 @@ in
     #
     # The resolver, for an instance with a routed exception, needs the same
     # treatment and for the same reason: our table accepts 53, NixOS's
-    # firewall would still drop it.
+    # firewall would still drop it. And so does a slot's forge (forgeHole),
+    # open or allowlisted.
     networking.firewall.interfaces = lib.mapAttrs'
       (name: inst:
         let vm = plans.${name}; in
         lib.nameValuePair vm.interface {
-          allowedTCPPorts = [ vm.proxyPort ]
+          allowedTCPPorts = lib.optional (inst.egress == "allowlist") vm.proxyPort
+            ++ lib.optional inst.slot vm.forgePort
             ++ lib.optional (inst.routedEgress != [ ]) 53;
           allowedUDPPorts = lib.optional (inst.routedEgress != [ ]) 53;
         })
-      allowlisted;
+      (lib.filterAttrs (_: inst: inst.egress == "allowlist" || inst.slot) active);
 
     # The proxies' own user; their units are in systemd.services below.
     users.users.tinyproxy = lib.mkIf (allowlisted != { }) {
