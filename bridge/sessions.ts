@@ -225,7 +225,8 @@ function core(environment: string, source: Source) {
   };
 }
 
-export function serve(id: string, environment: string, source: Source) {
+// worker: the Worker's origin and a token for it (cloud.ts's), or a test's.
+export function serve(id: string, environment: string, source: Source, worker: { cloud: string; token(): Promise<string> } = { cloud: CLOUD, token }) {
   const connect = core(environment, source);
   source.hub?.({ id, machine: hostname(), url: PAGE ?? null, environment }, (send) => connect(send, true));
 
@@ -248,7 +249,7 @@ export function serve(id: string, environment: string, source: Source) {
   };
   const lookUp = async () => {
     try {
-      const res = await fetch(`${CLOUD}/api/sessions`, { headers: { Authorization: `Bearer ${await token()}` } });
+      const res = await fetch(`${worker.cloud}/api/sessions`, { headers: { Authorization: `Bearer ${await worker.token()}` } });
       if (!res.ok) return;
       peers.clear();
       for (const b of (await res.json()) as unknown[]) peer(b);
@@ -261,8 +262,8 @@ export function serve(id: string, environment: string, source: Source) {
   let retry = 1000;
   const follow = async () => {
     try {
-      const url = `${CLOUD.replace(/^http/, "ws")}/api/live?bridge=${encodeURIComponent(id)}&machine=${encodeURIComponent(hostname())}${PAGE ? `&url=${encodeURIComponent(PAGE)}` : ""}`;
-      const ws = new WebSocket(url, { headers: { Authorization: `Bearer ${await token()}` } } as any);
+      const url = `${worker.cloud.replace(/^http/, "ws")}/api/live?bridge=${encodeURIComponent(id)}&machine=${encodeURIComponent(hostname())}${PAGE ? `&url=${encodeURIComponent(PAGE)}` : ""}`;
+      const ws = new WebSocket(url, { headers: { Authorization: `Bearer ${await worker.token()}` } } as any);
       const ping = setInterval(() => ws.readyState === WebSocket.OPEN && ws.send("ping"), 30_000);
       let link: Link | undefined;
       ws.onopen = () => {

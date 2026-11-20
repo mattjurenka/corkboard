@@ -120,3 +120,7 @@ export const toolText = async (res: Response) => {
   const j = (await res.json()) as { result: { content: { text: string }[]; isError?: boolean } };
   return { error: !!j.result.isError, text: j.result.content[0].text };
 };
+
+// For sessions.ts's serve in a test: no Worker to follow, rather than the
+// account's real one with this machine's token.
+export const NO_WORKER = { cloud: "http://127.0.0.1:9", token: () => Promise.reject(new Error("no Worker in a test")) };

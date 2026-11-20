@@ -37,7 +37,7 @@ import { LEASE_MS, sweep, touch } from "./leases";
 import { lentCalendar, startCalendar, writeAccepted } from "./calendar";
 import { type Block, type ChatMessage, type Plan, today } from "../../lib/model/plans";
 import type { BoardEvent } from "../../lib/model/cards";
-import { ORIGIN, as, challenge, dirs, form, memoryBlobs, relay, rpc, setup, toolText, verifier } from "./testing";
+import { NO_WORKER, ORIGIN, as, challenge, dirs, form, memoryBlobs, relay, rpc, setup, toolText, verifier } from "./testing";
 
 describe("the node's OAuth", () => {
   let n: Awaited<ReturnType<typeof setup>>;
@@ -2075,7 +2075,7 @@ describe("the machine's sessions, on a channel", () => {
       screen: async (key) => (key === "1-2" ? { lines: ["$ hi"], width: 80 } : { error: "no such", missing: true }),
       terminals: (t) => ((to = t), { open: (s, k) => term.push(["open", k]), input: (s, d) => (term.push(["in", d]), to!.out(s, "echo")), size: (s, r, c) => void term.push(["size", r, c]), close: () => void term.push(["close"]) }),
       hub: joinHub(hub),
-    });
+    }, NO_WORKER);
     const keys = accountKeys(newRoot());
     const id = (name: string, role?: "relay"): Identity => {
       const d = newDevice();
@@ -2168,7 +2168,7 @@ describe("the machine's sessions, on a channel", () => {
         say: async (key, text) => (term.push(["say", key, text]), { ok: true }),
         terminals: (t) => ((to = t), { open: (st) => (term.push(["open"]), to.out(st, "hi")), input: (st, d) => void term.push(["in", d]), size: () => {}, close: () => void term.push(["close"]) }),
         hub: joinHub(hub),
-      });
+      }, NO_WORKER);
       return b;
     };
     const [mine, theirs] = [new Hub(), new Hub()];
