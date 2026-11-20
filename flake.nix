@@ -71,8 +71,20 @@
         ];
       };
 
-      checks = forAll (pkgs: {
+      checks = forAll (pkgs: let
+        p = self.packages.${pkgs.stdenv.hostPlatform.system};
+        # A package laid out by hand has every file its entry points import:
+        # bun bundles them from where it installed them, and fails on one missing.
+        imports = pkg: entries: pkgs.runCommand "${pkg.pname}-imports" { nativeBuildInputs = [ pkgs.bun ]; } ''
+          export HOME=$TMPDIR
+          cd ${pkg}/share/${pkg.pname}
+          bun build --target=bun --outdir $TMPDIR/out ${pkgs.lib.concatStringsSep " " entries}
+          touch $out
+        '';
+      in {
         fleet = import ./fleet/tests.nix { inherit pkgs; inherit (pkgs) lib; };
+        fleet-package = imports p.fleet [ "fleet/fleetd/fleetd.ts" "fleet/fleetd/cli.ts" ];
+        forge-gate-package = imports p.forge-gate [ "forge/gate/main.ts" ];
       } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
         # One account on three nodes in VMs, through a relay in a fourth.
         multi-node = import ./nix/tests/multi-node.nix { inherit pkgs; corkboard = self.packages.${pkgs.stdenv.hostPlatform.system}.default; src = ./.; };
@@ -251,7 +263,7 @@
           version = "0.1.0";
           src = pkgs.lib.fileset.toSource {
             root = ./.;
-            fileset = pkgs.lib.fileset.unions [ ./fleet/fleetd/fleet.ts ./fleet/fleetd/fleetd.ts ./fleet/fleetd/cli.ts ./fleet/fleetd/queue.ts ./fleet/fleetd/sessions.ts ./bridge/cloud.ts ./bridge/dirs.ts ./bridge/host.ts ./bridge/sessions.ts ./bridge/transcript.ts ./fleet/fleetd/assistant.ts ./fleet/fleetd/node.ts ./fleet/fleetd/forge.ts ./fleet/fleetd/actions.ts ./bridge/hub.ts ./bridge/keystore.ts ./bridge/replicadb.ts ./lib/e2ee ];
+            fileset = pkgs.lib.fileset.unions [ ./fleet/fleetd/fleet.ts ./fleet/fleetd/fleetd.ts ./fleet/fleetd/cli.ts ./fleet/fleetd/queue.ts ./fleet/fleetd/sessions.ts ./bridge/cloud.ts ./bridge/dirs.ts ./bridge/host.ts ./bridge/sessions.ts ./bridge/transcript.ts ./fleet/fleetd/assistant.ts ./fleet/fleetd/node.ts ./fleet/fleetd/forge.ts ./fleet/fleetd/actions.ts ./bridge/hub.ts ./bridge/keystore.ts ./bridge/replicadb.ts ./lib/e2ee ./lib/harden.ts ./lib/dict.ts ];
           };
           # The channel's cryptography (lib/e2ee), as the bridge has it.
           crypto = [ "@noble/ciphers" "@noble/curves" "@noble/hashes" ];
@@ -261,7 +273,7 @@
             mkdir -p $share/fleet/fleetd $share/bridge $share/lib
             cp fleet/fleetd/*.ts $share/fleet/fleetd/
             cp bridge/cloud.ts bridge/dirs.ts bridge/host.ts bridge/hub.ts bridge/keystore.ts bridge/replicadb.ts bridge/sessions.ts bridge/transcript.ts $share/bridge/
-            cp -r lib/e2ee $share/lib/
+            cp -r lib/e2ee lib/harden.ts lib/dict.ts $share/lib/
             for p in $crypto; do
               mkdir -p $share/node_modules/$(dirname $p)
               cp -r ${webDeps}/$p $share/node_modules/$p
@@ -281,7 +293,7 @@
           version = "0.1.0";
           src = pkgs.lib.fileset.toSource {
             root = ./.;
-            fileset = pkgs.lib.fileset.unions [ ./forge/gate/gate.ts ./forge/gate/main.ts ./forge/gate/proxy.ts ./forge/gate/push.ts ./forge/gate/routes.ts ./forge/gate/ssh.ts ./forge/gate/store.ts ./lib/e2ee ];
+            fileset = pkgs.lib.fileset.unions [ ./forge/gate/gate.ts ./forge/gate/main.ts ./forge/gate/proxy.ts ./forge/gate/push.ts ./forge/gate/routes.ts ./forge/gate/ssh.ts ./forge/gate/store.ts ./lib/e2ee ./lib/harden.ts ./lib/dict.ts ];
           };
           crypto = [ "@noble/ciphers" "@noble/curves" "@noble/hashes" ];
           nativeBuildInputs = [ pkgs.makeWrapper ];
@@ -289,7 +301,7 @@
             share=$out/share/corkboard-forge-gate
             mkdir -p $share/forge/gate $share/lib
             cp forge/gate/*.ts $share/forge/gate/
-            cp -r lib/e2ee $share/lib/
+            cp -r lib/e2ee lib/harden.ts lib/dict.ts $share/lib/
             for p in $crypto; do
               mkdir -p $share/node_modules/$(dirname $p)
               cp -r ${webDeps}/$p $share/node_modules/$p
