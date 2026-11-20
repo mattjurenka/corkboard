@@ -1667,6 +1667,9 @@ describe("the fleet sealed, on the node", () => {
     const got = await (await local("/api/node/brains/work/session")).json();
     expect(got.model).toBe("z-ai/glm-4.6");
     expect(got.env).toMatchObject({ ANTHROPIC_BASE_URL: "https://openrouter.ai/api", ANTHROPIC_AUTH_TOKEN: "sk-or-9", CLAUDE_CODE_OAUTH_TOKEN: "" });
+    // Its model and key as they are, for a slot's ACP agent.
+    expect(await (await local("/api/node/brains/work/model")).json()).toEqual({ model: { provider: "openai", model: "z-ai/glm-4.6", base: "https://openrouter.ai/api/v1" }, key: "sk-or-9" });
+    expect((await n.call("/api/node/brains/work/model", { headers: owner() })).status).toBe(404);
     expect((await n.call("/api/node/brains/work/session", { headers: owner() })).status).toBe(404);
     const agent = n.oauth.mint("pepper", 1, "assistant", "assistant");
     expect((await n.app(new Request(`${ORIGIN}/api/node/brains/work/session`, { headers: { Authorization: `Bearer ${agent}` } }), { requestIP: () => ({ address: "127.0.0.1" }) })).status).not.toBe(200);

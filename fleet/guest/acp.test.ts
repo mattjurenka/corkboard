@@ -50,6 +50,8 @@ for await (const c of Bun.stdin.stream()) {
 `,
 );
 KINDS.fake = () => ({ command: ["bun", AGENT] });
+// Made with the brain's model: its key as KEY.
+KINDS.brainy = (o) => ({ command: ["bun", AGENT], env: o.key ? { KEY: `${o.model?.provider === "openai" ? o.model.model : "?"}:${o.key}` } : ({} as Record<string, string>) });
 
 beforeEach(() => {
   rmSync(SHARE, { recursive: true, force: true });
@@ -84,6 +86,16 @@ describe("fleet acp", () => {
     expect(await main(["fake", "task"])).toBe(0);
     expect(result()).toEqual({ result: "got the task yes k1", stop_reason: "end_turn", is_error: false });
     expect(readdirSync(join(OUT, "projects", "acp"))).toEqual(["ses_1.jsonl"]);
+  });
+
+  test("a brain's model.json makes the kind, over the credential", async () => {
+    writeFileSync(join(SHARE, "task.md"), "the task");
+    writeFileSync(join(SHARE, "brainy-credential"), "KEY=k1\n");
+    expect(await main(["brainy", "task"])).toBe(0);
+    expect(result().result).toBe("got the task yes k1");
+    writeFileSync(join(SHARE, "model.json"), JSON.stringify({ model: { provider: "openai", model: "glm", base: "https://openrouter.ai/api/v1" }, key: "sk-or" }));
+    expect(await main(["brainy", "task"])).toBe(0);
+    expect(result().result).toBe("got the task yes glm:sk-or");
   });
 
   test("a session", async () => {

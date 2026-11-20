@@ -206,6 +206,42 @@ test("an Actions job needs the manifest's Actions, and holds no account's token"
   }
 });
 
+test("an ACP agent on a brain gets the brain's model from the node, Claude Code none; one the node won't give fails the spawn", async () => {
+  let refused = false;
+  const asked: string[] = [];
+  const node = Bun.serve({
+    port: 0,
+    fetch(req) {
+      const p = new URL(req.url).pathname;
+      asked.push(p);
+      if (req.headers.get("authorization") !== "Bearer nodeowner") return Response.json({ error: "who?" }, { status: 401 });
+      if (p === "/api/node/brains/work/model" && !refused) return Response.json({ model: "openrouter/qwen", key: "sk-or-9" });
+      return Response.json({ error: "no such brain" }, { status: 404 });
+    },
+  });
+  writeFileSync(join(dir, "node-token"), "nodeowner\n");
+  writeFileSync(join(fleet.ACCOUNTS, "personal.agy"), "GEMINI_API_KEY=g\n");
+  writeFileSync(process.env.CORKBOARD_FLEET_MANIFEST!, JSON.stringify({ ...manifest, node: { url: `http://localhost:${node.port}`, tokenFile: join(dir, "node-token") } }));
+  try {
+    const a = queue({ template: "gemini", brain: "work" }), b = queue({ brain: "work" });
+    await fleetd.tick();
+    expect([fleet.read(a.id)!.state, fleet.read(b.id)!.state]).toEqual(["running", "running"]);
+    expect(JSON.parse(share("agent-0", "model.json"))).toEqual({ model: "openrouter/qwen", key: "sk-or-9" });
+    expect(mode(join(slots["agent-0"].shareDir, "model.json"))).toBe(0o600);
+    expect(readdirSync(slots["agent-1"].shareDir)).not.toContain("model.json");
+    expect(asked).toEqual(["/api/node/brains/work/model"]);
+
+    refused = true;
+    finish("agent-0", { exit: "0" });
+    const c = queue({ template: "gemini", brain: "work" });
+    await fleetd.tick();
+    expect(fleet.read(c.id)).toMatchObject({ state: "failed", error: expect.stringContaining("the node: GET /brains/work/model: no such brain") });
+  } finally {
+    writeFileSync(process.env.CORKBOARD_FLEET_MANIFEST!, JSON.stringify(manifest));
+    node.stop(true);
+  }
+});
+
 test("a unit that won't start fails its spawn, and a spawn of no template here fails without a slot", async () => {
   refuse = true;
   const a = queue(), b = queue({ template: "nope" });

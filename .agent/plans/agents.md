@@ -345,8 +345,11 @@ think({ system, input, schema?, model?, tools?: [] }): Promise<{ text: string; j
    Decided: Claude Code stays on stream-json in the slot rather than claude-code-acp, which
    would lose its hooks: the context handoff and the brain's memory hooks are Claude Code's
    alone, and an ACP kind's task is one session with no handoff. The VM user stays `claude`.
-   A brain's model for an ACP kind in a slot (stage 3's route) isn't wired: the credential is
-   the account's.
+   A brain's model for an ACP kind in a slot (stage 3's route), since 2026-11-20: fleetd asks
+   the node's `GET /api/node/brains/<brain>/model` (owner only, sealed) and writes
+   `share/model.json` (0600), and fleet-acp makes the kind with its model and key, as the
+   bridge does, the kind's env over the credential's. A node that won't give it fails the
+   spawn rather than run it on the account's model.
    Booted 2026-11-12: `t@slot` guests from mkFleet on the flake's locked nixpkgs, QEMU user
    networking in place of the tap, the host's endpoints at 10.0.2.2. opencode 2.0.32 on a
    scripted OpenAI-compatible endpoint (its credential `OPENCODE_CONFIG` naming a provider) ran
@@ -356,7 +359,7 @@ think({ system, input, schema?, model?, tools?: [] }): Promise<{ text: string; j
    Found: with no model given, Codex asks the gateway for its own default (`gpt-6.1-sol`), and
    sends that model's `additional_tools` input, which anything but OpenAI refuses; the test
    gave `CODEX_CONFIG` in the credential, which replaces corkboard's prompt and MCP servers.
-   So a non-OpenAI gateway in a slot needs the model wiring above. Found: codex-acp hands a
+   So a non-OpenAI gateway in a slot needs the brain's model, wired above. Found: codex-acp hands a
    provider's error back as the agent's words and ends the turn `end_turn`, so `result.json`
    read `is_error: false` with the error JSON as its result. Fixed 2026-11-20: initialize asks
    for JetBrains AIR's `sessionFailure`, whose `severity: "error"` in the prompt's result

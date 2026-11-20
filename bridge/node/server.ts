@@ -30,6 +30,7 @@
 //     POST  brains/:name/entries       { entries: [{ day, at, who, text, key }] }: a log written elsewhere
 //                                      (memory-sync.ts's vault), each kept once: { added }
 //     POST  brains/:name/remember      { text, who? }
+//     GET   brains/:name/model         { model, key? }: fleetd's, for a slot's ACP agent; the owner's, sealed
 //     GET   plans/:date                the day plan (day.ts)
 //     POST  plans/:date/:change        say { text }, accept, discard or day { blocks, version?,
 //                                      proposal? } (owner); a stale one is 409 with { error, plan }
@@ -62,7 +63,7 @@ import { Conflict, type Data, Invalid } from "./data";
 import { type Caller, type Consent, OAuthError, type OAuthStore, Redirect, SCOPES, boardBound, deniedUrl } from "./oauth";
 import { type Fleet, mcp } from "./mcp";
 import { gitViews } from "./git";
-import { brainSession } from "./consolidator";
+import { brainModel, brainSession } from "./consolidator";
 import { Conflict as HoldConflict, type FleetRecords, SPAWN_ID } from "./fleet";
 import type { Search } from "./search";
 import type { CalendarConfig } from "./calendar";
@@ -417,10 +418,12 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       const brain = brainOf(name);
       // A session on its model, its key in it: fleetd's, for a VM's
       // (assistant.ts), so only the owner's, sealed.
-      if (sub === "session" && !id && m === "GET") {
+      // Its model and key, as they are: fleetd's, for a slot's ACP agent
+      // (fleet/guest/acp.ts), the same way.
+      if ((sub === "session" || sub === "model") && !id && m === "GET") {
         if (who.scope !== "owner" || !sealed) return json({ error: "not found" }, 404);
         try {
-          return json(brainSession(data.brains().find((b) => b.name === brain), (hold) => o.sealed?.secrets([hold])[hold]));
+          return json((sub === "session" ? brainSession : brainModel)(data.brains().find((b) => b.name === brain), (hold) => o.sealed?.secrets([hold])[hold]));
         } catch (e) {
           throw new Invalid(`${brain}: ${(e as Error).message}`);
         }

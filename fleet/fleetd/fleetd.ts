@@ -11,7 +11,9 @@
 // (queue.ts) also gets corkboard's MCP server with its spawn token (the
 // node's /mcp, for a board the node keeps), and is told which card is its
 // own; a brain's, the brain's token, which the guest's memory hooks send
-// (fleet/memory-hooks.nix), and the node's address when it's the node's.
+// (fleet/memory-hooks.nix), and the node's address when it's the node's;
+// with an ACP agent, the brain's model and key from the node, as model.json,
+// which fleet-acp gives the kind as the bridge does.
 //
 // A resident that is an assistant gets its token and the phone's chat
 // (assistant.ts).
@@ -19,7 +21,7 @@
 import "../../lib/harden";
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { coresOf, credentialFor, guestOf, manifest, memoryOf, newId, schedule, SPAWNS, spawns, write, type Manifest, type Spawn } from "./fleet";
+import { coresOf, credentialFor, guestOf, kindOf, manifest, memoryOf, newId, schedule, SPAWNS, spawns, write, type Manifest, type Spawn } from "./fleet";
 import { Actions, forgejo } from "./actions";
 import { assist } from "./assistant";
 import { GitGrants, SlotForges, forgeOrigin, gitNote, slotForge } from "./forge";
@@ -98,6 +100,12 @@ export async function start(m: Manifest, s: Spawn, slot: string) {
     writeFileSync(join(sl.shareDir, "mcp.json"), JSON.stringify(mcp, null, 2) + "\n", { mode: 0o600 });
   }
   if (s.remote?.brainToken) writeFileSync(join(sl.shareDir, "brain-token"), s.remote.brainToken + "\n", { mode: 0o600 });
+  // One that can't be had fails the start: on its account's model instead,
+  // it would run on what the brain doesn't.
+  if (s.brain && m.node && kindOf(m, s) !== "claude" && !s.job) {
+    const model = await nodeApi(m, "GET", `/brains/${encodeURIComponent(s.brain)}/model`);
+    writeFileSync(join(sl.shareDir, "model.json"), JSON.stringify(model) + "\n", { mode: 0o600 });
+  }
   if (s.remote?.memory) writeFileSync(join(sl.shareDir, "memory-url"), s.remote.memory + "\n");
   if (s.remote?.secrets) {
     mkdirSync(join(sl.shareDir, "secrets"), { mode: 0o700 });

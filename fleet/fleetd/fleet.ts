@@ -159,11 +159,14 @@ export const tokenFor = (account: string) => join(ACCOUNTS, account);
 // and how to make it when it's missing. None for an Actions job.
 export function credentialFor(m: Manifest, s: Spawn): { file: string; share: string; how: string } | undefined {
   if (s.job === "actions") return undefined;
-  const kind = m.templates[s.template]?.agent ?? "claude";
+  const kind = kindOf(m, s);
   if (kind === "claude") return { file: tokenFor(s.account), share: "claude-token", how: "claude setup-token, signed in as it, then save it there" };
   const keys: Record<string, string> = { agy: "GEMINI_API_KEY=...", codex: "OPENAI_API_KEY=..." };
   return { file: join(ACCOUNTS, `${s.account}.${kind}`), share: `${kind}-credential`, how: `its key as ${own(keys, kind) ?? "KEY=value"} lines there` };
 }
+
+// The kind a spawn's guest runs: Claude Code's, or an ACP agent's.
+export const kindOf = (m: Manifest, s: Spawn) => m.templates[s.template]?.agent ?? "claude";
 
 // QEMU's own allocations on top of the guest's RAM, per running slot.
 export const OVERHEAD = 512;

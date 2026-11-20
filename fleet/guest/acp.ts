@@ -15,7 +15,10 @@
 // The kind's credential, /mnt/share/<kind>-credential, is KEY=value lines
 // for its environment: GEMINI_API_KEY=... for agy, OPENAI_API_KEY=... for
 // codex (given to codex-acp as its gateway, OpenAI's, since the adapter
-// only takes that key through a login: lib/acp/codex.ts). Every permission it asks
+// only takes that key through a login: lib/acp/codex.ts). A brain's spawn has
+// /mnt/share/model.json, the brain's { model, key } from the node, which the
+// kind is made with, as the bridge makes it; what that sets is the brain's,
+// over the credential's. Every permission it asks
 // is allowed, as Claude Code runs here with --dangerously-skip-permissions.
 
 import "../../lib/harden";
@@ -24,6 +27,7 @@ import { join } from "node:path";
 import { AcpSession, type Permission } from "../../lib/acp/client";
 import { KINDS } from "../../lib/acp/kinds";
 import { dict, own } from "../../lib/dict";
+import type { Model } from "../../lib/think";
 
 const SHARE = process.env.FLEET_SHARE ?? "/mnt/share";
 const OUT = process.env.FLEET_OUTBOX ?? "/mnt/outbox";
@@ -92,13 +96,19 @@ export async function main(argv: string[]): Promise<number> {
     return 2;
   }
   const cred = join(SHARE, `${o.kind}-credential`);
+  const model = join(SHARE, "model.json");
+  const brain = existsSync(model) ? (JSON.parse(readFileSync(model, "utf8")) as { model?: Model; key?: string }) : undefined;
   const spec = make({
     dir: join(process.env.HOME ?? "/tmp", ".corkboard-acp"),
     name: "fleet",
     prompt: o.prompt && existsSync(o.prompt) ? readFileSync(o.prompt, "utf8") : undefined,
     mcp: o.mcp,
+    ...(brain && { model: brain.model, key: brain.key }),
   });
-  if (existsSync(cred)) spec.env = { ...spec.env, ...credentialEnv(o.kind, readFileSync(cred, "utf8")) };
+  if (existsSync(cred)) {
+    const env = credentialEnv(o.kind, readFileSync(cred, "utf8"));
+    spec.env = brain ? { ...env, ...spec.env } : { ...spec.env, ...env };
+  }
 
   const events = join(OUT, "events.jsonl");
   const dir = join(OUT, "projects", "acp");
