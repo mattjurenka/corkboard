@@ -259,11 +259,16 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
     else p = new URLSearchParams(await req.text());
     let basic: { id: string; secret: string } | undefined;
     const auth = req.headers.get("Authorization");
-    if (auth?.startsWith("Basic ")) {
-      const [id, secret] = atob(auth.slice(6)).split(":").map((s) => decodeURIComponent(s));
-      basic = { id, secret: secret ?? "" };
-    }
     try {
+      if (auth?.startsWith("Basic ")) {
+        let pair: string[];
+        try {
+          pair = atob(auth.slice(6).trim()).split(":").map((s) => decodeURIComponent(s));
+        } catch {
+          throw new OAuthError("invalid_client", "the Authorization header isn't Basic credentials", 401);
+        }
+        basic = { id: pair[0], secret: pair[1] ?? "" };
+      }
       return json(await o.oauth.token(p, basic, origin), 200, OPEN);
     } catch (e) {
       if (e instanceof OAuthError) return oauthError(e);

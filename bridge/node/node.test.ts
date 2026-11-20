@@ -242,6 +242,13 @@ describe("the node's OAuth", () => {
     expect(reg.status).toBe(400);
   });
 
+  it("takes a Basic header that isn't one as no client", async () => {
+    for (const auth of ["Basic !!!", `Basic ${btoa("%E0%A4%A:x")}`]) {
+      const res = await n.call("/token", { ...form({ grant_type: "authorization_code", code: "x" }), headers: { "Content-Type": "application/x-www-form-urlencoded", Authorization: auth } });
+      expect([auth, res.status, ((await res.json()) as { error: string }).error]).toEqual([auth, 401, "invalid_client"]);
+    }
+  });
+
   it("takes only a few wrong codes", async () => {
     const store = new OAuthStore(join(n.dir, "limit.json"));
     for (let i = 0; i < 5; i++) expect(store.spendApproval("ZZZZ-ZZZZ")).toBe(false);
