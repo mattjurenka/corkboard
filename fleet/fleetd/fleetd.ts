@@ -45,11 +45,15 @@ const forges = new SlotForges(
 // Forgejo Actions jobs, each a spawn (actions.ts).
 const actions = new Actions(forgejo, write, newId);
 
-async function run(cmd: string[]): Promise<{ ok: boolean; out: string }> {
-  const p = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe" });
-  const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
-  return { ok: (await p.exited) === 0, out: (out + err).trim() };
-}
+// What it runs (systemctl, git): a test stands in for systemctl here.
+export const sh = {
+  async run(cmd: string[]): Promise<{ ok: boolean; out: string }> {
+    const p = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe" });
+    const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+    return { ok: (await p.exited) === 0, out: (out + err).trim() };
+  },
+};
+const run = (cmd: string[]) => sh.run(cmd);
 
 // The units that are up, or on their way up: `is-active` prints one state
 // per unit, in order.
@@ -64,7 +68,7 @@ function empty(dir: string) {
   for (const f of readdirSync(dir)) rmSync(join(dir, f), { recursive: true, force: true });
 }
 
-async function start(m: Manifest, s: Spawn, slot: string) {
+export async function start(m: Manifest, s: Spawn, slot: string) {
   const sl = m.slots[slot];
   // An Actions job runs no agent, so has no account.
   const cred = credentialFor(m, s);
@@ -161,7 +165,7 @@ function collect(m: Manifest, s: Spawn) {
   return exit;
 }
 
-async function tick() {
+export async function tick() {
   const m = manifest();
   const all = spawns();
   const active = await activeUnits(m);
@@ -210,20 +214,23 @@ async function tick() {
   }
 }
 
-console.log("fleetd: watching", SPAWNS);
-// The Worker knows fleetd by its relay-only device.
-if (manifest().node?.device) useDevice(manifest().node!.device!);
-// The manifest's assistants as it is now: one added later waits for a restart.
-for (const [name, r] of Object.entries(manifest().residents)) {
-  if (!r.assistant) continue;
-  if (!r.brain) console.error(`${name}: an assistant with no brain, so no token to give it`);
-  else assist(name, r.brain, r.assistant, manifest().node);
-}
-const queue = new Queue();
-queue.start();
-serveSessions();
-for (;;) {
-  await tick().catch((e) => console.error("fleetd:", e));
-  await queue.step(await activeUnits(manifest()).catch(() => undefined));
-  await Bun.sleep(2000);
+// Run, not imported by a test.
+if (import.meta.main) {
+  console.log("fleetd: watching", SPAWNS);
+  // The Worker knows fleetd by its relay-only device.
+  if (manifest().node?.device) useDevice(manifest().node!.device!);
+  // The manifest's assistants as it is now: one added later waits for a restart.
+  for (const [name, r] of Object.entries(manifest().residents)) {
+    if (!r.assistant) continue;
+    if (!r.brain) console.error(`${name}: an assistant with no brain, so no token to give it`);
+    else assist(name, r.brain, r.assistant, manifest().node);
+  }
+  const queue = new Queue();
+  queue.start();
+  serveSessions();
+  for (;;) {
+    await tick().catch((e) => console.error("fleetd:", e));
+    await queue.step(await activeUnits(manifest()).catch(() => undefined));
+    await Bun.sleep(2000);
+  }
 }

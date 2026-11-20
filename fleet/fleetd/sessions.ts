@@ -81,7 +81,7 @@ function state(m: Manifest, s: Spawn): string {
 // When each came to the state it's in.
 const since = new Map<string, { state: string; at: number }>();
 
-function list(): Hosted[] {
+export function list(): Hosted[] {
   const m = manifest();
   return spawns()
     .filter((s) => s.interactive && s.state === "running" && s.slot && m.slots[s.slot])
@@ -105,7 +105,7 @@ function list(): Hosted[] {
     });
 }
 
-async function say(key: string, text: string, keys: string[], answers?: unknown) {
+export async function say(key: string, text: string, keys: string[], answers?: unknown) {
   if (answers) return { error: "a question here is answered in words" };
   const m = manifest();
   const s = spawns().find((x) => x.id === key && x.interactive && x.state === "running" && x.slot);
