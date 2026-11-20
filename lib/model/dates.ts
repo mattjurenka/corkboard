@@ -65,9 +65,12 @@ export function range(question: string, today: string): Range | null {
     const [mon, d] = /^\d/.test(m[1]) ? [m[2], m[1]] : [m[1], m[2]];
     const mo = MONTHS.indexOf(mon.slice(0, 3));
     const [y] = today.split("-").map(Number);
-    let day = iso(Date.UTC(y, mo, Number(d)));
-    if (day > today) day = iso(Date.UTC(y - 1, mo, Number(d)));
-    return { from: day, to: day, said: m[0] };
+    const on = (year: number) => new Date(Date.UTC(year, mo, Number(d)));
+    let day = on(y);
+    if (iso(day.getTime()) > today) day = on(y - 1);
+    // No such day ("feb 30", "oct 45", Feb 29 that year): not some other one.
+    if (day.getUTCMonth() !== mo || Number(d) < 1) return null;
+    return { from: iso(day.getTime()), to: iso(day.getTime()), said: m[0] };
   }
   return null;
 }
