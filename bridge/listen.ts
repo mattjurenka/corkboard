@@ -16,6 +16,14 @@
 
 import { FRAME, RATE, Vad, voice, transcribe } from "./transcribe";
 
+// What a meeting is heard with: transcribe.ts's models, or a test's.
+export type Models = {
+  vad: () => { next(frame: Float32Array): Promise<number> };
+  transcribe: (audio: Float32Array) => Promise<string>;
+  voice: (audio: Float32Array) => Promise<Float32Array>;
+};
+const MODELS: Models = { vad: () => new Vad(), transcribe, voice };
+
 export type Track = "out" | "in";
 // Something said, on a track, in ms from the meeting's start; speaker is
 // the track's voices' index.
@@ -59,7 +67,6 @@ type Utterance = { track: Track; start: number; stop: number; audio: Float32Arra
 
 // One track's audio, cut into utterances.
 class Ear {
-  private vad = new Vad();
   private rest = new Float32Array(0);
   private pre: Float32Array[] = [];
   private utt: Float32Array[] | null = null;
@@ -74,6 +81,7 @@ class Ear {
     private said: (u: Utterance) => void,
     private saying: (u: Utterance | null) => void,
     private upTo: (ms: number) => void,
+    private vad: ReturnType<Models["vad"]>,
   ) {}
 
   // samples, the first at ms when given (from the meeting's start); what's
@@ -193,7 +201,7 @@ function who(voices: Record<Track, Voice[]>): Record<Track, string[]> {
 // A meeting's hearing: both tracks into heard, which changed() is told of.
 // failed(), with why what was said couldn't be heard. Without partials,
 // only lines: for a meeting heard afterwards, when no one's watching it said.
-export function hear(heard: Heard, changed: () => void, failed: (err: Error) => void, partials = true) {
+export function hear(heard: Heard, changed: () => void, failed: (err: Error) => void, partials = true, models: Models = MODELS) {
   heard.lines ??= [];
   heard.voices ??= { out: [], in: [] };
   heard.who ??= { out: [], in: [] };
@@ -231,6 +239,7 @@ export function hear(heard: Heard, changed: () => void, failed: (err: Error) => 
         (ms) => {
           if (!said.some((u) => u.track === track)) heard.heard[track] = Math.max(heard.heard[track], ms);
         },
+        models.vad(),
       ),
     ]),
   ) as Record<Track, Ear>;
@@ -246,9 +255,9 @@ export function hear(heard: Heard, changed: () => void, failed: (err: Error) => 
     );
 
   const add = async (u: Utterance) => {
-    const text = await transcribe(u.audio);
+    const text = await models.transcribe(u.audio);
     if (!text) return;
-    const v = u.stop - u.start >= 1000 ? await voice(u.audio) : undefined;
+    const v = u.stop - u.start >= 1000 ? await models.voice(u.audio) : undefined;
     const line: Line = { track: u.track, start: u.start, stop: u.stop, text, speaker: 0 };
     if (u.track === "in" && echo(line, v)) return;
     const voices = heard.voices[u.track];
@@ -308,7 +317,7 @@ export function hear(heard: Heard, changed: () => void, failed: (err: Error) => 
         if (!track) break;
         const p = saying[track]!;
         delete saying[track];
-        const text = await transcribe(p.audio).catch(() => "");
+        const text = await models.transcribe(p.audio).catch(() => "");
         // Not if it's been said since.
         if (said.some((u) => u.track === track && u.start === p.start) || heard.heard[track] > p.start) continue;
         heard.partial[track] = { start: p.start, text };
