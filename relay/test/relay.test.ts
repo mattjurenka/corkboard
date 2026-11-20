@@ -1,4 +1,4 @@
-import { reset, runInDurableObject } from "cloudflare:test";
+import { reset, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env as bindings, exports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/index";
@@ -13,6 +13,7 @@ import {
   type TunnelResponse,
   type WireOp,
   EpochChanged,
+  LIMITS,
   Relay,
   RelayError,
   Replica,
@@ -966,4 +967,168 @@ describe("channels", () => {
     ch.close();
     stop();
   }, 90_000);
+});
+
+describe("what ends, and what's refused", () => {
+  const sql = (q: string, ...args: unknown[]) => runInDurableObject(env.ACCOUNTS.get(env.ACCOUNTS.idFromName("accounts")), (_o, state) => void state.storage.sql.exec(q, ...args));
+
+  it("forget a mailbox at its alarm, and one past its ten minutes even before", async () => {
+    const { code, secret, expires } = await (await post("/e2ee/pair", {})).json<{ code: string; secret: string; expires: number }>();
+    const box = env.MAILBOX.get(env.MAILBOX.idFromName(code));
+    expect(await runInDurableObject(box, (_o, state) => state.storage.getAlarm())).toBe(expires);
+    expect((await post(`/e2ee/pair/${code}`, { secret })).status).toBe(200);
+    expect(await runDurableObjectAlarm(box)).toBe(true);
+    expect((await runInDurableObject(box, (_o, state) => state.storage.list())).size).toBe(0);
+    expect((await post(`/e2ee/pair/${code}`, { secret })).status).toBe(404);
+
+    // The alarm not yet run: past its time, it's gone all the same.
+    const again = await (await post("/e2ee/pair", {})).json<{ code: string; secret: string }>();
+    await runInDurableObject(env.MAILBOX.get(env.MAILBOX.idFromName(again.code)), async (_o, state) => {
+      await state.storage.deleteAlarm();
+      await state.storage.put("box", { ...(await state.storage.get<object>("box")), expires: Date.now() - 1 });
+    });
+    const a = await account();
+    await expect(a.relay.commit(again.code, "A".repeat(43))).rejects.toMatchObject({ status: 404 });
+    expect((await post(`/e2ee/pair/${again.code}`, { secret: again.secret })).status).toBe(404);
+  });
+
+  it("take a challenge only within its two minutes, and a token only within its day", async () => {
+    const a = await account();
+    const { nonce } = await (await post("/e2ee/challenge", { account: a.keys.id, device: a.device.id })).json<{ nonce: string }>();
+    await sql("UPDATE e2ee_challenges SET expires = ? WHERE nonce = ?", Date.now() - 1, nonce);
+    const late = await post("/e2ee/token", { cert: a.cert, answer: answer(a.device, { origin: ORIGIN, nonce, account: a.keys.id }) });
+    expect(late.status).toBe(401);
+    expect((await late.json<{ error: string }>()).error).toMatch(/expired/);
+
+    // A fresh token, its row aged before the relay has seen it used.
+    const fresh = await a.relay.signIn();
+    expect(fresh.expires - Date.now()).toBeGreaterThan(23 * 3600_000);
+    expect(fresh.expires - Date.now()).toBeLessThanOrEqual(24 * 3600_000);
+    await sql("UPDATE e2ee_tokens SET expires = ?", Date.now() - 1);
+    expect((await worker("/e2ee/revoked", { headers: { Authorization: `Bearer ${fresh.token}` } })).status).toBe(401);
+    // Signing in again is all it takes.
+    expect((await worker("/e2ee/revoked", { headers: { Authorization: `Bearer ${(await a.relay.signIn()).token}` } })).status).toBe(200);
+  });
+
+  it("close a member's socket on the log when its grant goes, and not the owner's", async () => {
+    const a = await account();
+    const b = await account();
+    const index = await indexOf(a);
+    const rep = await replica(a, "brain", "notes");
+    await rep.change({ t: "card", card: "note:1", set: { title: "shared" } });
+    await rep.push();
+    await share(a.relay, a.root, a.keys.id, index, rep, { kind: "brain", name: "notes", member: await a.relay.accountView(b.keys.id), role: "read" });
+    const live = async (t: string, owner?: string) => {
+      const res = await worker(`/e2ee/log/${rep.object}/live${owner ? `?owner=${owner}` : ""}`, { headers: { Upgrade: "websocket", "Sec-WebSocket-Protocol": `corkboard, corkboard.bearer.${b64url(utf8(t))}` } });
+      expect(res.status).toBe(101);
+      const ws = res.webSocket! as WebSocket & { closed?: { code: number; reason: string }; heard: unknown[] };
+      ws.heard = [];
+      ws.addEventListener("message", (e) => void ws.heard.push(JSON.parse(e.data as string)));
+      ws.addEventListener("close", (e) => void (ws.closed = { code: e.code, reason: e.reason }));
+      ws.accept();
+      return ws;
+    };
+    const theirs = await live(await b.relay.token(), a.keys.id);
+    const mine = await live(await a.relay.token());
+    await vi.waitUntil(() => theirs.heard.length && mine.heard.length);
+    await a.relay.ungrant(rep.object, b.keys.id);
+    await vi.waitUntil(() => theirs.closed);
+    expect(theirs.closed).toEqual({ code: 1000, reason: "no longer shared" });
+    // Nor can it come back.
+    expect((await worker(`/e2ee/log/${rep.object}/live?owner=${a.keys.id}`, { headers: { Upgrade: "websocket", Authorization: `Bearer ${await b.relay.token()}` } })).status).toBe(403);
+    // The owner's still hears its pushes.
+    await rep.change({ t: "card", card: "note:1", set: { title: "mine" } });
+    await rep.push();
+    await vi.waitUntil(() => mine.heard.length === 2);
+    expect(mine.closed).toBeUndefined();
+    mine.close();
+  });
+
+  it("keep blobs to 25 MB, and let the owner delete its own, and only its own", async () => {
+    const a = await account();
+    const b = await account();
+    const t = await a.relay.token();
+    const id = b64url(KEY().slice(0, 16));
+    const put = (body: Uint8Array<ArrayBuffer>, headers: Record<string, string> = {}) => worker(`/e2ee/blob/${id}`, { method: "PUT", headers: { Authorization: `Bearer ${t}`, ...headers }, body });
+    // Said to be too big, or found to be.
+    expect((await put(new Uint8Array(48), { "Content-Length": String(LIMITS.blob + 1) })).status).toBe(413);
+    expect((await put(new Uint8Array(LIMITS.blob + 1))).status).toBe(413);
+    expect((await put(new Uint8Array(39))).status).toBe(400);
+    expect(await env.MEDIA.head(`e2ee/${a.keys.id}/${id}`)).toBeNull();
+
+    // The same id in two accounts: two blobs.
+    await a.relay.putBlob(id, new Uint8Array(48).fill(1));
+    await b.relay.putBlob(id, new Uint8Array(48).fill(2));
+    await a.relay.deleteBlob(id);
+    await expect(a.relay.getBlob(id)).rejects.toMatchObject({ status: 404 });
+    expect(await b.relay.getBlob(id)).toEqual(new Uint8Array(48).fill(2));
+    // Deleted, its id can be used again; and deleting nothing is no error.
+    await a.relay.putBlob(id, new Uint8Array(48).fill(3));
+    expect(await a.relay.getBlob(id)).toEqual(new Uint8Array(48).fill(3));
+    await a.relay.deleteBlob(b64url(KEY().slice(0, 16)));
+    expect((await worker(`/e2ee/blob/${id}`, { method: "DELETE" })).status).toBe(401);
+  });
+
+  it("refuse through the tunnel a socket and what's too big, and say when the node is too slow", async () => {
+    const a = await account();
+    const handle = await nodeHandle(a.keys.id);
+    const res = await worker("/e2ee/nodes/live?name=slow", { headers: { Upgrade: "websocket", "Sec-WebSocket-Protocol": `corkboard, corkboard.bearer.${b64url(utf8(await a.relay.token()))}` } });
+    const ws = res.webSocket!;
+    // A node that hears and doesn't answer.
+    const asked: TunnelRequest[] = [];
+    ws.addEventListener("message", (e) => void (String(e.data).startsWith("leader ") || asked.push(JSON.parse(e.data as string))));
+    ws.accept();
+    await vi.waitUntil(async () => (await a.relay.nodes()).connected.length === 1);
+
+    expect((await worker(`/n/${handle}/live`, { headers: { Upgrade: "websocket" } })).status).toBe(501);
+    expect((await worker(`/n/${handle}/upload`, { method: "PUT", headers: { "Content-Length": String(LIMITS.tunnel + 1) }, body: new Uint8Array(8) })).status).toBe(413);
+    expect((await worker(`/n/${handle}/upload`, { method: "PUT", body: new Uint8Array(LIMITS.tunnel + 1) })).status).toBe(413);
+    // None of them reached the node.
+    expect(asked).toEqual([]);
+
+    // A minute's wait, as the Durable Object's own clock has it.
+    const started = Date.now();
+    const slow = await worker(`/n/${handle}/slow`);
+    expect(slow.status).toBe(504);
+    expect((await slow.json<{ error: string }>()).error).toMatch(/in time/);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(LIMITS.tunnelMs - 1000);
+    expect(asked).toHaveLength(1);
+    // Its late answer goes nowhere, and the next request still goes to it.
+    ws.send(JSON.stringify({ id: asked[0].id, status: 200, headers: [] } satisfies TunnelResponse));
+    const next = worker(`/n/${handle}/next`);
+    await vi.waitUntil(() => asked.length === 2);
+    ws.send(JSON.stringify({ id: asked[1].id, status: 204, headers: [] } satisfies TunnelResponse));
+    expect((await next).status).toBe(204);
+    ws.close();
+  }, 90_000);
+
+  it("answer 405 to a method a route doesn't take", async () => {
+    const a = await account();
+    const t = await a.relay.token();
+    const object = objectId(a.root, "board", "home");
+    const { code } = await (await post("/e2ee/pair", {})).json<{ code: string }>();
+    const wrong: [string, string][] = [
+      ["GET", "/e2ee/accounts"],
+      ["GET", "/e2ee/challenge"],
+      ["GET", "/e2ee/token"],
+      ["GET", "/e2ee/revoke"],
+      ["GET", "/e2ee/rotated"],
+      ["GET", "/e2ee/pair"],
+      ["PUT", `/e2ee/pair/${code}`],
+      ["GET", `/e2ee/pair/${code}/commit`],
+      ["POST", "/e2ee/revoked"],
+      ["POST", "/e2ee/nodes"],
+      ["GET", "/e2ee/nodes/leader"],
+      ["POST", "/e2ee/nodes/forge"],
+      ["POST", `/e2ee/accounts/${a.keys.id}`],
+      ["GET", "/e2ee/rotate"],
+      ["PUT", "/e2ee/grants"],
+      ["GET", `/e2ee/grants/${object}/${a.keys.id}`],
+      ["POST", "/e2ee/shared"],
+      ["GET", `/e2ee/log/${object}/snapshot`],
+      ["PUT", `/e2ee/log/${object}`],
+      ["POST", `/e2ee/blob/${object}`],
+    ];
+    for (const [method, path] of wrong) expect([method, path, (await worker(path, { method, headers: { Authorization: `Bearer ${t}` } })).status]).toEqual([method, path, 405]);
+  });
 });
