@@ -9,6 +9,7 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { sanitize } from "@/lib/purify";
 import { cn } from "@/lib/utils";
 import type { Nvim } from "@/nvim/context";
 import { store } from "@/store";
@@ -118,7 +119,7 @@ export function MarkdownView({ state, win, nvim }: ViewProps<MarkdownState>) {
   const hasBar = !!state.actions?.length;
   const topline = useRef(state.topline);
   topline.current = state.topline;
-  const html = useMemo(() => (state.text == null ? null : DOMPurify.sanitize(blocks(state.text))), [state.text]);
+  const html = useMemo(() => (state.text == null ? null : sanitize(blocks(state.text))), [state.text]);
 
   // New text: its images are fetched, each scrolling again as it arrives
   // since its height moves everything below.

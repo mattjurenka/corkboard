@@ -8,9 +8,9 @@
 // window, which bump focus); Escape gives them back. Text can be selected,
 // and any key but a copy goes back to Neovim.
 
-import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { sanitize } from "@/lib/purify";
 import { cn } from "@/lib/utils";
 import type { Nvim } from "@/nvim/context";
 import { MAC, toNvimKey, windowKey } from "@/nvim/input.js";
@@ -240,7 +240,7 @@ function Key({ k, onClick, children }: { k: string; onClick: () => void; childre
 
 // A turn's text never changes once said, so each renders once.
 const Markdown = memo(function Markdown({ text }: { text: string }) {
-  const html = useMemo(() => DOMPurify.sanitize(marked.parse(text, { gfm: true, async: false })), [text]);
+  const html = useMemo(() => sanitize(marked.parse(text, { gfm: true, async: false })), [text]);
   return <div className="markdown-body chat" onClick={follow} dangerouslySetInnerHTML={{ __html: html }} />;
 });
 

