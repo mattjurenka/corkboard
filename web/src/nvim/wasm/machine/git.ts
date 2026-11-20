@@ -49,7 +49,7 @@ export async function runGit(vfs: Vfs, args: string[], cwd: string, stdin?: Uint
         for (let i = 0; i < rest.length; i++) {
           const a = rest[i];
           if (a === "--show-toplevel") out.push(top);
-          else if (a === "--git-common-dir" || a === "--git-dir") out.push(gitdir);
+          else if (a === "--git-common-dir" || a === "--git-dir" || a === "--absolute-git-dir") out.push(gitdir);
           else if (a === "--show-prefix") out.push(relative(top, cwd) ? `${relative(top, cwd)}/` : "");
           else if (a === "--is-inside-work-tree") out.push("true");
           else if (a === "--abbrev-ref") out.push((await git.currentBranch({ fs, dir })) ?? "HEAD"), i++;
@@ -63,18 +63,43 @@ export async function runGit(vfs: Vfs, args: string[], cwd: string, stdin?: Uint
         return ok(out.map((l) => l + "\n").join(""));
       }
       case "symbolic-ref": {
-        const branch = await git.currentBranch({ fs, dir, fullname: !has("--short") });
-        return branch ? ok(branch + "\n") : no("fatal: ref HEAD is not a symbolic ref", 128);
+        // HEAD, or the ref named (origin's HEAD, which a clone of one branch hasn't).
+        const ref = rest.find((a) => !a.startsWith("-")) ?? "HEAD";
+        const text = await fs.readFile(`${gitdir}/${ref}`, "utf8").catch(() => "");
+        const to = /^ref: (\S+)/.exec(text as string)?.[1];
+        if (!to) return no(`fatal: ref ${ref} is not a symbolic ref`, 128);
+        return ok((has("--short") ? to.replace(/^refs\/(heads|remotes|tags)\//, "") : to) + "\n");
       }
       case "status": {
         const sep = has("-z") ? "\0" : "\n";
         const spec = rest.indexOf("--");
         const only = spec >= 0 && rest[spec + 1] === "." ? relative(top, cwd) : "";
         const rows = await git.statusMatrix({ fs, dir, filepaths: only ? [only] : undefined });
-        const lines = rows.flatMap(([file, h, w, s]) => {
+        const untracked = rest.find((a) => a.startsWith("--untracked-files="))?.slice(18) ?? (has("-uno") ? "no" : has("-uall") ? "all" : "normal");
+        const lines: string[] = [];
+        const others: string[] = [];
+        for (const [file, h, w, s] of rows) {
           const code = xy(h, w, s);
-          return code ? [`${code} ${file}`] : [];
-        });
+          if (code === "??") others.push(file);
+          else if (code) lines.push(`${code} ${file}`);
+        }
+        // Untracked files after the rest, as git has them; by default a
+        // directory with nothing tracked in it as itself, once.
+        if (untracked !== "no") {
+          const tracked = new Set<string>();
+          for (const [file, h, , s] of rows) if (h || s) for (let i = file.indexOf("/"); i > 0; i = file.indexOf("/", i + 1)) tracked.add(file.slice(0, i));
+          const shown = new Set<string>();
+          for (const file of others) {
+            let at = file;
+            if (untracked !== "all")
+              for (let i = file.indexOf("/"); i > 0; i = file.indexOf("/", i + 1))
+                if (!tracked.has(file.slice(0, i))) {
+                  at = file.slice(0, i + 1);
+                  break;
+                }
+            if (!shown.has(at)) shown.add(at), lines.push(`?? ${at}`);
+          }
+        }
         return ok(lines.map((l) => l + sep).join(""));
       }
       case "check-ignore": {
@@ -87,7 +112,7 @@ export async function runGit(vfs: Vfs, args: string[], cwd: string, stdin?: Uint
           const isDir = await fs.lstat(`${top}/${filepath}`).then((st) => st.isDirectory(), () => false);
           if (await git.isIgnored({ fs, dir, filepath: isDir ? `${filepath}/` : filepath })) ignored.push(name);
         }
-        return ignored.length ? ok(ignored.map((n) => n + "\n").join("")) : no("");
+        return ignored.length ? ok(has("-q") || has("--quiet") ? "" : ignored.map((n) => n + "\n").join("")) : no("");
       }
       case "log": {
         // The first commit, which a shallow clone doesn't have: none, as
