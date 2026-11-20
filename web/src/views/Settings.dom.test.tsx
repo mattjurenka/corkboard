@@ -110,6 +110,12 @@ describe("Settings", () => {
     press(search, "Escape");
     expect(search.value).toBe("");
     expect(calls.refocus).toBe(2);
+    // Not while a word is being composed.
+    type(search, "字");
+    press(search, "Escape", { isComposing: true });
+    press(search, "Enter", { isComposing: true });
+    expect(search.value).toBe("字");
+    expect(calls.refocus).toBe(2);
   });
 });
 
@@ -156,6 +162,21 @@ describe("a text field", () => {
     type(input, "Mono");
     blur(input);
     expect(take()).toEqual([["settings.set", "editor.font", "Mono"]]);
+  });
+
+  test("an Enter or Esc that's a word being composed's (an IME's) is the composition's", () => {
+    const { el, take, calls } = mount();
+    const input = field(el);
+    focus(input);
+    type(input, "中");
+    press(input, "Enter", { isComposing: true });
+    press(input, "Escape", { isComposing: true });
+    expect(take()).toEqual([]);
+    expect(calls.refocus).toBe(0);
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("中");
+    press(input, "Enter");
+    expect(take()).toEqual([["settings.set", "editor.font", "中"]]);
   });
 
   test("empty is none", () => {
@@ -306,6 +327,16 @@ describe("a choice", () => {
     press(row.querySelector<HTMLInputElement>("input")!, "Enter");
     expect(sets()).toEqual([]);
     expect(row.querySelector("[role=listbox]")).toBeNull();
+  });
+
+  test("its filter's keys while a word is being composed are the composition's", () => {
+    const { el, sets } = mount();
+    const row = rowOf(el, "Language");
+    click(row.querySelector("button")!);
+    const filter = row.querySelector<HTMLInputElement>("input")!;
+    for (const k of ["ArrowDown", "Enter", "Escape"]) expect(press(filter, k, { isComposing: true }).defaultPrevented).toBe(false);
+    expect(sets()).toEqual([]);
+    expect(row.querySelector("li.bg-selection")!.textContent).toBe("●Lang 3");
   });
 
   test("Esc, or a press outside, shuts it", () => {

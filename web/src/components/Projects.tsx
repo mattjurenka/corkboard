@@ -115,6 +115,8 @@ export function Projects() {
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    // A word being composed (an IME) has its own arrows, Enter and Esc.
+    if (e.nativeEvent.isComposing) return;
     const moved = step(e, at, count);
     if (moved !== null) setPicked(moved);
     else if (e.key === "Enter") {

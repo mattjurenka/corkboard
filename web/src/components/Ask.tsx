@@ -42,7 +42,8 @@ export function Ask() {
       e.preventDefault();
       return reply(null);
     }
-    if (e.key === "Enter" && !e.shiftKey) {
+    // Not the Enter that ends a word being composed (an IME's).
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       return answer();
     }

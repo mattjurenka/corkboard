@@ -60,6 +60,8 @@ export function Tools() {
     nvim.lua("require('corkboard.picker').run(...)", i + 1);
   };
   const onKeyDown = (e: React.KeyboardEvent) => {
+    // A word being composed (an IME) has its own arrows, Enter and Esc.
+    if (e.nativeEvent.isComposing) return;
     const moved = step(e, at, shown.length);
     if (moved !== null) setPicked(moved);
     else if (e.key === "Enter") {

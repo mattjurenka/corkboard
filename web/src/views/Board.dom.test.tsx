@@ -4,6 +4,7 @@ import "@/testing/dom";
 import { afterEach, describe, expect, test } from "bun:test";
 import { byText, cleanup, click, fakeNvim, one, render, settle } from "@/testing/render";
 import { Board, type BoardCard } from "./Board";
+import { Cards } from "./Cards";
 
 afterEach(cleanup);
 
@@ -164,5 +165,33 @@ describe("Board", () => {
       expect(cards[i].innerHTML).not.toContain("function");
       expect(cards[i].innerHTML).not.toContain("[object");
     }
+  });
+});
+
+// The cards beside a session (corkboard.claude.cards), drawn as the board's.
+describe("Cards", () => {
+  const mountCards = (state: object) => {
+    const n = fakeNvim();
+    return { ...n, ...render(<Cards state={state as never} win={4} buf={6} focused nvim={n.nvim} />) };
+  };
+
+  test("this session's cards, then those ready to work on, a dash for none", () => {
+    const { el } = mountCards({ mine: [card({ id: "c-1" })], selected: "c-1" });
+    expect([...el.querySelectorAll("h2")].map((h) => h.textContent)).toEqual(["this session 1", "ready to work on 0"]);
+    expect(el.querySelector("[data-selected]")!.textContent).toContain("card c-1");
+    expect(byText(el, "div.text-border", "—")).toHaveLength(1);
+  });
+
+  test("a click opens the card beside the session; its session line and question go to them", () => {
+    const { el, take } = mountCards({ open: [card({ id: "c-2", session: "idle", attention: "?" })] });
+    const c = el.querySelector<HTMLElement>("[data-slot=card]")!;
+    click(c);
+    click(one(c, "div", "⏵ idle"));
+    click(one(c, "span", "↩ go to it"));
+    expect(take()).toEqual([
+      ["claude.cards.open", "c-2", 6],
+      ["claude.cards.go", "c-2"],
+      ["claude.cards.go", "c-2"],
+    ]);
   });
 });

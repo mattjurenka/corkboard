@@ -123,6 +123,16 @@ describe("Tools", () => {
     }
   });
 
+  test("keys while a word is being composed (an IME's) are the composition's", () => {
+    const { el, take } = mount(<Tools />);
+    open();
+    const search = el.querySelector("input")!;
+    for (const k of ["ArrowDown", "Enter", "Escape"]) expect(press(search, k, { isComposing: true }).defaultPrevented).toBe(false);
+    expect(picked(el)).toBe("Find filesCtrlF");
+    expect(store.get().tools).not.toBeNull();
+    expect(take()).toEqual([]);
+  });
+
   test("opened again, the search is empty and the first picked", () => {
     const { el } = mount(<Tools />);
     open();
@@ -222,6 +232,19 @@ describe("Projects", () => {
     press(search, "Escape");
     expect(store.get().projects).toBeNull();
     expect(take()).toEqual([]);
+  });
+
+  test("an Enter or Esc ending a word being composed neither makes it nor shuts", async () => {
+    const { el, take } = go(false, true);
+    await settle();
+    take();
+    type(el.querySelector("input")!, "新");
+    press(el.querySelector("input")!, "Enter", { isComposing: true });
+    press(el.querySelector("input")!, "Escape", { isComposing: true });
+    await settle();
+    expect(take()).toEqual([]);
+    expect(el.querySelector("input")!.value).toBe("新");
+    expect(el.querySelector("input")!.placeholder).toBe("Name or path");
   });
 
   test("named, Enter makes it", async () => {

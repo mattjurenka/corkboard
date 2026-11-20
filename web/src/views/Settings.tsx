@@ -80,6 +80,8 @@ export function Settings({ state, win, focused, nvim }: ViewProps<SettingsState>
           onChange={(e) => setQuery(e.target.value)}
           onMouseDown={own}
           onKeyDown={(e) => {
+            // A word being composed (an IME) has its own Enter and Esc.
+            if (e.nativeEvent.isComposing) return;
             if (e.key === "Escape") setQuery("");
             if (e.key === "Escape" || e.key === "Enter") nvim.refocus();
           }}
@@ -210,6 +212,7 @@ function TextField({
         cancelled.current = false;
       }}
       onKeyDown={(e) => {
+        if (e.nativeEvent.isComposing) return;
         cancelled.current = e.key === "Escape";
         if (e.key === "Enter" || e.key === "Escape") {
           e.currentTarget.blur();
@@ -336,6 +339,7 @@ function Choice({ item, set, nvim }: { item: Setting; set: Change; nvim: Nvim })
                 setAt(0);
               }}
               onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing) return;
                 if (e.key === "ArrowDown") setAt(Math.min(shown.length - 1, at + 1));
                 else if (e.key === "ArrowUp") setAt(Math.max(0, at - 1));
                 else if (e.key === "Enter") choose(shown[at]);
