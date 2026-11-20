@@ -921,7 +921,8 @@ describe("the consolidator", () => {
       await c.tick();
     };
     await flush("s5", "corkboard", "- Shipped the hook.\n===ITEMS===\n- open user: Reply to Winston about the audit.\nopen agent: Add tests for items.\nnot an item");
-    const opened = n.data.items("assistant", "corkboard", true);
+    // The same time, so in no order of their own: the user's first.
+    const opened = n.data.items("assistant", "corkboard", true).sort((a, b) => b.owner.localeCompare(a.owner));
     expect(opened.map((i) => [i.owner, i.text, i.by])).toEqual([
       ["user", "Reply to Winston about the audit.", "assistant"],
       ["agent", "Add tests for items.", "assistant"],
