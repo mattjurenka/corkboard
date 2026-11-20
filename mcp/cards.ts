@@ -48,9 +48,31 @@ const TASKS = join(DIR, "tasks");
 // first assignee: one agent per card.
 export type Card = Dict<any> & { id: string; path: string; body: string; agent?: string };
 
+const readsAs = (v: string) => {
+  try {
+    return (Bun.YAML.parse(`v: ${v}`) as { v?: unknown } | null)?.v === v;
+  } catch {
+    return false;
+  }
+};
+
+// Half a surrogate pair is U+FFFD in UTF-8 anyway, and YAML can't escape it.
+export const wellFormed = (s: string) => s.replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, "\ufffd");
+
+// What YAML doesn't print: a line break, a control character.
+const UNPRINTABLE = /[^\t\x20-\x7e\xa0-\ud7ff\ue000-\ufffd\u{10000}-\u{10ffff}]/u;
+
 // Quoted whenever YAML could read it as something else (a number, date,
-// boolean, list or mapping), the way Backlog.md quotes its dates.
-function quote(v: string): string {
+// boolean, list or mapping), the way Backlog.md quotes its dates. What YAML
+// doesn't print is in double quotes, escaped: in single quotes a line break
+// folds to a space, and bare, any of them made the front matter unreadable,
+// which reads as a card with no fields.
+function quote(s: string): string {
+  const v = wellFormed(s);
+  if (UNPRINTABLE.test(v))
+    return `"${v.replace(new RegExp(`${UNPRINTABLE.source}|["\\\\]`, "gu"), (c: string) =>
+      c === '"' || c === "\\" ? `\\${c}` : c === "\n" ? "\\n" : `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    )}"`;
   const plain =
     v !== "" &&
     !/^[\s\-?:,[\]{}#&*!|>'"%@`]/.test(v) &&
@@ -58,7 +80,9 @@ function quote(v: string): string {
     !v.includes(": ") &&
     !v.includes(" #") &&
     !/^[\d\s.:+-]+$/.test(v) &&
-    !["true", "false", "null", "yes", "no", "on", "off", "~"].includes(v.toLowerCase());
+    !["true", "false", "null", "yes", "no", "on", "off", "~"].includes(v.toLowerCase()) &&
+    // And whatever else YAML has (1e3, .inf, 0x1f) that the above misses.
+    readsAs(v);
   return plain ? v : `'${v.replaceAll("'", "''")}'`;
 }
 
@@ -116,11 +140,13 @@ export function serialize(card: Card): string {
   const emit = (k: string) => {
     const v = fields[k];
     seen.add(k);
+    // A key, too, is what YAML reads it as.
+    const key = quote(k);
     if (Array.isArray(v)) {
-      if (!v.length) lines.push(`${k}: []`);
-      else lines.push(`${k}:`, ...v.map((item) => `  - ${quote(String(item))}`));
+      if (!v.length) lines.push(`${key}: []`);
+      else lines.push(`${key}:`, ...v.map((item) => `  - ${quote(String(item))}`));
     } else if (v !== undefined && v !== "") {
-      lines.push(`${k}: ${k === "ordinal" && v !== null && !isNaN(Number(v)) ? v : quote(String(v))}`);
+      lines.push(`${key}: ${k === "ordinal" && v !== null && !isNaN(Number(v)) ? v : quote(String(v))}`);
     }
   };
   KEY_ORDER.forEach(emit);
