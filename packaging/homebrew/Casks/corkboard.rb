@@ -1,9 +1,9 @@
 cask "corkboard" do
   arch arm: "arm64", intel: "x64"
 
-  version "0.1.0-rc9"
-  sha256 arm:   "022e00ac4b538607ed786ace1e1057e92bcca9ffb380f1f2d74e6a9d4911652c",
-         intel: "44fb5eaa5c76ce8d350865c9951f4193db863e9242a86a86af6e6319f4d37588"
+  version "0.1.0-rc10"
+  sha256 arm:   "ddb6041bd141b412843ebfcdfed0bff78f77e530ce1b2be4e471522f2528ca6c",
+         intel: "dde10f7df73824a2df21e8aeba5826453049aae9b90769a4030a67ab087c3ce4"
 
   # Through corkboard.fyi, which counts the download and sends it on to the
   # GitHub release.

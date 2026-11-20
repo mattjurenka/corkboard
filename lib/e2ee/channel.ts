@@ -77,6 +77,10 @@ export const FRAME = 64 * 1024;
 export const WINDOW = 256 * 1024;
 const MAX_STREAMS = 256;
 const HANDSHAKE_MS = 30_000;
+// A socket to the relay: how often it's pinged, and how long it may be
+// silent before it's taken for dead (wsLink, and relay.ts's serveTunnel).
+export const PING_MS = 30_000;
+export const SILENT_MS = 75_000;
 const NULL_BODY = new Set([204, 205, 304]);
 
 const PROLOGUE = utf8(`${VERSION} channel`);
@@ -480,12 +484,37 @@ function parse<T>(b: Uint8Array): T | undefined {
 // A link over a WebSocket of its own: the opener's socket to /e2ee/channel.
 export function wsLink(ws: WebSocket): Link {
   ws.binaryType = "arraybuffer";
+  // The relay answers "ping" with "pong" (relay/src/nodes.ts), so a socket
+  // that hears nothing for SILENT_MS has died under us (the network
+  // changed): ended here, as its close event may not come for many minutes.
+  let heard = Date.now();
+  let ended: string | undefined;
+  let closed: ((reason: string) => void) | undefined;
+  const end = (reason: string) => {
+    if (ended !== undefined) return;
+    ended = reason;
+    clearInterval(ping);
+    closed?.(reason);
+  };
+  const ping = setInterval(() => {
+    if (Date.now() - heard < SILENT_MS) return void (ws.readyState === 1 && ws.send("ping"));
+    end("the relay stopped answering");
+    try {
+      ws.close(1000);
+    } catch {}
+  }, PING_MS);
+  (ping as { unref?(): void }).unref?.();
+  ws.addEventListener("message", () => {
+    heard = Date.now();
+  });
+  ws.addEventListener("close", (e: CloseEvent) => end(e.reason || `the relay closed it (${e.code})`));
   return {
     send: (b) => ws.readyState === 1 && ws.send(b as Uint8Array<ArrayBuffer>),
     close: (reason) => ws.close(1000, reason.slice(0, 120)),
-    on(message, closed) {
+    on(message, onClosed) {
       ws.addEventListener("message", (e: MessageEvent) => typeof e.data !== "string" && message(new Uint8Array(e.data as ArrayBuffer)));
-      ws.addEventListener("close", (e: CloseEvent) => closed(e.reason || `the relay closed it (${e.code})`));
+      closed = onClosed;
+      if (ended !== undefined) onClosed(ended);
     },
   };
 }

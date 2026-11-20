@@ -71,6 +71,14 @@ export function bundledGit(bridge, path) {
   };
 }
 
+// The ripgrep beside the bridge (scripts/build-bridge.ts), in front of path
+// when the machine has none of its own.
+export function bundledRg(bridge, path) {
+  const dir = join(bridge, "rg");
+  if (which("rg", path) || !existsSync(join(dir, exe("rg")))) return path;
+  return [dir, path].join(delimiter);
+}
+
 // Whether xcode-select points at an Xcode or the Command Line Tools that's
 // there, and so /usr/bin/git is a git.
 function commandLineTools() {

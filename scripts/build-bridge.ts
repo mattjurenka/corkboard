@@ -1,7 +1,7 @@
 // The bridge as one executable, with what it serves and runs beside it,
 // for the desktop app (app/electron-builder.yml) to carry:
 //
-//   bun scripts/build-bridge.ts [--target linux-x64,...|linux|mac|win|os|all] [--no-nvim] [--no-git] [--no-speech]
+//   bun scripts/build-bridge.ts [--target linux-x64,...|linux|mac|win|os|all] [--no-nvim] [--no-git] [--no-rg] [--no-speech]
 //
 // Into dist/bridge/<os>-<arch>/, named as electron-builder names them
 // (linux, mac, win; x64, arm64), for each target (this machine's by default):
@@ -18,6 +18,8 @@
 //   git/                     dugite-native's portable git (GitHub Desktop's),
 //                            for a machine with no git of its own, or only
 //                            macOS's stand-in for one (app/bridge.js)
+//   rg/                      ripgrep's own release, for a machine without
+//                            one (app/bridge.js's bundledRg)
 //
 // The page is built first if web/dist isn't there (`bun run build`).
 
@@ -35,17 +37,20 @@ const NVIM_VERSION = readFileSync(join(ROOT, "flake.nix"), "utf8").match(/github
 const GIT_RELEASE = "v2.56.0-2";
 const GIT_ASSET = "dugite-native-v2.56.0-a44aeca";
 
+// ripgrep's release.
+const RG_VERSION = "15.2.0";
+
 // snacks.nvim's commit: the flake's nixpkgs' vimPlugins.snacks-nvim.
 const SNACKS = "882c996cf28183f4d63640de0b4c02ec886d01f2";
 
-type Target = { bun: string; os: "linux" | "mac" | "win"; arch: "x64" | "arm64"; nvim: string; git: string; ort?: string };
+type Target = { bun: string; os: "linux" | "mac" | "win"; arch: "x64" | "arm64"; nvim: string; git: string; rg: string; ort?: string };
 const TARGETS: Record<string, Target> = {
-  "linux-x64": { bun: "bun-linux-x64", os: "linux", arch: "x64", nvim: "nvim-linux-x86_64.tar.gz", git: "ubuntu-x64", ort: "linux/x64" },
-  "linux-arm64": { bun: "bun-linux-arm64", os: "linux", arch: "arm64", nvim: "nvim-linux-arm64.tar.gz", git: "ubuntu-arm64", ort: "linux/arm64" },
+  "linux-x64": { bun: "bun-linux-x64", os: "linux", arch: "x64", nvim: "nvim-linux-x86_64.tar.gz", git: "ubuntu-x64", rg: "x86_64-unknown-linux-musl.tar.gz", ort: "linux/x64" },
+  "linux-arm64": { bun: "bun-linux-arm64", os: "linux", arch: "arm64", nvim: "nvim-linux-arm64.tar.gz", git: "ubuntu-arm64", rg: "aarch64-unknown-linux-musl.tar.gz", ort: "linux/arm64" },
   // onnxruntime-node has no Intel Mac binaries: no voice there.
-  "mac-x64": { bun: "bun-darwin-x64", os: "mac", arch: "x64", nvim: "nvim-macos-x86_64.tar.gz", git: "macOS-x64" },
-  "mac-arm64": { bun: "bun-darwin-arm64", os: "mac", arch: "arm64", nvim: "nvim-macos-arm64.tar.gz", git: "macOS-arm64", ort: "darwin/arm64" },
-  "win-x64": { bun: "bun-windows-x64", os: "win", arch: "x64", nvim: "nvim-win64.zip", git: "windows-x64", ort: "win32/x64" },
+  "mac-x64": { bun: "bun-darwin-x64", os: "mac", arch: "x64", nvim: "nvim-macos-x86_64.tar.gz", git: "macOS-x64", rg: "x86_64-apple-darwin.tar.gz" },
+  "mac-arm64": { bun: "bun-darwin-arm64", os: "mac", arch: "arm64", nvim: "nvim-macos-arm64.tar.gz", git: "macOS-arm64", rg: "aarch64-apple-darwin.tar.gz", ort: "darwin/arm64" },
+  "win-x64": { bun: "bun-windows-x64", os: "win", arch: "x64", nvim: "nvim-win64.zip", git: "windows-x64", rg: "x86_64-pc-windows-msvc.zip", ort: "win32/x64" },
 };
 const OS = { linux: "linux", darwin: "mac", win32: "win" } as Record<string, string>;
 const HERE = `${OS[process.platform]}-${process.arch}`;
@@ -187,5 +192,14 @@ for (const name of names) {
     unpack(await download(`https://github.com/desktop/dugite-native/releases/download/${GIT_RELEASE}/${asset}`, asset), join(dir, "git"));
     // Windows' is MinGit's layout, whose gitconfig has the credential manager on.
     if (t.os !== "win") pruneGit(join(dir, "git"));
+  }
+  if (!flag("--no-rg")) {
+    // Just rg and its licenses, of the release's docs and completions.
+    const asset = `ripgrep-${RG_VERSION}-${t.rg}`;
+    const tmp = join(dir, "rg.unpack");
+    unpack(await download(`https://github.com/BurntSushi/ripgrep/releases/download/${RG_VERSION}/${asset}`, asset), tmp);
+    mkdirSync(join(dir, "rg"));
+    for (const f of [t.os === "win" ? "rg.exe" : "rg", "COPYING", "LICENSE-MIT", "UNLICENSE"]) if (existsSync(join(tmp, f))) cpSync(join(tmp, f), join(dir, "rg", f));
+    rmSync(tmp, { recursive: true, force: true });
   }
 }
