@@ -105,6 +105,7 @@ export function opencode(o: OpencodeOptions): Spec {
     return s ? `mcp__${s}__${tool.slice(s.length + 1)}` : tool;
   };
   // Its MCP tools join a session about 100ms after session/new says it's
-  // open (2.2.5), so a first prompt sent at once goes without them.
+  // open (2.2.5), so a first prompt sent at once goes without them. 2.3.0,
+  // the flake's, has them at once; a host's may be older.
   return { command: ["opencode", "acp"], env: { ...m.env, OPENCODE_CONFIG_CONTENT: JSON.stringify(config) }, mcpServers: [], names, files, settle: Object.keys(mcp).length ? 1000 : 0 };
 }

@@ -256,8 +256,12 @@ think({ system, input, schema?, model?, tools?: [] }): Promise<{ text: string; j
      model loops on it rather than use corkboard-ui's ask.
    - opencode logs "mcp connected" before session/new answers, yet a prompt sent at once lacks
      the MCP tools (0–30 ms fails, 100 ms works). `Spec.settle` waits after session/new or load:
-     1000 ms for opencode with MCP servers. A timing workaround, verified 3/3.
-   - opencode 2.0.32, the flake's pin, never gives MCP tools to the model; 2.2.5 does.
+     1000 ms for opencode with MCP servers. A timing workaround, verified 3/3. opencode 2.3.0
+     (the flake's pin since 2026-11-20) needs none: 10/10 with no wait, where 2.2.5 failed 3/3;
+     it stays while hosts may have 2.2.5.
+   - opencode 2.0.32, the flake's old pin, never gave MCP tools to the model; 2.2.5 does.
+   - `permission` is still the key in 2.3.0 (`{bash: "ask"}` asks corkboard); `permissions` is
+     ignored.
    Verified live 2026-11-12 (2.2.5): a `permission: {bash: "ask"}` prompt answered with an
    option ran the shell; corkboard-ui's ask through MCP, written as AskUserQuestion with its
    result; a custom OpenAI-compatible provider in opencode's config (Ollama, a scripted
@@ -300,8 +304,9 @@ think({ system, input, schema?, model?, tools?: [] }): Promise<{ text: string; j
      (`Spec.meta`), the MCP servers in session/new as ACP's, stdio and HTTP, run without asking;
      the user's keyring login, or `GEMINI_API_KEY` signed in with `authenticate` (`Spec.auth`).
      ACP's `usage` on the prompt's result; `session/load` replays and keeps the prompt. The
-     fleet pins 1.5.3 in slot.nix: corkboard's nixpkgs has 1.4.1, which has no `acp`.
-   - **Codex 0.167.0 through codex-acp 2.1.1**: everything in `CODEX_CONFIG`: the prompt as
+     flake's nixpkgs has 1.5.12 since 2026-11-20 (1.4.1 before, with no `acp`, which slot.nix
+     overrode with 1.5.3); 1.5.12 isn't tried live.
+   - **Codex 0.167.0 through codex-acp 2.1.1** (0.170.0 since 2026-11-20): everything in `CODEX_CONFIG`: the prompt as
      `developer_instructions`, the MCP servers with `default_tools_approval_mode = "approve"`
      (handed over in `session/new` they ask every call), and the brain's model.
      `INITIAL_AGENT_MODE=workspace-write`, so what's outside it asks corkboard instead of
@@ -319,7 +324,8 @@ think({ system, input, schema?, model?, tools?: [] }): Promise<{ text: string; j
    (argv[0]), which slot.nix now links beside codex-acp. A host whose codex comes from nixpkgs
    needs the same. Found and fixed: a command Codex parses as a list, read or search comes with
    no rawInput, only a title ("List files"), which transcript.ts now writes as its
-   `description`. Not tried: Codex's own `request_user_input` tool through ACP.
+   `description`. Codex's own `request_user_input` isn't the model's through codex-acp: a
+   call is answered "request_user_input is unavailable in Default mode" (2026-11-20).
    Left: a real turn of each on its own service (Gemini, OpenAI), with the user's login or key.
 8. **Done 2026-11-12; opencode and Codex booted in a slot.** **The fleet**: a template's `agent` (fleet/lib.nix's
    `agents`, Claude Code's by default; any other throws) goes into the manifest, fleetd and
@@ -352,10 +358,14 @@ think({ system, input, schema?, model?, tools?: [] }): Promise<{ text: string; j
    gave `CODEX_CONFIG` in the credential, which replaces corkboard's prompt and MCP servers.
    So a non-OpenAI gateway in a slot needs the model wiring above. Found: codex-acp hands a
    provider's error back as the agent's words and ends the turn `end_turn`, so `result.json`
-   reads `is_error: false` with the error JSON as its result.
-   Pins: opencode 2.0.32 (the lock's) never gives MCP tools to the model, 2.2.5 does; bumping
-   nixpkgs for it breaks codex, which then isn't cached and fails building aws-lc-sys. A
-   separate nixpkgs input for the agent CLIs is one way out (undecided).
+   read `is_error: false` with the error JSON as its result. Fixed 2026-11-20: initialize asks
+   for JetBrains AIR's `sessionFailure`, whose `severity: "error"` in the prompt's result
+   fails the prompt with its title (`Spec.client`, `Spec.failure`).
+   Pins: nixpkgs moved whole to 0bb8272 on 2026-11-20 (opencode 2.3.0, codex 0.170.0 with
+   codex-acp 2.1.1, agy 1.5.12), the old pin's opencode 2.0.32 giving the model no MCP tools.
+   `bun run test:live` (lib/acp/live.ts) runs that opencode and codex-acp against scripted
+   models (lib/testing/scripted.ts): a turn, the MCP tools on the first prompt, `permission`,
+   a provider's error and a failing stream, `request_user_input`. Run it on a bump.
 
 Each kind's spike (its **verify** items, against the version nixpkgs has) comes before its stage.
 

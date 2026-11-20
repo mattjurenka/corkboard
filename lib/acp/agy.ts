@@ -1,5 +1,5 @@
-// Antigravity CLI as an ACP agent (`agy acp`, verified against 1.5.3,
-// nixpkgs', with a real turn on a Google AI Plus login). It took over
+// Antigravity CLI as an ACP agent (`agy acp`, verified against 1.5.3
+// with a real turn on a Google AI Plus login; the flake's nixpkgs has 1.5.12). It took over
 // Gemini CLI's personal sign-in, which Google stopped serving on 2026-06-18.
 // Nothing is written for it, and ~/.gemini/antigravity-cli is left as it is:
 //
