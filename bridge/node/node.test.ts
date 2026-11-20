@@ -1074,7 +1074,8 @@ describe("recall by meaning", () => {
       const replicas = await Replicas.open({ objects, transport: as(shared, name), device: name });
       await replicas.start({ live: false });
       const data = new Data(replicas, "UTC");
-      return { replicas, data, search: new Search(data, new LocalEmbedder(data, embed, "fake")) };
+      const embedder = new LocalEmbedder(data, embed, "fake");
+      return { replicas, data, embedder, search: new Search(data, embedder) };
     };
     const laptop = await device("laptop");
     await laptop.data.putNote("assistant", "home", { kind: "memory", title: "Home", body: "Matthew has a kitten called Miso." });
@@ -1094,6 +1095,7 @@ describe("recall by meaning", () => {
     await laptop.search.share("assistant");
     expect(embedded).toBe(4);
     expect(laptop.data.vectorHashes("assistant").length).toBe(2);
+    expect(laptop.embedder.opened).toBe(2);
     await laptop.replicas.settled();
     await desktop.replicas.syncAll();
     expect((await desktop.search.recall("assistant", "cats", 5))[0].snippet).toContain("two dogs");

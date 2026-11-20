@@ -25,7 +25,7 @@
     "test:mcp": "bun test ./mcp",
     "test:nvim": "bun test ./nvim/hooks ./nvim/*.test.ts",
     "test:web": "bun test web/src/lib web/src/e2ee web/src/avatar web/src/components web/src/views web/src/testing web/src/reconnect.test.ts web/src/nvim/input.test.ts web/src/nvim/input.dom.test.ts web/src/nvim/rpc.test.ts web/src/nvim/grid.test.ts web/src/nvim/wasm wasm",
-    "test:live": "nix shell --inputs-from . nixpkgs#opencode nixpkgs#codex-acp -c bun test --timeout 120000 ./lib/acp/live.ts",
+    "test:live": "nix shell --inputs-from . nixpkgs#opencode nixpkgs#codex-acp -c bun test --timeout 120000 ./lib/acp/live.ts ./bridge/node/embed.live.ts",
     "test:terminal": "bun test ./web/src/nvim/terminal.test.ts",
     "fuzz": "FUZZ_RUNS=${FUZZ_RUNS:-3000} bun test --timeout 0 lib/e2ee/test/*.fuzz.test.ts"
   },

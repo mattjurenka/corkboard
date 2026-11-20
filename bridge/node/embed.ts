@@ -34,12 +34,17 @@ export type Embed = (texts: string[], query?: boolean) => Promise<Float32Array[]
 const transformers = (): Promise<typeof import("@huggingface/transformers")> =>
   import(COMPILED ? Bun.resolveSync("@huggingface/transformers", join(RESOURCES, "speech.js")) : "@huggingface/transformers");
 
+// onnxruntime's arena and memory patterns keep what each new batch shape
+// took: a node that embedded for a week held 1.9 GB of them. Without
+// them it stays at what one batch needs.
+const SESSION = { enableCpuMemArena: false, enableMemPattern: false };
+
 let extractor: Promise<any> | undefined;
 export const bge: Embed = async (texts, query = false) => {
   extractor ??= transformers()
     .then((t) => {
       t.env.cacheDir = join(CACHE_DIR, "models");
-      return t.pipeline("feature-extraction", MODEL, { dtype: "q8" });
+      return t.pipeline("feature-extraction", MODEL, { dtype: "q8", session_options: SESSION });
     })
     .catch((e) => {
       extractor = undefined;
@@ -96,6 +101,11 @@ export class LocalEmbedder implements Embedder {
     private model = MODEL,
   ) {}
 
+  // How many it holds open.
+  get opened() {
+    return this.vectors.size;
+  }
+
   private hash(text: string) {
     return createHash("sha256").update(`${this.model}\n${text}`).digest("base64url");
   }
@@ -124,6 +134,8 @@ export class LocalEmbedder implements Embedder {
     const live = new Set(all.map((p) => p.hash));
     const gone = this.data.vectorHashes(brain).filter((h) => !live.has(h));
     if (gone.length) await this.data.putVectors(brain, [], gone);
+    // Another brain's of the same text is opened again when it's asked for.
+    for (const h of gone) this.vectors.delete(h);
     return all.map((p) => ({ key: p.key, vec: this.vector(brain, p.hash)! }));
   }
 
