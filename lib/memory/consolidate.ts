@@ -278,11 +278,15 @@ export function parseFlush(text: string): { bullets: string[]; opened: { owner: 
   return { bullets: bullets(i >= 0 ? text.slice(0, i).replace(/\n```[a-z]*\s*$/, "") : text), opened: opened.slice(0, 10), closed };
 }
 
+// What a model wrapped in a code block, out of it: an empty block is
+// empty, not three backticks.
+const unfence = (s: string) => s.trim().replace(/^```[a-z]*(?:\n|$)/, "").replace(/(?:^|\n)```$/, "").trim();
+
 // A page's answer: the new page, or null when the log added nothing. A page
 // too long, one that throws most of the old away, or one citing an entry it
 // wasn't given or the old page didn't cite, is refused.
 export function parsePage(text: string, was: string, known: Set<string>): { page: string } | { error: string } | null {
-  const page = text.trim().replace(/^```[a-z]*\n/, "").replace(/\n```$/, "").trim();
+  const page = unfence(text);
   if (page === NOTHING) return null;
   if (!page) return { error: "the page came back empty" };
   if (page.length > PAGE_MAX) return { error: `the page came back at ${page.length} characters, over ${PAGE_MAX}` };
@@ -306,7 +310,6 @@ export function parseRollup(text: string, was: string): { memory: string; sugges
   let soul = "";
   const j = rest.indexOf(SOUL_FENCE);
   if (j >= 0) (soul = rest.slice(j + SOUL_FENCE.length)), (rest = rest.slice(0, j));
-  const unfence = (s: string) => s.trim().replace(/^```[a-z]*\n/, "").replace(/\n```$/, "").trim();
   const memory = unfence(rest);
   if (!memory) return { error: "the memory came back empty" };
   if (memory.length > MEMORY_MAX) return { error: `the memory came back at ${memory.length} characters, over ${MEMORY_MAX}` };
