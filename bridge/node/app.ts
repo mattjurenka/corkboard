@@ -167,10 +167,11 @@ const env = (url: string) => ({ CORKBOARD_MEMORY_URL: url, CORKBOARD_MEMORY_TOKE
 // Another bridge's node, at the address its session-mcp.json gives (read
 // each call, as it may have restarted on another port), with the owner's
 // token. One that doesn't answer /app (an older bridge's) isn't used.
-async function runningNode(pid: number): Promise<AppNode | undefined> {
+// files: where those are, if not this machine's (a test's).
+export async function runningNode(pid: number, files = { mcp: MCP_FILE, owner: OWNER_TOKEN_FILE }, o = { tries: 30 }): Promise<AppNode | undefined> {
   const where = () => {
-    const url = JSON.parse(readFileSync(MCP_FILE, "utf8")).mcpServers["corkboard-memory"].url as string;
-    return { url: new URL(url).origin, token: readFileSync(OWNER_TOKEN_FILE, "utf8").trim() };
+    const url = JSON.parse(readFileSync(files.mcp, "utf8")).mcpServers["corkboard-memory"].url as string;
+    return { url: new URL(url).origin, token: readFileSync(files.owner, "utf8").trim() };
   };
   const call = async (op: string, args: any[]) => {
     const { url, token } = where();
@@ -188,7 +189,7 @@ async function runningNode(pid: number): Promise<AppNode | undefined> {
       break;
     } catch (e) {
       const answered = !(e instanceof TypeError || (e as any).code); // not a refused connection or a missing file
-      if (answered || tries >= 30) {
+      if (answered || tries >= o.tries) {
         console.error(`node: one is running already (pid ${pid}) and doesn't serve this bridge (${(e as Error).message}); memory isn't served here`);
         return;
       }
