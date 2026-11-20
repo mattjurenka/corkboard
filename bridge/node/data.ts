@@ -10,13 +10,13 @@
 
 import { type AgentState, type Card, type Fields, type LogEntry, type Priority, type Status, Invalid, fields as checkFields } from "../../lib/model/cards";
 import { createHash } from "node:crypto";
-import { type Block, type ChatMessage, DAY_STARTS_HOUR, type Note, type NoteInput, type Plan, type Proposal, today } from "../../lib/model/plans";
+import { type Block, DAY_STARTS_HOUR, type Note, type NoteInput, type Plan, type Proposal, today } from "../../lib/model/plans";
 import { dict } from "../../lib/dict";
 import type { CardChange, MergedCard } from "../../lib/e2ee/merge";
 import { b64url } from "../../lib/e2ee/wire";
 import { random } from "../../lib/e2ee/keys";
 import { BRAIN_RECORD, DAY, ROLLUP_RECORD, VECTOR_PREFIX, entryRecord, itemRecord, noteRecord, recordOf, vectorRecord } from "./objects";
-import { CHAT_PREFIX, Conflict, type FeedDevice, type Feeds, type Meditation, type Message, PLAN_PREFIX, askKey, chatRecord, feedsOf, feedsRecord, importedMessageId, meditationOf, meditationRecord, messageOf, planOf, planRecord, versionOf } from "./day";
+import { CHAT_PREFIX, Conflict, type FeedDevice, type Feeds, type Meditation, type Message, PLAN_PREFIX, askKey, chatRecord, feedsOf, feedsRecord, meditationOf, meditationRecord, messageOf, planOf, planRecord, versionOf } from "./day";
 import { BOARD_RECORD, type BoardSettings, MEDIA_PREFIX, extraOf, extraSet, isCard, isExtraField, leaseRecord, mediaRecord, newCardId, settingsOf } from "./board";
 import type { Replicas } from "./replicas";
 
@@ -308,17 +308,6 @@ export class Data {
     return typeof p === "string" ? p : undefined;
   }
 
-  // A note as another store kept it (move.ts, from the Worker): its own
-  // times and version, over any here that's older.
-  async importNote(brain: string, n: Note): Promise<boolean> {
-    const was = this.note(brain, n.id);
-    if (was && (was.version ?? 0) >= (n.version ?? 1) && was.updated >= n.updated) return false;
-    const set: Record<string, unknown> = { kind: n.kind, title: n.title, body: n.body, created: n.created, updated: n.updated, version: n.version ?? 1 };
-    if (n.path) set.path = n.path;
-    await this.replicas.change("brain", brain, { t: "card", card: noteRecord(n.id), set });
-    return true;
-  }
-
   async appendNote(brain: string, id: string, who: string, text: string): Promise<Note> {
     const n = this.note(brain, id);
     if (!n) throw new Invalid(`no note ${id}; write it first`);
@@ -543,29 +532,6 @@ export class Data {
     return this.changePlan(date, null, { calendar: { accepted, at: now(), day, ...result } });
   }
 
-  // A plan from the Worker (move.ts), as it is there: its open proposal
-  // named from its version, what's asked as entries of that day, an accept
-  // that names no proposal. Only what differs is written, so a second move
-  // writes nothing.
-  async importPlan(p: Plan): Promise<boolean> {
-    const m = this.planRecord(p.date);
-    const want: Record<string, unknown> = {
-      day: p.day,
-      projects: p.projects,
-      proposal: p.proposal && { ...p.proposal, id: `worker-${p.version}` },
-      accepted: p.accepted && { at: p.accepted, proposal: null },
-      ...(p.calendar && { calendar: p.calendar }),
-    };
-    const set = Object.fromEntries(Object.entries(want).filter(([k, v]) => JSON.stringify(m?.[k] ?? null) !== JSON.stringify(v ?? null)));
-    const had = new Set((m?.log ?? []).map(askKey));
-    const asked = p.asked
-      .map((note, i) => ({ at: `${p.date}T00:00:00.${String(i).padStart(3, "0")}Z`, who: "user", note }))
-      .filter((e) => !had.has(askKey(e)));
-    const changes = [...(Object.keys(set).length ? [{ t: "card" as const, card: planRecord(p.date), set }] : []), ...asked.map((entry) => ({ t: "log" as const, card: planRecord(p.date), entry }))];
-    if (changes.length) await this.replicas.change("day", DAY, ...changes);
-    return changes.length > 0;
-  }
-
   // Meditation (day.ts) -------------------------------------------------------------
 
   meditation(date: string): Meditation {
@@ -659,17 +625,5 @@ export class Data {
     if (!m || !m.by_user) throw new Invalid(`no message ${id}`);
     if (!m.delivered) await this.replicas.change("day", DAY, { t: "card", card: chatRecord(id), set: { delivered: now() } });
     return this.message(id)!;
-  }
-
-  // The Worker's messages (move.ts), with their times, each once. Their
-  // ids here are day.ts's importedMessageId.
-  async importChat(messages: ChatMessage[]): Promise<number> {
-    const have = new Set(this.messages().map((m) => m.id));
-    const changes = messages
-      .map((m) => ({ id: importedMessageId(m.id, m.at), m }))
-      .filter(({ id }) => !have.has(id))
-      .map(({ id, m }) => ({ t: "card" as const, card: chatRecord(id), set: { at: m.at, who: m.who, text: m.text, by_user: m.by_user, delivered: m.delivered } }));
-    if (changes.length) await this.replicas.change("day", DAY, ...changes);
-    return changes.length;
   }
 }

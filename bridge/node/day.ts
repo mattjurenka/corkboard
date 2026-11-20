@@ -65,11 +65,6 @@ export function feedsOf(date: string, f: MergedCard | undefined): Feeds {
 // The node's messages are named by a string.
 export type Message = Omit<ChatMessage, "id"> & { id: string };
 
-// A Worker message's id here, after the move: its time, as the node's are,
-// then the Worker's number, so they keep their order and a second move
-// finds them.
-export const importedMessageId = (id: number, at: string) => `${Date.parse(at).toString(36)}-w${String(id).padStart(9, "0")}`;
-
 export type Accepted ={ at: string; proposal: string | null };
 
 // A said thing's key in `answered`.

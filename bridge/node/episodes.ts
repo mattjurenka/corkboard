@@ -116,26 +116,6 @@ export class Episodes {
     return this.db.query<{ through: string }, [string, string]>("SELECT through FROM consolidated_sessions WHERE brain = ? AND session = ?").get(brain, session)?.through;
   }
 
-  // An episode as another store kept it (move.ts, from the Worker): its id,
-  // time and whether it's consolidated, so what's done isn't done again.
-  restore(brain: string, e: Omit<Episode, "attempts"> & { attempts?: number; transcript: string }): boolean {
-    if (this.db.query("SELECT 1 FROM episodes WHERE id = ?").get(e.id)) return false;
-    this.db.run("INSERT INTO episodes (id, brain, session, agent, trigger, at, bytes, transcript, consolidated, attempts, project) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
-      e.id,
-      brain,
-      e.session,
-      e.agent,
-      e.trigger,
-      e.at,
-      e.bytes,
-      e.transcript,
-      e.consolidated ? 1 : 0,
-      e.attempts ?? 0,
-      e.project ?? null,
-    ]);
-    return true;
-  }
-
   restoreThrough(brain: string, session: string, through: string) {
     this.db.run(
       "INSERT INTO consolidated_sessions (brain, session, through) VALUES (?, ?, ?) ON CONFLICT (brain, session) DO UPDATE SET through = max(through, excluded.through)",

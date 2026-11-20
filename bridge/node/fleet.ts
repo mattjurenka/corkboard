@@ -357,19 +357,6 @@ export class FleetRecords {
     }
     return { status: 405, body: { error: "method not allowed" } };
   }
-
-  // The Worker's holds, moved here (e2ee move-holds): each record and secret
-  // its export has, those not here already.
-  async importHolds(d: { records: Record<string, Omit<Hold, "name">>; secrets: Record<string, string> }): Promise<string[]> {
-    const moved: string[] = [];
-    for (const [name, r] of Object.entries(d.records ?? {})) {
-      if (!LABEL.test(name) || this.hold(name)) continue;
-      const v = own(d.secrets ?? {}, name) ?? null;
-      await this.set(holdRecord(name), { about: r.about ?? "", where: r.where ?? null, secret: v, secret_at: v === null ? null : (r.secret ?? r.updated), created: r.created, updated: r.updated, deleted: null });
-      moved.push(name);
-    }
-    return moved;
-  }
 }
 
 const shown = ({ value: _, ...h }: Hold & { value?: string | null }): Hold => h;
