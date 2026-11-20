@@ -22,6 +22,13 @@ function topOf(vfs: Vfs, cwd: string): string | undefined {
   }
 }
 
+// A revision log was given that names no commit.
+class Unknown extends Error {
+  constructor(readonly ref: string) {
+    super(ref);
+  }
+}
+
 const relative = (top: string, path: string) => (path === top ? "" : path.slice(top.length + 1));
 
 // status's XY for each of statusMatrix's [HEAD, workdir, stage] (see its
@@ -123,9 +130,35 @@ export async function runGit(vfs: Vfs, args: string[], cwd: string, stdin?: Uint
         }
         const format = rest.find((a) => a.startsWith("--format="))?.slice(9) ?? "%H %s";
         const max = has("--max-parents=0") ? Infinity : Number(rest.find((a) => /^-n?\d+$/.test(a))?.replace(/^-n?/, "") ?? Infinity);
-        const commits = await git.log({ fs, dir, ref: "HEAD", depth: Number.isFinite(max) ? max : undefined });
+        // What to show and what not: rev, a..b (an empty side is HEAD) and ^rev.
+        const show: string[] = [];
+        const hide: string[] = [];
+        for (const a of rest.filter((a) => !a.startsWith("-"))) {
+          const dots = a.indexOf("..");
+          if (dots >= 0) hide.push(a.slice(0, dots) || "HEAD"), show.push(a.slice(dots + 2) || "HEAD");
+          else if (a.startsWith("^")) hide.push(a.slice(1));
+          else show.push(a);
+        }
+        const walk = async (ref: string) => {
+          const oid = await git.resolveRef({ fs, dir, ref }).catch(() => git.expandOid({ fs, dir, oid: ref }).catch(() => undefined));
+          if (!oid) throw new Unknown(ref);
+          return git.log({ fs, dir, ref: oid });
+        };
+        let hidden: Set<string>;
+        let commits: Awaited<ReturnType<typeof git.log>>;
+        try {
+          hidden = new Set((await Promise.all(hide.map(walk))).flat().map((c) => c.oid));
+          const seen = new Set<string>();
+          commits = (await Promise.all((show.length ? show : ["HEAD"]).map(walk)))
+            .flat()
+            .filter((c) => !hidden.has(c.oid) && !seen.has(c.oid) && seen.add(c.oid));
+        } catch (e) {
+          if (e instanceof Unknown) return no(`fatal: ambiguous argument '${e.ref}': unknown revision or path not in the working tree.`, 128);
+          throw e;
+        }
         const out = commits
           .filter((c) => !has("--max-parents=0") || c.commit.parent.length === 0)
+          .slice(0, max)
           .map((c) =>
             format
               .replace(/%H/g, c.oid)

@@ -55,6 +55,12 @@ beforeAll(() => {
   sh(repo, "commit", "-q", "-m", "First\n\nwith a body");
   write(`${repo}/src/a.ts`, "a2\n");
   sh(repo, "commit", "-q", "-am", "Second: a's changed");
+  // A branch off the first, for the ranges review.lua logs.
+  sh(repo, "switch", "-q", "-c", "side", "HEAD~1");
+  write(`${repo}/side.txt`, "side\n");
+  sh(repo, "add", "side.txt");
+  sh(repo, "commit", "-q", "-m", "On the side");
+  sh(repo, "switch", "-q", "main");
   sh(repo, "remote", "add", "origin", "https://git.example/r.git");
   sh(repo, "config", "user.name", "Someone");
   // Changes of every kind since.
@@ -164,7 +170,28 @@ describe("runGit as git", () => {
   });
 
   test("log", async () => {
-    expect(await differ([[["log", "--max-parents=0", "--format=%ct %H", "HEAD"]]])).toEqual([]);
+    const first = Bun.spawnSync(["git", "rev-parse", "HEAD~1"], { cwd: repo, env }).stdout.toString().trim();
+    expect(
+      await differ([
+        [["log", "--max-parents=0", "--format=%ct %H", "HEAD"]],
+        [["log", "--format=%h %s"]],
+        [["log", "--format=%h %s", "HEAD"]],
+        [["log", "--format=%h %s", "-1"]],
+        [["log", "--format=%h %s", "-n1", "side"]],
+        [["log", "--format=%h %s", "side"]],
+        [["log", "--format=%h %s", first]],
+        [["log", "--format=%h %s", first.slice(0, 10)]],
+        [["log", "--format=%h %s", `${first}..HEAD`]],
+        [["log", "--format=%h %s", `${first}..`]],
+        [["log", "--format=%h %s", "main..side"]],
+        [["log", "--format=%h %s", "side..main"]],
+        [["log", "--format=%h %s", "..side"]],
+        [["log", "--format=%h %s", "HEAD..HEAD"]],
+        [["log", "--format=%h %s", "side", "^main"]],
+        [["log", "--format=%h %s", "nope..HEAD"]],
+        [["log", "--format=%h %s", "nope"]],
+      ]),
+    ).toEqual([]);
   });
 
   test("config and remotes", async () => {
