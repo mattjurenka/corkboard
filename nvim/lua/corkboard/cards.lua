@@ -145,8 +145,22 @@ local function quote(v)
     and not v:find(": ", 1, true)
     and not v:find(" #", 1, true)
     and not v:match("^[%d%s.:+%-]+$")
+    -- YAML's other numbers: hex, octal, exponents, infinity and NaN.
+    and not v:lower():match("^[%-+]?0[xo]%w+$")
+    and not v:lower():match("^[%-+]?[%d.]+e[%-+]?%d+$")
+    and not v:lower():match("^[%-+]?%.inf$")
+    and v:lower() ~= ".nan"
     and not vim.tbl_contains({ "true", "false", "null", "yes", "no", "on", "off", "~" }, v:lower())
   return plain and v or "'" .. v:gsub("'", "''") .. "'"
+end
+
+-- An ordinal YAML reads back as the same text: a number as JS would print
+-- it (no "1.50", "007", "-0", "1e3" or " ", which tonumber() takes), short
+-- enough not to round. As mcp/cards.ts's decimal().
+local function decimal(s)
+  local int, dot, frac = s:match("^%-?(%d+)(%.?)(%d*)$")
+  if not int or (#int > 1 and int:sub(1, 1) == "0") or #int + #frac > 15 or s == "-0" then return false end
+  return dot == "" or frac:match("[1-9]$") ~= nil
 end
 
 -- Files -----------------------------------------------------------------------
@@ -189,8 +203,9 @@ function M.parse(path)
   card.id = card.id or (base:match("^(%a+%-%d+) %- ") or base):upper()
   card.title = (card.title ~= nil and card.title ~= "") and card.title or card.id
   if not vim.tbl_contains(M.statuses, card.status) then card.status = "backlog" end
-  -- One agent per card: the first assignee.
-  if card.assignee then card.agent = card.assignee[1] and card.assignee[1]:gsub("^@", "") end
+  -- One agent per card: the first assignee, unless it has no name.
+  local agent = card.assignee and card.assignee[1] and card.assignee[1]:gsub("^@", "")
+  card.agent = agent ~= "" and agent or nil
   return card
 end
 
@@ -198,7 +213,7 @@ function M.serialize(card)
   local lines, seen = { "---" }, { path = true, body = true, agent = true }
   local fields = setmetatable({}, { __index = card })
   fields.assignee = vim.list_slice(card.assignee or {}, 2)
-  if card.agent then table.insert(fields.assignee, 1, card.agent) end
+  if card.agent and card.agent ~= "" then table.insert(fields.assignee, 1, card.agent) end
   local function emit(k)
     local v = fields[k]
     seen[k] = true
@@ -210,7 +225,7 @@ function M.serialize(card)
         for _, item in ipairs(v) do table.insert(lines, "  - " .. quote(tostring(item))) end
       end
     elseif v ~= nil and v ~= "" then
-      table.insert(lines, k .. ": " .. ((k == "ordinal" and tonumber(v)) and tostring(v) or quote(tostring(v))))
+      table.insert(lines, k .. ": " .. ((k == "ordinal" and decimal(tostring(v))) and tostring(v) or quote(tostring(v))))
     end
   end
   for _, k in ipairs(KEY_ORDER) do emit(k) end
@@ -398,10 +413,12 @@ function M.append_log(card, who, note)
     if not i then break end
     at, from = i, i + 1
   end
+  -- Once: LuaJIT's gsub matches "\n*$" again, empty, at the very end, and
+  -- would leave a blank line where mcp/cards.ts leaves none.
   if at then
-    card.body = body:sub(1, at - 1):gsub("\n*$", "\n") .. entry .. body:sub(at)
+    card.body = body:sub(1, at - 1):gsub("\n*$", "\n", 1) .. entry .. body:sub(at)
   else
-    card.body = body:gsub("\n*$", "\n") .. "\n" .. section("Implementation Notes", "NOTES", entry)
+    card.body = body:gsub("\n*$", "\n", 1) .. "\n" .. section("Implementation Notes", "NOTES", entry)
   end
 end
 

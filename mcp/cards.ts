@@ -66,7 +66,9 @@ const UNPRINTABLE = /[^\t\x20-\x7e\xa0-\ud7ff\ue000-\ufffd\u{10000}-\u{10ffff}]/
 // boolean, list or mapping), the way Backlog.md quotes its dates. What YAML
 // doesn't print is in double quotes, escaped: in single quotes a line break
 // folds to a space, and bare, any of them made the front matter unreadable,
-// which reads as a card with no fields.
+// which reads as a card with no fields. Spaces are ASCII's, as Lua's %s
+// and YAML's are: \s would quote a no-break space that cards.lua leaves
+// plain.
 function quote(s: string): string {
   const v = wellFormed(s);
   if (UNPRINTABLE.test(v))
@@ -75,15 +77,28 @@ function quote(s: string): string {
     )}"`;
   const plain =
     v !== "" &&
-    !/^[\s\-?:,[\]{}#&*!|>'"%@`]/.test(v) &&
-    !/[\s:]$/.test(v) &&
+    !/^[ \t\n\v\f\r\-?:,[\]{}#&*!|>'"%@`]/.test(v) &&
+    !/[ \t\n\v\f\r:]$/.test(v) &&
     !v.includes(": ") &&
     !v.includes(" #") &&
-    !/^[\d\s.:+-]+$/.test(v) &&
+    !/^[\d \t\n\v\f\r.:+-]+$/.test(v) &&
+    // YAML's other numbers: hex, octal, exponents, infinity and NaN.
+    !/^[-+]?0[xo][0-9a-z]+$/i.test(v) &&
+    !/^[-+]?[\d.]+e[-+]?\d+$/i.test(v) &&
+    !/^[-+]?\.inf$/i.test(v) &&
+    v.toLowerCase() !== ".nan" &&
     !["true", "false", "null", "yes", "no", "on", "off", "~"].includes(v.toLowerCase()) &&
-    // And whatever else YAML has (1e3, .inf, 0x1f) that the above misses.
+    // And whatever else YAML has that the above misses.
     readsAs(v);
   return plain ? v : `'${v.replaceAll("'", "''")}'`;
+}
+
+// An ordinal YAML reads back as the same text: a number as JS would print
+// it (no "1.50", "007", "-0", "1e3" or " ", which Number() takes), short
+// enough not to round. As cards.lua's decimal().
+function decimal(v: string): boolean {
+  const m = v.match(/^-?(0|[1-9]\d*)(?:\.(\d*[1-9]))?$/);
+  return !!m && v !== "-0" && m[1].length + (m[2]?.length ?? 0) <= 15;
 }
 
 export const now = (d = new Date()) => {
@@ -146,7 +161,7 @@ export function serialize(card: Card): string {
       if (!v.length) lines.push(`${key}: []`);
       else lines.push(`${key}:`, ...v.map((item) => `  - ${quote(String(item))}`));
     } else if (v !== undefined && v !== "") {
-      lines.push(`${key}: ${k === "ordinal" && v !== null && !isNaN(Number(v)) ? v : quote(String(v))}`);
+      lines.push(`${key}: ${k === "ordinal" && decimal(String(v)) ? v : quote(String(v))}`);
     }
   };
   KEY_ORDER.forEach(emit);
