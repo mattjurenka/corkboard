@@ -125,6 +125,9 @@ export class OAuthError extends Error {
 
 export type Caller = { scope: Kind; agent: string; grant: string; resource: string | null; brain?: string; board?: string; card?: string; spawn?: string };
 
+// How a client id document is looked up and fetched: the system's, or a test's.
+export type Net = { lookup?: (host: string) => Promise<{ address: string }[]>; fetch?: (url: URL, init: RequestInit) => Promise<Response>; timeout?: number };
+
 export class OAuthStore {
   private failures: number[] = [];
   private documents = new Map<string, { client: Client; until: number }>();
@@ -135,6 +138,7 @@ export class OAuthStore {
   constructor(
     readonly path: string,
     private shared?: Shared,
+    private net: Net = {},
   ) {}
 
   private read(): File {
@@ -316,10 +320,10 @@ export class OAuthStore {
       throw new OAuthError("invalid_client", "client_id isn't a URL");
     }
     if (url.protocol !== "https:" || url.pathname === "/" || url.hash || url.username || url.password) throw new OAuthError("invalid_client", "a client id document is an https URL with a path");
-    await publicHost(url.hostname);
+    await publicHost(url.hostname, this.net.lookup);
     let doc: Record<string, unknown>;
     try {
-      const res = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(10_000), headers: { Accept: "application/json" } });
+      const res = await (this.net.fetch ?? fetch)(url, { redirect: "error", signal: AbortSignal.timeout(this.net.timeout ?? 10_000), headers: { Accept: "application/json" } });
       if (!res.ok) throw new Error(String(res.status));
       const text = await res.text();
       if (text.length > 64 * 1024) throw new Error("too big");
@@ -577,9 +581,9 @@ export function sameRedirect(registered: string, asked: string): boolean {
 // shared, multicast or reserved, so a client id can't make the node fetch
 // from its own network. (Its DNS could still change between this and the
 // fetch; the window is the gap the plan names.)
-async function publicHost(host: string) {
+async function publicHost(host: string, resolve: (name: string) => Promise<{ address: string }[]> = (name) => lookup(name, { all: true })) {
   const name = host.replace(/^\[|\]$/g, "");
-  const addresses = isIP(name) ? [{ address: name }] : await lookup(name, { all: true }).catch(() => []);
+  const addresses = isIP(name) ? [{ address: name }] : await resolve(name).catch(() => []);
   if (!addresses.length) throw new OAuthError("invalid_client", `can't resolve ${host}`);
   for (const { address } of addresses) if (!publicAddress(address)) throw new OAuthError("invalid_client", `${host} isn't a public address`);
 }
