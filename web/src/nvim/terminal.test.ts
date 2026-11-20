@@ -1,6 +1,7 @@
 // Ghosting in the terminal itself: a TUI that measures text as Claude Code
 // does (Ink's string-width, which Bun.stringWidth follows) draws frames in a
-// real Neovim :terminal, and the screen it leaves must be its last frame.
+// session's terminal in Neovim (corkboard.terminal), and the screen it
+// leaves must be its last frame.
 // Where Neovim gives a character a different width, the TUI's cursor maths
 // is off from there on and what it meant to overwrite stays.
 import { describe, expect, test } from "bun:test";
@@ -44,10 +45,17 @@ if (mode === "widths") {
 // A line as cells: a grapheme, then "" for each further column it takes.
 const layout = (line) => {
   const cells = [];
+  // No columns with no cell before them: the next one's.
+  let lead = "";
   for (const { segment } of seg.segment(line)) {
     const w = Bun.stringWidth(segment);
-    if (w === 0 && cells.length) cells[cells.length - 1] += segment;
-    else cells.push(segment, ...Array(Math.max(0, w - 1)).fill(""));
+    if (w === 0) {
+      if (cells.length) cells[cells.length - 1] += segment;
+      else lead += segment;
+    } else {
+      cells.push(lead + segment, ...Array(w - 1).fill(""));
+      lead = "";
+    }
   }
   return cells;
 };
@@ -99,8 +107,10 @@ local spec = vim.json.decode(io.open(os.getenv("SPEC")):read("a"))
 vim.o.columns = spec.cols
 vim.o.lines = spec.rows + 2
 vim.o.laststatus = 0
+-- As a session runs: through corkboard's terminal, not Neovim's own.
+vim.opt.rtp:prepend(spec.plugin)
 vim.cmd("enew")
-local job = vim.fn.jobstart({ "bun", spec.tui, spec.mode, spec.input, spec.output }, { term = true })
+local job = require("corkboard.terminal").start({ "bun", spec.tui, spec.mode, spec.input, spec.output }, {})
 vim.wait(20000, function() return vim.fn.jobwait({ job }, 0)[1] ~= -1 end, 10)
 vim.wait(200)
 if spec.mode ~= "widths" then
@@ -120,7 +130,7 @@ function inTerminal(mode: string, data: unknown) {
   const output = join(dir, `out-${id}.json`);
   const spec = join(dir, `spec-${id}.json`);
   writeFileSync(input, JSON.stringify(data));
-  writeFileSync(spec, JSON.stringify({ cols: COLS, rows: ROWS, tui, mode, input, output }));
+  writeFileSync(spec, JSON.stringify({ cols: COLS, rows: ROWS, tui, mode, input, output, plugin: join(import.meta.dir, "../../../nvim") }));
   const p = Bun.spawnSync(["nvim", "--headless", "--clean", "-l", harness], { env: { ...process.env, SPEC: spec } });
   if (p.exitCode !== 0) throw new Error(`nvim: ${p.stderr.toString()}`);
   return JSON.parse(readFileSync(output, "utf8"));
@@ -130,7 +140,10 @@ function screen(mode: string, frames: string[][]) {
   const lines: string[] = inTerminal(mode, frames);
   return lines.slice(0, ROWS).map((l) => l.trimEnd()).join("\n").replace(/\n+$/, "");
 }
-const last = (frames: string[][]) => frames[frames.length - 1].map((l) => l.trimEnd()).join("\n").replace(/\n+$/, "");
+// The last frame as the screen should show it: less what corkboard's terminal
+// takes out (corkboard.terminal's filter), which no program gives a column.
+const FILTERED = /[\u070f\u180e\u200b\u200e\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g;
+const last = (frames: string[][]) => frames[frames.length - 1].map((l) => l.replace(FILTERED, "").trimEnd()).join("\n").replace(/\n+$/, "");
 
 // What Claude Code draws: its spinner and status glyphs, the logo's blocks,
 // emoji with and without presentation selectors, and East Asian text.

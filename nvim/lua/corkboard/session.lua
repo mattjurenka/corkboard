@@ -137,8 +137,7 @@ function M.start(opts)
   vim.b[buf].corkboard_branch = opts.branch
   -- For away mode's list (corkboard.away).
   vim.b[buf].corkboard_name = opts.name
-  vim.fn.jobstart(cmd, {
-    term = true,
+  require("corkboard.terminal").start(cmd, {
     cwd = opts.cwd,
     -- Its colors, for the phone; its bytes, for its mirrors.
     on_stdout = (function()

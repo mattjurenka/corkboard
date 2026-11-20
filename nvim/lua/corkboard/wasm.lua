@@ -164,19 +164,7 @@ end
 
 -- jobstart and its company ---------------------------------------------
 
--- What a terminal's process should think its size is: the smallest of the
--- windows showing it, as Neovim does for its own.
-local function term_size(buf)
-  local rows, cols
-  for _, win in ipairs(vim.fn.win_findbuf(buf)) do
-    local info = vim.fn.getwininfo(win)[1]
-    local h = info.height - (info.winbar or 0)
-    local w = info.width - info.textoff
-    rows = math.min(rows or h, h)
-    cols = math.min(cols or w, w)
-  end
-  return math.max(rows or vim.o.lines - 2, 1), math.max(cols or vim.o.columns, 1)
-end
+local function term_size(buf) return require("corkboard.terminal").size(buf) end
 
 local terminals = {} -- buf -> proc
 M.terminals = terminals
@@ -206,6 +194,8 @@ function M.jobstart(cmd, opts)
   if opts.term then
     local buf = vim.api.nvim_get_current_buf()
     p.buf = buf
+    -- What Neovim's terminal can't draw as the process means it.
+    p.filter = require("corkboard.terminal").filter()
     p.chan = vim.api.nvim_open_term(buf, {
       on_input = function(_, _, _, data)
         if not p.exited then call("write", p.id, data) end
@@ -234,11 +224,20 @@ function M.jobstart(cmd, opts)
   procs[id] = {
     on_event = function(kind, a, b)
       if kind == "stdout" or kind == "stderr" then
-        if p.buf then vim.api.nvim_chan_send(p.chan, a) end
+        if p.buf then
+          a = p.filter(a)
+          if a ~= "" then vim.api.nvim_chan_send(p.chan, a) end
+        end
+        -- An empty chunk is EOF to jobstart's callers.
         local cb = opts["on_" .. kind]
-        if cb then cb(p.chan, lines(a), kind) end
+        if cb and a ~= "" then cb(p.chan, lines(a), kind) end
       elseif kind == "exit" then
         procs[id] = nil
+        local rest = p.buf and p.filter("", true) or ""
+        if rest ~= "" then
+          pcall(vim.api.nvim_chan_send, p.chan, rest)
+          if opts.on_stdout then opts.on_stdout(p.chan, lines(rest), "stdout") end
+        end
         p.exited, p.code = true, b ~= 0 and 128 + b or a
         for _, name in ipairs({ "stdout", "stderr" }) do
           local cb = opts["on_" .. name]

@@ -167,6 +167,7 @@ local function connect(v)
   v.ended = false
   -- Over what was there: it starts with all of it again.
   vim.api.nvim_chan_send(v.chan, "\27c")
+  v.filter = terminal.filter()
   local ok, err = pcall(cloud().call, "fleet_terminal", v.bridge, v.key)
   if not ok then return M.event({ type = "terminal_end", bridge = v.bridge, key = v.key, why = tostring(err) }) end
   size(v, true)
@@ -233,7 +234,9 @@ function M.event(event)
     local why = event.why ~= vim.NIL and event.why or "ended"
     return vim.api.nvim_chan_send(v.chan, "\r\n\27[2m" .. tostring(why) .. " (R to connect again)\27[0m")
   end
-  vim.api.nvim_chan_send(v.chan, vim.base64.decode(event.data))
+  v.filter = v.filter or terminal.filter()
+  local s = v.filter(vim.base64.decode(event.data))
+  if s ~= "" then vim.api.nvim_chan_send(v.chan, s) end
 end
 
 return M
