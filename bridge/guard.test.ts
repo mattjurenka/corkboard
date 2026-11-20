@@ -85,7 +85,7 @@ describe("a bridge behind a proxy", () => {
 // The same over a real socket, served as server.ts serves /nvim.
 describe("the socket itself", () => {
   const g = guard({ local: true, token: TOKEN });
-  const server = Bun.serve<{ error?: string }, {}>({
+  const server = Bun.serve<{ error?: string }>({
     hostname: "127.0.0.1",
     port: 0,
     fetch(r, s) {
