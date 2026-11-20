@@ -72,8 +72,9 @@ export class Session extends CloudSession {
   // The node's day events this session follows.
   private unfollowDay?: () => void;
 
-  constructor(listener: Listener, sessions?: () => unknown[]) {
-    super(cloud, listener, sessions);
+  // c: the Worker, as cloud-session.ts reaches it; a test's own.
+  constructor(listener: Listener, sessions?: () => unknown[], c: Cloud = cloud) {
+    super(c, listener, sessions);
   }
 
   override async call(op: string, args: any[]): Promise<unknown> {
