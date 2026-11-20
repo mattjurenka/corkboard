@@ -6,6 +6,7 @@
 // one in the output starts a tag.
 import { describe, expect, test } from "bun:test";
 import { fuzz } from "../../../lib/testing/fuzz";
+import { BREAKOUTS, ESCAPED, HREFS, IMAGES, INLINE_OPENERS, PIECES, RAW_HTML } from "../testing/xss";
 import { md } from "./markdown";
 
 const TAGS = new Map<string, Set<string>>([
@@ -67,24 +68,7 @@ describe("md", () => {
     expect(html("[x](https://a.example/p?q=1&r=2)")).toBe('<p><a href="https://a.example/p?q=1&#38;r=2" target="_blank" rel="noopener noreferrer">x</a></p>\n');
     expect(html("[x](HTTP://A.EXAMPLE)")).toContain('href="HTTP://A.EXAMPLE"');
     expect(html("see https://a.example and www.b.example")).toContain('href="http://www.b.example"');
-    for (const href of [
-      "javascript:alert(1)",
-      "JaVaScRiPt:alert(1)",
-      " javascript:alert(1)",
-      "java\tscript:alert(1)",
-      "&#106;avascript:alert(1)",
-      "&#x6A;avascript:alert(1)",
-      "javascript&colon;alert(1)",
-      "vbscript:msgbox(1)",
-      "data:text/html,<script>alert(1)</script>",
-      "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
-      "file:///etc/passwd",
-      "//evil.example",
-      "/local",
-      "#top",
-      "http:evil",
-      "mailto:a@b.example",
-    ]) {
+    for (const href of HREFS) {
       safe(`[x](${href})`);
       expect(html(`[x](${href})`)).not.toContain("<a");
     }
@@ -94,70 +78,14 @@ describe("md", () => {
   });
 
   test("a link's href and title can't break out of the attribute", () => {
-    for (const s of [
-      '[x](http://a.example"onmouseover="alert(1))',
-      "[x](http://a.example'onmouseover='alert(1))",
-      '[x](<http://a.example/" onclick="alert(1)>)',
-      '[x](http://a.example "t\\" onclick=\\"alert(1)")',
-      "[x](http://a.example 'it\\'s' )",
-      '[x][r]\n\n[r]: http://a.example "t\\" onclick=x"',
-      '<http://a.example/"onclick=alert(1)>',
-      'www.a.example/"onclick=alert(1)',
-      "https://a.example/<script>alert(1)</script>",
-      "[x](http://a.example&#34;onclick=alert(1))",
-      "[x](http://a.example&quot;onclick=alert(1))",
-      "[x](http://a.example/%22onclick=alert(1))",
-    ])
-      safe(s);
+    for (const s of BREAKOUTS) safe(s);
     // The title is dropped rather than put through.
     expect(html('[x](http://a.example "the title")')).not.toContain("title");
     expect(html('[x](http://a.example"onclick="y)')).toContain('href="http://a.example&#34;onclick=&#34;y"');
   });
 
   test("raw HTML is text", () => {
-    for (const s of [
-      "<script>alert(1)</script>",
-      "<SCRIPT SRC=//evil.example/x.js></SCRIPT>",
-      "<iframe src=javascript:alert(1)></iframe>",
-      "<style>body{display:none}</style>",
-      "<img src=x onerror=alert(1)>",
-      "a <img src=x onerror=alert(1)> b",
-      "<svg onload=alert(1)>",
-      "<svg><script>alert(1)</script></svg>",
-      "<math><mi xlink:href=javascript:alert(1)>x</mi></math>",
-      '<a href="javascript:alert(1)">x</a>',
-      "<details open ontoggle=alert(1)>",
-      "<div>\n<script>alert(1)</script>\n</div>",
-      "Text\n<div onclick=alert(1)>\n\nmore\n</div>",
-      "<!-- x --><b>",
-      "<![CDATA[<script>alert(1)</script>]]>",
-      "<?php echo 1 ?>",
-      "<img src=x onerror=alert(1)",
-      "<a href=x",
-      "<",
-      "<<script>>",
-      "</p><script>",
-      "<body onload=alert(1)>",
-      "<object data=x>",
-      "<embed src=x>",
-      "<base href=//evil.example>",
-      "<meta http-equiv=refresh content=0;url=//evil.example>",
-      "<form action=//evil.example><input name=p></form>",
-      "<textarea><script>",
-      "<noscript><p title=\"</noscript><img src=x onerror=alert(1)>\">",
-      "<template><script>alert(1)</script></template>",
-      "> <style>*{}</style>",
-      "- <img src=x onerror=1>",
-      "| <img src=x onerror=1> | b |\n|---|---|\n| c | <script>d</script> |",
-      "# <i onclick=x>h</i>",
-      "*<b onclick=x>*",
-      "[<img src=x onerror=1>](http://a.example)",
-      "[a](http://a.example)<img src=x onerror=1>",
-      "```\n</code></pre><script>alert(1)</script>\n```",
-      '```"><script>alert(1)</script>\nx\n```',
-      "    <script>alert(1)</script>",
-      "`</code><script>`",
-    ]) {
+    for (const s of RAW_HTML) {
       safe(s);
       expect(html(s)).not.toMatch(/<(script|iframe|style|img|svg|math|object|embed|base|meta|form|textarea|template|details|body|noscript|div|b|i)\b/i);
     }
@@ -168,7 +96,7 @@ describe("md", () => {
   // raw HTML, up to its end tag, and put it out as it was: a tag left
   // unclosed there (so not an html token, which is escaped) went into the page.
   test("text after an inline <script>, <pre>, <code> or <kbd> is escaped too", () => {
-    for (const open of ["<script>", "<pre>", "<code>", "<kbd>", "<SCRIPT>", "<pre class=x>"]) {
+    for (const open of INLINE_OPENERS) {
       const s = `a ${open} b <img src=x onerror=alert(1)//`;
       safe(s);
       expect(html(s)).toBe(`<p>a ${open.replace("<", "&#60;").replace(">", "&#62;")} b &#60;img src=x onerror=alert(1)//</p>\n`);
@@ -182,14 +110,14 @@ describe("md", () => {
 
   test("an image is its alt text", () => {
     expect(html("![a cat](https://a.example/cat.png)")).toBe("<p>a cat</p>\n");
-    for (const s of ["![x](javascript:alert(1))", '![x" onerror="alert(1)](http://a.example/x.png)', "![<script>](x)", "![a](x \"t\" onerror=alert(1))", "[![a](i.png)](http://a.example)"]) {
+    for (const s of IMAGES) {
       safe(s);
       expect(html(s)).not.toContain("<img");
     }
   });
 
   test("escaped and entity text stays text", () => {
-    for (const s of ["&lt;script&gt;", "&#60;script&#62;", "&#x3C;script&#x3E;", "\\<script>", "&amp;lt;script&amp;gt;"]) {
+    for (const s of ESCAPED) {
       safe(s);
       expect(html(s)).not.toContain("<script");
     }
@@ -197,11 +125,6 @@ describe("md", () => {
 });
 
 // Markdown made of the pieces above and random text, run together.
-const PIECES = [
-  "<script>", "</script>", "<img src=x onerror=alert(1)>", "<svg onload=x>", "<a href=", "javascript:", "JAVASCRIPT:", "data:text/html,", "vbscript:",
-  "http://a.example", "https://a.example/", "www.a.example", "[", "]", "(", ")", "![", "<", ">", '"', "'", "`", "```", "\n", "\n\n", "    ", "- ", "> ", "# ",
-  "| a |", "|---|", "*", "**", "_", "~~", "\\", "&", "&#", "&#106;", "&quot;", "&lt;", ";", ":", "=", " on", "onclick=", "/", "<!--", "-->", "[r]: ", "1. ",
-];
 fuzz("md's output is always within the list", (g) => {
   let s = "";
   for (let n = g.size(40); n > 0; n--) s += g.bool(0.8) ? g.pick(PIECES) : g.string(8);

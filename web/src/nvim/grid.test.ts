@@ -3,7 +3,7 @@
 // final cells. The canvas is faked with one that rasterises like a browser's:
 // fractional edges cover pixels partly and blend with what is there, and
 // glyphs are boxes that may run wider or taller than their cell.
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 
 const CELL = 8.4; // "M"'s advance, so cellW is 9 and glyphs fall a little short
 const GLYPH_W = new Map<string, number>([
@@ -121,6 +121,14 @@ class FakeCanvas {
 }
 
 let dpr = 1;
+// Put back after, for a page (testing/dom.ts) a later file in this process has.
+const page = new Map(["window", "document", "getComputedStyle"].map((k) => [k, Object.getOwnPropertyDescriptor(globalThis, k)]));
+afterAll(() => {
+  for (const [k, d] of page) {
+    if (d) Object.defineProperty(globalThis, k, d);
+    else delete (globalThis as Record<string, unknown>)[k]; // keys: the three globals above
+  }
+});
 Object.assign(globalThis, {
   window: {
     get devicePixelRatio() {
