@@ -217,7 +217,18 @@ export async function startNode(o: NodeOptions = {}) {
     const sealed = new FleetRecords(replicas, fleet, forge, data);
     // Each brain thinks with its own model, its key a hold's secret here.
     const think = brainThink((brain) => data.brains().find((b) => b.name === brain), (hold) => sealed.secrets([hold])[hold]);
-    const consolidator = new Consolidator({ data, episodes, think, after: (brain) => search.share(brain), leads, handoff });
+    // A test's (nix/tests/multi-node.nix): episodes read at once, and often.
+    const ms = (v: string | undefined) => (v ? Number(v) : undefined);
+    const consolidator = new Consolidator({
+      data,
+      episodes,
+      think,
+      after: (brain) => search.share(brain),
+      leads,
+      handoff,
+      quiet: ms(process.env.CORKBOARD_CONSOLIDATE_QUIET_MS),
+      every: ms(process.env.CORKBOARD_CONSOLIDATE_EVERY_MS),
+    });
     consolidator.start();
     const forgeRecords = new ForgeRecords(replicas);
     const forgeUnix = process.env.CORKBOARD_FORGE_UNIX ?? join(NODE_DIR, "forge", "forgejo.sock");

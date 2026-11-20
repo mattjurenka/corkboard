@@ -51,13 +51,14 @@ export function brainThink(settings: (brain: string) => BrainModel | undefined, 
 // having the same log (serve.ts: the node the tunnel goes to); always,
 // without it. handoff: where a node that doesn't lead gives its episodes,
 // and the one that does takes them (handoff.ts); without it, each node
-// reads its own.
+// reads its own. quiet: in place of QUIET (a test's).
 export type ConsolidatorOptions = {
   data: Data;
   episodes: Episodes;
   think?: Think;
   now?: () => number;
   every?: number;
+  quiet?: number;
   after?: (brain: string) => Promise<void>;
   leads?: () => Promise<boolean>;
   handoff?: Pick<Handoff, "give" | "take">;
@@ -77,7 +78,7 @@ export class Consolidator {
     this.think = o.think ?? brainThink((brain) => o.data.brains().find((b) => b.name === brain), () => undefined);
     this.now = o.now ?? Date.now;
     // Read once it's quiet.
-    o.episodes.onAdded = (brain) => o.episodes.setMeta(brain, "consolidate_at", String(this.now() + QUIET));
+    o.episodes.onAdded = (brain) => o.episodes.setMeta(brain, "consolidate_at", String(this.now() + (o.quiet ?? QUIET)));
   }
 
   start() {
