@@ -16,10 +16,32 @@ jobs:
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
+      # The plugin's tests and the terminal's run a real Neovim, the one the
+      # flake pins; git makes their repositories and worktrees.
+      - name: Neovim 0.12.6
+        run: |
+          curl -fsSL https://github.com/neovim/neovim/releases/download/v0.12.6/nvim-linux-x86_64.tar.gz | tar -xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
+      - run: git config --global user.name ci && git config --global user.email ci@localhost && git config --global init.defaultBranch main
       - run: bun run typecheck
       - run: bun run test:fleet
       - run: bun run test:e2ee
+      - run: bun run test:lib
+      - run: bun run test:bridge
+      - run: bun run test:mcp
+      - run: bun run test:nvim
+      - run: bun run test:web
+      - run: bun run test:terminal
       - run: bun run build
+
+  # The flake's checks but multi-node (four VMs): the fleet's, its packages'
+  # imports, and the page's Neovim and libuv built for wasm and run.
+  nix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: nix build -L .#checks.x86_64-linux.{fleet,fleet-host,fleet-package,forge-gate-package,nvim-smoke,libuv-smoke}
 
   relay:
     runs-on: ubuntu-latest
