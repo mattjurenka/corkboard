@@ -5,10 +5,12 @@ import { type MailboxView, type PairTransport, approve, pairNew, parseQr } from 
 import { CODE_ALPHABET, b64url } from "../wire";
 
 // A mailbox as the relay keeps one (relay/src/mailbox.ts), in memory, with
-// its order enforced; code: to make two that share one, for a relay in the middle.
+// its order enforced, and gone once the new device has seen the delivery;
+// code: to make two that share one, for a relay in the middle.
 function mailbox(code = Array.from({ length: 10 }, () => CODE_ALPHABET[Math.floor(Math.random() * 32)]).join("")): PairTransport & { box: MailboxView } {
   const secret = "s3cret";
   const box: MailboxView = { code, expires: Date.now() + 60_000 };
+  let gone = false;
   const once = (k: keyof MailboxView, v: never) => {
     if (box[k] !== undefined) throw new Error(`${k} already`);
     (box as Record<string, unknown>)[k] = v;
@@ -16,7 +18,12 @@ function mailbox(code = Array.from({ length: 10 }, () => CODE_ALPHABET[Math.floo
   return {
     box,
     create: async () => ({ code, secret, expires: box.expires }),
-    view: async (_c, s) => (s && s !== secret ? Promise.reject(new Error("wrong secret")) : structuredClone(box)),
+    view: async (_c, s) => {
+      if (gone) throw new Error("no such pairing");
+      if (s && s !== secret) throw new Error("wrong secret");
+      if (s && box.deliver) gone = true;
+      return structuredClone(box);
+    },
     commit: async (_c, commit) => once("commit", commit as never),
     join: async (_c, s, j) => {
       if (s !== secret || !box.commit) throw new Error("not yet");
@@ -107,6 +114,26 @@ describe("pairing", () => {
     await Promise.all([m1, m2]);
     expect(delivered).toBe(false);
     expect(toOld.box.deliver).toBeUndefined();
+  });
+
+  it("keeps a delivery that comes with the reveal, the mailbox going with it", async () => {
+    // A quick approver: the new device's first sight of the reveal has the delivery too.
+    const relay = mailbox();
+    const view = relay.view;
+    relay.view = async (c, s) => {
+      const v = await view(c, s);
+      return s && !v.deliver ? { ...v, reveal: undefined } : v;
+    };
+    const root = newRoot();
+    let code = "";
+    const [got] = await Promise.all([
+      pairNew(relay, newDevice(), "phone", { show: (c) => (code = c), confirm: async () => true }, fast),
+      (async () => {
+        while (!code) await new Promise((r) => setTimeout(r, 1));
+        return approve(relay, root, code, { confirm: async () => true }, fast);
+      })(),
+    ]);
+    expect(got.root).toEqual(root);
   });
 
   it("refuses an approver whose key isn't what it committed to", async () => {

@@ -132,11 +132,18 @@ export async function pairNew(
     const commit = await poll(async () => (await relay.view(code, secret)).commit, w, expires);
     const join = { box: b64url(device.box.public), device: device.id, name };
     await relay.join(code, secret, join);
-    const approver = await poll(async () => (await relay.view(code, secret)).reveal, w, expires);
+    // An approver quick to confirm has delivered by the time the reveal is
+    // seen, and the relay lets the mailbox go with that view: the delivery
+    // is kept from it, and opened only once this side has confirmed too.
+    const revealed = await poll(async () => {
+      const v = await relay.view(code, secret);
+      return v.reveal ? { approver: v.reveal, deliver: v.deliver } : undefined;
+    }, w, expires);
+    const approver = revealed.approver;
     if (commitment(approver) !== commit) throw new Error("pairing: the approving device's key doesn't match what it committed to; someone is in the middle");
     const t: PairTranscript = { v: 1, code, approver, box: join.box, device: join.device };
     if (!(await ui.confirm(sas(t)))) throw new Error("pairing: the codes didn't match");
-    const d = await poll(async () => (await relay.view(code, secret)).deliver, w, expires);
+    const d = revealed.deliver ?? (await poll(async () => (await relay.view(code, secret)).deliver, w, expires));
     return receive(device, t, d);
   } catch (e) {
     await relay.cancel(code, secret).catch(() => {});
