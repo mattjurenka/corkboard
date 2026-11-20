@@ -73,6 +73,9 @@
 
       checks = forAll (pkgs: {
         fleet = import ./fleet/tests.nix { inherit pkgs; inherit (pkgs) lib; };
+      } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
+        # One account on three nodes in VMs, through a relay in a fourth.
+        multi-node = import ./nix/tests/multi-node.nix { inherit pkgs; corkboard = self.packages.${pkgs.stdenv.hostPlatform.system}.default; src = ./.; };
       } // (wasmOn pkgs.stdenv.hostPlatform.system).checks);
 
       devShells = forAll (pkgs:
