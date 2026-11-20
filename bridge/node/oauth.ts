@@ -325,9 +325,7 @@ export class OAuthStore {
     try {
       const res = await (this.net.fetch ?? fetch)(url, { redirect: "error", signal: AbortSignal.timeout(this.net.timeout ?? 10_000), headers: { Accept: "application/json" } });
       if (!res.ok) throw new Error(String(res.status));
-      const text = await res.text();
-      if (text.length > 64 * 1024) throw new Error("too big");
-      doc = JSON.parse(text);
+      doc = JSON.parse(await upTo(res, 64 * 1024));
     } catch (e) {
       throw new OAuthError("invalid_client", `couldn't read the client's metadata document (${(e as Error).message})`);
     }
@@ -575,6 +573,25 @@ export function sameRedirect(registered: string, asked: string): boolean {
   } catch {
     return false;
   }
+}
+
+// A response's body as text, read no further than max bytes: past them
+// it's too big, and the rest is never fetched.
+async function upTo(res: Response, max: number): Promise<string> {
+  const reader = res.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const r = await reader?.read();
+    if (!r || r.done) break;
+    size += r.value.length;
+    if (size > max) {
+      await reader!.cancel();
+      throw new Error("too big");
+    }
+    chunks.push(r.value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 // A host whose every address is public: not private, loopback, link-local,

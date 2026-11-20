@@ -155,6 +155,10 @@ describe("a client id metadata document", () => {
     await expect(doc("/missing.json")).rejects.toThrow(/couldn't read.*404/);
     await expect(doc("/html.json")).rejects.toThrow(/couldn't read/);
     await expect(doc("/big.json")).rejects.toThrow(/too big/);
+    // One without end is cut off at its 64 KB, not read until the time's up.
+    const started = Date.now();
+    await expect(doc("/endless.json")).rejects.toThrow(/too big/);
+    expect(Date.now() - started).toBeLessThan(500);
     await expect(doc("/slow.json")).rejects.toThrow(/couldn't read/);
     await expect(doc("/other-id.json")).rejects.toThrow(/names another client_id/);
     await expect(doc("/http-redirect.json")).rejects.toThrow(/redirect_uris/);
