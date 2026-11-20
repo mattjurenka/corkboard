@@ -1,5 +1,5 @@
 // Codex as an ACP agent (`codex-acp`, the agentclientprotocol adapter,
-// verified against 2.1.1 with Codex 0.167.0, nixpkgs'; nixpkgs wraps it
+// verified against 2.1.1 with Codex 0.170.0, nixpkgs'; nixpkgs wraps it
 // with CODEX_PATH set to its own codex). Everything goes in the adapter's
 // environment, so the user's ~/.codex (their `codex login`, config.toml)
 // is left as it is:
@@ -26,6 +26,19 @@
 // - With no gateway, a session/new before any login is "Authentication
 //   required": `codex login` once, as the user would for Codex itself.
 //   NO_BROWSER keeps the adapter from offering a browser login.
+//
+// A turn that fails (the provider's 400, a stream that keeps dropping)
+// ends as end_turn all the same. Asked for in initialize, as JetBrains AIR's
+// sessionFailure, why comes in the result's _meta.jetbrains.air
+// .sessionFailure, `severity: "error"` and its `title`, and failure() makes
+// the prompt fail with it; warnings come as session_info_updates (Reconnecting
+// N/5, the model's missing metadata) and the error is no longer a message
+// chunk. Without it the error is only words in the turn.
+//
+// Codex's request_user_input tool isn't the model's in the default mode
+// codex-acp runs: a call is answered "request_user_input is unavailable in
+// Default mode" (2.1.1, tried against a scripted model), so a question comes
+// through corkboard-ui's ask.
 //
 // Tool calls are titled mcp.<server>.<tool> for an MCP tool (rawInput
 // { server, tool, arguments }), else what the tool does; names() gives an MCP
@@ -89,6 +102,11 @@ export function codex(o: CodexOptions): Spec {
     env: { ...m.env, CODEX_CONFIG: JSON.stringify(config), INITIAL_AGENT_MODE: "workspace-write", NO_BROWSER: "1" },
     mcpServers: [],
     names,
+    client: { jetbrains: { air: { version: 1, capabilities: ["sessionFailure"] } } },
+    failure: (r) => {
+      const f = r?._meta?.jetbrains?.air?.sessionFailure;
+      return f?.severity === "error" ? String(f.title || "the turn failed") : undefined;
+    },
     quiet: (u) => u.sessionUpdate === "agent_message_chunk" && /^Warning: Model metadata for `[^`]*` not found\./.test(String(u.content?.text ?? "")),
   };
 }

@@ -1,9 +1,10 @@
 // The Spec lib/acp/codex.ts builds for codex-acp (what it says was verified).
 
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AcpSession } from "./client";
 import { codex } from "./codex";
 import { Transcript } from "./transcript";
 
@@ -108,5 +109,43 @@ describe("its transcript", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("a failed turn", () => {
+  // A stand-in for codex-acp 2.1.1 as a scripted provider's 400 had it:
+  // end_turn, and why in _meta, given initialize asked for it.
+  const dir = mkdtempSync(join(tmpdir(), "codex-failed-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const agent = join(dir, "agent.ts");
+  writeFileSync(
+    agent,
+    `
+const out = (m) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...m }) + "\\n");
+let buf = "", air = false;
+for await (const c of Bun.stdin.stream()) {
+  buf += new TextDecoder().decode(c);
+  let n;
+  while ((n = buf.indexOf("\\n")) >= 0) {
+    const m = JSON.parse(buf.slice(0, n));
+    buf = buf.slice(n + 1);
+    if (m.method === "initialize") { air = !!m.params.clientCapabilities._meta?.jetbrains?.air?.capabilities?.includes("sessionFailure"); out({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {} } }); }
+    else if (m.method === "session/new") out({ id: m.id, result: { sessionId: "s" } });
+    else if (m.method === "session/prompt") {
+      const fail = m.params.prompt[0].text === "fail";
+      const sessionFailure = fail ? { id: "s:error", revision: 1, category: "service", severity: "error", title: "The model \`fake-model\` does not exist or you do not have access to it.", actions: ["retry"] } : { id: "s:notice", revision: 1, category: "unknown", severity: "warning", title: "Model metadata not found.", actions: [] };
+      out({ id: m.id, result: { stopReason: "end_turn", ...(air && { _meta: { jetbrains: { air: { version: 1, sessionFailure } } } }) } });
+    }
+  }
+}
+`,
+  );
+
+  test("asked for, its error fails the prompt; a warning doesn't", async () => {
+    const s = new AcpSession({ spec: { ...codex({}), command: ["bun", agent] }, cwd: dir, dir, event: () => {} });
+    await s.start();
+    expect(await s.prompt("hi")).toBe("end_turn");
+    await expect(s.prompt("fail")).rejects.toThrow("The model `fake-model` does not exist");
+    s.close();
   });
 });

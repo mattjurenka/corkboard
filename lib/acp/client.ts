@@ -28,6 +28,10 @@ export type McpServer =
 // settle: ms to wait after the session opens before it's ready, for an agent
 // whose MCP tools join the session a moment after it says it's open.
 // meta: the session/new (and session/load) _meta the kind's agent reads.
+// client: the initialize clientCapabilities' _meta, for what the kind's agent
+// offers a client that asks for it.
+// failure: why a turn failed, from session/prompt's result, for an agent
+// that says so there rather than in its stopReason.
 // auth: the authenticate method to sign in with before the session, given
 // the env the kind's spec ends up with (a fleet slot's credential's too).
 export type Spec = {
@@ -39,6 +43,8 @@ export type Spec = {
   quiet?: (u: any) => boolean;
   settle?: number;
   meta?: object;
+  client?: object;
+  failure?: (result: any) => string | undefined;
   auth?: (env: Record<string, string>) => string | undefined;
 };
 
@@ -141,7 +147,7 @@ export class AcpSession {
 
   // The agent up and a session open: a new one, or resume's again.
   async start(resume?: string): Promise<string> {
-    const init = await this.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } });
+    const init = await this.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false, ...(this.o.spec.client && { _meta: this.o.spec.client }) } });
     this.capabilities = init?.agentCapabilities ?? {};
     const method = this.o.spec.auth?.(this.o.spec.env ?? {});
     if (method) await this.request("authenticate", { methodId: method });
@@ -167,7 +173,8 @@ export class AcpSession {
     return this.id!;
   }
 
-  // A turn: resolves with its stopReason once it's over.
+  // A turn: resolves with its stopReason once it's over, rejects with why
+  // it failed.
   async prompt(text: string): Promise<string> {
     if (!this.id) throw new Error("no session yet");
     if (this.busy) throw new Error("it's still on the last prompt");
@@ -177,6 +184,8 @@ export class AcpSession {
     try {
       const got = await this.request("session/prompt", { sessionId: this.id, prompt: [{ type: "text", text }] });
       const stop = String(got?.stopReason ?? "end_turn");
+      const failed = this.o.spec.failure?.(got);
+      if (failed) throw new Error(failed);
       this.transcript!.turn(got?.usage);
       return stop;
     } catch (err) {
