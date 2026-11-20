@@ -23,6 +23,7 @@ const S_IFREG = 0o100000;
 const S_IFDIR = 0o040000;
 const S_IFLNK = 0o120000;
 const O_ACCMODE = 0o3;
+const O_WRONLY = 0o1;
 const O_CREAT = 0o100;
 const O_EXCL = 0o200;
 const O_TRUNC = 0o1000;
@@ -61,6 +62,7 @@ export class Vfs {
       const name = parts[i];
       const last = i === parts.length - 1;
       if (name === "..") {
+        if (!this.isDir(dir)) fail("ENOTDIR");
         dir = stack.pop() ?? this.root;
         if (last) return { node: dir, parent: stack.at(-1) ?? this.root, name: "." };
         continue;
@@ -95,8 +97,9 @@ export class Vfs {
     return [n.mode, size, n.mtime, n.atime, n.ctime, this.isDir(n) ? 2 : 1, 1000, 1000, 1, 0, 4096, Math.ceil(size / 512)];
   }
 
-  private add(path: string, mode: number): Node {
-    const { node, parent, name } = this.walk(path, false);
+  // A new node at path, or where walk took it (a dangling link's target).
+  private add(path: string, mode: number, at = this.walk(path, false)): Node {
+    const { node, parent, name } = at;
     if (node) fail("EEXIST");
     if (!this.isDir(parent)) fail("ENOTDIR");
     const n = this.node(mode);
@@ -155,6 +158,7 @@ export class Vfs {
       }
       case "truncate": case "ftruncate": {
         const n = op === "truncate" ? this.get(a[0]) : this.fd(a[0]).node;
+        if (op === "ftruncate" && (this.fd(a[0]).flags & O_ACCMODE) === 0) fail("EINVAL");
         if (this.isDir(n)) fail("EISDIR");
         this.resize(n, a[1]);
         return null;
@@ -168,7 +172,8 @@ export class Vfs {
       }
       case "close": return this.fds.delete(a[0]), null;
       case "read": {
-        const { node } = this.fd(a[0]);
+        const { node, flags } = this.fd(a[0]);
+        if ((flags & O_ACCMODE) === O_WRONLY) fail("EBADF");
         if (this.isDir(node)) fail("EISDIR");
         node.atime = Date.now();
         return node.data!.slice(a[2], Math.min(node.size!, a[2] + a[1]));
@@ -185,11 +190,14 @@ export class Vfs {
   }
 
   private open(path: string, flags: number, mode = 0o666): number {
-    let { node } = this.walk(path, true);
-    if (node && flags & O_CREAT && flags & O_EXCL) fail("EEXIST");
+    // O_EXCL takes even a dangling link as there; without it, the file is
+    // made where the link leads.
+    if (flags & O_CREAT && flags & O_EXCL && this.walk(path, false).node) fail("EEXIST");
+    const at = this.walk(path, true);
+    let { node } = at;
     if (!node) {
       if (!(flags & O_CREAT)) fail("ENOENT");
-      node = this.add(path, S_IFREG | (mode & 0o7777));
+      node = this.add(path, S_IFREG | (mode & 0o7777), at);
     }
     const writing = (flags & O_ACCMODE) !== 0;
     if (this.isDir(node) && writing) fail("EISDIR");
@@ -203,6 +211,7 @@ export class Vfs {
     const { node, flags } = this.fd(fd);
     if ((flags & O_ACCMODE) === 0) fail("EBADF");
     const at = flags & O_APPEND ? node.size! : position;
+    if (!bytes.length) return 0;
     if (at + bytes.length > node.size!) this.resize(node, at + bytes.length);
     node.data!.set(bytes, at);
     node.mtime = node.ctime = Date.now();
@@ -228,17 +237,21 @@ export class Vfs {
   }
 
   private rename(from: string, to: string) {
+    // Both paths are looked up before either is found missing, as a kernel does.
     const a = this.walk(from, false);
-    if (!a.node) fail("ENOENT");
     const b = this.walk(to, false);
+    if (!a.node) fail("ENOENT");
     if (!this.isDir(b.parent)) fail("ENOTDIR");
     if (b.node === a.node) return;
+    // Whether there is in dir, however the paths are spelt (a .., a link on the way).
+    const holds = (dir: Node, there: Node): boolean => dir === there || (this.isDir(dir) && [...dir.children!.values()].some((n) => holds(n, there)));
+    // Not into itself, nor over a directory it's in.
+    if (this.isDir(a.node!) && holds(a.node!, b.parent)) fail("EINVAL");
+    if (b.node && this.isDir(b.node) && holds(b.node, a.parent)) fail("ENOTEMPTY");
     if (b.node) {
       if (this.isDir(a.node!) !== this.isDir(b.node)) fail(this.isDir(b.node) ? "EISDIR" : "ENOTDIR");
       if (this.isDir(b.node) && b.node.children!.size) fail("ENOTEMPTY");
     }
-    // Not into itself.
-    if (this.isDir(a.node!) && `${to}/`.startsWith(`${from.replace(/\/+$/, "")}/`)) fail("EINVAL");
     a.parent.children!.delete(a.name);
     b.parent.children!.set(b.name, a.node!);
     a.parent.mtime = b.parent.mtime = Date.now();
