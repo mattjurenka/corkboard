@@ -35,7 +35,10 @@ export function forgeProxy(config: Upstream) {
   async function allow(req: Request, url: URL, user: string, scope: Scope): Promise<Verdict> {
     const method = req.method;
     const raw = url.pathname;
-    if (/%2f|%5c|\/\.\.?(\/|$)|\/\//i.test(raw)) return no(400, "not a path a grant takes");
+    // A URL has no dot segments (it resolved them, %2e ones too, as Forgejo
+    // would), so what's left to take apart is an encoded separator and an
+    // empty segment.
+    if (/%2f|%5c|\/\//i.test(raw)) return no(400, "not a path a grant takes");
     if (OPEN_API.has(`${method} ${raw}`)) return { ok: true, body: req.body };
 
     const git = gitRoute(method, raw, url.searchParams.get("service"));

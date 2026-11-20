@@ -352,6 +352,17 @@ describe("a grant's request, taken apart", () => {
     expect(seen.length).toBe(before);
   });
 
+  it("is taken with its dot segments resolved, as Forgejo takes it, so one reaches only what the path it resolves to does", async () => {
+    const h = await vm();
+    const before = seen.length;
+    for (const p of ["/api/v1/repos/matt/corkboard/../other/contents/a", "/api/v1/repos/matt/corkboard/%2e%2e/other/contents/a", "/api/v1/repos/matt/corkboard/contents/../../../../user", "/matt/corkboard.git/../../other/r.git/info/refs?service=git-upload-pack"]) {
+      expect([p, (await call(p, { headers: h })).status]).toEqual([p, 403]);
+    }
+    expect(seen.length).toBe(before);
+    expect((await call("/api/v1/repos/matt/other/../corkboard/contents/a", { headers: h })).status).toBe(200);
+    expect(last().path).toBe("/api/v1/repos/matt/corkboard/contents/a");
+  });
+
   it("holds no more than 64 MiB of an API write to read its refs", async () => {
     const h = await vm();
     const before = seen.length;
