@@ -16,6 +16,7 @@ import { openPlan } from "./planWindow";
 import { remember, save as saveSkeleton } from "./skeleton";
 import { nvimFlushed, startLatency } from "./latency";
 import { navigate } from "./lib/nav";
+import { closed, reconnect } from "./reconnect";
 import { openListed } from "./views/Projects";
 
 // ?cwd=/path/to/project opens Neovim there; ?host=<name> on that machine,
@@ -297,23 +298,12 @@ rpc.on("corkboard.theme", async ([theme]: any[]) => {
 });
 // The tabs and windows, for the next load to show while Neovim starts.
 addEventListener("pagehide", () => saveSkeleton(store.get()));
-// A bridge that went away (restarted, or the machine slept) is waited for,
-// and the page loads again once it answers, with a new Neovim as a reload
-// would. A close the bridge chose (Neovim exited, a wrong token, the plan
-// opened elsewhere) stays closed.
-const reconnect = async () => {
-  for (let wait = 500; ; wait = Math.min(wait * 2, 5000)) {
-    await new Promise((r) => setTimeout(r, wait));
-    try {
-      if ((await fetch("manifest.webmanifest", { method: "HEAD", cache: "no-store" })).ok) return location.reload();
-    } catch {}
-  }
-};
+// A bridge that went away is waited for (reconnect.ts).
 rpc.on("close", (e: CloseEvent) => {
   document.title = "corkboard (disconnected)";
-  const lost = e.code === 1006 || e.code === 1001;
-  store.set({ status: e.reason || (lost ? "can't reach the bridge — reconnecting" : "nvim exited") });
-  if (lost) reconnect();
+  const { status, lost } = closed(e);
+  store.set({ status });
+  if (lost) void reconnect();
 });
 
 await rpc.ready;
