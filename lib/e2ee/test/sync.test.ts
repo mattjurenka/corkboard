@@ -3,7 +3,7 @@ import { type CardChange, type Op, apply, cards, empty } from "../merge";
 import { newRoot, objectKey } from "../keys";
 import { sealRecord } from "../record";
 import { type LogTransport, Replica, memoryStore } from "../sync";
-import { type NewOp, type WireOp, b64url } from "../wire";
+import { LIMITS, type NewOp, type WireOp, b64url } from "../wire";
 
 // A seeded random, so a failure can be rerun.
 function rng(seed: number) {
@@ -188,6 +188,44 @@ describe("replicas", () => {
       for (const rep of reps) await rep.pull();
       const want = JSON.stringify(reps[0].cards());
       for (const rep of reps) expect(JSON.stringify(rep.cards())).toBe(want);
+    }
+  });
+
+  it("open the queue in order, for moving it to another object, and leave it queued", async () => {
+    const relay = memoryRelay();
+    const a = await Replica.open({ transport: relay.transport("A"), key, object: "obj3", device: "A" });
+    expect(await a.queued()).toEqual([]);
+    const changes: CardChange[] = [
+      { t: "card", card: "c", set: { title: "one" } },
+      { t: "log", card: "c", entry: { at: "now", who: "A", note: "two" } },
+      { t: "card", card: "d", set: { status: "done" } },
+    ];
+    await a.change(...changes);
+    expect(await a.queued()).toEqual(changes);
+    expect(a.pending).toBe(3);
+    await a.push();
+    expect(await a.queued()).toEqual([]);
+  });
+
+  it("are worth compacting once the relay says the log has grown past its limits", async () => {
+    const relay = memoryRelay();
+    let kept = { count: 0, bytes: 0 };
+    const base = relay.transport("A");
+    const transport: LogTransport = { ...base, read: async (object, since) => ({ ...(await base.read(object, since)), ...kept }) };
+    const a = await Replica.open({ transport, key, object: "obj4", device: "A" });
+    expect(a.worthCompacting).toBe(false);
+    let was = false;
+    for (const [k, worth] of [
+      [{ count: LIMITS.compactOps + 1, bytes: 0 }, true],
+      [{ count: LIMITS.compactOps, bytes: 0 }, false],
+      [{ count: 1, bytes: LIMITS.compactBytes + 1 }, true],
+      [{ count: 1, bytes: LIMITS.compactBytes }, false],
+    ] as const) {
+      kept = k;
+      // Only what a read says counts.
+      expect(a.worthCompacting).toBe(was);
+      await a.pull();
+      expect(a.worthCompacting).toBe((was = worth));
     }
   });
 });
