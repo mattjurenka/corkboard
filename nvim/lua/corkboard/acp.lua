@@ -237,8 +237,12 @@ function M.failed(buf, why)
   draw(buf)
 end
 
--- The agent's process ended. One cleared is followed by its next.
-function M.exited(buf, code)
+-- Its stderr's last lines this many, for why it failed.
+local STDERR_LINES = 8
+
+-- The agent's process ended, with the end of its stderr. One cleared is
+-- followed by its next.
+function M.exited(buf, code, stderr)
   local s = open[buf]
   if not s then return end
   if s.clearing then
@@ -247,7 +251,12 @@ function M.exited(buf, code)
   end
   s.alive = false
   vim.b[buf].corkboard_acp_alive = false
-  if code ~= nil and code ~= vim.NIL and code ~= 0 then note(s, ("✗ %s exited with status %d"):format(s.kind.exe, code), true) end
+  if code ~= nil and code ~= vim.NIL and code ~= 0 then
+    local why = ("✗ %s exited with status %d"):format(s.kind.exe, code)
+    local lines = vim.split(vim.trim(type(stderr) == "string" and stderr or ""), "\n", { plain = true })
+    if lines[1] ~= "" then why = why .. "\n" .. table.concat(lines, "\n", math.max(1, #lines - STDERR_LINES + 1)) end
+    note(s, why, true)
+  end
   s.c.ended = "— ended"
   draw(buf)
   require("corkboard.away").report()

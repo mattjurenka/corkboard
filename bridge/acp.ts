@@ -43,10 +43,16 @@ type Open = {
   drawing?: ReturnType<typeof setTimeout>;
   // The words last drawn as it said them.
   said?: string;
+  // The end of its stderr, and whether its process has ended.
+  stderr: string;
+  exited?: boolean;
 };
 
 // Updates come a word at a time: the view's drawn this long after the first.
 const DRAW = 40;
+
+// How much of its stderr is kept, for why it ended.
+const STDERR = 4096;
 
 
 export class Acp {
@@ -55,6 +61,7 @@ export class Acp {
   constructor(
     private lua: Lua,
     private node: () => AppNode | undefined,
+    private kinds: typeof KINDS = KINDS,
   ) {}
 
   private get(buf: number): Open {
@@ -76,19 +83,20 @@ export class Acp {
     switch (op) {
       case "acp_start": {
         const o = args[1] ?? {};
-        const kind = own(KINDS, String(o.kind));
+        const kind = own(this.kinds, String(o.kind));
         if (!kind) throw new Error(`corkboard acp: no agent called ${o.kind}`);
         if (typeof o.cwd !== "string") throw new Error("corkboard acp: where?");
         this.stop(buf);
         const spec = kind({ dir: join(DIR, "prompts"), name: `${process.pid}-${buf}-${++starts}`, prompt: o.prompt, mcp: o.mcp, servers: o.servers, ...(await this.model(o.brain)) });
         const asked = new Map<string, (option: string | null) => void>();
-        const open: Open = { buf, session: undefined as unknown as AcpSession, asked, asks: 0 };
+        const open: Open = { buf, session: undefined as unknown as AcpSession, asked, asks: 0, stderr: "" };
         const session = new AcpSession({
           spec,
           cwd: o.cwd,
           dir: DIR,
           event: (e) => this.lua("require('corkboard.agents').hook(...)", { buf, ...e }),
           update: () => this.draw(open),
+          log: (chunk) => (open.stderr = (open.stderr + chunk).slice(-STDERR)),
           permission: (p: Permission) =>
             new Promise((resolve) => {
               const id = String(++open.asks);
@@ -96,11 +104,12 @@ export class Acp {
               this.lua("require('corkboard.acp').permission(...)", buf, id, p);
             }),
           exit: (code) => {
+            open.exited = true;
             this.drawNow(open);
             for (const answer of asked.values()) answer(null);
             asked.clear();
             if (this.open.get(buf) === open) this.open.delete(buf);
-            this.lua("require('corkboard.acp').exited(...)", buf, code);
+            this.lua("require('corkboard.acp').exited(...)", buf, code, open.stderr);
           },
         });
         open.session = session;
@@ -114,6 +123,9 @@ export class Acp {
           return { session: id, transcript: session.transcriptPath, capabilities: session.capabilities };
         } catch (err) {
           this.stop(buf);
+          // Why, when its exit hasn't said already.
+          const why = open.stderr.trim();
+          if (!open.exited && why && err instanceof Error) err.message += `\n${why}`;
           throw err;
         }
       }

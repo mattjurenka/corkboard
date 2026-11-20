@@ -81,6 +81,9 @@ export type Options = {
 
 type Waiting = { resolve: (v: any) => void; reject: (e: Error) => void };
 
+// How long its exit waits on the rest of its stderr.
+const STDERR_WAIT = 100;
+
 export class AcpSession {
   private proc: ChildProcess;
   private next = 0;
@@ -90,6 +93,7 @@ export class AcpSession {
   private transcript?: Transcript;
   // A turn's tool calls, by id: what they're called, for tool_done.
   private tools = new Map<string, string>();
+  private exited = false;
   id?: string;
   capabilities: any = {};
   usage?: Usage;
@@ -102,12 +106,26 @@ export class AcpSession {
     this.proc = spawn(exe, args, { cwd: o.cwd, env: { ...process.env, ...o.spec.env }, stdio: ["pipe", "pipe", "pipe"] });
     this.proc.stdout!.setEncoding("utf8");
     this.proc.stdout!.on("data", (chunk: string) => this.read(chunk));
-    this.proc.stderr!.setEncoding("utf8");
-    this.proc.stderr!.on("data", (chunk: string) => o.log?.(chunk));
+    const stderr = this.proc.stderr!;
+    stderr.setEncoding("utf8");
+    stderr.on("data", (chunk: string) => o.log?.(chunk));
+    let heard = false;
+    stderr.once("end", () => (heard = true));
     this.proc.on("error", (err) => this.ended(err));
     this.proc.on("exit", (code) => {
-      this.ended(new Error(`${exe} exited${code === null ? "" : ` with status ${code}`}`));
-      o.exit?.(code);
+      // Its stderr's last words before how it ended: 'exit' can come
+      // first. Not 'close', which waits on whatever else holds the pipe.
+      let wait: ReturnType<typeof setTimeout> | undefined;
+      const end = () => {
+        if (this.exited) return;
+        this.exited = true;
+        clearTimeout(wait);
+        this.ended(new Error(`${exe} exited${code === null ? "" : ` with status ${code}`}`));
+        o.exit?.(code);
+      };
+      if (heard) return end();
+      wait = setTimeout(end, STDERR_WAIT);
+      stderr.once("end", end);
     });
     this.proc.stdin!.on("error", () => {});
   }

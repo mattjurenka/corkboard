@@ -263,8 +263,11 @@ think({ system, input, schema?, model?, tools?: [] }): Promise<{ text: string; j
    result; a custom OpenAI-compatible provider in opencode's config (Ollama, a scripted
    endpoint). Not verified live: the brain's model handed over by bridge/acp.ts, and switching
    models.
-   Found: bridge/acp.ts passes no `log`, so an agent's stderr is dropped and a failed start
-   (codex's "Authentication required") shows in Neovim only as the buffer exiting. The board's `A` picks a card's brain and kind (see Choosing the agent),
+   Fixed 2026-11-20: bridge/acp.ts passed no `log`, so an agent's stderr was dropped and a
+   failed start (codex's "Authentication required") showed in Neovim only as the buffer
+   exiting. It keeps the last 4 KB: on acp_start's error while the process is up, and as
+   `exited(buf, code, stderr)`'s third argument, whose last 8 lines a non-zero exit shows. The
+   client's exit waits up to 100 ms for stderr's end, as 'exit' may come first. The board's `A` picks a card's brain and kind (see Choosing the agent),
    verified 2026-11-12 in a headless Neovim with the board and start stubbed.
 6. **Neovim's part done 2026-11-12, on this machine (opencode 2.2.5).** **The conversation view**
    in Neovim and on the phone, for an ACP session. The fleet's view (conversation.lua) is shared:

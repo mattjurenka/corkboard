@@ -136,6 +136,22 @@ describe("AcpSession", () => {
     await ended.promise;
     expect(existsSync(join(dir, "prompted.md"))).toBe(false);
   });
+
+  // What it said is logged before its exit, which a process it left
+  // holding stderr doesn't hold up.
+  for (const [what, script] of [
+    ["alone", "echo 'Authentication required' >&2; exit 1"],
+    ["leaving a process with its stderr", "sleep 5 >&2 & echo 'Authentication required' >&2; exit 1"],
+  ])
+    test(`its stderr before its exit: ${what}`, async () => {
+      let said = "";
+      const t = Date.now();
+      const ended = Promise.withResolvers<{ code: number | null; said: string }>();
+      const s = new AcpSession({ spec: { command: ["sh", "-c", script] }, cwd: dir, dir: join(dir, "transcripts"), event: () => {}, log: (c) => (said += c), exit: (code) => ended.resolve({ code, said }) });
+      expect(await s.start().catch((e) => (e as Error).message)).toBe("sh exited with status 1");
+      expect(await ended.promise).toEqual({ code: 1, said: "Authentication required\n" });
+      expect(Date.now() - t).toBeLessThan(1000);
+    });
 });
 
 describe("opencode", () => {
