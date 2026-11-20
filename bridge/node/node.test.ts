@@ -32,7 +32,7 @@ import { Hub, joinHub } from "../hub";
 import { type Hosted, type TerminalOut, serve } from "../sessions";
 import { type PeerEvent, type Reach, Peers } from "../peers";
 import type { Fleet } from "./mcp";
-import { type DayEvent, boardEvents, boards, brains, dayEvents, notes, plans } from "./app";
+import { type DayEvent, boardEvents, boards, brains, dayEvents, nodes, notes, plans } from "./app";
 import { LEASE_MS, sweep, touch } from "./leases";
 import { lentCalendar, startCalendar, writeAccepted } from "./calendar";
 import { type Block, type ChatMessage, type Plan, today } from "../../lib/model/plans";
@@ -512,6 +512,68 @@ describe("the app's operations, for another bridge", () => {
     await n.data.putNote("assistant", "memory", { kind: "memory", title: "Long-term memory", body: "- mine\n" });
     expect(await op("brains_note", "memory")).not.toHaveProperty("previous");
     expect(((await op("brains_learned")) as { pages: { id: string }[] }).pages.map((p) => p.id)).toEqual(["project-corkboard"]);
+    await n.stop();
+  });
+
+  it("chooses the leader and turns the forge's pages through the tunnel on and off, for the owner on loopback alone", async () => {
+    const n = await setup();
+    // The relay's account nodes (relay/src/nodes.ts), as its routes answer them.
+    const state = { leader: null as string | null, forge: false };
+    const asked: string[] = [];
+    const view = () => ({ handle: "h", url: "https://relay.test/n/h", leader: state.leader, ...(state.forge && { forge: true as const }), connected: [{ device: "me", since: 2 }, { device: "desktop", since: 1 }], known: [{ device: "desktop", name: "desktop", seen: 1 }] });
+    const relay = new Relay({
+      origin: "https://relay.test",
+      token: { token: "cbe_x", expires: Date.now() + 3600_000 },
+      fetch: async (url, init = {}) => {
+        const p = new URL(url).pathname;
+        const body = init.body ? JSON.parse(String(init.body)) : {};
+        asked.push(`${init.method ?? "GET"} ${p}`);
+        if (p === "/e2ee/nodes/forge") state.forge = body.on;
+        if (p === "/e2ee/nodes/leader") state.leader = body.device;
+        return Response.json(view());
+      },
+    });
+    // serve.ts's: the tunnel's node goes by what it was last told.
+    let forgeWeb = false;
+    const started = { tunnel: { url: "https://relay.test/n/h", connected: true, stop() {} }, relay, device: "me", noteNodes: (v: { forge?: true }) => void (forgeWeb = !!v.forge) } as unknown as StartedNode;
+    const forge = async () => new Response("forgejo");
+    const tunneled = node({ data: n.data, search: n.search, oauth: n.oauth, origin: "https://relay.test/n/h", forge, forgeWeb: () => forgeWeb });
+    const local = node({ data: n.data, search: n.search, oauth: n.oauth, origin: ORIGIN, forge, app: () => (op, args) => nodes(started, op, args) });
+    const owner = n.oauth.mint("dev bridge", 1, "owner");
+    const app = async (op: string, args: unknown[], token = owner, address = "127.0.0.1") => {
+      const res = await local(new Request(`${ORIGIN}/app`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ op, args }) }), { requestIP: () => ({ address }) });
+      return res.status === 200 ? ((await res.json()) as { value: any }).value : res.status;
+    };
+    // A browser's, as serveTunnel hands it on.
+    const page = async () => (await tunneled(new Request("http://tunnel.invalid/forge/user/login"))).status;
+
+    const listed = await app("nodes_list", []);
+    expect(listed).toEqual({ url: "https://relay.test/n/h", leader: null, forge: false, devices: [expect.objectContaining({ device: "me", me: true, connected: true }), expect.objectContaining({ device: "desktop", me: false, connected: true, leader: false })] });
+    expect(await page()).toBe(404);
+
+    expect((await app("nodes_forge", [true])).forge).toBe(true);
+    expect(await page()).toBe(200);
+    // Only true turns them on.
+    expect((await app("nodes_forge", ["on"])).forge).toBe(false);
+    expect(await page()).toBe(404);
+
+    expect((await app("nodes_leader", ["desktop"])).devices.find((d: { leader: boolean }) => d.leader).device).toBe("desktop");
+    expect((await app("nodes_leader", [])).leader).toBeNull();
+
+    // Not an assistant's, not from another machine, not through the tunnel, not on a channel.
+    const before = asked.length;
+    expect(await app("nodes_forge", [true], n.oauth.mint("claude.ai", 1, "assistant"))).toBe(404);
+    expect(await app("nodes_forge", [true], owner, "192.168.1.5")).toBe(404);
+    expect((await local(new Request(`${ORIGIN}/app`, { method: "POST", headers: { Authorization: `Bearer ${owner}` }, body: JSON.stringify({ op: "nodes_forge", args: [true] }) }))).status).toBe(404);
+    const device = { body: { device: "phone", name: "phone" } } as unknown as Parameters<typeof local>[2];
+    expect((await local(new Request(`${ORIGIN}/app`, { method: "POST", body: JSON.stringify({ op: "nodes_forge", args: [true] }) }), undefined, device)).status).toBe(404);
+    expect((await tunneled(new Request("http://tunnel.invalid/app", { method: "POST", headers: { Authorization: `Bearer ${owner}` }, body: JSON.stringify({ op: "nodes_forge", args: [true] }) }))).status).toBe(404);
+    expect(asked.length).toBe(before);
+    expect(state.forge).toBe(false);
+    expect(await page()).toBe(404);
+
+    // With no tunnel there's nothing to choose.
+    expect(await nodes({ ...started, tunnel: undefined } as unknown as StartedNode, "nodes_forge", [true])).toBeNull();
     await n.stop();
   });
 

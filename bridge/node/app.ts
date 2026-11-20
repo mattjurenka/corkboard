@@ -334,7 +334,7 @@ async function runningNode(pid: number): Promise<AppNode | undefined> {
 // The account's devices as the relay knows them, this one first, the
 // leader, and whether Forgejo's pages go through the tunnel: nodes_list,
 // nodes_leader with a device's id, or null, and nodes_forge with on or off.
-async function nodes(n: StartedNode, op: string, args: any[]): Promise<unknown> {
+export async function nodes(n: StartedNode, op: string, args: any[]): Promise<unknown> {
   if (!n.tunnel || !n.relay) return null;
   const v = op === "nodes_leader" ? await n.relay.setLeader(args[0] ?? null) : op === "nodes_forge" ? await n.relay.setForgeWeb(args[0] === true) : await n.relay.nodes();
   n.noteNodes(v);
