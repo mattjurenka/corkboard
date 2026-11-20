@@ -11,7 +11,10 @@ import { type Gen, fuzz } from "../lib/testing/fuzz";
 const BOARD = mkdtempSync(join(tmpdir(), "corkboard-cards-"));
 afterAll(() => rmSync(BOARD, { recursive: true, force: true }));
 process.env.CORKBOARD_BOARD = BOARD;
-const { STATUSES, appendLog, change, create, find, list, parse, sections, serialize, split, waitingOn, wellFormed } = await import("./cards");
+const { DIR, STATUSES, appendLog, change, create, find, list, parse, sections, serialize, split, waitingOn, wellFormed } = await import("./cards");
+// Loaded already by another file in this run, it's on whatever board that
+// had: maybe the user's own. Run apart (bun test mcp/), it's this one.
+if (DIR !== BOARD) throw new Error(`cards.ts was loaded already, on ${DIR}: run this file on its own`);
 type Card = import("./cards").Card;
 
 const TASKS = join(BOARD, "tasks");
