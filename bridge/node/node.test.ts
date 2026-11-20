@@ -281,6 +281,11 @@ describe("the node's OAuth", () => {
     expect(sameRedirect("https://claude.ai/api/mcp/auth_callback", "https://claude.ai:444/api/mcp/auth_callback")).toBe(false);
     for (const a of ["10.0.0.1", "127.0.0.1", "169.254.169.254", "192.168.1.1", "172.20.0.1", "100.100.1.1", "::1", "fd00::1", "fe80::1", "::ffff:10.0.0.1"]) expect(publicAddress(a)).toBe(false);
     for (const a of ["160.79.104.10", "1.1.1.1", "2606:4700::1111"]) expect(publicAddress(a)).toBe(true);
+    // An IPv4 address however IPv6 spells it: https://[::ffff:127.0.0.1]/ is [::ffff:7f00:1] to a URL.
+    for (const a of ["::ffff:7f00:1", "::ffff:a00:1", "::ffff:c0a8:101", "::ffff:a9fe:a9fe", "0:0:0:0:0:ffff:7f00:1", "::7f00:1", "::127.0.0.1", "0:0:0:0:0:0:0:1", "fe80::1%eth0", "nonsense"])
+      expect([a, publicAddress(a)]).toEqual([a, false]);
+    expect(publicAddress("::ffff:a04f:680a")).toBe(true);
+    expect(publicAddress(new URL("https://[::ffff:127.0.0.1]/").hostname.slice(1, -1))).toBe(false);
   });
 
   it("names its origin from Host when it isn't given one", () => {

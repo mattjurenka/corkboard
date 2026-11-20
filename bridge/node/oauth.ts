@@ -597,9 +597,20 @@ export function publicAddress(a: string): boolean {
       (x === 198 && (y === 18 || y === 19))
     );
   }
-  const v = a.toLowerCase();
-  const mapped = v.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) return publicAddress(mapped[1]);
-  return !(v === "::" || v === "::1" || /^f[cd]/.test(v) || /^fe[89ab]/.test(v) || /^ff/.test(v) || v.startsWith("64:ff9b:") || v.startsWith("2001:db8"));
+  // As a URL spells it (::ffff:127.0.0.1 is [::ffff:7f00:1]), so an IPv4
+  // address it maps is known however it's written; what it can't spell isn't public.
+  let v: string;
+  try {
+    v = new URL(`http://[${a}]`).hostname.slice(1, -1);
+  } catch {
+    return false;
+  }
+  const mapped = v.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mapped) {
+    const [hi, lo] = [parseInt(mapped[1], 16), parseInt(mapped[2], 16)];
+    return publicAddress(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+  }
+  // 0::/16 (::, ::1, the old IPv4-compatible ::7f00:1 and the like) is all reserved.
+  return !(v.startsWith("::") || /^f[cd]/.test(v) || /^fe[89ab]/.test(v) || /^ff/.test(v) || v.startsWith("64:ff9b:") || v.startsWith("2001:db8"));
 }
 
