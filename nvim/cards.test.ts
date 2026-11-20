@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFile
 import { join } from "node:path";
 import { dict } from "../lib/dict";
 import { fuzz } from "../lib/testing/fuzz";
-import { type Card, STATUSES, appendLog, parse, serialize } from "../mcp/cards";
+import { type Card, STATUSES, appendLog, parse, serialize, wellFormed } from "../mcp/cards";
 import { sandbox } from "./testing";
 
 const box = sandbox({ repo: false });
@@ -61,6 +61,9 @@ describe("the same file from both", () => {
     [["id", "TASK-8"], ["title", "0x1F"], ["labels", ["1e3", "-2.5E-3", "0o17", ".inf", "-.Inf", ".NaN", "e3", "1e"]], ["attention", "NULL"]],
     // An ordinal that isn't the number YAML would read it as stays text.
     ...["1.50", " ", "0x10", "007", "-0", "1e3", "Infinity", "12345678901234567"].map((o, i): Fields => [["id", `TASK-${20 + i}`], ["title", `ordinal ${JSON.stringify(o)}`], ["ordinal", o]]),
+    // What YAML doesn't print, in double quotes: bare, any of them made the
+    // front matter unreadable, a card with no fields.
+    [["id", "TASK-30"], ["title", "two\nlines"], ["attention", "nul\0 cr\r del\x7f c1\x85 ￾ \"q\" \\"], ["labels", ["a\nb", "\t"]], ["key\nbreak", "v"]],
     // A no-break space is no space to YAML, nor to Lua's %s.
     [["id", "TASK-9"], ["title", " no-break "], ["labels", [" "]]],
   ];
@@ -96,6 +99,9 @@ describe("YAML written by others", () => {
     "flow lists": "---\nid: TASK-9\ntitle: Flow\nlabels: [a, 'b, c', \"d\"]\ndependencies: [TASK-1]\n---\nbody",
     "quoted scalars": "---\nid: TASK-9\ntitle: 'it''s'\nattention: \"say \\\"hi\\\"\"\n---\n",
     "a bare dash and an @": "---\nid: TASK-9\ntitle: Dash\nassignee:\n  - '@claude'\n  -\n---\n",
+    // Not only the \n and \t that cards.lua read before: \u0000 was u0000.
+    escapes: '---\nid: TASK-9\ntitle: "nul\\u0000 cr\\r x\\x41 \\U0001F600 \\ud83d\\ude00 bell\\a \\\\ \\" \\/ \\e"\n---\n',
+    "quoted keys": "---\nid: TASK-9\ntitle: Keys\n'it''s': one\n\"tab\\tkey\": two\n'yes': three\n---\n",
     "a list as one value": "---\nid: TASK-9\ntitle: One\nlabels: solo\n---\n",
     "no front matter": "just a body\n",
   };
@@ -105,28 +111,36 @@ describe("YAML written by others", () => {
       writeFileSync(path, text);
       const theirs = parse(path)!;
       const ours = lua(`local c = cards.parse(input) c.path = nil return c`, path);
-      for (const k of ["id", "title", "status", "labels", "dependencies", "attention", "agent", "body"]) {
+      for (const k of ["id", "title", "status", "labels", "dependencies", "attention", "agent", "body", "it's", "tab\tkey", "yes"]) {
         // Lua's JSON has no empty list, only an empty object.
         const v = ours[k] && typeof ours[k] === "object" && !Array.isArray(ours[k]) && !Object.keys(ours[k]).length ? [] : ours[k];
         expect([k, v]).toEqual([k, theirs[k]]);
       }
     });
   }
+
+  // Which Bun's YAML refuses, and nobody writes.
+  test("half a surrogate pair is U+FFFD", () => {
+    const path = join(box.dir, "task-9 - half.md");
+    writeFileSync(path, '---\nid: TASK-9\ntitle: "a\\ud800b \\udc00"\n---\n');
+    expect(lua(`return cards.parse(input).title`, path)).toBe("a\ufffdb \ufffd");
+  });
 });
 
-// Cards with any fields: identifiers for keys (the nasty ones among them, as
-// Lua's front matter reads only [%w_]+), one-line values of anything.
+// Cards with any fields: any keys, the nasty ones among them, and any values,
+// line breaks and NULs too (half a surrogate pair is U+FFFD in a file, so it
+// is one here).
 fuzz(
   "any card, written by either, the same",
   (g, seed) => {
-    const keys = ["assignee", "labels", "dependencies", "priority", "ordinal", "attention", "worktree", "__proto__", "constructor", "toString", "hasOwnProperty", "valueOf", "prototype", "x_1"];
-    const line = () => [...g.string(24)].filter((ch) => ch >= " " && ch !== "\x7f" && !/[\ud800-\udfff]/.test(ch)).join("");
+    const keys = ["assignee", "labels", "dependencies", "priority", "ordinal", "attention", "worktree"];
+    const line = () => wellFormed(g.string(24));
     const cases = Array.from({ length: 12 }, (_, i) => {
       // A title and a status, as parse() gives a card without them some.
-      const fields: Fields = [["id", `TASK-${i + 1}`], ["title", line() || "t"], ["status", g.pick(STATUSES)]];
-      const seen = new Set(["id", "title", "status"]);
+      const fields: Fields = [["id", `TASK-${i + 1}`], ["title", line().trim() || "t"], ["status", g.pick(STATUSES)]];
+      const seen = new Set(["id", "title", "status", "path", "body", "agent"]);
       for (let n = g.int(0, 6); n > 0; n--) {
-        const k = g.pick(keys);
+        const k = wellFormed(g.key(keys));
         if (seen.has(k)) continue;
         seen.add(k);
         // An assignee with no name is no agent, and goes; an @ is taken off.
@@ -141,7 +155,9 @@ fuzz(
       const file = readFileSync(c.path, "utf8");
       expect(got[i].wrote).toBe(file);
       expect(got[i].reread).toBe(file);
-      expect(serialize(parse(c.path)!)).toBe(file);
+      const read = parse(c.path)!;
+      expect(serialize(read)).toBe(file);
+      for (const [k, v] of c.fields) if (v !== "") expect([k, read[k]]).toEqual([k, v]);
     });
   },
   { runs: 15 },

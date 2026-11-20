@@ -165,7 +165,12 @@ export function serialize(card: Card): string {
     }
   };
   KEY_ORDER.forEach(emit);
-  Object.keys(card).filter((k) => !seen.has(k)).sort().forEach(emit);
+  // By code point, as cards.lua's sort of the UTF-8 bytes: sort()'s UTF-16
+  // order puts 😀 before U+FFFD.
+  Object.keys(card)
+    .filter((k) => !seen.has(k))
+    .sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)))
+    .forEach(emit);
   lines.push("---");
   return lines.join("\n") + "\n" + (card.body ?? "");
 }

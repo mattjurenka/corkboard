@@ -83,14 +83,65 @@ for you. Otherwise edit the files by hand:
 -- The part of YAML that Backlog.md writes: scalars, plain or quoted, and
 -- lists, flow ([a, b]) or block ("  - a" lines under "key:").
 
+local function utf8(cp)
+  if cp < 0x80 then return string.char(cp) end
+  if cp < 0x800 then return string.char(0xC0 + math.floor(cp / 0x40), 0x80 + cp % 0x40) end
+  if cp < 0x10000 then
+    return string.char(0xE0 + math.floor(cp / 0x1000), 0x80 + math.floor(cp / 0x40) % 0x40, 0x80 + cp % 0x40)
+  end
+  return string.char(0xF0 + math.floor(cp / 0x40000), 0x80 + math.floor(cp / 0x1000) % 0x40, 0x80 + math.floor(cp / 0x40) % 0x40, 0x80 + cp % 0x40)
+end
+
+-- YAML's double-quoted escapes, those that are one character.
+local ESCAPES = {
+  ["0"] = "\0", a = "\a", b = "\b", t = "\t", ["\t"] = "\t", n = "\n", v = "\v", f = "\f", r = "\r", e = "\27",
+  [" "] = " ", ['"'] = '"', ["/"] = "/", ["\\"] = "\\", N = "\194\133", _ = "\194\160", L = "\226\128\168", P = "\226\128\169",
+}
+local HEX = { x = 2, u = 4, U = 8 }
+
+-- A double-quoted scalar's text, its escapes undone: \x, \u and \U as
+-- UTF-8 (a surrogate pair as one character, half of one as U+FFFD).
+local function unescape(q)
+  local out, i = {}, 1
+  local function hex(at, n)
+    local h = q:sub(at, at + n - 1)
+    return #h == n and h:match("^%x+$") and tonumber(h, 16)
+  end
+  while i <= #q do
+    local c = q:sub(i, i)
+    local n = c == "\\" and HEX[q:sub(i + 1, i + 1)]
+    local cp = n and hex(i + 2, n)
+    if cp then
+      i = i + 2 + n
+      if cp >= 0xD800 and cp <= 0xDBFF then
+        local low = q:sub(i, i + 1) == "\\u" and hex(i + 2, 4)
+        if low and low >= 0xDC00 and low <= 0xDFFF then
+          cp, i = 0x10000 + (cp - 0xD800) * 0x400 + (low - 0xDC00), i + 6
+        else
+          cp = 0xFFFD
+        end
+      elseif cp >= 0xDC00 and cp <= 0xDFFF or cp > 0x10FFFF then
+        cp = 0xFFFD
+      end
+      table.insert(out, utf8(cp))
+    elseif c == "\\" and i < #q then
+      local e = q:sub(i + 1, i + 1)
+      table.insert(out, ESCAPES[e] or e)
+      i = i + 2
+    else
+      table.insert(out, c)
+      i = i + 1
+    end
+  end
+  return table.concat(out)
+end
+
 local function scalar(s)
   s = vim.trim(s)
   local q = s:match("^'(.*)'$")
   if q then return (q:gsub("''", "'")) end
   q = s:match('^"(.*)"$')
-  if q then
-    return (q:gsub("\\(.)", function(c) return ({ n = "\n", t = "\t" })[c] or c end))
-  end
+  if q then return unescape(q) end
   return s
 end
 
@@ -114,6 +165,26 @@ local function flow(s)
   return items
 end
 
+-- A line's quoted key ('it''s', "a\"b"), still quoted, and its value.
+local function quoted_key(line)
+  local q, i = line:sub(1, 1), 2
+  if q ~= "'" and q ~= '"' then return nil end
+  while i <= #line do
+    local c = line:sub(i, i)
+    if q == "'" and c == "'" and line:sub(i + 1, i + 1) == "'" then
+      i = i + 2
+    elseif q == '"' and c == "\\" then
+      i = i + 2
+    elseif c == q then
+      local v = line:sub(i + 1):match("^:%s+(.-)%s*$") or line:sub(i + 1):match("^:$") and ""
+      if v then return line:sub(1, i), v end
+      return nil
+    else
+      i = i + 1
+    end
+  end
+end
+
 local function read_front(text)
   local fields, key = {}, nil
   for line in text:gmatch("[^\n]+") do
@@ -121,7 +192,12 @@ local function read_front(text)
     if item and key and type(fields[key]) == "table" then
       table.insert(fields[key], scalar(item))
     else
-      local k, v = line:match("^([%w_]+):%s*(.-)%s*$")
+      -- A key quoted, as mcp/cards.ts writes one YAML would misread, or
+      -- plain: anything up to the first ": ", which plain YAML can't hold.
+      local k, v = quoted_key(line)
+      if not k then k, v = line:match("^([^%s'\"#%-].-):%s+(.-)%s*$") end
+      if not k then k = line:match("^([^%s'\"#%-].-):$") v = "" end
+      k = k and scalar(k)
       if k then
         key = k
         -- A bare "key:" starts a block list, or is an empty value.
@@ -138,7 +214,29 @@ end
 
 -- Quoted whenever YAML could read it as something else (a number, date,
 -- boolean, list or mapping), the way Backlog.md quotes its dates.
+--
+-- What YAML doesn't print (a line break, a control character, U+FFFE) is in
+-- double quotes, escaped as mcp/cards.ts escapes it: in single quotes a
+-- break folds to a space, and bare, any of them made the front matter
+-- unreadable, which reads as a card with no fields.
+local UNPRINTABLE = { "[%z\1-\8\10-\31\127]", "\194[\128-\159]", "\239\191[\190\191]" }
+
+local function escape(c)
+  if c == "\n" then return "\\n" end
+  local cp = #c == 1 and c:byte() or #c == 2 and c:byte(2) or 0xFFFE + c:byte(3) - 190
+  return string.format("\\u%04x", cp)
+end
+
 local function quote(v)
+  local unprintable = false
+  for _, p in ipairs(UNPRINTABLE) do
+    unprintable = unprintable or v:find(p) ~= nil
+  end
+  if unprintable then
+    v = v:gsub('[\\"]', "\\%0")
+    for _, p in ipairs(UNPRINTABLE) do v = v:gsub(p, escape) end
+    return '"' .. v .. '"'
+  end
   local plain = v ~= ""
     and not v:match("^[%s%-?:,%[%]{}#&*!|>'\"%%@`]")
     and not v:match("[%s:]$")
@@ -219,13 +317,13 @@ function M.serialize(card)
     seen[k] = true
     if type(v) == "table" then
       if #v == 0 then
-        table.insert(lines, k .. ": []")
+        table.insert(lines, quote(k) .. ": []")
       else
-        table.insert(lines, k .. ":")
+        table.insert(lines, quote(k) .. ":")
         for _, item in ipairs(v) do table.insert(lines, "  - " .. quote(tostring(item))) end
       end
     elseif v ~= nil and v ~= "" then
-      table.insert(lines, k .. ": " .. ((k == "ordinal" and decimal(tostring(v))) and tostring(v) or quote(tostring(v))))
+      table.insert(lines, quote(k) .. ": " .. ((k == "ordinal" and decimal(tostring(v))) and tostring(v) or quote(tostring(v))))
     end
   end
   for _, k in ipairs(KEY_ORDER) do emit(k) end
