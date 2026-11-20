@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { checkCert, newDevice } from "../device";
 import { accountKeys, newRoot } from "../keys";
 import { type MailboxView, type PairTransport, approve, pairNew, parseQr } from "../pairing";
-import { CODE_ALPHABET, b64url } from "../wire";
+import { CODE_ALPHABET, b64url, normalizeCode, showCode } from "../wire";
 
 // A mailbox as the relay keeps one (relay/src/mailbox.ts), in memory, with
 // its order enforced, and gone once the new device has seen the delivery;
@@ -54,6 +54,16 @@ function person() {
     oldSide: async (s: string) => (b(s), s === (await onNew)),
   };
 }
+
+describe("a pairing code", () => {
+  it("is shown as XXXXX-XXXXX and typed forgiving case, dashes, spaces, O for 0 and I or L for 1", () => {
+    expect(showCode("0123456789")).toBe("01234-56789");
+    expect(normalizeCode("o1i3l-5678 9")).toBe("0113156789");
+    expect(normalizeCode(" abcde-fghjk ")).toBe("ABCDEFGHJK");
+    // U is not in the alphabet, nor are too few or too many.
+    for (const typed of ["ABCDE-FGHJU", "ABCDE-FGHJ", "ABCDE-FGHJKM", ""]) expect(normalizeCode(typed)).toBeUndefined();
+  });
+});
 
 describe("pairing", () => {
   it("gives the new device the root and a cert for itself", async () => {
