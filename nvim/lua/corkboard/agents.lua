@@ -286,7 +286,8 @@ function M.hook(ev)
   local state = event_state(ev)
   -- A question's dialog is its permission prompt too, and Claude Code says
   -- so with a permission (a PermissionRequest, then a Notification) after it.
-  if state == "permission" and was == "asking" and (ev.tool_name == nil or ev.tool_name == "AskUserQuestion") then state = "asking" end
+  local folded = state == "permission" and was == "asking" and (ev.tool_name == nil or ev.tool_name == "AskUserQuestion")
+  if folded then state = "asking" end
   -- A turn starting: whether it schedules another wakeup is up to it.
   if state == "working" and was ~= "working" then waking[buf] = nil end
   if ev.background and ev.tool_use_id then
@@ -304,7 +305,8 @@ function M.hook(ev)
   -- over.
   local open = state == "settled" and require("corkboard.questions").pending(buf)
   if open then state = "asking" end
-  local question = asking(ev) or (open and "asks: " .. open[1].question)
+  -- Folded into the question, it still asks that, not for permission.
+  local question = folded and vim.b[buf].corkboard_asking or asking(ev) or (open and "asks: " .. open[1].question)
   if state == "settled" then state = settle(buf, ev) end
   if state then
     live[buf] = state
