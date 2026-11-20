@@ -61,6 +61,28 @@ end
 -- (cwd, env, on_stdout, on_exit); on_stdout gets the filtered output, split
 -- as jobstart splits it. Gives the job, as jobstart does. In the page
 -- (corkboard.wasm) jobstart makes the terminal and filters itself.
+-- The process behind buf's nvim_open_term exited with code, before its
+-- channel is closed. TermClose's v:event.status can't be set from here; and
+-- Neovim's TermClose handler says "[Terminal closed]" for any
+-- nvim_open_term, so say what it says for :terminal, where it said one.
+function M.exited(buf, code)
+  vim.b[buf].corkboard_exit_status = code
+  vim.api.nvim_create_autocmd("TermClose", {
+    buffer = buf,
+    once = true,
+    callback = function()
+      local ns = vim.api.nvim_create_namespace("nvim.terminal.exitmsg")
+      for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, {})) do
+        vim.api.nvim_buf_set_extmark(buf, ns, m[2], m[3], {
+          id = m[1],
+          virt_text = { { ("[Process exited %d]"):format(code) } },
+          virt_text_pos = "overlay",
+        })
+      end
+    end,
+  })
+end
+
 function M.start(cmd, opts)
   opts = opts or {}
   if package.loaded["corkboard.wasm"] and vim.fn.jobstart == package.loaded["corkboard.wasm"].jobstart then
@@ -91,24 +113,7 @@ function M.start(cmd, opts)
       -- Not on TermClose: wiping the buffer fires it before BufUnload.
       if group then pcall(vim.api.nvim_del_augroup_by_id, group) end
       if not vim.api.nvim_buf_is_valid(buf) then return end
-      -- TermClose's v:event.status can't be set from here.
-      vim.b[buf].corkboard_exit_status = code
-      -- Neovim's TermClose handler says "[Terminal closed]" for any
-      -- nvim_open_term; say what it says for :terminal, where it said one.
-      vim.api.nvim_create_autocmd("TermClose", {
-        buffer = buf,
-        once = true,
-        callback = function()
-          local ns = vim.api.nvim_create_namespace("nvim.terminal.exitmsg")
-          for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, {})) do
-            vim.api.nvim_buf_set_extmark(buf, ns, m[2], m[3], {
-              id = m[1],
-              virt_text = { { ("[Process exited %d]"):format(code) } },
-              virt_text_pos = "overlay",
-            })
-          end
-        end,
-      })
+      M.exited(buf, code)
       pcall(vim.fn.chanclose, term)
     end,
   })

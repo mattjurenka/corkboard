@@ -195,6 +195,30 @@ describe("start", () => {
     expect(r).toEqual({ lines: ["bye"], said: ["[Process exited 3]"], status: 3, code: 3, closed: 1, alive: false });
   });
 
+  test("the page's terminal (corkboard.wasm's jobstart) says it the same way", () => {
+    const r = live(String.raw`
+      -- The bridge, as /dev/corkboard-host answers for it: process 7.
+      local uv, real = vim.uv, { open = vim.uv.fs_open, read = vim.uv.fs_read, write = vim.uv.fs_write, close = vim.uv.fs_close }
+      local answer
+      uv.fs_open = function(path, ...) if path == "/dev/corkboard-host" then return -7 end return real.open(path, ...) end
+      uv.fs_write = function(fd, data, ...) if fd == -7 then answer = vim.mpack.encode({ result = 7 }) return #data end return real.write(fd, data, ...) end
+      uv.fs_read = function(fd, ...) if fd == -7 then local a = answer or "" answer = nil return a end return real.read(fd, ...) end
+      uv.fs_close = function(fd, ...) if fd == -7 then return true end return real.close(fd, ...) end
+      local wasm, closed, code = require("corkboard.wasm"), 0, nil
+      local buf = vim.api.nvim_get_current_buf()
+      vim.api.nvim_create_autocmd("TermClose", { buffer = buf, callback = function() closed = closed + 1 end })
+      wasm.jobstart({ "sh" }, { term = true, on_exit = function(_, c) code = c end })
+      wasm.event(7, "stdout", "bye\r\n")
+      wasm.event(7, "exit", 3, 0)
+      wait(function() return closed > 0 end)
+      wait(function() return false end, 100)
+      local said = vim.tbl_map(function(m) return m[4].virt_text[1][1] end,
+        vim.api.nvim_buf_get_extmarks(buf, vim.api.nvim_create_namespace("nvim.terminal.exitmsg"), 0, -1, { details = true }))
+      return { lines = lines(), said = said, status = vim.b[buf].corkboard_exit_status, code = code, closed = closed }
+    `);
+    expect(r).toEqual({ lines: ["bye"], said: ["[Process exited 3]"], status: 3, code: 3, closed: 1 });
+  });
+
   test("stops the process with its buffer, as :terminal does", () => {
     const r = live(String.raw`
       local job = require("corkboard.terminal").start({ "sleep", "30" }, {})

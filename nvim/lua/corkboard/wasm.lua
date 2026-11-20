@@ -246,9 +246,7 @@ function M.jobstart(cmd, opts)
         if opts.on_exit then opts.on_exit(p.chan, p.code, "exit") end
         if p.buf and vim.api.nvim_buf_is_valid(p.buf) then
           terminals[p.buf] = nil
-          -- TermClose's v:event.status can't be set from here.
-          vim.b[p.buf].corkboard_exit_status = p.code
-          pcall(vim.api.nvim_chan_send, p.chan, ("\r\n[Process exited %d]"):format(p.code))
+          require("corkboard.terminal").exited(p.buf, p.code)
           pcall(vim.fn.chanclose, p.chan)
         end
       end
