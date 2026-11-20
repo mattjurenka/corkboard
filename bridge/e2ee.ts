@@ -229,18 +229,19 @@ export function pairStatus() {
 
 const approving = new Map<string, { answer: (ok: boolean) => void; done: Promise<Signed<DeviceCert>> }>();
 
-export async function pairApprove(typed: string, pass?: string): Promise<{ id: string; sas: string; name: string; device: string }> {
+// at: the keystore and relay (a test's), else this machine's.
+export async function pairApprove(typed: string, pass?: string, at: { store: Keystore; relay: string } = { store, relay: CLOUD }): Promise<{ id: string; sas: string; name: string; device: string }> {
   const code = normalizeCode(typed);
   if (!code) throw new Error("that isn't a code: it's the ten letters and digits the new device shows");
-  const d = store.device();
-  if (!d || !store.exists() || d.relay !== CLOUD) throw new Error("this machine isn't in an account the phone can join");
-  const root = await store.root(pass || process.env.CORKBOARD_E2EE_PASSPHRASE);
+  const d = at.store.device();
+  if (!d || !at.store.exists() || d.relay !== at.relay) throw new Error("this machine isn't in an account the phone can join");
+  const root = await at.store.root(pass || process.env.CORKBOARD_E2EE_PASSPHRASE);
   return new Promise((resolve, reject) => {
     const id = crypto.randomUUID();
     let joined = false;
     // The device joins as soon as it sees the commit; unanswered, it's turned away.
     const done = approve(
-      relayFor(d.device, d.cert),
+      new Relay({ origin: at.relay, device: d.device, cert: d.cert, token: at.store.token(), onToken: (t) => at.store.saveToken(t) }),
       root,
       code,
       {

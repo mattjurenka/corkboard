@@ -512,16 +512,25 @@ const FLEET_TOOLS = dict<FleetTool>({
 
 // A new device let into the account from chat, as :AgentPair does
 // (bridge/e2ee.ts): the owner's own clients only.
-type PairTool = { description: string; properties?: Record<string, object>; required?: string[]; run: (a: any) => Promise<unknown> };
+// How: bridge/e2ee.ts's pairApprove and pairConfirm, on this machine's
+// keystore and relay (a test's, its own).
+export type Pairing = {
+  approve(code: string): Promise<{ id: string; sas: string; name: string }>;
+  confirm(id: string, ok: boolean): Promise<{ name: string }>;
+};
+const pairing = async (): Promise<Pairing> => {
+  const { pairApprove, pairConfirm } = await import("../e2ee");
+  return { approve: (code) => pairApprove(code), confirm: pairConfirm };
+};
+type PairTool = { description: string; properties?: Record<string, object>; required?: string[]; run: (a: any, p: Pairing) => Promise<unknown> };
 const PAIR_TOOLS = dict<PairTool>({
   pair_device: {
     description:
       "Let a new device (a phone, another computer) into the user's encrypted account. Only with a code the user gave you in this conversation: it's the ten characters the new device shows (case, dashes and spaces don't matter). Answers once the device has joined, with six digits: show them to the user and ask whether the new device shows the same, then call pair_confirm with their answer. Never guess the answer.",
     properties: { code: str("The code the new device shows, as the user typed it") },
     required: ["code"],
-    run: async (a) => {
-      const { pairApprove } = await import("../e2ee");
-      const got = await pairApprove(String(a.code ?? ""));
+    run: async (a, p) => {
+      const got = await p.approve(String(a.code ?? ""));
       return { id: got.id, device: got.name, digits: `${got.sas.slice(0, 3)} ${got.sas.slice(3)}` };
     },
   },
@@ -529,9 +538,8 @@ const PAIR_TOOLS = dict<PairTool>({
     description: "The user's answer to pair_device's six digits: match true lets the device in, false turns it away. Only what the user said, after they compared the digits on the new device.",
     properties: { id: str("pair_device's id"), match: { type: "boolean", description: "Whether the user said the digits match" } },
     required: ["id", "match"],
-    run: async (a) => {
-      const { pairConfirm } = await import("../e2ee");
-      const { name } = await pairConfirm(String(a.id ?? ""), a.match === true);
+    run: async (a, p) => {
+      const { name } = await p.confirm(String(a.id ?? ""), a.match === true);
       return { paired: name };
     },
   },
@@ -903,7 +911,8 @@ function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryO
 }
 
 // forge: the account's forge (serve.ts's toForge), for the PR tools.
-export type Node = { data: Data; search: Search; media?: Media; files?: ToFiles; fileOffers?: FileOffers; origin: string; fleet?: Fleet; sealed?: FleetRecords; forge?: ToForge };
+// pairing: how pair_* let a device in, when not this machine's own way.
+export type Node = { data: Data; search: Search; media?: Media; files?: ToFiles; fileOffers?: FileOffers; origin: string; fleet?: Fleet; sealed?: FleetRecords; forge?: ToForge; pairing?: Pairing };
 
 async function callTool(node: Node, caller: Caller, name: string, args: any): Promise<unknown> {
   const { data, search, media, origin } = node;
@@ -914,7 +923,7 @@ async function callTool(node: Node, caller: Caller, name: string, args: any): Pr
       throw e instanceof Invalid || e instanceof ToolError ? e : new ToolError((e as Error).message);
     });
   if (PAIR_TOOLS[name] && pairs(caller))
-    return PAIR_TOOLS[name].run({ ...args }).catch((e) => {
+    return PAIR_TOOLS[name].run({ ...args }, node.pairing ?? (await pairing())).catch((e) => {
       throw e instanceof ToolError ? e : new ToolError((e as Error).message);
     });
   if (FILE_TOOLS[name] && node.files && !bound)
