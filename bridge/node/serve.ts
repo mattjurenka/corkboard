@@ -63,6 +63,7 @@ import { ForgeSnapshots } from "./snapshots";
 import { Media } from "./media";
 import { FileOffers, Files } from "./files";
 import { startLeases } from "./leases";
+import { Leadership, forgeKeeper } from "./leader";
 import { OAuthStore, SCOPES, type Scope, type Shared } from "./oauth";
 import { type AppCall, type AppEvents, node } from "./server";
 import { Hub } from "../hub";
@@ -175,26 +176,12 @@ export async function startNode(o: NodeOptions = {}) {
     const episodes = new Episodes(join(NODE_DIR, "memory.db"));
     // The tunnel, where the relay has one (an older one answers 404).
     let tunnel: { url: string; connected: boolean; stop(): void } | undefined;
-    // Rollups on the node the tunnel goes to (the leader if it's connected,
-    // else the newest), or on this one offline, with no tunnel or none
-    // connected; the account's nodes asked once a minute. Another node
-    // leading, this one's episodes are handed to it. The relay also says
-    // when it changes (the tunnel's onLeader, below).
-    let led: { at: number; to: string } | undefined;
-    // Whether the account has Forgejo's pages through the tunnel, as last looked.
-    let forgeWeb = false;
+    // Rollups on the node that leads (leader.ts). Another node leading,
+    // this one's episodes are handed to it.
+    const leadership = new Leadership({ me: d.device.id, nodes: () => (r && tunnel ? () => r.nodes() : undefined) });
     // The node that leads: its device's id.
-    const leader = async () => {
-      if (!r || !tunnel) return d.device.id;
-      if (led && Date.now() - led.at < 60_000) return led.to;
-      const v = await r.nodes();
-      forgeWeb = !!v.forge;
-      const nodes = v.connected.filter((c) => c.tunnel !== false);
-      const to = nodes.find((c) => c.device === v.leader) ?? nodes.sort((a, b) => b.since - a.since)[0];
-      led = { at: Date.now(), to: to?.device ?? d.device.id };
-      return led.to;
-    };
-    const leads = async () => (await leader()) === d.device.id;
+    const leader = () => leadership.leader();
+    const leads = leadership.leads;
     const handoff = r && new Handoff({ replicas, episodes, blobs: r });
     // Working cards whose agents went quiet, blocked by the same node.
     const stopLeases = startLeases(data, leads);
@@ -300,46 +287,27 @@ export async function startNode(o: NodeOptions = {}) {
         // (ciphertext-relay.md step 2), at the tunnel's origin, so the
         // phone's tokens work on either; never loopback. One with no
         // token is its device's, the owner (fleetd's relay-only one).
-        forgeWeb = !!nodes.forge;
-        const tunneled = node({ ...served, origin: nodes.url, forgeWeb: () => forgeWeb, toForge, files, toFiles, fileOffers });
+        leadership.forgeWeb = !!nodes.forge;
+        const tunneled = node({ ...served, origin: nodes.url, forgeWeb: () => leadership.forgeWeb, toForge, files, toFiles, fileOffers });
         // The relay says when the leader may have changed, so a move takes
         // effect at once rather than at the next minute's look.
-        const told = (to: string | null) => (led = { at: Date.now(), to: to ?? d.device.id });
-        t.stop = r.serveTunnel(tunneled, { name: d.cert.body.name, onState: (up) => (t.connected = up), onLeader: (to) => (told(to), void keepForge()), channels: (req, ch) => tunneled(req, undefined, ch.peer) });
+        t.stop = r.serveTunnel(tunneled, { name: d.cert.body.name, onState: (up) => (t.connected = up), onLeader: (to) => (leadership.told(to), void keepForge()), channels: (req, ch) => tunneled(req, undefined, ch.peer) });
         tunnel = t;
       }
     }
-    // Forgejo runs on the leader the account names, so a blip in its socket
-    // (the tunnel going to another node meanwhile) doesn't stop it; with
-    // none named, on the node the tunnel goes to. A failed look changes nothing.
+    // Forgejo, on the leader (leader.ts's forgeKeeper).
     const forgeBin = process.env.CORKBOARD_FORGEJO;
     const forgeProcess = forgeBin ? new Forgejo({ bin: forgeBin, static: process.env.CORKBOARD_FORGEJO_STATIC, dir: join(NODE_DIR, "forge"), unix: forgeUnix, userHeader: forgeHeader, url: process.env.CORKBOARD_FORGE_URL, defaultUrl: tunnel && `${tunnel.url}/forge/` }) : undefined;
     // Its state to the relay as it runs, and from it before it starts here (snapshots.ts).
     const snapshots = forgeProcess && r && new ForgeSnapshots({ dir: join(NODE_DIR, "forge"), replicas, blobs: r });
-    const keepForge = async () => {
-      if (!forgeProcess) return;
-      try {
-        const named = r && tunnel ? (await r.nodes()).leader : null;
-        if (!(named ? named === d.device.id : await leads())) {
-          if (!forgeProcess.running) return await forgeProcess.stop();
-          await forgeProcess.stop();
-          return await snapshots?.step(Date.now(), true);
-        }
-        if (!forgeProcess.running) {
-          const restored = await snapshots?.restore();
-          if (restored) console.log(`node: the forge: ${restored} restored from the relay`);
-        }
-        await forgeProcess.start();
-        await snapshots?.step();
-        // A forge moved in with no login recorded is its one admin's.
-        if (!forgeRecords.user()) {
-          const admins = await forgeProcess.admins();
-          if (admins.length === 1) await forgeRecords.setUser(admins[0]);
-        }
-      } catch (e) {
-        console.error(`node: the forge: ${(e as Error).message}`);
-      }
-    };
+    const keepForge = forgeKeeper({
+      forge: forgeProcess,
+      me: d.device.id,
+      named: async () => (r && tunnel ? (await r.nodes()).leader : null),
+      leads,
+      snapshots,
+      records: forgeRecords,
+    });
     void keepForge();
     const keepingForge = forgeProcess && setInterval(keepForge, 60_000);
     return {
@@ -373,7 +341,7 @@ export async function startNode(o: NodeOptions = {}) {
       toForge,
       toFiles,
       // The account's nodes as just told (app.ts's nodes_*).
-      noteNodes: (v: NodesView) => void (forgeWeb = !!v.forge),
+      noteNodes: (v: NodesView) => void (leadership.forgeWeb = !!v.forge),
       // The app's operations on the loopback /app (app.ts's), and its
       // boards' events on /app/events, not the tunnel's.
       serveApp: (f: AppCall, events: AppEvents) => void ((app = f), (appEvents = events)),
