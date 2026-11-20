@@ -12,7 +12,7 @@
 import "../lib/harden";
 import { decodeMultiStream, decode, encode, ExtensionCodec } from "@msgpack/msgpack";
 import type { Subprocess } from "bun";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -29,6 +29,7 @@ import { Peers } from "./peers";
 import { CLOUD, token } from "./cloud";
 import { COMPILED, RESOURCES, STATE_DIR, dirsEnv } from "./dirs";
 import { dict, own } from "../lib/dict";
+import { guard, isLoopback } from "./guard";
 
 const HOST = process.env.CORKBOARD_HOST ?? "127.0.0.1";
 const PORT = Number(process.env.CORKBOARD_PORT ?? 7777);
@@ -97,11 +98,8 @@ const RTP_CMD = `set rtp^=${[PLUGIN_ROOT, ...PLUGINS]
 // notifications.
 const NAME = process.env.CORKBOARD_NAME;
 
-// Loopback names, for the bind address and for the Host a loopback bridge
-// accepts. Browsers resolve *.localhost to loopback themselves, never by
-// DNS, so names like dev.corkboard.localhost can't be rebound either.
-const isLoopback = (name: string) =>
-  /^((.+\.)?localhost|127(\.\d+){3}|::1)$/.test(name.replace(/^\[(.*)\]$/, "$1"));
+// Loopback names (guard.ts), for the bind address and for the Host a
+// loopback bridge accepts.
 const LOCAL = isLoopback(HOST);
 // Behind a proxy (Caddy on the droplet), the page's origin is the proxy's
 // public one, e.g. https://valheim.jurenka.software:8443: the socket opens
@@ -127,34 +125,8 @@ const TOKEN = readToken();
 // It goes in Sec-WebSocket-Protocol, which allows only these.
 if (TOKEN && !/^[\w.~-]+$/.test(TOKEN)) throw new Error("CORKBOARD_TOKEN: use letters, digits and . _ ~ - only");
 if ((!LOCAL || ORIGIN) && !TOKEN) throw new Error(`refusing to bind ${HOST} without a token`);
-const TOKEN_PROTOCOL = "corkboard.token.";
-
-const sameToken = (given: string) => {
-  const a = Buffer.from(given);
-  const b = Buffer.from(TOKEN);
-  return a.length === b.length && timingSafeEqual(a, b);
-};
-
-// Why an upgrade is refused, if it is. Origin must be this bridge's own
-// page, so another site open in the browser can't connect. A loopback
-// bridge also wants a loopback Host, or a site whose name was rebound to
-// 127.0.0.1 would be its own origin.
-function refuse(req: Request): string | undefined {
-  const host = req.headers.get("host") ?? "";
-  const origin = req.headers.get("origin");
-  if (ORIGIN) return origin === ORIGIN ? undefined : `wrong origin: ${origin}`;
-  if (LOCAL && !isLoopback(new URL(`http://${host}`).hostname)) return `wrong host: ${host}`;
-  if (!origin || URL.parse(origin)?.host !== host) return `wrong origin: ${origin}`;
-}
-
-// The same for a request the page may make as a plain GET, which a browser
-// sends with no Origin when it's same-origin: then its Sec-Fetch-Site says.
-function refuseFetch(req: Request): string | undefined {
-  if (req.headers.has("origin")) return refuse(req);
-  const host = req.headers.get("host") ?? "";
-  if (LOCAL && !isLoopback(new URL(`http://${host}`).hostname)) return `wrong host: ${host}`;
-  if (req.headers.get("sec-fetch-site") !== "same-origin") return `not from this page: ${req.headers.get("sec-fetch-site")}`;
-}
+// Origin, Host and the token, for the socket and the page's calls.
+const { sameToken, refuse, refuseFetch, socket } = guard({ local: LOCAL, origin: ORIGIN, token: TOKEN });
 
 const extensionCodec = new ExtensionCodec();
 for (const type of [0, 1, 2]) {
@@ -778,26 +750,22 @@ Bun.serve<Session>({
     if (url.pathname === "/nvim") {
       const host = url.searchParams.get("host");
       const cwd = url.searchParams.get("cwd");
-      const why = refuse(req);
-      if (why) {
-        console.error(`refused /nvim: ${why}`);
-        return new Response(why, { status: 403 });
+      const checked = socket(req);
+      if ("refused" in checked) {
+        console.error(`refused /nvim: ${checked.refused}`);
+        return new Response(checked.refused, { status: 403 });
       }
-      const offered = (req.headers.get("sec-websocket-protocol") ?? "").split(",").map((p) => p.trim());
-      const token = offered.find((p) => p.startsWith(TOKEN_PROTOCOL))?.slice(TOKEN_PROTOCOL.length);
-      // A wrong token still upgrades, to be closed with the reason before
-      // Neovim starts, which the page can show; a refused upgrade it can't.
+      // A wrong token still upgrades, to be closed with checked.error.
       // The day plan isn't a project's, so its window opens in the home
       // directory, on this machine.
       const view = url.searchParams.get("view") === "plan" ? "plan" : undefined;
-      const data: Session =
-        TOKEN && !(token && sameToken(token))
-          ? { cwd: "", error: "wrong or missing token: open the URL the bridge printed" }
-          : view
-            ? { ...resolveCwd(homedir()), view }
-            : host
-              ? resolveRemote(host, cwd)
-              : resolveCwd(cwd);
+      const data: Session = checked.error
+        ? { cwd: "", error: checked.error }
+        : view
+          ? { ...resolveCwd(homedir()), view }
+          : host
+            ? resolveRemote(host, cwd)
+            : resolveCwd(cwd);
       if (inPage(url) && !data.error) {
         if (data.host) data.error = "a page on another machine runs Neovim there, not in wasm";
         // Its hooks dial a unix socket and its terminals want a pty (wasm.ts).
@@ -805,9 +773,7 @@ Bun.serve<Session>({
         else if (!NVIM_WASM) data.error = "CORKBOARD_NVIM_WASM is not set";
         else data.wasm = true;
       }
-      // The browser drops a socket whose reply names no protocol it offered.
-      const headers = offered.includes("corkboard") ? { "sec-websocket-protocol": "corkboard" } : undefined;
-      return server.upgrade(req, { data, headers }) ? undefined : new Response("upgrade failed", { status: 400 });
+      return server.upgrade(req, { data, headers: checked.headers }) ? undefined : new Response("upgrade failed", { status: 400 });
     }
     if (url.pathname === "/open") return open(url.searchParams.get("ticket") ?? "");
     if (url.pathname === "/host/fs" || url.pathname === "/host/lua") return hostCall(req, url);
