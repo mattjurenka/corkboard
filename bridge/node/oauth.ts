@@ -31,7 +31,9 @@
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import { lookup } from "node:dns/promises";
+import { request } from "node:https";
 import { isIP } from "node:net";
+import { Readable } from "node:stream";
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { type Dict, dict } from "../../lib/dict";
@@ -125,8 +127,10 @@ export class OAuthError extends Error {
 
 export type Caller = { scope: Kind; agent: string; grant: string; resource: string | null; brain?: string; board?: string; card?: string; spawn?: string };
 
-// How a client id document is looked up and fetched: the system's, or a test's.
-export type Net = { lookup?: (host: string) => Promise<{ address: string }[]>; fetch?: (url: URL, init: RequestInit) => Promise<Response>; timeout?: number };
+// How a client id document is looked up and fetched: the system's, or a
+// test's. The fetch is given the addresses the lookup found and were checked.
+type Address = { address: string };
+export type Net = { lookup?: (host: string) => Promise<Address[]>; fetch?: (url: URL, init: RequestInit, addresses: Address[]) => Promise<Response>; timeout?: number };
 
 export class OAuthStore {
   private failures: number[] = [];
@@ -320,10 +324,10 @@ export class OAuthStore {
       throw new OAuthError("invalid_client", "client_id isn't a URL");
     }
     if (url.protocol !== "https:" || url.pathname === "/" || url.hash || url.username || url.password) throw new OAuthError("invalid_client", "a client id document is an https URL with a path");
-    await publicHost(url.hostname, this.net.lookup);
+    const addresses = await publicHost(url.hostname, this.net.lookup);
     let doc: Record<string, unknown>;
     try {
-      const res = await (this.net.fetch ?? fetch)(url, { redirect: "error", signal: AbortSignal.timeout(this.net.timeout ?? 10_000), headers: { Accept: "application/json" } });
+      const res = await (this.net.fetch ?? pinnedFetch)(url, { redirect: "error", signal: AbortSignal.timeout(this.net.timeout ?? 10_000), headers: { Accept: "application/json" } }, addresses);
       if (!res.ok) throw new Error(String(res.status));
       doc = JSON.parse(await upTo(res, 64 * 1024));
     } catch (e) {
@@ -596,13 +600,39 @@ async function upTo(res: Response, max: number): Promise<string> {
 
 // A host whose every address is public: not private, loopback, link-local,
 // shared, multicast or reserved, so a client id can't make the node fetch
-// from its own network. (Its DNS could still change between this and the
-// fetch; the window is the gap the plan names.)
-async function publicHost(host: string, resolve: (name: string) => Promise<{ address: string }[]> = (name) => lookup(name, { all: true })) {
+// from its own network. Its addresses, for the fetch to go to.
+async function publicHost(host: string, resolve: (name: string) => Promise<Address[]> = (name) => lookup(name, { all: true })) {
   const name = host.replace(/^\[|\]$/g, "");
   const addresses = isIP(name) ? [{ address: name }] : await resolve(name).catch(() => []);
   if (!addresses.length) throw new OAuthError("invalid_client", `can't resolve ${host}`);
   for (const { address } of addresses) if (!publicAddress(address)) throw new OAuthError("invalid_client", `${host} isn't a public address`);
+  return addresses;
+}
+
+// A GET of url from one of addresses, and not from whatever its name
+// resolves to by the time it connects (a name that answered with a public
+// address for the check and its own network's for the fetch); its
+// certificate is still the name's. A redirect is an error, as fetch's
+// redirect: "error" makes it.
+export function pinnedFetch(url: URL, init: RequestInit, addresses: Address[]): Promise<Response> {
+  const all = addresses.map(({ address }) => ({ address, family: isIP(address) }));
+  return new Promise((resolve, reject) => {
+    const req = request(
+      url,
+      {
+        headers: Object.fromEntries(new Headers(init.headers)),
+        signal: init.signal ?? undefined,
+        lookup: ((_host: string, opts: { all?: boolean }, cb: (...a: unknown[]) => void) => (opts.all ? cb(null, all) : cb(null, all[0].address, all[0].family))) as never,
+      },
+      (res) => {
+        const status = res.statusCode!;
+        if (status >= 300 && status < 400) return res.destroy(), reject(new Error(`redirected (${status})`));
+        resolve(new Response(Readable.toWeb(res) as unknown as ReadableStream, { status }));
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
 }
 
 export function publicAddress(a: string): boolean {

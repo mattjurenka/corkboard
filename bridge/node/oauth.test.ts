@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, setSystemTime } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
+import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newRoot } from "../../lib/e2ee/keys";
@@ -10,7 +11,7 @@ import { listObjects } from "./objects";
 import { Replicas } from "./replicas";
 import { Data } from "./data";
 import { Search } from "./search";
-import { type Net, OAuthStore } from "./oauth";
+import { type Net, OAuthStore, pinnedFetch } from "./oauth";
 import { node } from "./server";
 
 const ORIGIN = "https://node.test";
@@ -89,6 +90,25 @@ async function consent(n: Awaited<ReturnType<typeof setup>>, client_id: string, 
   const request = page.match(/name="request" value="([^"]+)"/)![1];
   return { request, approve: async () => new URL((await n.call("/authorize", form({ request, code: n.oauth.newApproval(), action: "approve" }))).headers.get("Location")!).searchParams.get("code")! };
 }
+
+// The fetch the node makes: to the addresses the check found, whatever the
+// name resolves to by then. client.example resolves to nothing; its TLS
+// hello reaches 127.0.0.1, still for the name.
+describe("pinnedFetch", () => {
+  it("connects to the address it's given, for the name", async () => {
+    const hello = Promise.withResolvers<Buffer>();
+    const server = createServer((socket) => socket.once("data", (d: Buffer) => (hello.resolve(d), socket.destroy())));
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const { port } = server.address() as AddressInfo;
+    try {
+      const fetched = pinnedFetch(new URL(`https://client.example:${port}/client.json`), { signal: AbortSignal.timeout(5_000) }, [{ address: "127.0.0.1" }]);
+      expect((await hello.promise).includes("client.example")).toBe(true);
+      await expect(fetched).rejects.toThrow();
+    } finally {
+      server.close();
+    }
+  });
+});
 
 describe("a client id metadata document", () => {
   let web: ReturnType<typeof internet>;

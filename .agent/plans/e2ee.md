@@ -483,7 +483,8 @@ with `https://NAME/mcp`, and when the node's page asks, type the code from
   would follow.
 - The calendar is written only when the phone posts the plan; once plans are records, the node
   can write one when it sees an accept.
-- A CIMD host's DNS could change between the check and the fetch (rebinding).
+- ~~A CIMD host's DNS could change between the check and the fetch (rebinding).~~ 2026-11-20: the
+  fetch connects to the addresses the check found (oauth.ts pinnedFetch).
 - SSE keepalives: nothing streams yet. A tool that takes long (a calendar write, recall by
   meaning) should answer as SSE with comments as keepalives.
 ## Android (2026-11-02)
