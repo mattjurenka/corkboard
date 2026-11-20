@@ -1177,6 +1177,39 @@ describe("the node's objects, from the account's index", () => {
     await fresh.stop();
   });
 
+  it("keeps a board another device lists as soon as the index's socket brings it", async () => {
+    // A relay that follows logs: what's appended goes to the sockets at once.
+    const followers = new Map<string, (ops: WireOp[]) => void>();
+    const live: LogTransport = {
+      ...shared,
+      append: async (object, ops) => {
+        const out = await as(shared, "laptop").append(object, ops);
+        const log = shared.state.logs.get(object)!;
+        followers.get(object)?.(log.ops.filter((w) => out.some((o) => o.pos === w.pos)));
+        return out;
+      },
+      subscribe: (object, _since, on) => (followers.set(object, on), () => followers.delete(object)),
+    };
+    const nodeIndex = await Replica.open({ transport: live, key: indexKey(root), object: indexId(root), device: "node" });
+    await nodeIndex.pull();
+    const following = await Replicas.open({ objects: listObjects(root, { boards: [], brains: [] }, nodeIndex), transport: live, device: "node", index: nodeIndex, discover: () => listObjects(root, { boards: [], brains: [] }, nodeIndex) });
+    await following.start();
+    expect(following.get("board", "garden")).toBeUndefined();
+
+    const laptop = await Replica.open({ transport: live, key: indexKey(root), object: indexId(root), device: "laptop" });
+    await laptop.pull();
+    const [garden] = listObjects(root, { boards: ["garden"], brains: [] });
+    const board = await Replica.open({ transport: live, key: garden.key, object: garden.object, device: "laptop" });
+    await board.change(card("Plant tulips"));
+    await board.push();
+    await remember(laptop, { object: garden.object, kind: "board", name: "garden", epoch: 0 });
+    await laptop.push();
+
+    for (let i = 0; i < 50 && !following.get("board", "garden")?.cards().length; i++) await Bun.sleep(10);
+    expect(following.get("board", "garden")!.cards()[0].title).toBe("Plant tulips");
+    await following.stop();
+  });
+
   it("compacts a log of its own once it's worth it, and lives through a refusal", async () => {
     const home = replicas.objects("board")[0];
     shared.state.refuse = true;

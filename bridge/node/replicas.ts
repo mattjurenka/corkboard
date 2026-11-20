@@ -6,7 +6,7 @@
 //
 // The account's index comes along: an object of ours the node writes that
 // it doesn't list yet goes into it, and one another device adds to it is
-// kept from the next sync on. A log of ours that has grown past what
+// kept as soon as the index's socket brings it. A log of ours that has grown past what
 // lib/e2ee thinks worth keeping is compacted as it syncs.
 //
 // Over sync.ts's offline transport (an account only on this machine) the
@@ -41,6 +41,7 @@ export class Replicas {
   private listeners: ((o: NodeObject) => void)[] = [];
   private timer?: Timer;
   private following = false;
+  private stopIndex?: () => void;
 
   private constructor(
     private transport: LogTransport,
@@ -182,10 +183,14 @@ export class Replicas {
     try {
       await index.sync();
       await this.compact(index, "the index");
-      for (const o of this.discover?.() ?? []) if (!this.kept.has(`${o.kind}/${o.name}`)) await this.add(o);
+      await this.discovered();
     } catch (e) {
       console.error(`node: syncing the index: ${(e as Error).message}`);
     }
+  }
+
+  private async discovered() {
+    for (const o of this.discover?.() ?? []) if (!this.kept.has(`${o.kind}/${o.name}`)) await this.add(o);
   }
 
   async syncAll() {
@@ -200,12 +205,17 @@ export class Replicas {
     await this.syncAll();
     this.following = o.live !== false && !!this.transport.subscribe;
     if (this.following) for (const k of this.kept.values()) this.follow(k);
+    if (this.following && this.index)
+      this.stopIndex = this.index.live((n) => {
+        if (n) void this.discovered().catch((e) => console.error(`node: following the index: ${(e as Error).message}`));
+      });
     this.timer = setInterval(() => void this.syncAll(), RESYNC_MS);
   }
 
   // What's pushed so far, for a clean exit, and the sockets closed.
   async stop() {
     clearInterval(this.timer);
+    this.stopIndex?.();
     for (const k of this.kept.values()) {
       k.stop?.();
       clearTimeout(k.retry);
