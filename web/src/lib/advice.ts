@@ -7,6 +7,19 @@ export type ProjectAdvice = { project: string; board?: string | null; recommenda
 
 const FENCE = /```json\s*\n([\s\S]*?)\n```\s*$/;
 
+// A model wrote it: each field is kept only as the type it should be.
+const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+const objects = (v: unknown): Record<string, unknown>[] =>
+  Array.isArray(v) ? v.filter((x): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x)) : [];
+const recommendation = (r: Record<string, unknown>): Recommendation => ({
+  title: str(r.title) ?? "",
+  saving: typeof r.saving === "number" && Number.isFinite(r.saving) ? r.saving : undefined,
+  change: str(r.change),
+  evidence: str(r.evidence),
+  cards: Array.isArray(r.cards) ? r.cards.filter((c): c is string => typeof c === "string") : undefined,
+});
+const earlier = (e: Record<string, unknown>): Earlier => ({ title: str(e.title) ?? "", status: str(e.status), evidence: str(e.evidence) });
+
 // The note's projects, this one's first and the boardless last; the
 // markdown without its JSON when there are none.
 export function parseAdvice(body: string, board?: string): { projects?: ProjectAdvice[]; markdown: string } {
@@ -15,7 +28,14 @@ export function parseAdvice(body: string, board?: string): { projects?: ProjectA
   let projects: ProjectAdvice[] | undefined;
   try {
     const parsed = m && JSON.parse(m[1]);
-    if (Array.isArray(parsed?.projects)) projects = parsed.projects.filter((p: ProjectAdvice) => p && typeof p.project === "string");
+    projects = objects(parsed?.projects)
+      .filter((p) => typeof p.project === "string")
+      .map((p) => ({
+        project: p.project as string,
+        board: str(p.board) ?? null,
+        recommendations: objects(p.recommendations).map(recommendation),
+        earlier: objects(p.earlier).map(earlier),
+      }));
   } catch {}
   if (!projects?.length) return { markdown };
   const rank = (p: ProjectAdvice) => (board && p.board === board ? 0 : p.board ? 1 : 2);
