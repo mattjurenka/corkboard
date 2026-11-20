@@ -25,6 +25,10 @@ type Opener = { channel: string; from: string; to: string; since: number };
 
 const isOpener = (a: Attached | Opener | null): a is Opener => !!a && "channel" in a;
 const utf8 = (s: string) => new TextEncoder().encode(s);
+// A node pings every 30s (lib/e2ee/relay.ts); one not heard from this long
+// has gone without closing (its machine crashed, its network went), which
+// its socket here may not show for many minutes. lib/e2ee/channel.ts's SILENT_MS.
+const SILENT_MS = 75_000;
 // A close's reason is at most 123 bytes.
 const why = (reason: string) => reason.slice(0, 120);
 
@@ -81,10 +85,16 @@ export class Nodes extends DurableObject {
     }
   }
 
+  // The nodes' sockets that are open; one gone silent is let go of.
   private sockets(): { ws: WebSocket; a: Attached }[] {
     return this.ctx.getWebSockets().flatMap((ws) => {
       const a = ws.deserializeAttachment() as Attached | Opener | null;
-      return a && !isOpener(a) && ws.readyState === WebSocket.OPEN ? [{ ws, a }] : [];
+      if (!a || isOpener(a) || ws.readyState !== WebSocket.OPEN) return [];
+      const heard = this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? a.since;
+      if (Date.now() - heard < SILENT_MS) return [{ ws, a }];
+      this.sql.exec("UPDATE devices SET seen = ? WHERE device = ?", heard, a.device);
+      this.drop(ws, 1001, "stopped answering");
+      return [];
     });
   }
 

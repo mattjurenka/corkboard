@@ -778,6 +778,22 @@ describe("nodes and the tunnel", () => {
     expect((await worker(`/n/${handle}/x`)).headers.get("x-node")).toBe("second");
   });
 
+  it("let go of a node that's stopped pinging, as one whose machine died has", async () => {
+    const a = await account();
+    const handle = await nodeHandle(a.keys.id);
+    const ws = await node(a.relay, "laptop");
+    let closed = 0;
+    ws.addEventListener("close", (e) => void (closed = e.code));
+    await vi.waitUntil(async () => (await a.relay.nodes()).connected.length === 1);
+    // Connected 80s ago and not heard from since.
+    await runInDurableObject(env.NODES.get(env.NODES.idFromName(handle)), (_o, state) => {
+      for (const s of state.getWebSockets()) s.serializeAttachment({ ...(s.deserializeAttachment() as object), since: Date.now() - 80_000 });
+    });
+    expect((await a.relay.nodes()).connected).toEqual([]);
+    expect((await worker(`/n/${handle}/x`)).status).toBe(503);
+    await vi.waitUntil(() => closed === 1001);
+  });
+
   it("pass Forgejo's pages, and its cookies, only while the account has them on", async () => {
     const a = await account();
     const handle = await nodeHandle(a.keys.id);
