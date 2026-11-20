@@ -5,7 +5,7 @@
 // left. Floats Neovim opens meanwhile (a picker) show through it, and float
 // panels sit above it.
 
-import { box, holes } from "@/components/Panels";
+import { box, holes } from "@/lib/clip";
 import { Spinner } from "@/components/Spinner";
 import { windowsOf } from "@/skeleton";
 import { type Rect, useStore } from "@/store";

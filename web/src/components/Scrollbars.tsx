@@ -17,7 +17,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useNvim } from "@/nvim/context";
 import { type Bar, type GitRange, type Minimap as Map, type Rect, useStore } from "@/store";
-import { box, holes } from "./Panels";
+import { box, holes } from "@/lib/clip";
 
 const MIN_THUMB = 24; // px
 // px a line, and a character.

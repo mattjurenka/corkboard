@@ -1,6 +1,7 @@
 // The token-usage view. Neovim reads the session logs and owns the
 // selection (corkboard.usage); a click on a session calls back into it.
 
+import { type ProjectAdvice, parseAdvice } from "@/lib/advice";
 import { md } from "@/lib/markdown";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Spinner } from "@/components/Spinner";
@@ -143,29 +144,6 @@ export function Usage({ state, win, focused, nvim }: ViewProps<UsageState>) {
       </div>
     </div>
   );
-}
-
-
-// The JSON Pepper ends its note with (fleet/pepper/guest.nix).
-type Recommendation = { title: string; saving?: number; change?: string; evidence?: string; cards?: string[] };
-type Earlier = { title: string; status?: string; evidence?: string };
-type ProjectAdvice = { project: string; board?: string | null; recommendations?: Recommendation[]; earlier?: Earlier[] };
-
-const FENCE = /```json\s*\n([\s\S]*?)\n```\s*$/;
-
-// The note's projects, this one's first and the boardless last; the
-// markdown without its JSON when there are none.
-function parseAdvice(body: string, board?: string): { projects?: ProjectAdvice[]; markdown: string } {
-  const m = FENCE.exec(body.trimEnd());
-  const markdown = m ? body.trimEnd().slice(0, m.index) : body;
-  let projects: ProjectAdvice[] | undefined;
-  try {
-    const parsed = m && JSON.parse(m[1]);
-    if (Array.isArray(parsed?.projects)) projects = parsed.projects.filter((p: ProjectAdvice) => p && typeof p.project === "string");
-  } catch {}
-  if (!projects?.length) return { markdown };
-  const rank = (p: ProjectAdvice) => (board && p.board === board ? 0 : p.board ? 1 : 2);
-  return { projects: [...projects].sort((a, b) => rank(a) - rank(b)), markdown };
 }
 
 
