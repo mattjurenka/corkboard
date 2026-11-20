@@ -1,8 +1,9 @@
 import { afterAll, describe, expect, it } from "bun:test";
-import { type Device, certify, creation, newDevice, revoke } from "../../lib/e2ee/device";
+import { type Device, certify, creation, newDevice, revoke, signRotation } from "../../lib/e2ee/device";
 import { FORGE_BIND_SSH, type ForgeGrant, type GrantTerms, answerForge, bindForge, bindForgeAsDevice, forgeBindBytes, forgeGrantHash, grantForge, revokeForgeGrant } from "../../lib/e2ee/forge";
 import { accountKeys, newRoot } from "../../lib/e2ee/keys";
 import { type AccountView, type DeviceCert, type Signed, b64url } from "../../lib/e2ee/wire";
+import { sendRevocationToGate } from "../../lib/e2ee/forge-client";
 import { createGate } from "./gate";
 import { Store } from "./store";
 import { mkdtempSync, readFileSync } from "node:fs";
@@ -258,5 +259,130 @@ describe("a grant", () => {
     expect(res.headers.get("access-control-allow-origin")).toBe("https://corkboard.test");
     const other = await call("/api/v1/repos/matt/corkboard", { headers: { ...h, origin: "https://evil.test" } });
     expect(other.headers.get("access-control-allow-origin")).toBeNull();
+  });
+});
+
+describe("the account's key moving on", () => {
+  const rotation = (a: ReturnType<typeof account>, next = accountKeys(newRoot())) => {
+    const r = signRotation(a.keys, { v: 1, account: a.id, from: a.keys.id, to: next.id, box: b64url(next.box.public), at: Date.now() });
+    const view: AccountView = { ...a.view, key: next.id, box: b64url(next.box.public), proof: { ...a.view.proof, rotations: [r] } };
+    return { next, view };
+  };
+
+  it("ends the old key's sessions and certs, and takes the new key's", async () => {
+    const a = await bound();
+    const h = await session(a.id, a.laptop, a.cert);
+    const { next, view } = rotation(a);
+    expect(await (await post("/gate/account", { view })).json()).toEqual({ account: a.id, key: next.id });
+    expect((await call("/api/v1/repos/matt/corkboard", { headers: h })).status).toBe(401);
+    await expect(session(a.id, a.laptop, a.cert)).rejects.toThrow();
+    const cert = certify(next, a.laptop, "laptop");
+    // The same view again changes nothing, and keeps the new key's sessions.
+    const h2 = await session(a.id, a.laptop, cert);
+    expect((await post("/gate/account", { view })).status).toBe(200);
+    expect((await call("/api/v1/repos/matt/corkboard", { headers: h2 })).status).toBe(200);
+  });
+
+  it("can't be taken back by a view from before, nor moved by one that doesn't chain", async () => {
+    const a = await bound();
+    const { view } = rotation(a);
+    expect((await post("/gate/account", { view })).status).toBe(200);
+    expect((await post("/gate/account", { view: a.view })).status).toBe(409);
+    const stranger = accountKeys(newRoot());
+    const forged = signRotation(stranger, { v: 1, account: a.id, from: view.key, to: stranger.id, box: b64url(stranger.box.public), at: Date.now() });
+    const bad: AccountView = { ...view, key: stranger.id, box: b64url(stranger.box.public), proof: { ...view.proof, rotations: [...view.proof.rotations, forged] } };
+    expect((await post("/gate/account", { view: bad })).status).toBe(400);
+    // Nor by binding again with the view from before.
+    expect((await post("/gate/bind", { view: a.view, bind: bindForge(a.keys, a.id, ORIGIN, "matt"), forgejo_token: "good" })).status).toBe(409);
+  });
+
+  it("is news only for an account bound here", async () => {
+    expect((await post("/gate/account", { view: account().view })).status).toBe(404);
+    expect((await post("/gate/account", {})).status).toBe(404);
+    expect((await call("/gate/account", { method: "POST", body: "not json" })).status).toBe(404);
+  });
+});
+
+describe("the client's revocation", () => {
+  const f = ((input: string | URL | Request, init?: RequestInit) => gate.fetch(new Request(input, init))) as typeof fetch;
+
+  it("ends a grant at the gate, and a device", async () => {
+    const a = await bound();
+    const holder = newDevice();
+    const g = grantForge(a.laptop, a.id, holder.id, terms());
+    const h = await session(a.id, holder, a.cert, [g]);
+    await sendRevocationToGate(ORIGIN, a.id, { grant: revokeForgeGrant(a.laptop, a.id, forgeGrantHash(g.body)) }, f);
+    expect((await call("/api/v1/repos/matt/corkboard", { headers: h })).status).toBe(401);
+    await expect(session(a.id, holder, a.cert, [g])).rejects.toThrow("revoked");
+
+    const d = await session(a.id, a.laptop, a.cert);
+    await sendRevocationToGate(ORIGIN, a.id, { revocation: revoke(a.keys, a.laptop.id) }, f);
+    expect((await call("/api/v1/repos/matt/corkboard", { headers: d })).status).toBe(401);
+    await expect(session(a.id, a.laptop, a.cert)).rejects.toThrow();
+  });
+
+  it("is nothing to a gate the account isn't bound at, and throws at any other refusal", async () => {
+    const a = account();
+    await sendRevocationToGate(ORIGIN, a.id, { revocation: revoke(a.keys, a.laptop.id) }, f);
+    const b = await bound();
+    await expect(sendRevocationToGate(ORIGIN, b.id, { revocation: revoke(accountKeys(newRoot()), b.laptop.id) }, f)).rejects.toThrow("forge gate /gate/revoke: revocation must be signed by the account's key");
+    await expect(sendRevocationToGate(ORIGIN, b.id, {}, f)).rejects.toThrow("revocation or grant");
+    const down = (async () => new Response("bad gateway", { status: 502 })) as unknown as typeof fetch;
+    await expect(sendRevocationToGate(ORIGIN, b.id, { revocation: revoke(b.keys, b.laptop.id) }, down)).rejects.toThrow("forge gate /gate/revoke: 502");
+    const unreachable = (async () => {
+      throw new TypeError("connection refused");
+    }) as unknown as typeof fetch;
+    await expect(sendRevocationToGate(ORIGIN, b.id, { revocation: revoke(b.keys, b.laptop.id) }, unreachable)).rejects.toThrow("connection refused");
+  });
+});
+
+describe("a grant's request, taken apart", () => {
+  async function vm(t: Partial<GrantTerms> = {}) {
+    const a = await bound();
+    const holder = newDevice();
+    return session(a.id, holder, a.cert, [grantForge(a.laptop, a.id, holder.id, terms(t))]);
+  }
+
+  it("isn't a path with an encoded slash or backslash, or an empty segment", async () => {
+    const h = await vm();
+    const before = seen.length;
+    for (const p of ["/api/v1/repos/matt/corkboard//contents/a", "//matt/corkboard.git/info/refs?service=git-upload-pack", "/api/v1/repos/matt/corkboard/contents%2F..%2Fx", "/api/v1/repos/matt/corkboard/contents%5cx", "/api/v1/repos/matt%2fcorkboard/contents"]) {
+      expect([p, (await call(p, { headers: h })).status]).toEqual([p, 400]);
+    }
+    expect(seen.length).toBe(before);
+  });
+
+  it("holds no more than 64 MiB of an API write to read its refs", async () => {
+    const h = await vm();
+    const before = seen.length;
+    const big = new Uint8Array(64 * 1024 * 1024 + 1).fill(0x20);
+    expect((await call("/api/v1/repos/matt/corkboard/contents/a.txt", { method: "PUT", body: big, headers: h })).status).toBe(413);
+    expect(seen.length).toBe(before);
+  });
+
+  it("pushes a wiki to any ref, given wiki:write, and not the repository", async () => {
+    const h = await vm({ perms: { wiki: "write" } });
+    const main = pushBody("refs/heads/main");
+    expect((await call("/matt/corkboard.wiki.git/git-receive-pack", { method: "POST", body: main, headers: h })).status).toBe(200);
+    expect(last()).toMatchObject({ path: "/matt/corkboard.wiki.git/git-receive-pack", body: main, user: "matt" });
+    expect((await call("/matt/corkboard.git/git-receive-pack", { method: "POST", body: pushBody("refs/heads/agent/x"), headers: h })).status).toBe(403);
+    const ro = await vm({ perms: { wiki: "read" } });
+    expect((await call("/matt/corkboard.wiki.git/git-receive-pack", { method: "POST", body: main, headers: ro })).status).toBe(403);
+    expect((await call("/matt/corkboard.wiki.git/info/refs?service=git-upload-pack", { headers: ro })).status).toBe(200);
+  });
+
+  it("takes a push gzipped or as it is, and in no other encoding", async () => {
+    const h = await vm();
+    const ok = pushBody("refs/heads/agent/x");
+    const br = await call("/matt/corkboard.git/git-receive-pack", { method: "POST", body: ok, headers: { ...h, "content-encoding": "br" } });
+    expect(br.status).toBe(415);
+    expect(((await br.json()) as any).error).toBe("content-encoding br");
+    expect((await call("/matt/corkboard.git/git-receive-pack", { method: "POST", body: ok, headers: { ...h, "content-encoding": "identity" } })).status).toBe(200);
+    expect(last().body).toBe(ok);
+    // A gzipped one goes on unzipped.
+    expect((await call("/matt/corkboard.git/git-receive-pack", { method: "POST", body: Bun.gzipSync(new TextEncoder().encode(ok)), headers: { ...h, "content-encoding": "gzip" } })).status).toBe(200);
+    expect(last().body).toBe(ok);
+    // One whose commands don't parse goes nowhere.
+    expect((await call("/matt/corkboard.git/git-receive-pack", { method: "POST", body: "zzzz", headers: h })).status).toBe(400);
   });
 });
