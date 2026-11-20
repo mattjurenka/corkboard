@@ -11,6 +11,9 @@ const safe = new Marked({
   renderer: {
     html: ({ text }) => escape(text),
     image: ({ text }) => escape(text),
+    // After a <script>, <pre>, <code> or <kbd> (as text, above) marked takes
+    // the text up to its end tag as raw HTML and puts it out unescaped.
+    text: (token) => ("escaped" in token && token.escaped ? escape(token.text) : false),
     link({ href, tokens }) {
       const text = this.parser.parseInline(tokens);
       return /^https?:\/\//i.test(href) ? `<a href="${escape(href)}" target="_blank" rel="noopener noreferrer">${text}</a>` : text;
