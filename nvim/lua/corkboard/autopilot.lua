@@ -390,7 +390,11 @@ local function apply(list, changes)
           end
           cards.append_log(card, "groomer", table.concat(what, "; ") .. (ch.reason ~= "" and (" — " .. ch.reason) or ""))
         end)
-        if ok then table.insert(changed, id) end
+        -- What the next change's cycle check reads: two changes in one
+        -- run could otherwise make two cards wait on each other.
+        if ok and fields.dependencies then c.dependencies = fields.dependencies end
+        -- Once, however many of the changes were to it.
+        if ok and not vim.tbl_contains(changed, id) then table.insert(changed, id) end
       end
     end
   end
