@@ -9,7 +9,7 @@
 // variable of the test's own environment gets through, so there is no
 // bridge (cards are the files, CORKBOARD_CLOUD_BOARDS=0), no parent Neovim
 // and no global git config.
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { type Dict, dict } from "../lib/dict";
@@ -21,6 +21,8 @@ export type Sandbox = {
   home: string;
   repo: string;
   origin: string;
+  // What origin is to git: origin's path, or the forge's URL for it.
+  remote: string;
   bin: string;
   env: Dict<string>;
   // The code is a Lua function's body, given `input`; it may vim.wait.
@@ -50,12 +52,14 @@ out:close()
 
 let runs = 0;
 
-export function sandbox(opts: { repo?: boolean } = {}): Sandbox {
+// opts.forge: origin is served over HTTP as the node's forge is
+// (http://127.0.0.1:<port>/forge/me/project.git, nvim/forge-server.ts).
+export function sandbox(opts: { repo?: boolean; forge?: boolean } = {}): Sandbox {
   // Real paths: git and Neovim give them, and the tests compare.
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "corkboard-nvim-")));
   const home = join(dir, "home");
   const repo = join(dir, "project");
-  const origin = join(dir, "origin.git");
+  const origin = opts.forge ? join(dir, "forge/me/project.git") : join(dir, "origin.git");
   const bin = join(dir, "bin");
   for (const d of [home, bin, join(home, ".config"), join(home, ".local/share"), join(home, ".local/state"), join(home, ".claude")]) {
     mkdirSync(d, { recursive: true });
@@ -92,14 +96,22 @@ export function sandbox(opts: { repo?: boolean } = {}): Sandbox {
     return p;
   };
 
+  let server: ReturnType<typeof Bun.spawn> | undefined;
+  let remote = origin;
   if (opts.repo !== false) {
     mkdirSync(repo);
     git(["init", "--quiet", "--bare", origin], dir);
+    if (opts.forge) {
+      const portFile = join(dir, "forge.port");
+      server = Bun.spawn(["bun", join(PLUGIN, "forge-server.ts"), join(dir, "forge"), portFile], { env, stdout: "ignore", stderr: "inherit" });
+      for (let i = 0; i < 500 && !existsSync(portFile); i++) Bun.sleepSync(10);
+      remote = `http://127.0.0.1:${readFileSync(portFile, "utf8")}/forge/me/project.git`;
+    }
     git(["init", "--quiet"]);
     write("README.md", "hello\n");
     git(["add", "."]);
     git(["commit", "--quiet", "-m", "first"]);
-    git(["remote", "add", "origin", origin]);
+    git(["remote", "add", "origin", remote]);
     git(["push", "--quiet", "-u", "origin", "main"]);
   } else {
     mkdirSync(repo);
@@ -131,6 +143,7 @@ export function sandbox(opts: { repo?: boolean } = {}): Sandbox {
     home,
     repo,
     origin,
+    remote,
     bin,
     env,
     lua,
@@ -143,6 +156,9 @@ export function sandbox(opts: { repo?: boolean } = {}): Sandbox {
       chmodSync(p, 0o755);
     },
     board: join(home, ".local/share/corkboard/boards", repo.replace(/^\//, "").replaceAll("/", "-")),
-    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+    cleanup: () => {
+      server?.kill();
+      rmSync(dir, { recursive: true, force: true });
+    },
   };
 }
