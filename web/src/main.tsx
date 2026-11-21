@@ -200,13 +200,19 @@ rpc.on("corkboard.ask_done", ([id]: any[]) => {
 });
 rpc.on("corkboard.pair", ([pair]: any[]) => store.set({ pair: typeof pair === "object" ? pair : null }));
 rpc.on("corkboard.chime", () => chime());
-rpc.on("corkboard.message", ([m]: any[]) => notifyMessage(m));
 // A toast replaces the one with its id; one that's ended goes after a while.
-rpc.on("corkboard.toast", ([t]: [Toast]) => {
+function toast(t: Toast) {
   store.set({ toasts: [...store.get().toasts.filter((o) => o.id !== t.id), t] });
   if (t.kind === "pending") return;
   setTimeout(() => store.set({ toasts: store.get().toasts.filter((o) => o !== t) }), t.kind === "error" ? 8000 : 3000);
+}
+// An error is a toast too, so what you just did that failed says so.
+let messages = 0;
+rpc.on("corkboard.message", ([m]: any[]) => {
+  notifyMessage(m);
+  if (m?.level === "error") toast({ id: `message:${messages++}`, kind: "error", text: String(m.text) });
 });
+rpc.on("corkboard.toast", ([t]: [Toast]) => toast(t));
 rpc.on("corkboard.away_return", ([here]: any[]) => {
   if (!here) notifyBack();
   canvas.focus();
