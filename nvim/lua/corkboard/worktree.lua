@@ -18,7 +18,8 @@ function M.make(root, name, branch)
   vim.fn.mkdir(vim.fs.dirname(dir), "p")
   local args = has(branch) and { "worktree", "add", dir, branch } or { "worktree", "add", "-b", branch, dir }
   local ok, _, err = util.git(args, root)
-  if not ok then error("git worktree add: " .. err, 0) end
+  -- git's last line says why; the hints before it are for its own CLI.
+  if not ok then error("git worktree add: " .. (err:match("[^\n]*$") or err), 0) end
   return dir, branch
 end
 
@@ -32,12 +33,13 @@ function M.linked(dir)
 end
 
 -- A new session's worktree, for one that would start in dir: nil when dir
--- is outside a repository or already in a linked worktree. Gives the
--- directory to start in (dir's place in the worktree), its branch, and
--- what to tell the agent.
+-- is outside a repository, already in a linked worktree, or in one with no
+-- commit yet (there's no HEAD to branch from). Gives the directory to start
+-- in (dir's place in the worktree), its branch, and what to tell the agent.
 function M.for_session(dir)
   local root = util.repo_root(dir)
   if not root or M.linked(dir) then return nil end
+  if not util.git({ "rev-parse", "--verify", "--quiet", "HEAD" }, root) then return nil end
   local name = os.date("%m%d-%H%M%S")
   local tree, branch = M.make(root, name)
   local sub = util.is_under(dir, root) and dir:sub(#root + 2) or ""
