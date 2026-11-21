@@ -160,7 +160,8 @@ export async function startNode(o: NodeOptions = {}) {
     let r: Relay | undefined;
     if (d.relay) {
       r = new Relay({ origin: CLOUD, device: d.device, cert: d.cert, token: store.token(), onToken: (t) => store.saveToken(t) });
-      await r.token();
+      // One that fails (offline at login) is signed in again by the first call.
+      await r.token().catch((e) => console.error(`node: signing in to the relay: ${(e as Error).message}`));
       relay = r;
     }
 

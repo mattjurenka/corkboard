@@ -72,6 +72,8 @@ export type RelayOptions = {
 
 // How long a device goes by the relay's list of revocations before asking again.
 const REVOKED_MS = 60_000;
+// How long a call (not a blob or a socket) gets.
+const CALL_TIMEOUT_MS = 30_000;
 
 export class Relay implements PairTransport, LogTransport {
   readonly origin: string;
@@ -94,11 +96,14 @@ export class Relay implements PairTransport, LogTransport {
     this.o.token = undefined;
   }
 
+  // With a timeout: a connection made as the network comes up (a node
+  // started at login) can stall until fetch's own, five minutes on.
   private async call<T>(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<T> {
     const res = await this.f(`${this.origin}${path}`, {
       method,
       headers: { ...(body !== undefined && { "Content-Type": "application/json" }), ...headers },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
     });
     const json = (await res.json().catch(() => ({}))) as { error?: string };
     if (!res.ok) throw new RelayError(res.status, `${method} ${path}: ${json.error ?? res.status}`, json);
