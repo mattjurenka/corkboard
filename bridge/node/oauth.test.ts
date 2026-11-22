@@ -122,6 +122,8 @@ describe("a client id metadata document", () => {
     const page = await n.call(`/authorize?${ask(id, redirect, { state: "s" })}`);
     expect(page.status).toBe(200);
     expect(await page.text()).toContain("Client");
+    // The approve post redirects there, which form-action has to allow.
+    expect(page.headers.get("Content-Security-Policy")).toContain("form-action 'self' https://client.example;");
     expect(web.resolved.at(-1)).toBe("client.example");
     const { approve } = await consent(n, id, redirect);
     const code = await approve();

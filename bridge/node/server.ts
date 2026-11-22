@@ -150,7 +150,15 @@ const FORGE_HEADERS = ["content-type", "accept", "git-protocol", "content-encodi
 
 const escape = (v: string) => v.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
-function page(title: string, body: string, status = 200): Response {
+// A source for CSP's form-action that lets a form's redirect reach where
+// it's going: browsers hold the redirect after a post to it as well.
+function formSource(to: string): string {
+  const u = new URL(to);
+  return u.protocol === "https:" || u.protocol === "http:" ? u.origin : u.protocol;
+}
+
+// redirectTo: where the page's form sends the browser on, after it posts.
+function page(title: string, body: string, status = 200, redirectTo?: string): Response {
   return new Response(
     `<!doctype html>
 <meta charset="utf-8">
@@ -169,7 +177,7 @@ function page(title: string, body: string, status = 200): Response {
   button[value=approve] { border-color: var(--accent); color: var(--accent); }
 </style>
 <main><h1>corkboard node · ${escape(title)}</h1>${body}</main>`,
-    { status, headers: { "Content-Type": "text/html; charset=utf-8", "X-Frame-Options": "DENY", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'" } },
+    { status, headers: { "Content-Type": "text/html; charset=utf-8", "X-Frame-Options": "DENY", "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; form-action 'self'${redirectTo ? ` ${formSource(redirectTo)}` : ""}; frame-ancestors 'none'` } },
   );
 }
 
@@ -228,6 +236,8 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
 <label>code <input name="code" autocomplete="off" autocapitalize="characters" spellcheck="false" autofocus></label><br>
 <button name="action" value="approve">approve</button><button name="action" value="deny">deny</button>
 </form>`,
+      200,
+      c.redirect_uri,
     );
 
   async function authorize(req: Request, origin: string): Promise<Response> {
