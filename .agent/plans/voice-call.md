@@ -17,18 +17,20 @@ phone: call service ──── mic (VOICE_COMMUNICATION, AEC) ───▶ nod
 
 ---
 
-## 1. Phone: the call
+## 1. Phone: the call (built: corkboard-cloud's Call.kt, not yet tried on a phone)
 
-In corkboard-cloud's Android app. A foreground service of type `microphone|mediaPlayback`,
-started from a Call button on the Pepper chat, with an ongoing notification (hang up, mute) and a
-MediaSession, so it runs with the screen off and a headset's button hangs up. The mic is
-`AudioRecord` on `VOICE_COMMUNICATION`, so Android's echo canceller takes Pepper's voice out of what
-it hears and the user can talk over it. Audio both ways on a sealed channel to the node (16 kHz
-Opus up, the bridge's 16-bit samples down), as the hub's sessions already go. Talking over Pepper
-stops its voice at once on the phone and tells the node.
+In corkboard-cloud's Android app. `call` on the Pepper chat's header starts `CallService`, a
+foreground service of type `microphone|mediaPlayback`, with an ongoing notification (mute, hang
+up) and a MediaSession, so it runs with the screen off and a headset's button hangs up. The mic is
+`AudioRecord` on `VOICE_COMMUNICATION` with the echo canceller, so Pepper's voice is taken out of
+what it hears and the user can talk over it; muted, it sends quiet. It goes up as 16 kHz 16-bit
+samples a tenth of a second at a time, on the leader's sealed channel (`Hubs.leader`), and
+what's said comes down to a streamed AudioTrack, on a headset if there is one, the speaker
+otherwise. `stop` drops what's queued at once. Hanging up sends `end`, so what was being said is
+still heard. The chat shows the last line heard.
 
-A confirm waiting (step 3) is a notification too, with Yes and No, for when the user would rather
-tap.
+A confirm waiting (step 3) is a notification too, with Yes and No, and a line in the chat with yes
+and no, both POSTing confirms/:id on the leader's channel. Opus up is for later.
 
 ## 2. Node: the voice loop (done: bridge/node/call.ts)
 
@@ -72,4 +74,4 @@ one is a shell.
 ## Order
 
 3 (tools, confirms), then 2 (the voice loop, with the yes heard in the node), then 1 (the phone).
-Until 1, confirms are decided only by an owner client's API.
+To try it, the leader node has to run step 2.
