@@ -37,6 +37,7 @@ const models: CallModels = {
     if (making) await Bun.sleep(making);
     return { audio: new Float32Array(seconds ? seconds * 24_000 : text.length * 24).fill(0.5), rate: 24_000 };
   },
+  phonemes: async (text) => text.toLowerCase(),
 };
 
 describe("a voice call with Pepper", () => {
@@ -53,12 +54,12 @@ describe("a voice call with Pepper", () => {
 
   const LOCAL = { requestIP: () => ({ address: "127.0.0.1" }) } as any;
   // A call from the phone: what it sends, and everything the node says.
-  async function dial(o: { token?: string; peer?: any } = {}) {
+  async function dial(o: { token?: string; peer?: any; query?: string } = {}) {
     let push!: ReadableStreamDefaultController<Uint8Array>;
     let cancelled = false;
     const body = new ReadableStream<Uint8Array>({ start: (c) => void (push = c), cancel: () => void (cancelled = true) });
     const res = await n.app(
-      new Request(`${ORIGIN}/api/node/call?voice=af_heart`, { method: "POST", headers: { Authorization: `Bearer ${o.token ?? phone}` }, body, duplex: "half" } as RequestInit),
+      new Request(`${ORIGIN}/api/node/call?voice=af_heart${o.query ?? ""}`, { method: "POST", headers: { Authorization: `Bearer ${o.token ?? phone}` }, body, duplex: "half" } as RequestInit),
       o.peer === undefined ? LOCAL : o.peer,
     );
     const got: any[] = [];
@@ -68,6 +69,7 @@ describe("a voice call with Pepper", () => {
       res,
       got,
       over,
+      send,
       say: (audio: Float32Array) => send({ type: "audio", data: pcm(audio) }),
       hangUp: () => (send({ type: "end" }), over),
       close: () => push.close(),
@@ -150,6 +152,30 @@ describe("a voice call with Pepper", () => {
     await c.until((m) => m.type === "say" && m.text === "Two.", 4000);
     [seconds, making] = [0, 0];
     expect(Date.now() - first).toBeLessThan(2000);
+    await c.hangUp();
+  });
+
+  it("sends the phone every sentence's phonemes at once when it makes the voice, and stops it until it says it's played them", async () => {
+    const c = await dial({ query: "&speak=phone" });
+    seconds = 3;
+    await n.data.post("assistant", "One. Two. Three.");
+    await c.until((m) => m.type === "say" && m.text === "Three.");
+    seconds = 0;
+    expect(c.got.filter((m) => m.type === "say")).toEqual([
+      { type: "say", text: "One.", phonemes: "one." },
+      { type: "say", text: "Two.", phonemes: "two." },
+      { type: "say", text: "Three.", phonemes: "three." },
+    ]);
+    c.say(join(speech(300, 1), silence(1000)));
+    await c.until((m) => m.type === "stop");
+    await c.until((m) => m.type === "heard");
+    // Played, talking isn't stopping anything.
+    c.got.length = 0;
+    c.send({ type: "played", n: 3 });
+    await Bun.sleep(20);
+    c.say(join(speech(300, 1), silence(1000)));
+    await c.until((m) => m.type === "heard");
+    expect(c.got.some((m) => m.type === "stop")).toBe(false);
     await c.hangUp();
   });
 

@@ -49,7 +49,7 @@
 //     DELETE grants                    { token }: that token ended (owner)
 //     GET   confirms                   what a resident would do, waiting for the user's yes (owner; confirm.ts)
 //     POST  confirms/:id               { ok }: the user's answer; yes runs it, and says what came of it (owner)
-//     POST  call                       ?voice=&speed=: a voice call with Pepper, ndjson both ways (owner, sealed; call.ts)
+//     POST  call                       ?voice=&speed=&speak=phone: a voice call with Pepper, ndjson both ways (owner, sealed; call.ts)
 //   /memory/...                        a session's hooks, as the Worker's (fleet/memory-hooks.nix), with a
 //                                      token; the brain is ?brain= (or the body's), else the default:
 //     GET   context                    Markdown: what a session starts with; ?budget= characters,
@@ -433,7 +433,7 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       const voice = q("voice") ?? "af_heart", speed = Number(q("speed") ?? 1);
       if (!/^[a-z]{2}_[a-z]+$/.test(voice)) throw new Invalid("bad voice");
       if (!(speed >= 0.5 && speed <= 2)) throw new Invalid("bad speed");
-      return call(req.body, { data, confirms, sessions: o.sessions, voice, speed, models: o.callModels }, req.signal);
+      return call(req.body, { data, confirms, sessions: o.sessions, voice, speed, phone: q("speak") === "phone", models: o.callModels }, req.signal);
     }
     if (what === "confirms" && !sub) {
       if (who.scope !== "owner") return json({ error: "only the user decides" }, 403);
