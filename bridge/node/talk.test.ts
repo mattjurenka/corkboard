@@ -10,10 +10,11 @@ import { certify, checkCert, newDevice } from "../../lib/e2ee/device";
 import { fuzz } from "../../lib/testing/fuzz";
 import { Hub, joinHub } from "../hub";
 import { type Answers, type Hosted, answers, inWords, serve } from "../sessions";
-import type { Question } from "../transcript";
+import { type Item, type Question, asked } from "../transcript";
 import type { Reach } from "../peers";
 import type { Caller } from "./mcp";
 import { node } from "./server";
+import { TALK_TOOLS } from "./talk";
 import { NO_WORKER, ORIGIN, rpc, setup, toolText } from "./testing";
 
 const record = (type: string, content: unknown, uuid = crypto.randomUUID()) => JSON.stringify({ type, uuid, timestamp: "2026-11-22T10:00:00Z", message: { role: type, content } }) + "\n";
@@ -54,7 +55,12 @@ async function setupTalk() {
     list: () => local,
     watch: () => {},
     say: async (key, text, keys, a) => (saidHere.push(a ? [key, a] : [key, text, keys]), { ok: true }),
-    screen: async (key) => (key === "screen-1" ? { lines: ["$ make"], width: 80 } : { error: "no such", missing: true }),
+    screen: async (key) =>
+      key === "screen-1"
+        ? { lines: ["$ make"], width: 80 }
+        : key === "3-4"
+          ? { lines: ["│ Bash command", "│   rm -rf dist", "│ Do you want to proceed?", "│ ❯ 1. Yes", "│   2. Yes, and don't ask again for rm commands in /site", "│   3. No, and tell Claude what to do differently (esc)"], width: 80 }
+          : { error: "no such", missing: true },
     hub: joinHub(here),
   }, NO_WORKER);
   const saidThere: unknown[] = [];
@@ -118,6 +124,8 @@ describe("the account's sessions over the node's MCP", () => {
       { at: "2026-11-22T10:00:00Z", tool: "Bash", detail: "List files", result: "site.css" },
       { at: "2026-11-22T10:00:00Z", tool: "AskUserQuestion", detail: "Which colour?\nWhich sizes?" },
     ]);
+    expect(got.asked).toBe("q1");
+    expect(got.partial).toBeUndefined();
     expect(got.question[0]).toEqual({ header: "Colour", question: "Which colour?", multiSelect: false, options: [{ n: 0, label: "Red", description: "warm" }, { n: 1, label: "Blue", description: "cool" }] });
     expect(got.question[1].options.map((o: { n: number }) => o.n)).toEqual([0, 1, 2]);
     // The newest, as many as asked.
@@ -129,6 +137,7 @@ describe("the account's sessions over the node's MCP", () => {
     expect(got.turns.at(-1)).toEqual({ at: expect.any(String), claude: "Which colour, Red or Blue?" });
     expect(got.turns[1]).toMatchObject({ tool: "AskUserQuestion", error: "no one to ask" });
     expect(got.question).toHaveLength(1);
+    expect(got.asked).toBe("q2");
   });
 
   it("gives a session with no conversation its screen", async () => {
@@ -142,8 +151,8 @@ describe("the account's sessions over the node's MCP", () => {
     expect((await t.call(token, "send_session", { session: "laptop/laptop-1/1-2", text: "stop that", interrupt: true })).error).toBe(false);
     expect((await t.call(token, "send_session", { session: "laptop/laptop-1/1-2", interrupt: true })).error).toBe(false);
     expect(await t.call(token, "send_session", { session: "laptop/laptop-1/1-2", text: " " })).toEqual({ error: true, text: "say something, or interrupt it" });
-    expect((await t.call(token, "answer_session", { session: "laptop/laptop-1/1-2", answers: [{ picks: [1] }, { picks: [0, 2], other: "XL" }] })).error).toBe(false);
-    expect(await t.call(token, "answer_session", { session: "laptop/laptop-1/1-2", answers: [{ picks: [-1] }] })).toEqual({ error: true, text: "each answer needs picks, the options' numbers from 0" });
+    expect((await t.call(token, "answer_session", { session: "laptop/laptop-1/1-2", question: "q1", answers: [{ picks: [1] }, { picks: [0, 2], other: "XL" }] })).error).toBe(false);
+    expect(await t.call(token, "answer_session", { session: "laptop/laptop-1/1-2", question: "q1", answers: [{ picks: [-1] }] })).toEqual({ error: true, text: "each answer needs picks, the options' numbers from 0" });
     expect(t.saidHere).toEqual([
       ["1-2", "use the brand colours", ["enter"]],
       ["1-2", "", ["esc"]],
@@ -152,13 +161,38 @@ describe("the account's sessions over the node's MCP", () => {
       ["1-2", [{ picks: [1] }, { picks: [0, 2], other: "XL" }]],
     ]);
     // And over the channel.
-    expect((await t.call(token, "answer_session", { session: "vm-host/fleetd-vm/s1", answers: [{ picks: [0] }] })).error).toBe(false);
+    expect((await t.call(token, "answer_session", { session: "vm-host/fleetd-vm/s1", question: "q2", answers: [{ picks: [0] }] })).error).toBe(false);
     expect(t.saidThere).toEqual([["s1", [{ picks: [0] }]]]);
+  });
+
+  it("answers a question only as it's asked now, with options it has", async () => {
+    const before = t.saidHere.length;
+    const answer = (args: Record<string, unknown>) => t.call(token, "answer_session", { session: "laptop/laptop-1/1-2", ...args });
+    expect(await answer({ answers: [{ picks: [1] }, { picks: [0] }] })).toEqual({ error: true, text: "it's asking something else now; read it again" });
+    expect(await answer({ question: "q0", answers: [{ picks: [1] }, { picks: [0] }] })).toEqual({ error: true, text: "it's asking something else now; read it again" });
+    expect(await answer({ question: "q1", answers: [{ picks: [2] }, { picks: [0] }] })).toEqual({ error: true, text: "question 1's options are 0 to 1" });
+    expect(await answer({ question: "q1", answers: [{ picks: [0, 1] }, { picks: [0] }] })).toEqual({ error: true, text: "question 1 takes one answer" });
+    expect(await answer({ question: "q1", answers: [{ picks: [0] }] })).toEqual({ error: true, text: "answers must be a list, one for each of its 2 questions" });
+    expect((await answer({ question: "q1", answers: [{ picks: [0], other: "x".repeat(2001) }, { picks: [0] }] })).error).toBe(true);
+    expect(t.saidHere.length).toBe(before);
+  });
+
+  it("sends a session that's only a screen nothing: no message, answer or choice", async () => {
+    const before = t.saidHere.length;
+    for (const [tool, args] of [["send_session", { text: "rm -rf ~" }], ["send_session", { interrupt: true }], ["answer_session", { choice: 1 }], ["answer_session", { answers: [{ picks: [0] }] }]] as const)
+      expect(await t.call(token, tool, { session: "laptop/laptop-1/screen-1", ...args })).toEqual({ error: true, text: "that session is only a screen, and is sent nothing from here" });
+    expect(t.saidHere.length).toBe(before);
   });
 
   it("answers a permission prompt with its option's number, and only one that's waiting", async () => {
     expect((await t.call(token, "answer_session", { session: "laptop/laptop-1/3-4", choice: 3 })).error).toBe(false);
     expect(t.saidHere.at(-1)).toEqual(["3-4", "3", []]);
+    expect((await t.call(token, "answer_session", { session: "laptop/laptop-1/3-4", choice: 1 })).error).toBe(false);
+    expect(t.saidHere.at(-1)).toEqual(["3-4", "1", []]);
+    const before = t.saidHere.length;
+    expect(await t.call(token, "answer_session", { session: "laptop/laptop-1/3-4", choice: 2 })).toEqual({ error: true, text: `"Yes, and don't ask again for rm commands in /site" is the user's to pick, on the session itself` });
+    expect(await t.call(token, "answer_session", { session: "laptop/laptop-1/3-4", choice: 4 })).toEqual({ error: true, text: "its screen shows no such option" });
+    expect(t.saidHere.length).toBe(before);
     expect(await t.call(token, "answer_session", { session: "laptop/laptop-1/1-2", choice: 1 })).toEqual({ error: true, text: "it isn't waiting on a permission prompt" });
     expect((await t.call(token, "answer_session", { session: "laptop/laptop-1/3-4", choice: 0 })).text).toBe("choice is the option's number, from 1");
   });
@@ -192,6 +226,61 @@ describe("the account's sessions over the node's MCP", () => {
     if (session === "laptop/laptop-1/1-2") return;
     expect(got.error).toBe(true);
   }, { runs: 50 });
+});
+
+describe("a conversation from a machine whose batches come apart", () => {
+  // A machine that sends these lines on attach and keeps the stream open.
+  const machine = (sent: string[]) => {
+    let aborted = 0;
+    const reach: Reach = {
+      devices: async () => ({ me: "old", devices: ["old"] }),
+      fetch: async (_d, path, init = {}) => {
+        if (path === "/api/sessions") return Response.json([{ id: "b", machine: "old", sessions: [{ key: "k", name: "Old", state: "idle", attach: true }] }]);
+        init.signal?.addEventListener("abort", () => aborted++);
+        const body = new ReadableStream<Uint8Array>({ start: (c) => c.enqueue(new TextEncoder().encode(sent.map((l) => l + "\n").join(""))) });
+        return new Response(body);
+      },
+    };
+    return { reach, aborted: () => aborted };
+  };
+  const out = (batch: object) => JSON.stringify({ type: "out", stream: "x", data: JSON.stringify(batch) });
+  const said = { id: "y", at: "", kind: "you", text: "hi" };
+
+  it("is whole once its machine says so, and partial when it only stops for a while", async () => {
+    const whole = machine([out({ reset: true, items: [said] }), out({ items: [{ ...said, id: "z" }], whole: true })]);
+    const got = (await TALK_TOOLS.read_session.run({ session: "old/b/k" }, whole)) as any;
+    expect(got.turns).toHaveLength(2);
+    expect(got.partial).toBeUndefined();
+    expect(whole.aborted()).toBe(1);
+    const old = machine([out({ reset: true, items: [said] })]);
+    const part = (await TALK_TOOLS.read_session.run({ session: "old/b/k" }, old)) as any;
+    expect(part.turns).toHaveLength(1);
+    expect(part.partial).toBe(true);
+  });
+
+  it("says when what it sent isn't a conversation, and lets go of the stream", async () => {
+    const bad = machine([JSON.stringify({ type: "out", stream: "x", data: "{not json" })]);
+    await expect(TALK_TOOLS.read_session.run({ session: "old/b/k" }, bad)).rejects.toThrow("its machine sent a conversation that isn't one");
+    expect(bad.aborted()).toBe(1);
+  });
+});
+
+describe("the question a session waits on", () => {
+  const ask = (call: string): Item & { kind: "tool" } => ({ id: call, at: "", kind: "tool", tool: "AskUserQuestion", call, detail: "", questions: QUESTIONS as Question[] });
+  const result = (call: string, text: string, error = false): Item => ({ id: `r${call}`, at: "", kind: "result", call, text, error });
+  const you: Item = { id: "y", at: "", kind: "you", text: "never mind" };
+  it("is the last one asked, unless it's answered, turned down, stopped or spoken over", () => {
+    expect(asked([ask("a")])?.call).toBe("a");
+    expect(asked([ask("a"), result("a", "User has answered your questions")])).toBeUndefined();
+    expect(asked([ask("a"), result("a", "The user doesn't want to proceed with this tool use. The tool use was rejected", true)])).toBeUndefined();
+    expect(asked([ask("a"), result("a", "[Request interrupted by user for tool use]", true)])).toBeUndefined();
+    expect(asked([ask("a"), result("a", "no one to ask", true)])?.call).toBe("a");
+    expect(asked([ask("a"), result("a", "no one to ask", true), you])).toBeUndefined();
+    expect(asked([ask("a"), result("a", "done"), ask("b")])?.call).toBe("b");
+    expect(asked([ask("a"), ask("b"), result("b", "done")])).toBeUndefined();
+    expect(asked([{ ...ask("a"), questions: undefined }])).toBeUndefined();
+    expect(asked([])).toBeUndefined();
+  });
 });
 
 describe("answers in words", () => {

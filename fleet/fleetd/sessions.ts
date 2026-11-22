@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync,
 import { hostname } from "node:os";
 import { basename, join } from "node:path";
 import { type Answers, bridgeId, inWords, serve, type Hosted } from "../../bridge/sessions";
-import { Follower, asked } from "../../bridge/transcript";
+import { asked, readItems } from "../../bridge/transcript";
 import { Hub, joinHub } from "../../bridge/hub";
 import { answerChannels } from "./node";
 import { manifest, spawns, type Manifest, type Spawn } from "./fleet";
@@ -116,7 +116,7 @@ export async function say(key: string, text: string, keys: string[], answers?: A
   const share = m.slots[s.slot!].shareDir;
   if (answers) {
     const path = transcript(outbox(m, s));
-    const q = path && asked(new Follower(path).read());
+    const q = path && asked(await readItems(path));
     if (!q) return { error: "it isn't asking anything" };
     const said = inWords(q.questions!, answers);
     if ("error" in said) return said;

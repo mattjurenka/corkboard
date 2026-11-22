@@ -121,7 +121,7 @@ export type Link = { receive(m: any): void; drop(): void };
 // and connect, called each time a link opens, with how to send down it.
 export type HubJoin = (hello: { id: string; machine: string; url?: string | null; environment: string }, connect: (send: (m: object) => void) => Link) => void;
 
-type Stream = { key: string; send(m: object): void; follower?: Follower; state?: string; timer?: ReturnType<typeof setInterval> };
+type Stream = { key: string; send(m: object): void; follower?: Follower; state?: string; sent?: boolean; timer?: ReturnType<typeof setInterval> };
 
 // The protocol's bridge end, whatever it's linked to: each link hears the
 // list, is asked and is sent its own streams.
@@ -195,10 +195,15 @@ function core(environment: string, source: Source) {
   };
 
   // In batches, each well under a socket message's limit; the first with
-  // the session's state, when that's changed.
+  // the session's state, when that's changed. The last of what a stream is
+  // first sent, or sent again from the start, is whole: its conversation
+  // so far has all come (talk.ts reads it so, where batches may come apart).
   const out = (s: Stream, stream: string, items: Item[], reset = false, state?: string) => {
+    const whole = reset || !s.sent;
     for (let i = 0; i < items.length || ((reset || state) && i === 0); i += 40) {
-      s.send({ type: "out", stream, data: JSON.stringify({ items: items.slice(i, i + 40), ...(reset && i === 0 && { reset: true }), ...(state && i === 0 && { state }) }) });
+      const last = whole && i + 40 >= items.length;
+      s.sent = true;
+      s.send({ type: "out", stream, data: JSON.stringify({ items: items.slice(i, i + 40), ...(reset && i === 0 && { reset: true }), ...(state && i === 0 && { state }), ...(last && { whole: true }) }) });
     }
   };
 
