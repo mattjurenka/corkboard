@@ -90,6 +90,8 @@
       } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
         # One account on three nodes in VMs, through a relay in a fourth.
         multi-node = import ./nix/tests/multi-node.nix { inherit pkgs; corkboard = self.packages.${pkgs.stdenv.hostPlatform.system}.default; src = ./.; };
+        # A session's browser taken over through its guest's forwarded DevTools.
+        browser = import ./nix/tests/browser.nix { inherit pkgs; src = ./.; };
       } // (wasmOn pkgs.stdenv.hostPlatform.system).checks);
 
       devShells = forAll (pkgs:

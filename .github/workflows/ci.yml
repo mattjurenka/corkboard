@@ -35,13 +35,14 @@ jobs:
       - run: bun run build
 
   # The flake's checks but multi-node (four VMs): the fleet's, its packages'
-  # imports, and the page's Neovim and libuv built for wasm and run.
+  # imports, the page's Neovim and libuv built for wasm and run, and a
+  # session's browser taken over (two VMs).
   nix:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
-      - run: nix build -L .#checks.x86_64-linux.{fleet,fleet-host,fleet-package,forge-gate-package,nvim-smoke,libuv-smoke}
+      - run: nix build -L .#checks.x86_64-linux.{fleet,fleet-host,fleet-package,forge-gate-package,nvim-smoke,libuv-smoke,browser}
 
   relay:
     runs-on: ubuntu-latest
