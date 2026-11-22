@@ -49,8 +49,9 @@ const HANG_MS = 800;
 const PAD_MS = 200;
 const MAX_MS = 30_000;
 const MIN_MS = 300;
-// How far ahead of the phone's playing Pepper's next sentence is made.
-const AHEAD_MS = 1500;
+// How much sooner than it's expected to take Pepper's next sentence is
+// started, so it's ready as the phone finishes the last.
+const MARGIN_MS = 500;
 const frames = (ms: number) => Math.round(ms / FRAME_MS);
 
 // A whole utterance that's only a yes, or only a no.
@@ -61,15 +62,28 @@ export function answer(text: string): boolean | undefined {
   return YES.test(t) ? true : NO.test(t) ? false : undefined;
 }
 
-// What's said aloud of a chat message: its markdown's words, a sentence each.
+// What's said aloud of a chat message: its markdown's words, a sentence each,
+// the first cut at a clause past its first few words when it's long. The
+// voice is made at about real time on the droplet's CPU, so a long first
+// sentence is as long a wait before anything's heard.
 export function spoken(md: string): string[] {
-  return md
+  const [first, ...rest] = md
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/[*_`#>|~]+/g, "")
     .split(/(?<=[.!?])\s+|\n+/)
     .map((s) => s.replace(/^\s*[-+]\s+/, "").trim())
     .filter((s) => /[\p{L}\p{N}]/u.test(s));
+  if (first === undefined) return [];
+  const words = (s: string) => s.split(/\s+/).length;
+  if (words(first) > 8) {
+    const cut = /[,;:–—]\s+/g;
+    for (let m; (m = cut.exec(first)); ) {
+      const head = first.slice(0, m.index + 1);
+      if (words(head) >= 3) return [head, first.slice(cut.lastIndex), ...rest];
+    }
+  }
+  return [first, ...rest];
 }
 
 const pcm16 = (audio: Float32Array) => {
@@ -180,8 +194,11 @@ export function call(input: ReadableStream<Uint8Array>, o: CallOptions, signal?:
   let queue: string[] = [];
   let saying = false;
   let gen = 0;
-  // When what's been sent will have been played.
+  // When what's been sent will have been played, how long a letter took to
+  // make the last time, and when a message came in to nothing being said.
   let playing = 0;
+  let perChar = 0;
+  let since = 0;
   const hush = () => {
     if (!queue.length && !saying && Date.now() >= playing) return;
     gen++;
@@ -195,15 +212,25 @@ export function call(input: ReadableStream<Uint8Array>, o: CallOptions, signal?:
     try {
       for (let text; (text = queue.shift()) !== undefined && !over; ) {
         const g = gen;
-        // Each made only as the phone is about to need it: Kokoro runs on
-        // this thread (onnxruntime-node's run isn't async), and what's heard
-        // waits for it, so a whole answer made at once goes unheard over.
-        const ahead = playing - AHEAD_MS - Date.now();
+        // Each made only as the phone is about to need it, and after what's
+        // been heard so far: Kokoro runs on this thread (onnxruntime-node's
+        // run isn't async), and the VAD waits for it, so a whole answer made
+        // at once goes unheard over. On a CPU slower than real time that's
+        // as soon as the last is made.
+        const ahead = playing - perChar * text.length - MARGIN_MS - Date.now();
         if (ahead > 0) await Bun.sleep(ahead);
+        await Bun.sleep(0);
+        await feeding;
         if (g !== gen || over) continue;
+        const t = Date.now();
         const { audio, rate } = await models.say(text).catch((e) => (console.error(`call: speech: ${e instanceof Error ? e.message : e}`), { audio: new Float32Array(), rate: 0 }));
         if (g !== gen || !audio.length) continue;
+        perChar = (Date.now() - t) / text.length;
         send({ type: "say", text, rate, audio: pcm16(audio) });
+        const late = Date.now() - playing;
+        if (since) console.log(`call: first said ${Date.now() - since} ms after Pepper's message (${(Date.now() - t)} ms to make ${(audio.length / rate).toFixed(1)} s)`);
+        else if (late > 0) console.log(`call: ${late} ms quiet before "${text.slice(0, 30)}"`);
+        since = 0;
         playing = Math.max(Date.now(), playing) + (audio.length / rate) * 1000;
       }
     } finally {
@@ -216,7 +243,9 @@ export function call(input: ReadableStream<Uint8Array>, o: CallOptions, signal?:
   const read = () => {
     for (const m of o.data.chat(last, 500)) {
       last = m.id;
-      if (!m.by_user) queue.push(...spoken(m.text));
+      if (m.by_user) continue;
+      if (!queue.length && !saying && Date.now() >= playing) since = Date.now();
+      queue.push(...spoken(m.text));
     }
     if (queue.length) void speakNext();
   };

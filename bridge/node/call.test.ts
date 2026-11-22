@@ -25,6 +25,7 @@ const pcm = (audio: Float32Array) => Buffer.from(Int16Array.from(audio, (x) => x
 
 let held: Promise<void> | null = null;
 let seconds = 0;
+let making = 0;
 const models: CallModels = {
   vad: () => ({ next: async (f) => (f.some((x) => x !== 0) ? 0.9 : 0.01) }),
   transcribe: async (audio) => {
@@ -33,6 +34,7 @@ const models: CallModels = {
   },
   say: async (text) => {
     await held;
+    if (making) await Bun.sleep(making);
     return { audio: new Float32Array(seconds ? seconds * 24_000 : text.length * 24).fill(0.5), rate: 24_000 };
   },
 };
@@ -70,8 +72,8 @@ describe("a voice call with Pepper", () => {
       hangUp: () => (send({ type: "end" }), over),
       close: () => push.close(),
       cancelled: () => cancelled,
-      async until(test: (m: any) => boolean) {
-        for (let i = 0; i < 200; i++) {
+      async until(test: (m: any) => boolean, ms = 2000) {
+        for (let i = 0; i < ms / 10; i++) {
           const m = got.find(test);
           if (m) return m;
           await Bun.sleep(10);
@@ -136,6 +138,18 @@ describe("a voice call with Pepper", () => {
     // Past when the second would have been made.
     await Bun.sleep(1500);
     expect(c.got.filter((m) => m.type === "say")).toHaveLength(1);
+    await c.hangUp();
+  });
+
+  it("starts the next sentence as long before the last ends as it takes to make, so a slow voice leaves no gap", async () => {
+    const c = await dial();
+    [seconds, making] = [2, 1800];
+    await n.data.post("assistant", "One. Two.");
+    await c.until((m) => m.type === "say", 4000);
+    const first = Date.now();
+    await c.until((m) => m.type === "say" && m.text === "Two.", 4000);
+    [seconds, making] = [0, 0];
+    expect(Date.now() - first).toBeLessThan(2000);
     await c.hangUp();
   });
 
@@ -204,5 +218,15 @@ describe("a voice call with Pepper", () => {
 
   it("says a message's words, not its markdown or code", () => {
     expect(spoken("# Plan\n- **one** thing.\n- `two`\n```\ncode\n```\nDone!")).toEqual(["Plan", "one thing.", "two", "Done!"]);
+  });
+
+  it("cuts a long first sentence at a clause, so the first of it is heard sooner", () => {
+    expect(spoken("Morning is the terminal UI from nine to eleven thirty, then referral messages. After that, lunch with Sam today.")).toEqual([
+      "Morning is the terminal UI from nine to eleven thirty,",
+      "then referral messages.",
+      "After that, lunch with Sam today.",
+    ]);
+    expect(spoken("Yes, so the plan for today is waiting for you to accept it.")).toEqual(["Yes, so the plan for today is waiting for you to accept it."]);
+    expect(spoken("Okay, I can hear you.")).toEqual(["Okay, I can hear you."]);
   });
 });

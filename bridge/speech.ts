@@ -114,11 +114,12 @@ async function clone(python: string): Promise<Cloner> {
   return say;
 }
 
-// The CPU's model, downloaded the first time.
+// The CPU's model, downloaded the first time: uint8, a quarter faster than
+// fp32 on the droplet's two vCPUs, and half its size.
 async function cpuModel(cache: string): Promise<string> {
-  const file = join(cache, MODEL, "onnx", "model.onnx");
+  const file = join(cache, MODEL, "onnx", "model_uint8.onnx");
   if (await stat(file).catch(() => null)) return file;
-  const res = await fetch(`https://huggingface.co/${MODEL}/resolve/main/onnx/model.onnx`);
+  const res = await fetch(`https://huggingface.co/${MODEL}/resolve/main/onnx/model_uint8.onnx`);
   if (!res.ok) throw new Error(`no speech model (${res.status})`);
   await mkdir(dirname(file), { recursive: true });
   await Bun.write(`${file}.part`, res);
