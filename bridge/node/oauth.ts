@@ -72,9 +72,11 @@ type Client = {
   used?: number;
 };
 // A minted grant may be a brain's (`brain`): its agent, whose memory is that
-// brain's, goals and all. One held to a board names it, its card or spawn and
-// its agent, and goes when it expires (every node drops it then, so none
-// drops it early for a token it hasn't heard of yet).
+// brain's, goals and all; a resident's (fleetd's assistant, Pepper) also
+// reaches the account's sessions and the fleet, its writes held for the
+// user's yes (mcp.ts, confirm.ts). One held to a board names it, its card or
+// spawn and its agent, and goes when it expires (every node drops it then,
+// so none drops it early for a token it hasn't heard of yet).
 type Grant = {
   id: string;
   client: string;
@@ -83,6 +85,7 @@ type Grant = {
   resource: string | null;
   created: number;
   brain?: string;
+  resident?: true;
   board?: string;
   card?: string;
   spawn?: string;
@@ -125,7 +128,7 @@ export class OAuthError extends Error {
   }
 }
 
-export type Caller = { scope: Kind; agent: string; grant: string; resource: string | null; brain?: string; board?: string; card?: string; spawn?: string };
+export type Caller = { scope: Kind; agent: string; grant: string; resource: string | null; brain?: string; resident?: true; board?: string; card?: string; spawn?: string };
 
 // How a client id document is looked up and fetched: the system's, or a
 // test's. The fetch is given the addresses the lookup found and were checked.
@@ -455,6 +458,7 @@ export class OAuthStore {
       grant: grant.id,
       resource: grant.resource,
       ...(grant.brain ? { brain: grant.brain } : {}),
+      ...(grant.resident ? { resident: true as const } : {}),
       ...(grant.board ? { board: grant.board } : {}),
       ...(grant.card ? { card: grant.card } : {}),
       ...(grant.spawn ? { spawn: grant.spawn } : {}),
@@ -463,10 +467,10 @@ export class OAuthStore {
 
   // A long-lived token for a client of the user's own (the phone), made on
   // the node's own machine: no consent, since being here is the proof.
-  mint(name: string, days: number, scope: Scope = "owner", brain?: string): string {
+  mint(name: string, days: number, scope: Scope = "owner", brain?: string, resident = false): string {
     const access = newToken("cbn_");
     this.change((f) => {
-      const grant: Grant = { id: b64url(random(12)), client: "cli", name, scope, resource: null, created: Date.now(), ...(brain ? { brain } : {}) };
+      const grant: Grant = { id: b64url(random(12)), client: "cli", name, scope, resource: null, created: Date.now(), ...(brain ? { brain } : {}), ...(resident && { resident: true as const }) };
       f.grants[grant.id] = grant;
       f.tokens[sha(access)] = { grant: grant.id, kind: "access", expires: Date.now() + days * 86_400_000 };
     });

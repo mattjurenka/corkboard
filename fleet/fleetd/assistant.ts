@@ -7,7 +7,9 @@
 //   on the node (Pepper's is the one grant that sees the goals), for the
 //   memory hooks and corkboard-memory, minted there (its POST
 //   /api/node/grants), written to that file in the guest, and replaced each
-//   day, the old one revoked. What mints it never goes in the VM.
+//   day, the old one revoked. What mints it never goes in the VM. It's a
+//   resident's: it reaches the account's sessions and the fleet, and what
+//   it would write to them waits for the user's yes (bridge/node/confirm.ts).
 //
 // - With the node and `sessionEnvFile`, what its sessions run on: the
 //   brain's model (its GET /api/node/brains/<brain>/session), as shell
@@ -17,7 +19,9 @@
 //
 // - With `chat`, the phone's chat (the hosted Worker's user.ts): each new
 //   message of the user's is pasted into the session as a line starting
-//   "[phone]", and the assistant answers it with chat_send. One session,
+//   "[phone]" ("[call]" for what the node heard on a voice call, from
+//   "call", or told it of meanwhile, from "away": bridge/node/call.ts), and
+//   the assistant answers it with chat_send. One session,
 //   whichever side is talking. The user has one chat, so one resident has it.
 //   Once the chat has moved to the user's node (the Worker answers 410:
 //   .agent/plans/local-plans.md, step 5), it's the node's, at the manifest's
@@ -140,7 +144,7 @@ export function assist(name: string, brain: string, a: Assistant, node?: Node) {
   // it's the session's to read, not to replace.
   async function renewNode(s: State) {
     if (!node || !a.memoryTokenFile || (s.nodeToken && s.nodeMinted && Date.now() - s.nodeMinted < DAY)) return;
-    const { token: fresh } = await nodeApi(node, "POST", "/grants", { scope: "brain", brain, agent: name });
+    const { token: fresh } = await nodeApi(node, "POST", "/grants", { scope: "brain", brain, agent: name, resident: true });
     await spawn([...ssh, `cat > ${a.memoryTokenFile}`], fresh);
     const old = s.nodeToken;
     Object.assign(s, { nodeToken: fresh, nodeMinted: Date.now() });
@@ -202,12 +206,14 @@ export function assist(name: string, brain: string, a: Assistant, node?: Node) {
       // Marked passed on first, so it can't change after; its text as it is now. Taken back: skipped.
       const now = (await chat("POST", `/chat/${m.id}/delivered`, {}).catch((e: Error) => (/no message/.test(e.message) ? null : Promise.reject(e))))?.json;
       if (now) {
-        const run = command(now.text);
+        // Heard on a call, never a command.
+        const call = m.who === "call" || m.who === "away";
+        const run = call ? undefined : command(now.text);
         if (run) {
           await prompt(run);
           await done(run);
           await prompt(`[phone] I ran ${run} from my phone. Tell me in the chat what it showed.`);
-        } else await prompt(`[phone] ${now.text}`);
+        } else await prompt(`${call ? "[call]" : "[phone]"} ${now.text}`);
       }
       s.last = m.id;
       save(s);

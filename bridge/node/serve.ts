@@ -67,7 +67,8 @@ import { Leadership, forgeKeeper } from "./leader";
 import { OAuthStore, SCOPES, type Scope, type Shared } from "./oauth";
 import { type AppCall, type AppEvents, node } from "./server";
 import { Hub } from "../hub";
-import type { Reach } from "../peers";
+import { Peers, type Reach } from "../peers";
+import { Confirms } from "./confirm";
 import type { Channel } from "../../lib/e2ee/channel";
 import type { NodesView } from "../../lib/e2ee/wire";
 import { lentCalendar, loadCalendar, login, saveCalendar, startCalendar } from "./calendar";
@@ -279,7 +280,12 @@ export async function startNode(o: NodeOptions = {}) {
     const fileOffers = new FileOffers(toFiles);
     let app: AppCall | undefined;
     let appEvents: AppEvents | undefined;
-    const server = Bun.serve({ port: o.port ?? c.port ?? 8787, hostname, idleTimeout: 255, maxRequestBodySize: 1025 * 1024 * 1024, fetch: node({ ...served, origin, app: () => app, appEvents: () => appEvents, reach, toForge, files, toFiles, fileOffers }) });
+    // The account's sessions, for /mcp's session tools, and what a resident
+    // would do to them, one for the tunnel's node and this one's.
+    const sessions = new Peers(reach);
+    sessions.start();
+    const confirms = new Confirms();
+    const server = Bun.serve({ port: o.port ?? c.port ?? 8787, hostname, idleTimeout: 255, maxRequestBodySize: 1025 * 1024 * 1024, fetch: node({ ...served, sessions, confirms, origin, app: () => app, appEvents: () => appEvents, reach, toForge, files, toFiles, fileOffers }) });
     if (r) {
       const nodes = await r.nodes().catch((e) => void console.error(`node: no tunnel: ${(e as Error).message}`));
       if (nodes) {
@@ -289,7 +295,7 @@ export async function startNode(o: NodeOptions = {}) {
         // phone's tokens work on either; never loopback. One with no
         // token is its device's, the owner (fleetd's relay-only one).
         leadership.forgeWeb = !!nodes.forge;
-        const tunneled = node({ ...served, origin: nodes.url, forgeWeb: () => leadership.forgeWeb, reach, toForge, files, toFiles, fileOffers });
+        const tunneled = node({ ...served, sessions, confirms, reach, origin: nodes.url, forgeWeb: () => leadership.forgeWeb, toForge, files, toFiles, fileOffers });
         // The relay says when the leader may have changed, so a move takes
         // effect at once rather than at the next minute's look.
         t.stop = r.serveTunnel(tunneled, { name: d.cert.body.name, onState: (up) => (t.connected = up), onLeader: (to) => (leadership.told(to), void keepForge()), channels: (req, ch) => tunneled(req, undefined, ch.peer) });
@@ -348,6 +354,7 @@ export async function startNode(o: NodeOptions = {}) {
       serveApp: (f: AppCall, events: AppEvents) => void ((app = f), (appEvents = events)),
       async stop() {
         tunnel?.stop();
+        sessions.stop();
         server.stop();
         stopLeases();
         stopCalendar();
