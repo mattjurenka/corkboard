@@ -3,7 +3,10 @@
 // Same names, descriptions and rules, so a client moved from the Worker to
 // the node sees the same tools, less those with nothing on the node yet:
 // boards made over MCP, day plans and the chat. The fleet's spawn tools
-// queue on the Worker (Fleet), as a device of the account.
+// queue on the Worker (Fleet), as a device of the account. The session
+// tools reach the account's Claude Code sessions as away mode does; a
+// resident (Pepper) has those and the spawn tools, its writes held for the
+// user's yes (confirm.ts).
 //
 // Streamable HTTP, stateless, as the Worker's: each POST is a JSON-RPC
 // message (or a batch) answered with JSON; GET is 405. Every tool here
@@ -30,10 +33,12 @@ import { type Kind, boardBound } from "./oauth";
 import type { ToForge } from "./git";
 import { PR_TOOLS } from "./prs";
 import { dict, own } from "../../lib/dict";
+import type { Confirms } from "./confirm";
+import type { PeerBridge } from "../peers";
 
 // branch and repo: the session's worktree's, as its MCP config told them
 // (X-Corkboard-Branch, X-Corkboard-Repo), for the PR tools (prs.ts).
-export type Caller = { scope: Kind; agent: string; brain?: string; board?: string; card?: string; branch?: string; repo?: string };
+export type Caller = { scope: Kind; agent: string; brain?: string; resident?: true; board?: string; card?: string; branch?: string; repo?: string };
 
 class ToolError extends Error {}
 
@@ -546,9 +551,144 @@ const PAIR_TOOLS = dict<PairTool>({
 });
 const pairs = (caller: Caller) => caller.scope === "owner" && !caller.brain && !boardBound(caller);
 
-// The user's own clients spawn, as on the Worker: not a brain's token, nor
-// one held to a board.
-const spawns = (caller: Caller, fleet?: Fleet) => !!fleet && (caller.scope === "owner" || caller.scope === "assistant") && !caller.brain;
+// The user's own clients spawn, as on the Worker, and a resident: not
+// another brain's token, nor one held to a board.
+const spawns = (caller: Caller, fleet?: Fleet) => !!fleet && (caller.scope === "owner" || caller.scope === "assistant") && (!caller.brain || caller.resident === true);
+
+// The account's sessions --------------------------------------------------------------------
+
+// Every Claude Code session of the account's, as away mode has them: each
+// hub's, this machine's and each connected device's (peers.ts), asked at
+// the Worker's paths (hub.ts). For the user's own clients, and a resident's
+// voice (.agent/plans/voice-call.md); what a resident would write is held
+// for the user's yes (confirm.ts).
+export type Sessions = { list(): PeerBridge[]; fetch(bridge: string, path: string, init?: RequestInit): Promise<Response> };
+
+type AwayCall = { sessions: Sessions };
+// what: the node's own words for a write, for the user to say yes to.
+type AwayTool = { description: string; properties?: Record<string, object>; required?: string[]; what?: (a: any, c: AwayCall) => string; run: (a: any, c: AwayCall) => Promise<unknown> };
+
+// Claude Code's keys, as hub.ts takes them.
+const KEYS = ["enter", "esc", "up", "down", "tab", "shift-tab", "ctrl-c"];
+// The screen's last lines, which is where a session's prompt and its question are.
+const SCREEN_LINES = 60;
+
+const at = (a: any) => ({ bridge: String(a.bridge ?? ""), key: String(a.key ?? "") });
+const sessionPath = (a: any, op = "") => {
+  const { bridge, key } = at(a);
+  if (!bridge || !key) throw new ToolError("say which session: its bridge and key, from sessions_list");
+  return `/api/sessions/${encodeURIComponent(bridge)}/${encodeURIComponent(key)}${op}`;
+};
+
+// One session, named as the user would say it.
+function named(a: any, c: AwayCall) {
+  const { bridge, key } = at(a);
+  const b = c.sessions.list().find((x) => x.id === bridge);
+  const s = b?.sessions.find((x) => x.key === key) as { project?: string; name?: string } | undefined;
+  if (!b || !s) throw new ToolError(`no session ${key} on ${bridge}; sessions_list lists them`);
+  return `${s.project || "a session"}${s.name && s.name !== "Claude Code" ? ` (${s.name})` : ""} on ${b.machine}`;
+}
+
+async function asked(res: Response) {
+  const out = (await res.json().catch(() => ({}))) as Record<string, any>;
+  if (!res.ok) throw new ToolError(typeof out.error === "string" ? out.error : `HTTP ${res.status}`);
+  return out;
+}
+
+const AWAY_TOOLS = dict<AwayTool>({
+  sessions_list: {
+    description:
+      "Every Claude Code session of the user's, on each of their machines and in the fleet's VMs: what each is working on (project), its state (working, asking, permission, ready, idle...), since when, and what it's asking. bridge and key name one for the other session_ tools.",
+    run: async (_, c) =>
+      c.sessions.list().flatMap((b) =>
+        b.sessions
+          .filter((s: any) => s.key && s.state)
+          .map((s: any) => ({
+            bridge: b.id,
+            key: s.key,
+            machine: b.machine,
+            project: s.project ?? "",
+            name: s.name ?? "Claude Code",
+            state: s.state,
+            ...(typeof s.since === "number" && { since: new Date(s.since).toISOString() }),
+            ...(s.detail && { detail: s.detail }),
+            ...(s.spawn && { spawn: s.spawn }),
+            ...(s.vm && { vm: s.vm }),
+            ...(s.card && { card: s.card }),
+          })),
+      ),
+  },
+  session_screen: {
+    description: "What a session shows now: its terminal's last lines, where its prompt and any question it asks are.",
+    properties: { bridge: str("Its bridge, from sessions_list"), key: str("Its key, from sessions_list") },
+    required: ["bridge", "key"],
+    run: async (a, c) => {
+      const out = await asked(await c.sessions.fetch(at(a).bridge, sessionPath(a)));
+      const lines = (Array.isArray(out.lines) ? out.lines.map(String) : []).map((l: string) => l.trimEnd());
+      while (lines.length && !lines.at(-1)) lines.pop();
+      return lines.slice(-SCREEN_LINES).join("\n");
+    },
+  },
+  session_say: {
+    description: `Type into a session, as the user would at its prompt: text, then keys (${KEYS.join(", ")}). Text alone is typed and sent with enter. To pick an option of a menu it shows, use keys.`,
+    properties: {
+      bridge: str("Its bridge, from sessions_list"),
+      key: str("Its key, from sessions_list"),
+      text: str("What to type"),
+      keys: { type: "array", items: { type: "string", enum: KEYS }, description: "Keys to press after the text" },
+    },
+    required: ["bridge", "key"],
+    what: (a, c) => {
+      const keys = Array.isArray(a.keys) ? a.keys.map(String) : [];
+      if (keys.some((k: string) => !KEYS.includes(k))) throw new ToolError(`keys must be some of ${KEYS.join(", ")}`);
+      const does = [a.text ? `type "${String(a.text)}"` : "", keys.length ? `press ${keys.join(", ")}` : ""].filter(Boolean).join(" and ");
+      if (!does) throw new ToolError("say something: text, keys or both");
+      return `${does} in ${named(a, c)}`;
+    },
+    run: async (a, c) => asked(await c.sessions.fetch(at(a).bridge, sessionPath(a, "/say"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: a.text ?? "", keys: a.keys ?? [] }) })),
+  },
+  session_answer: {
+    description: "Answer the question a session asks (its AskUserQuestion): one answer for each of its questions, each the numbers of the options picked (from 0), or other for words of the user's own.",
+    properties: {
+      bridge: str("Its bridge, from sessions_list"),
+      key: str("Its key, from sessions_list"),
+      answers: {
+        type: "array",
+        items: { type: "object", properties: { picks: { type: "array", items: { type: "integer" } }, other: { type: "string" } }, required: ["picks"] },
+        description: "One for each question, in order",
+      },
+    },
+    required: ["bridge", "key", "answers"],
+    what: (a, c) => `answer ${named(a, c)}'s question with ${JSON.stringify(a.answers)}`,
+    run: async (a, c) => asked(await c.sessions.fetch(at(a).bridge, sessionPath(a, "/say"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ answers: a.answers }) })),
+  },
+});
+
+// The user's own clients and a resident; no other brain's, nor one held to a board.
+const sees = (caller: Caller, sessions?: Sessions) => !!sessions && (caller.scope === "owner" || caller.scope === "assistant") && (!caller.brain || caller.resident === true);
+
+// A resident's fleet writes, in the node's words.
+const SPAWN_WHAT = dict<(a: any) => string>({
+  spawn_agent: (a) => `spawn an agent${a.template ? ` (${a.template})` : ""}${a.brain ? ` for the ${a.brain} brain` : ""}${a.board ? ` on ${a.board}${a.card ? ` ${a.card}` : ""}` : ""} to: ${String(a.task ?? "")}`,
+  start_session: (a) => `start a${a.template ? ` ${a.template}` : ""} session on ${a.board ?? "no board"}${a.message ? `, saying: ${String(a.message)}` : ""}`,
+  spawn_stop: (a) => `stop the spawn ${a.id}`,
+});
+
+const CONFIRM_STATUS = {
+  description: "What came of something you asked the user to say yes to: waiting, done (with its result), refused, failed or expired.",
+  properties: { id: str("Its id, as you were given it") },
+  required: ["id"],
+};
+
+// Held for the user, and what to tell the resident.
+function hold(confirms: Confirms | undefined, caller: Caller, tool: string, what: string, run: () => Promise<unknown>) {
+  if (!confirms) throw new ToolError("this node can't ask the user to confirm, so it won't do that for you");
+  const h = confirms.hold(caller.agent, tool, what, run);
+  return {
+    confirm: h.id,
+    waiting: `The user must say yes first. Tell them, in these words, what will happen, and ask: "${h.what}". It happens when they say yes, on their side; confirm_status says what came of it.`,
+  };
+}
 
 // Memory --------------------------------------------------------------------------------
 
@@ -859,7 +999,7 @@ const reaches = (name: string, caller: Caller) => (caller.scope === "session" ? 
 // memoryOnly: the memory tools alone, for a local session (app.ts), whose
 // board tools are its own board's. One held to a board, that board's tools
 // it reaches, with no board argument.
-function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryOnly = false, fleet?: Fleet, files?: ToFiles, forge?: ToForge) {
+function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryOnly = false, fleet?: Fleet, files?: ToFiles, forge?: ToForge, sessions?: Sessions) {
   if (boardBound(caller))
     return Object.entries(memoryOnly ? {} : TOOLS)
       .filter(([name]) => reaches(name, caller))
@@ -892,6 +1032,14 @@ function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryO
       description: t.description,
       inputSchema: { type: "object", properties: t.properties ?? {}, required: t.required ?? [] },
     })),
+    ...Object.entries(sees(caller, sessions) ? AWAY_TOOLS : {}).map(([name, t]) => ({
+      name,
+      description: t.description,
+      inputSchema: { type: "object", properties: t.properties ?? {}, required: t.required ?? [] },
+    })),
+    ...(caller.resident && (sees(caller, sessions) || spawns(caller, fleet))
+      ? [{ name: "confirm_status", description: CONFIRM_STATUS.description, inputSchema: { type: "object", properties: CONFIRM_STATUS.properties, required: CONFIRM_STATUS.required } }]
+      : []),
     ...Object.entries(files ? FILE_TOOLS : {}).map(([name, t]) => ({
       name,
       description: t.description,
@@ -912,16 +1060,46 @@ function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryO
 
 // forge: the account's forge (serve.ts's toForge), for the PR tools.
 // pairing: how pair_* let a device in, when not this machine's own way.
-export type Node = { data: Data; search: Search; media?: Media; files?: ToFiles; fileOffers?: FileOffers; origin: string; fleet?: Fleet; sealed?: FleetRecords; forge?: ToForge; pairing?: Pairing };
+// sessions: the account's (peers.ts); confirms: a resident's writes, held
+// for the user (confirm.ts).
+export type Node = {
+  data: Data;
+  search: Search;
+  media?: Media;
+  files?: ToFiles;
+  fileOffers?: FileOffers;
+  origin: string;
+  fleet?: Fleet;
+  sealed?: FleetRecords;
+  forge?: ToForge;
+  pairing?: Pairing;
+  sessions?: Sessions;
+  confirms?: Confirms;
+};
+
+const toolError = (e: unknown) => (e instanceof Invalid || e instanceof ToolError ? e : new ToolError((e as Error).message));
 
 async function callTool(node: Node, caller: Caller, name: string, args: any): Promise<unknown> {
   const { data, search, media, origin } = node;
   const bound = boardBound(caller);
   if (name === "list_boards" && !bound) return data.boards();
-  if (FLEET_TOOLS[name] && spawns(caller, node.fleet))
-    return FLEET_TOOLS[name].run({ ...args }, { data, fleet: node.fleet!, me: caller.agent, sealed: node.sealed }).catch((e) => {
-      throw e instanceof Invalid || e instanceof ToolError ? e : new ToolError((e as Error).message);
-    });
+  if (FLEET_TOOLS[name] && spawns(caller, node.fleet)) {
+    const run = () => FLEET_TOOLS[name].run({ ...args }, { data, fleet: node.fleet!, me: caller.agent, sealed: node.sealed }).catch((e) => Promise.reject(toolError(e)));
+    const what = own(SPAWN_WHAT, name);
+    return caller.resident && what ? hold(node.confirms, caller, name, what(args), run) : run();
+  }
+  const away = own(AWAY_TOOLS, name);
+  if (away && sees(caller, node.sessions)) {
+    const c = { sessions: node.sessions! };
+    const run = () => away.run({ ...args }, c).catch((e) => Promise.reject(toolError(e)));
+    return caller.resident && away.what ? hold(node.confirms, caller, name, away.what(args, c), run) : run();
+  }
+  if (name === "confirm_status" && caller.resident && node.confirms) {
+    const h = node.confirms.get(String(args.id ?? ""));
+    // Only its own.
+    if (!h || h.agent !== caller.agent) throw new ToolError(`nothing was asked as ${args.id}`);
+    return h;
+  }
   if (PAIR_TOOLS[name] && pairs(caller))
     return PAIR_TOOLS[name].run({ ...args }, node.pairing ?? (await pairing())).catch((e) => {
       throw e instanceof ToolError ? e : new ToolError((e as Error).message);
@@ -994,7 +1172,7 @@ async function handle(node: Node, caller: Caller, msg: Message, memoryOnly: bool
     case "ping":
       return reply({});
     case "tools/list":
-      return reply({ tools: toolsFor(node.data, caller, BRAIN_ONLY_KINDS, memoryOnly, node.fleet, node.files, node.forge).filter((t) => (!boardOnly || !MEMORY_TOOLS[t.name]) && (!forgeOnly || !!own(PR_TOOLS, t.name))) });
+      return reply({ tools: toolsFor(node.data, caller, BRAIN_ONLY_KINDS, memoryOnly, node.fleet, node.files, node.forge, node.sessions).filter((t) => (!boardOnly || !MEMORY_TOOLS[t.name]) && (!forgeOnly || !!own(PR_TOOLS, t.name))) });
     case "tools/call":
       try {
         const name = String(params?.name);

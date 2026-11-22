@@ -7,7 +7,9 @@
 //   on the node (Pepper's is the one grant that sees the goals), for the
 //   memory hooks and corkboard-memory, minted there (its POST
 //   /api/node/grants), written to that file in the guest, and replaced each
-//   day, the old one revoked. What mints it never goes in the VM.
+//   day, the old one revoked. What mints it never goes in the VM. It's a
+//   resident's: it reaches the account's sessions and the fleet, and what
+//   it would write to them waits for the user's yes (bridge/node/confirm.ts).
 //
 // - With the node and `sessionEnvFile`, what its sessions run on: the
 //   brain's model (its GET /api/node/brains/<brain>/session), as shell
@@ -140,7 +142,7 @@ export function assist(name: string, brain: string, a: Assistant, node?: Node) {
   // it's the session's to read, not to replace.
   async function renewNode(s: State) {
     if (!node || !a.memoryTokenFile || (s.nodeToken && s.nodeMinted && Date.now() - s.nodeMinted < DAY)) return;
-    const { token: fresh } = await nodeApi(node, "POST", "/grants", { scope: "brain", brain, agent: name });
+    const { token: fresh } = await nodeApi(node, "POST", "/grants", { scope: "brain", brain, agent: name, resident: true });
     await spawn([...ssh, `cat > ${a.memoryTokenFile}`], fresh);
     const old = s.nodeToken;
     Object.assign(s, { nodeToken: fresh, nodeMinted: Date.now() });

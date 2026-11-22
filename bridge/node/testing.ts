@@ -19,7 +19,8 @@ import type { Blobs } from "./handoff";
 import { Media } from "./media";
 import { OAuthStore } from "./oauth";
 import { node } from "./server";
-import type { Fleet } from "./mcp";
+import type { Fleet, Sessions } from "./mcp";
+import type { Confirms } from "./confirm";
 
 
 // A relay in memory: a log per object, ordered by pos, as the Worker keeps
@@ -74,7 +75,7 @@ export const ORIGIN = "https://node.test";
 export const dirs: string[] = [];
 afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
-export async function setup(o: { fleet?: Fleet; sealed?: boolean; forge?: () => ForgeSigner | undefined } = {}) {
+export async function setup(o: { fleet?: Fleet; sealed?: boolean; forge?: () => ForgeSigner | undefined; sessions?: Sessions; confirms?: Confirms } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "corkboard-node-"));
   dirs.push(dir);
   const root = newRoot();
@@ -89,7 +90,7 @@ export async function setup(o: { fleet?: Fleet; sealed?: boolean; forge?: () => 
   const blobs = memoryBlobs();
   const media = new Media({ data, blobs, dir: join(dir, "blobs") });
   const sealed = o.sealed ? new FleetRecords(replicas, () => o.fleet, o.forge, data) : undefined;
-  const app = node({ data, search, oauth, episodes, media, origin: ORIGIN, fleet: () => o.fleet, sealed });
+  const app = node({ data, search, oauth, episodes, media, origin: ORIGIN, fleet: () => o.fleet, sealed, sessions: o.sessions, confirms: o.confirms });
   // Another device of the account: the laptop, on the same relay.
   const board = objects.find((o) => o.kind === "board")!;
   const laptop = await Replica.open({ transport: as(shared, "laptop"), key: board.key, object: board.object, device: "laptop" });

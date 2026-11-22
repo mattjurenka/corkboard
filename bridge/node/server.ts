@@ -44,8 +44,11 @@
 //     POST  chat/:id/delivered         passed on to Pepper (owner)
 //     POST  grants                     { scope: card|session, board, card|spawn, agent }: a token held
 //                                      to the board, for a fleet slot, and the /mcp it's for; or
-//                                      { scope: brain, brain, agent }, a week's, for its memory hooks (owner)
+//                                      { scope: brain, brain, agent, resident? }, a week's, for its memory hooks,
+//                                      and a resident's (Pepper's) sessions and fleet, held for a yes (owner)
 //     DELETE grants                    { token }: that token ended (owner)
+//     GET   confirms                   what a resident would do, waiting for the user's yes (owner; confirm.ts)
+//     POST  confirms/:id               { ok }: the user's answer; yes runs it, and says what came of it (owner)
 //   /memory/...                        a session's hooks, as the Worker's (fleet/memory-hooks.nix), with a
 //                                      token; the brain is ?brain= (or the body's), else the default:
 //     GET   context                    Markdown: what a session starts with; ?budget= characters,
@@ -61,7 +64,8 @@ import { BRAIN_ONLY_KINDS, blocks as checkBlocks, chatText, date as checkDate, n
 import { waitingOn } from "../../lib/model/cards";
 import { Conflict, type Data, Invalid } from "./data";
 import { type Caller, type Consent, OAuthError, type OAuthStore, Redirect, SCOPES, boardBound, deniedUrl } from "./oauth";
-import { type Fleet, mcp } from "./mcp";
+import { type Fleet, type Sessions, mcp } from "./mcp";
+import { Confirms } from "./confirm";
 import { gitViews } from "./git";
 import { brainModel, brainSession } from "./consolidator";
 import { Conflict as HoldConflict, type FleetRecords, SPAWN_ID } from "./fleet";
@@ -93,6 +97,10 @@ export type NodeOptions = {
   calendar?: () => Promise<CalendarConfig | undefined> | CalendarConfig | undefined;
   // The Worker's fleet queue, while this machine's account is on the relay: /mcp's spawn tools.
   fleet?: () => Fleet | undefined;
+  // The account's sessions (peers.ts), for /mcp's session tools; and what a
+  // resident would do to them or the fleet, held for the user (confirms).
+  sessions?: Sessions;
+  confirms?: Confirms;
   // What the fleet keeps sealed from the Worker (fleet.ts): /api/node/fleet.
   sealed?: FleetRecords;
   // The app's brains_*, nodes_*, notes and board_* operations (app.ts's),
@@ -199,6 +207,7 @@ function sse(follow: (send: (event: unknown) => void) => () => void): Response {
 }
 
 export function node(o: NodeOptions) {
+  const confirms = o.confirms ?? new Confirms();
   const consents = new Map<string, Consent>();
   // Each bridge's link to the hub, by its id: its /app/sessions/live.
   const joined = new Map<string, Joined>();
@@ -399,7 +408,7 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       };
       if (b.scope === "brain") {
         const brain = brainOf(str("brain"));
-        const token = o.oauth.mint(`${str("agent")} for ${brain}`, 7, "assistant", brain);
+        const token = o.oauth.mint(`${str("agent")} for ${brain}`, 7, "assistant", brain, b.resident === true);
         return json({ token, url: origin }, 201);
       }
       const board = str("board");
@@ -412,6 +421,16 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
             : undefined;
       if (!grant) throw new Invalid("scope must be card or session");
       return json({ ...grant, url: `${origin}/mcp` }, 201);
+    }
+    if (what === "confirms" && !sub) {
+      if (who.scope !== "owner") return json({ error: "only the user decides" }, 403);
+      if (!name && m === "GET") return json(confirms.waiting());
+      if (name && m === "POST") {
+        const b = await body();
+        if (typeof b.ok !== "boolean") throw new Invalid("ok must be true or false");
+        return json(await confirms.decide(name, b.ok));
+      }
+      return json({ error: "not found" }, 404);
     }
     if (what === "brains") {
       if (!name && m === "GET") return json(data.brains().map((b) => ({ ...b, default: b.name === data.defaultBrain(), notes: data.notes(b.name).length, entries: data.entries(b.name).length })));
@@ -616,7 +635,7 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       if (p === "/mcp") {
         const who = caller(req, origin, from, true);
         if (!who) return unauthorized(origin);
-        return await mcp(req, { data: o.data, search: o.search, media: o.media, files: o.toFiles, fileOffers: o.fileOffers, origin, fleet: o.fleet?.(), sealed: o.sealed, forge: o.toForge }, who);
+        return await mcp(req, { data: o.data, search: o.search, media: o.media, files: o.toFiles, fileOffers: o.fileOffers, origin, fleet: o.fleet?.(), sealed: o.sealed, forge: o.toForge, sessions: o.sessions, confirms }, who);
       }
       if (p.startsWith("/file-upload/") || p.startsWith("/file/")) {
         if (!o.fileOffers) return json({ error: "not found" }, 404);
