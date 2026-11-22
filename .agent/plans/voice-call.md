@@ -32,7 +32,7 @@ still heard. The chat shows the last line heard.
 A confirm waiting (step 3) is a notification too, with Yes and No, and a line in the chat with yes
 and no, both POSTing confirms/:id on the leader's channel. Opus up is for later.
 
-## 2. Node: the voice loop (done: bridge/node/call.ts)
+## 2. Node: the voice loop (done: bridge/node/call.ts; in the multi-node VM test, with a bun stand-in phone)
 
 `POST /api/node/call?voice=&speed=`, the user's own and sealed, ndjson both ways: up, 16 kHz 16-bit
 samples (`audio`) and `end`; down, `heard`, `say` (a sentence and its audio), `stop`, `confirm` and
