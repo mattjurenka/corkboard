@@ -49,6 +49,7 @@
 //     DELETE grants                    { token }: that token ended (owner)
 //     GET   confirms                   what a resident would do, waiting for the user's yes (owner; confirm.ts)
 //     POST  confirms/:id               { ok }: the user's answer; yes runs it, and says what came of it (owner)
+//     POST  call                       ?voice=&speed=: a voice call with Pepper, ndjson both ways (owner, sealed; call.ts)
 //   /memory/...                        a session's hooks, as the Worker's (fleet/memory-hooks.nix), with a
 //                                      token; the brain is ?brain= (or the body's), else the default:
 //     GET   context                    Markdown: what a session starts with; ?budget= characters,
@@ -66,6 +67,7 @@ import { Conflict, type Data, Invalid } from "./data";
 import { type Caller, type Consent, OAuthError, type OAuthStore, Redirect, SCOPES, boardBound, deniedUrl } from "./oauth";
 import { type Fleet, type Sessions, mcp } from "./mcp";
 import { Confirms } from "./confirm";
+import { type CallModels, call } from "./call";
 import { gitViews } from "./git";
 import { brainModel, brainSession } from "./consolidator";
 import { Conflict as HoldConflict, type FleetRecords, SPAWN_ID } from "./fleet";
@@ -101,6 +103,8 @@ export type NodeOptions = {
   // resident would do to them or the fleet, held for the user (confirms).
   sessions?: Sessions;
   confirms?: Confirms;
+  // A call's models (call.ts), a test's; else transcribe.ts's and speech.ts's.
+  callModels?: CallModels;
   // What the fleet keeps sealed from the Worker (fleet.ts): /api/node/fleet.
   sealed?: FleetRecords;
   // The app's brains_*, nodes_*, notes and board_* operations (app.ts's),
@@ -421,6 +425,15 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
             : undefined;
       if (!grant) throw new Invalid("scope must be card or session");
       return json({ ...grant, url: `${origin}/mcp` }, 201);
+    }
+    // A voice call with Pepper (call.ts): the user's, sealed, as their voice is.
+    if (what === "call" && !name) {
+      if (who.scope !== "owner" || !sealed) return json({ error: "not found" }, 404);
+      if (m !== "POST" || !req.body) return json({ error: "method not allowed" }, 405);
+      const voice = q("voice") ?? "af_heart", speed = Number(q("speed") ?? 1);
+      if (!/^[a-z]{2}_[a-z]+$/.test(voice)) throw new Invalid("bad voice");
+      if (!(speed >= 0.5 && speed <= 2)) throw new Invalid("bad speed");
+      return call(req.body, { data, confirms, sessions: o.sessions, voice, speed, models: o.callModels }, req.signal);
     }
     if (what === "confirms" && !sub) {
       if (who.scope !== "owner") return json({ error: "only the user decides" }, 403);

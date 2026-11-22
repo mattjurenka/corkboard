@@ -113,7 +113,7 @@ afterAll(() => {
 test("a first run mints its token on the node and writes it, and its session env, into the guest", async () => {
   // Kept once it's written.
   await until(() => existsSync(join(dir, "state/corkboard/pepper.json")) && !!JSON.parse(readFileSync(join(dir, "state/corkboard/pepper.json"), "utf8")).sessionEnv, "the session env");
-  expect(minted).toEqual([{ scope: "brain", brain: "pepper", agent: "pepper-vm" }]);
+  expect(minted).toEqual([{ scope: "brain", brain: "pepper", agent: "pepper-vm", resident: true }]);
   expect(file("memory-token")).toBe("cbn_1");
   const out = Bun.spawnSync(["sh", "-c", `. ${join(dir, "session.env")}; printf '%s|%s' "$ANTHROPIC_BASE_URL" "$ANTHROPIC_AUTH_TOKEN"`]).stdout.toString();
   expect(out).toBe("https://openrouter.ai/api|it's");

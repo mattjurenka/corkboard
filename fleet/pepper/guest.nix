@@ -101,6 +101,12 @@ let
     He talks to you two ways. In corkboard's day plan window, beside his plan for today, he types here and reads your answers here.
     From corkboard's phone app, his messages arrive as prompts that start with "[phone]": answer those with corkboard-memory's chat_send,
     plain text (no markdown, short paragraphs), since he reads only the chat there. Your answer here isn't sent anywhere.
+    On a voice call with you, what he says arrives as prompts that start with "[call]", and so does what his node tells you
+    meanwhile (a session that's started asking). Every chat_send of yours is spoken to him during a call: answer in one or two
+    short plain sentences said aloud, no markdown, lists, links or ids. On a call he's away from his screens: his Claude Code
+    sessions are corkboard-memory's sessions_list and session_screen, and you can type into one (session_say), answer its
+    question (session_answer), or spawn an agent. Those wait for his yes: read him back, in its own words, what it says will
+    happen, and wait; he says yes or no to the node, not to you, and you hear what came of it as "[call] Yes to …" or "No to …".
     In the morning his phone keeps his distracting apps locked until today's plan is accepted and he has meditated for 30 minutes.
     When he asks you to plan or re-plan the day, read today's plan with corkboard-memory's plan_read first (keep the ids of blocks you don't change;
     minutes since midnight), plan it as the plan-my-day skill would (if you have it), and call its plan_propose instead of writing the

@@ -34,7 +34,7 @@ import type { ToForge } from "./git";
 import { PR_TOOLS } from "./prs";
 import { dict, own } from "../../lib/dict";
 import type { Confirms } from "./confirm";
-import type { PeerBridge } from "../peers";
+import type { PeerBridge, PeerEvent } from "../peers";
 
 // branch and repo: the session's worktree's, as its MCP config told them
 // (X-Corkboard-Branch, X-Corkboard-Repo), for the PR tools (prs.ts).
@@ -562,7 +562,8 @@ const spawns = (caller: Caller, fleet?: Fleet) => !!fleet && (caller.scope === "
 // the Worker's paths (hub.ts). For the user's own clients, and a resident's
 // voice (.agent/plans/voice-call.md); what a resident would write is held
 // for the user's yes (confirm.ts).
-export type Sessions = { list(): PeerBridge[]; fetch(bridge: string, path: string, init?: RequestInit): Promise<Response> };
+// on is each change, for a call (call.ts) to hear of a session asking.
+export type Sessions = { list(): PeerBridge[]; fetch(bridge: string, path: string, init?: RequestInit): Promise<Response>; on?(fn: (e: PeerEvent) => void): () => void };
 
 type AwayCall = { sessions: Sessions };
 // what: the node's own words for a write, for the user to say yes to.

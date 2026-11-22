@@ -30,16 +30,22 @@ stops its voice at once on the phone and tells the node.
 A confirm waiting (step 3) is a notification too, with Yes and No, for when the user would rather
 tap.
 
-## 2. Node: the voice loop
+## 2. Node: the voice loop (done: bridge/node/call.ts)
 
-The bridge's listen.ts and speech.ts, run for a call: VAD ends an utterance, Parakeet transcribes
-it, and fleetd pastes it into Pepper as `[call] …`, as the chat's `[phone]`. Pepper answers with a
-new tool, `call_say`, short and spoken (no markdown); the node speaks it with the avatar's voice
-and streams it down. While a confirm waits, an utterance that is a yes or a no ("yes", "do it",
-"no", "cancel") decides it in the node, before Pepper hears anything.
+`POST /api/node/call?voice=&speed=`, the user's own and sealed, ndjson both ways: up, 16 kHz 16-bit
+samples (`audio`) and `end`; down, `heard`, `say` (a sentence and its audio), `stop`, `confirm` and
+`decided`. Silero cuts what's said into utterances (800 ms of quiet ends one), Parakeet
+transcribes each, and it's posted to the chat as the user's, from `call`; fleetd pastes it into
+Pepper as `[call] …`, as the chat's `[phone]`. Pepper answers with chat_send, short and spoken (its
+instructions say so for `[call]`), and every message of Pepper's during the call is said with
+Kokoro (or Chatterbox), a sentence at a time. Speech starting while it's talking sends `stop` and
+drops the sentences not yet sent. While a confirm waits, an utterance that's only a yes or a no
+("yes", "go ahead", "no", "cancel") decides the newest in the node, before Pepper hears anything,
+and Pepper is told `Yes to "…". It's done.`
 
-Away mode's wakes (a session asking, all stopped, one finished a while) during a call go to Pepper
-as `[call] …`, so it says them unasked.
+Away mode's wakes during a call (a session starting to ask, or wanting permission) are posted
+from `away`, also pasted as `[call] …`, so Pepper says them unasked. Audio is PCM for now; Opus
+later, with the phone.
 
 ## 3. Pepper's tools (this step first: no phone needed)
 
