@@ -2136,7 +2136,7 @@ describe("the machine's sessions, on a channel", () => {
     expect(await next(page)).toEqual({ type: "out", data: JSON.stringify({ frame: "SlBFRw==" }) });
     const put = (input: unknown) => ch.fetch("/api/sessions/laptop-1/1-2/browser", { method: "POST", body: JSON.stringify(input) });
     expect((await put({ t: "text", text: "me@example.com" })).status).toBe(200);
-    expect((await put({ t: "text", text: "x".repeat(9000) })).status).toBe(400);
+    expect((await put({ t: "text", text: "x".repeat(9000) })).status).toBe(413);
     await page.cancel();
     await Bun.sleep(10);
     expect(looked).toEqual([["open", "1-2"], ["input", "1-2", { t: "text", text: "me@example.com" }], ["close"]]);

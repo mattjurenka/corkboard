@@ -296,11 +296,12 @@ export class Hub {
       }
       return new Response(Buffer.from(audio, "base64"), { headers });
     }
-    const input = await body();
     if (op === "browser") {
-      if (JSON.stringify(input).length > 8192) return error(400, "that's too much to put in a page at once");
+      const input = await capped(req, 8192);
+      if (!input) return error(413, "that's too much to put in a page at once");
       return reply(await this.ask(bridge, { type: "browser", key, input }));
     }
+    const input = await body();
     if (input.answers !== undefined) {
       const a = answers(input.answers);
       if (typeof a === "string") return error(400, a);
@@ -373,6 +374,26 @@ export function ndjson(follow: (send: (m: object) => void, end: () => void) => (
       "Cache-Control": "no-store",
     },
   });
+}
+
+// A request's JSON object, no more than max bytes of it kept: null past
+// that, {} if it isn't an object. The rest is read and dropped, not left,
+// as a channel's request stream left unread resets its reply too.
+export async function capped(req: Request, max: number): Promise<Record<string, any> | null> {
+  const chunks: Uint8Array[] = [];
+  let n = 0;
+  if (req.body)
+    for await (const chunk of req.body) {
+      n += chunk.length;
+      if (n <= max) chunks.push(chunk);
+    }
+  if (n > max) return null;
+  try {
+    const v = JSON.parse(new TextDecoder().decode(Buffer.concat(chunks)));
+    return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+  } catch {
+    return {};
+  }
 }
 
 // Each JSON line of a body, as it comes; a line that isn't JSON is skipped.

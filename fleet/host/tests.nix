@@ -165,6 +165,10 @@ else pkgs.runCommand "fleet-host-tests" { nativeBuildInputs = [ pkgs.gnugrep pkg
   has $slot 'iifname "ag0" tcp dport 8890 counter accept'
   hasnt $slot 'dport 53'
   has $slot 'iifname "ag0" counter drop'
+  # Nothing in but replies: no other guest or machine reaches the slot's
+  # ports (the browser's forwarded DevTools among them), only the host.
+  has $slot 'oifname "ag0" ct state established,related counter accept'
+  has $slot 'oifname "ag0" counter drop'
   hasnt $slot 'masquerade'
   # The resident's hole: its reason as comments, destinations and ports in one rule, NAT, DNS.
   has $brain "# Steam's game traffic."

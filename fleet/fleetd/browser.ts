@@ -1,7 +1,8 @@
 // A session's browser, taken over from the phone: the page its agent has
 // open in the slot's Chromium (fleet/caps/browser-mcp.ts), streamed as
 // frames, and the user's taps and typing put into it, so a login is the
-// user's own and the password never passes through the agent. The guest
+// user's own and the agent isn't told the password. (It has the browser
+// all the same, so it could read the field: a courtesy, not a wall.) The guest
 // forwards Chromium's DevTools port to its tap (fleet/caps/browser.nix),
 // which only the host can reach.
 //
@@ -60,7 +61,7 @@ export function calls(input: Record<string, unknown>, size: { width: number; hei
     case "scroll": {
       const p = at();
       const dx = Number(input.dx ?? 0), dy = Number(input.dy ?? 0);
-      if (!p || !Number.isFinite(dx) || !Number.isFinite(dy)) return "a scroll is x, y, and dx, dy in fractions of the frame";
+      if (!p || !(Math.abs(dx) <= 10) || !(Math.abs(dy) <= 10)) return "a scroll is x, y, and dx, dy in fractions of the frame, up to 10";
       return [["Input.dispatchMouseEvent", { type: "mouseWheel", ...p, deltaX: Math.round(dx * size.width), deltaY: Math.round(dy * size.height) }]];
     }
     case "text":
@@ -77,10 +78,14 @@ export function calls(input: Record<string, unknown>, size: { width: number; hei
     }
     case "back":
       return [["Runtime.evaluate", { expression: "history.back()" }]];
+    // The web only: what has no http(s):// gets https://, so javascript:,
+    // file: and the like are a host that isn't one, and localhost:3000 a port.
     case "go": {
       const url = typeof input.url === "string" ? input.url.trim() : "";
       if (!url || url.length > 2048) return "go is a url";
-      return [["Page.navigate", { url: /^[a-z][a-z+.-]*:/i.test(url) ? url : `https://${url}` }]];
+      const to = URL.parse(/^https?:\/\//i.test(url) ? url : `https://${url}`);
+      if (!to || (to.protocol !== "https:" && to.protocol !== "http:")) return "go is a web address";
+      return [["Page.navigate", { url: to.href }]];
     }
     default:
       return `no input ${String(input.t)}`;
@@ -126,9 +131,25 @@ class View {
     return pages((await res.json()) as any[]);
   }
 
+  // The tab left as the agent had it: no screencast, its own layout. What
+  // was still waiting on it is told so.
+  private leave() {
+    const ws = this.ws;
+    this.ws = null;
+    for (const r of this.replies.values()) r({ error: { message: "the page went" } });
+    this.replies.clear();
+    if (ws?.readyState === WebSocket.OPEN) {
+      const id = this.next;
+      this.next += 2;
+      ws.send(JSON.stringify({ id, method: "Page.stopScreencast" }));
+      ws.send(JSON.stringify({ id: id + 1, method: "Emulation.clearDeviceMetricsOverride" }));
+      setTimeout(() => ws.close(), 500);
+    } else ws?.close();
+  }
+
   // Connected to the tab, laid out for the phone, and its frames coming.
   private async open(id: string) {
-    this.ws?.close();
+    this.leave();
     this.tab = id;
     const ws = new WebSocket(`${this.base.replace(/^http/, "ws")}/devtools/page/${id}`);
     this.ws = ws;
@@ -136,7 +157,13 @@ class View {
       ws.onopen = () => resolve();
       ws.onerror = () => reject(new Error("the browser didn't let us in"));
     });
+    // Closed, or gone to another tab, while it connected.
+    if (this.ws !== ws) {
+      ws.close();
+      throw new Error("closed");
+    }
     ws.onmessage = (e) => {
+      if (this.ws !== ws) return;
       const m = JSON.parse(String(e.data));
       if (typeof m.id === "number") {
         this.replies.get(m.id)?.(m);
@@ -169,7 +196,7 @@ class View {
   // The tabs as they change; a closed tab's watchers go to another.
   private async look() {
     const tabs = await this.list();
-    if (JSON.stringify(tabs) === JSON.stringify(this.tabs)) return;
+    if (this.closed || JSON.stringify(tabs) === JSON.stringify(this.tabs)) return;
     this.tabs = tabs;
     if (!tabs.length) return this.close("the browser has no page open");
     if (!tabs.some((t) => t.id === this.tab)) await this.open(tabs[0].id);
@@ -178,8 +205,10 @@ class View {
 
   async start() {
     const tabs = await this.list();
+    if (this.closed) return;
     if (!tabs.length) throw new Error("the browser has no page open");
     await this.open(tabs[0].id);
+    if (this.closed) return;
     this.tabs = tabs;
     this.say({ tabs, tab: this.tab });
     this.poll = setInterval(() => void this.look().catch((e) => this.close((e as Error).message)), 2000);
@@ -209,14 +238,7 @@ class View {
     this.closed = true;
     this.gone();
     clearInterval(this.poll);
-    const ws = this.ws;
-    this.ws = null;
-    if (ws?.readyState === WebSocket.OPEN) {
-      const id = this.next++;
-      ws.send(JSON.stringify({ id, method: "Page.stopScreencast" }));
-      ws.send(JSON.stringify({ id: id + 1, method: "Emulation.clearDeviceMetricsOverride" }));
-      setTimeout(() => ws.close(), 500);
-    } else ws?.close();
+    this.leave();
     const watchers = [...this.watchers];
     this.watchers.clear();
     for (const s of watchers) this.out.end(s, why ?? "closed");

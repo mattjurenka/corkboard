@@ -14,9 +14,12 @@ const slot = { guestAddress: "127.0.0.1", stateDir: join(dir, "agent-0"), shareD
 let fleet: typeof import("./fleet");
 let browser: typeof import("./browser");
 
-// What the page was sent, by method, and the tabs it lists.
-let got: { method: string; params: any }[] = [];
+// What the pages were sent, by method and page, the tabs it lists, how
+// often it was asked for them, and how long it takes to say.
+let got: { method: string; params: any; page: string }[] = [];
 let tabs: object[] = [];
+let listed = 0;
+let slow = 0;
 let server: ReturnType<typeof Bun.serve>;
 
 beforeAll(async () => {
@@ -42,14 +45,17 @@ beforeAll(async () => {
     port: 0,
     fetch(req, srv) {
       const p = new URL(req.url).pathname;
-      if (p === "/json/list") return Response.json(tabs);
-      if (p.startsWith("/devtools/page/") && srv.upgrade(req, { data: undefined })) return undefined;
+      if (p === "/json/list") {
+        listed++;
+        return Bun.sleep(slow).then(() => Response.json(tabs));
+      }
+      if (p.startsWith("/devtools/page/") && srv.upgrade(req, { data: { page: p.slice("/devtools/page/".length) } })) return undefined;
       return new Response("no", { status: 404 });
     },
     websocket: {
       message(ws, data) {
         const m = JSON.parse(String(data));
-        got.push({ method: m.method, params: m.params });
+        got.push({ method: m.method, params: m.params, page: (ws.data as { page: string }).page });
         ws.send(JSON.stringify({ id: m.id, result: {} }));
         if (m.method === "Page.startScreencast")
           ws.send(JSON.stringify({ method: "Page.screencastFrame", params: { data: "SlBFRw==", sessionId: 7, metadata: { deviceWidth: 400, deviceHeight: 800 } } }));
@@ -97,6 +103,21 @@ test("what isn't an input, or is outside the page, is refused; keys like the pro
   const size = { width: 400, height: 800 };
   for (const bad of [{ t: "tap", x: 2, y: 0 }, { t: "tap" }, { t: "text", text: "" }, { t: "key", key: "constructor" }, { t: "key", key: "__proto__" }, { t: "go", url: "" }, { t: "toString" }])
     expect(typeof browser.calls(bad, size)).toBe("string");
+  expect(typeof browser.calls({ t: "scroll", x: 0, y: 0, dy: 1e9 }, size)).toBe("string");
+});
+
+test("go is to the web only: javascript:, file: and the like are no page's address, localhost:3000 a host's port", () => {
+  const size = { width: 400, height: 800 };
+  const to = (url: string) => {
+    const c = browser.calls({ t: "go", url }, size);
+    return typeof c === "string" ? null : (c[0][1] as { url: string }).url;
+  };
+  expect(to("javascript:alert(1)")).toBeNull();
+  expect(to("view-source:https://a")).toBeNull();
+  expect(to("file:///etc/passwd")).toStartWith("https://");
+  expect(to("chrome://settings")).toStartWith("https://");
+  expect(to("localhost:3000/x")).toBe("https://localhost:3000/x");
+  expect(to("http://example.com")).toBe("http://example.com/");
 });
 
 test("only pages are tabs, not an extension's background or DevTools", () => {
@@ -138,7 +159,7 @@ test("taken over: laid out for the phone, its frames streamed, taps put in, and 
   expect(mouse.map((m) => m.params.type)).toEqual(["mouseMoved", "mousePressed", "mouseReleased"]);
   expect(mouse[1].params).toMatchObject({ x: 200, y: 400 });
   expect(await b.input("s1", { t: "text", text: "me@example.com" })).toEqual({ ok: true });
-  expect(got.at(-1)).toEqual({ method: "Input.insertText", params: { text: "me@example.com" } });
+  expect(got.at(-1)).toMatchObject({ method: "Input.insertText", params: { text: "me@example.com" } });
   expect(await b.input("s1", { t: "key", key: "valueOf" })).toEqual({ error: expect.stringContaining("a key is one of") });
 
   // A second phone shares the page; it's put back only when both have gone.
@@ -177,4 +198,35 @@ test("a page closed while watched moves the phone to another, and the last one c
   tabs = [];
   await until(() => ended.has("st"));
   expect(ended.get("st")).toBe("the browser has no page open");
+}, 10_000);
+
+test("a phone gone while the page is still being reached leaves nothing behind", async () => {
+  tabs = [{ id: "p1", type: "page", url: "https://a" }];
+  got = [];
+  slow = 200;
+  const { b, ended } = phone();
+  const opening = b.open("st", "s1");
+  b.close("st");
+  await opening;
+  slow = 0;
+  const after = listed;
+  await Bun.sleep(2500);
+  expect(listed).toBe(after);
+  expect(got.some((m) => m.method === "Page.startScreencast" || m.method === "Emulation.setDeviceMetricsOverride")).toBe(false);
+  expect(ended.size).toBe(0);
+}, 10_000);
+
+test("going to another tab puts the one left back as the agent had it", async () => {
+  tabs = [{ id: "p1", type: "page", url: "https://a" }, { id: "p2", type: "page", url: "https://b" }];
+  got = [];
+  const { b, out } = phone();
+  await b.open("st", "s1");
+  expect(await b.input("s1", { t: "size", width: 390, height: 700 })).toEqual({ ok: true });
+  expect(await b.input("s1", { t: "tab", id: "p2" })).toEqual({ ok: true });
+  expect(out.at(-1)).toMatchObject({ tab: "p2" });
+  await until(() => got.some((m) => m.page === "p1" && m.method === "Emulation.clearDeviceMetricsOverride"));
+  expect(got.findLast((m) => m.page === "p1" && m.method !== "Page.screencastFrameAck")?.method).toBe("Emulation.clearDeviceMetricsOverride");
+  expect(got.some((m) => m.page === "p2" && m.method === "Emulation.setDeviceMetricsOverride")).toBe(true);
+  b.close("st");
+  await until(() => got.some((m) => m.page === "p2" && m.method === "Emulation.clearDeviceMetricsOverride"));
 }, 10_000);

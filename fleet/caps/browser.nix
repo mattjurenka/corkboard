@@ -27,7 +27,9 @@ in
 
   # Its DevTools port on the tap, for fleetd to stream the page to the phone
   # and take the user's taps and typing (fleet/fleetd/browser.ts). Chromium
-  # keeps it on loopback; the host's rules let only the host reach the tap.
+  # keeps it on loopback. The host's forward chain lets nothing new into the
+  # tap (fleet/host/host.nix, checked in fleet/host/tests.nix), so only the
+  # host itself reaches it.
   systemd.services.fleet-browser-view = {
     wantedBy = [ "multi-user.target" ];
     after = [ "network.target" ];
