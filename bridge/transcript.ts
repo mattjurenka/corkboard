@@ -10,6 +10,7 @@
 // phone's face to say or do (corkboard/avatar.lua's panel, there).
 
 import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { own } from "../lib/dict";
 
 // A question AskUserQuestion asks, whole, for the phone to answer it there.
@@ -96,6 +97,18 @@ export function items(r: any): Item[] {
   });
 }
 
+// A log's items, read once without holding up the event loop on the file.
+export async function readItems(path: string): Promise<Item[]> {
+  const text = await readFile(path, "utf8").catch(() => "");
+  return text.split("\n").flatMap((l) => {
+    try {
+      return items(JSON.parse(l));
+    } catch {
+      return [];
+    }
+  });
+}
+
 // A log followed as it grows: each read gives the items written since the
 // last, from whole lines only.
 export class Follower {
@@ -131,5 +144,22 @@ export class Follower {
     } finally {
       closeSync(fd);
     }
+  }
+}
+
+// What Claude Code's result says when you turned a tool down or stopped it.
+const REFUSED = /^(The user doesn't want to proceed|\[Request interrupted by user)/;
+
+// The question it's waiting on: the last AskUserQuestion it asked, unless
+// that has been answered, turned down or stopped, or you've said something
+// since. One asked where there's no one to answer it (fleetd's VMs, on
+// stream-json) fails at once, and waits for words instead.
+export function asked(items: Item[]): (Item & { kind: "tool" }) | undefined {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind === "you") return undefined;
+    if (it.kind !== "tool" || it.tool !== "AskUserQuestion" || !it.questions?.length) continue;
+    const result = items.slice(i + 1).find((r) => r.kind === "result" && r.call === it.call);
+    return result && result.kind === "result" && (!result.error || REFUSED.test(result.text)) ? undefined : it;
   }
 }

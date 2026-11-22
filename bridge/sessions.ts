@@ -12,7 +12,7 @@
 
 import { hostname } from "node:os";
 import { CLOUD, token } from "./cloud";
-import { Follower, type Item } from "./transcript";
+import { Follower, type Item, type Question } from "./transcript";
 import type { Peers } from "./peers";
 
 // One session, as the Worker hears of it, and where its log is (which stays
@@ -52,6 +52,23 @@ export function answers(a: unknown): Answers | string {
     if (x.other != null && (typeof x.other !== "string" || x.other.length > 2000)) return "other must be a string, under 2000 characters";
   }
   return a.map((x) => ({ picks: x.picks, ...(typeof x.other === "string" && x.other.trim() && { other: x.other }) }));
+}
+
+// Answers in words, for a session that takes only words: each question's
+// header (or the question), then the options picked and its own words; or
+// why they don't answer these questions.
+export function inWords(questions: Question[], a: Answers): { text: string } | { error: string } {
+  if (a.length !== questions.length) return { error: `answers must be a list, one for each of its ${questions.length} questions` };
+  const said: string[] = [];
+  for (const [i, q] of questions.entries()) {
+    const { picks, other } = a[i];
+    if (picks.some((p) => p >= q.options.length)) return { error: `question ${i + 1}'s options are 0 to ${q.options.length - 1}` };
+    if (!q.multiSelect && picks.length + (other ? 1 : 0) > 1) return { error: `question ${i + 1} takes one answer` };
+    const words = [...picks.map((p) => q.options[p].label), ...(other ? [other.trim()] : [])];
+    if (!words.length) return { error: `question ${i + 1} has no answer` };
+    said.push(`${q.header || q.question}: ${words.join(", ")}`);
+  }
+  return { text: said.join("\n") };
 }
 
 export type Source = {
@@ -104,7 +121,7 @@ export type Link = { receive(m: any): void; drop(): void };
 // and connect, called each time a link opens, with how to send down it.
 export type HubJoin = (hello: { id: string; machine: string; url?: string | null; environment: string }, connect: (send: (m: object) => void) => Link) => void;
 
-type Stream = { key: string; send(m: object): void; follower?: Follower; state?: string; timer?: ReturnType<typeof setInterval> };
+type Stream = { key: string; send(m: object): void; follower?: Follower; state?: string; sent?: boolean; timer?: ReturnType<typeof setInterval> };
 
 // The protocol's bridge end, whatever it's linked to: each link hears the
 // list, is asked and is sent its own streams.
@@ -178,10 +195,15 @@ function core(environment: string, source: Source) {
   };
 
   // In batches, each well under a socket message's limit; the first with
-  // the session's state, when that's changed.
+  // the session's state, when that's changed. The last of what a stream is
+  // first sent, or sent again from the start, is whole: its conversation
+  // so far has all come (talk.ts reads it so, where batches may come apart).
   const out = (s: Stream, stream: string, items: Item[], reset = false, state?: string) => {
+    const whole = reset || !s.sent;
     for (let i = 0; i < items.length || ((reset || state) && i === 0); i += 40) {
-      s.send({ type: "out", stream, data: JSON.stringify({ items: items.slice(i, i + 40), ...(reset && i === 0 && { reset: true }), ...(state && i === 0 && { state }) }) });
+      const last = whole && i + 40 >= items.length;
+      s.sent = true;
+      s.send({ type: "out", stream, data: JSON.stringify({ items: items.slice(i, i + 40), ...(reset && i === 0 && { reset: true }), ...(state && i === 0 && { state }), ...(last && { whole: true }) }) });
     }
   };
 

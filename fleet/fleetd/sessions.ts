@@ -12,7 +12,8 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { basename, join } from "node:path";
-import { bridgeId, serve, type Hosted } from "../../bridge/sessions";
+import { type Answers, bridgeId, inWords, serve, type Hosted } from "../../bridge/sessions";
+import { asked, readItems } from "../../bridge/transcript";
 import { Hub, joinHub } from "../../bridge/hub";
 import { answerChannels } from "./node";
 import { manifest, spawns, type Manifest, type Spawn } from "./fleet";
@@ -105,13 +106,23 @@ export function list(): Hosted[] {
     });
 }
 
-export async function say(key: string, text: string, keys: string[], answers?: unknown) {
-  if (answers) return { error: "a question here is answered in words" };
+// answers: to the question it asked, which on stream-json it can't wait
+// on, so they're said in words (inWords), as a message.
+export async function say(key: string, text: string, keys: string[], answers?: Answers) {
   const m = manifest();
   const s = spawns().find((x) => x.id === key && x.interactive && x.state === "running" && x.slot);
   if (!s) return { error: "that session has ended", missing: true };
   if (s.ending) return { error: "that session is finishing" };
   const share = m.slots[s.slot!].shareDir;
+  if (answers) {
+    const path = transcript(outbox(m, s));
+    const q = path && asked(await readItems(path));
+    if (!q) return { error: "it isn't asking anything" };
+    const said = inWords(q.questions!, answers);
+    if ("error" in said) return said;
+    text = said.text;
+    keys = [];
+  }
   if (text) post(share, message(text));
   if (keys.includes("esc")) post(share, JSON.stringify({ type: "control_request", request_id: `esc-${Date.now()}`, request: { subtype: "interrupt" } }) + "\n");
   watched();

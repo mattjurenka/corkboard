@@ -289,7 +289,7 @@ export async function startNode(o: NodeOptions = {}) {
         // phone's tokens work on either; never loopback. One with no
         // token is its device's, the owner (fleetd's relay-only one).
         leadership.forgeWeb = !!nodes.forge;
-        const tunneled = node({ ...served, origin: nodes.url, forgeWeb: () => leadership.forgeWeb, toForge, files, toFiles, fileOffers });
+        const tunneled = node({ ...served, origin: nodes.url, forgeWeb: () => leadership.forgeWeb, reach, toForge, files, toFiles, fileOffers });
         // The relay says when the leader may have changed, so a move takes
         // effect at once rather than at the next minute's look.
         t.stop = r.serveTunnel(tunneled, { name: d.cert.body.name, onState: (up) => (t.connected = up), onLeader: (to) => (leadership.told(to), void keepForge()), channels: (req, ch) => tunneled(req, undefined, ch.peer) });
