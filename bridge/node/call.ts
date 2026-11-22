@@ -49,6 +49,8 @@ const HANG_MS = 800;
 const PAD_MS = 200;
 const MAX_MS = 30_000;
 const MIN_MS = 300;
+// How far ahead of the phone's playing Pepper's next sentence is made.
+const AHEAD_MS = 1500;
 const frames = (ms: number) => Math.round(ms / FRAME_MS);
 
 // A whole utterance that's only a yes, or only a no.
@@ -193,6 +195,12 @@ export function call(input: ReadableStream<Uint8Array>, o: CallOptions, signal?:
     try {
       for (let text; (text = queue.shift()) !== undefined && !over; ) {
         const g = gen;
+        // Each made only as the phone is about to need it: Kokoro runs on
+        // this thread (onnxruntime-node's run isn't async), and what's heard
+        // waits for it, so a whole answer made at once goes unheard over.
+        const ahead = playing - AHEAD_MS - Date.now();
+        if (ahead > 0) await Bun.sleep(ahead);
+        if (g !== gen || over) continue;
         const { audio, rate } = await models.say(text).catch((e) => (console.error(`call: speech: ${e instanceof Error ? e.message : e}`), { audio: new Float32Array(), rate: 0 }));
         if (g !== gen || !audio.length) continue;
         send({ type: "say", text, rate, audio: pcm16(audio) });

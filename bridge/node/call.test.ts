@@ -10,7 +10,8 @@ import { ORIGIN, setup } from "./testing";
 // A voice call with Pepper (call.ts), with models that read the audio made
 // here: a sample's value is its phrase / 100 (silence 0), so the VAD hears
 // speech where it isn't 0 and the transcriber says the phrase. Speech is
-// as long as its text, and waits while held is.
+// as long as its text (a ms a letter, or seconds if set), and waits while
+// held is.
 const PHRASES = ["", "what does my day look like", "yes", "no", "go ahead please", "tell corkboard to push"];
 const speech = (ms: number, phrase: number) => new Float32Array(Math.round((ms / 1000) * RATE)).fill(phrase / 100);
 const silence = (ms: number) => new Float32Array(Math.round((ms / 1000) * RATE));
@@ -23,6 +24,7 @@ const join = (...parts: Float32Array[]) => {
 const pcm = (audio: Float32Array) => Buffer.from(Int16Array.from(audio, (x) => x * 0x7fff).buffer).toString("base64");
 
 let held: Promise<void> | null = null;
+let seconds = 0;
 const models: CallModels = {
   vad: () => ({ next: async (f) => (f.some((x) => x !== 0) ? 0.9 : 0.01) }),
   transcribe: async (audio) => {
@@ -31,7 +33,7 @@ const models: CallModels = {
   },
   say: async (text) => {
     await held;
-    return { audio: new Float32Array(text.length * 24).fill(0.5), rate: 24_000 };
+    return { audio: new Float32Array(seconds ? seconds * 24_000 : text.length * 24).fill(0.5), rate: 24_000 };
   },
 };
 
@@ -118,6 +120,22 @@ describe("a voice call with Pepper", () => {
     await c.until((m) => m.type === "heard");
     await Bun.sleep(50);
     expect(c.got.filter((m) => m.type === "say")).toEqual([]);
+    await c.hangUp();
+  });
+
+  it("makes each sentence only as the phone is about to need it, so talking over a long answer is heard at once", async () => {
+    const c = await dial();
+    seconds = 3;
+    await n.data.post("assistant", "One. Two. Three.");
+    await c.until((m) => m.type === "say");
+    await Bun.sleep(300);
+    expect(c.got.filter((m) => m.type === "say").map((m) => m.text)).toEqual(["One."]);
+    c.say(speech(300, 1));
+    await c.until((m) => m.type === "stop");
+    seconds = 0;
+    // Past when the second would have been made.
+    await Bun.sleep(1500);
+    expect(c.got.filter((m) => m.type === "say")).toHaveLength(1);
     await c.hangUp();
   });
 
