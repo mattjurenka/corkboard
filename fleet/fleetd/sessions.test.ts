@@ -72,13 +72,32 @@ test("its transcript is its newest log, not a subagent's", () => {
   expect(sessions.list()[0].transcript).toBe(join(project, "new.jsonl"));
 });
 
+test("a question it asked is answered in words, as a message, once it has asked one", async () => {
+  const log = join(slot.outboxDir, "projects/-work/new.jsonl");
+  const record = (type: string, content: unknown) => JSON.stringify({ type, uuid: crypto.randomUUID(), timestamp: "2026-11-22T00:00:00Z", message: { role: type, content } }) + "\n";
+  writeFileSync(log, record("user", "which?"));
+  expect(await sessions.say("s1", "", [], [{ picks: [0] }])).toEqual({ error: "it isn't asking anything" });
+  const questions = [
+    { header: "Colour", question: "Which colour?", multiSelect: false, options: [{ label: "Red", description: "" }, { label: "Blue", description: "" }] },
+    { header: "", question: "Which sizes?", multiSelect: true, options: [{ label: "S", description: "" }, { label: "M", description: "" }] },
+  ];
+  writeFileSync(log, record("user", "which?") + record("assistant", [{ type: "tool_use", id: "t1", name: "AskUserQuestion", input: { questions } }]) + record("user", [{ type: "tool_result", tool_use_id: "t1", is_error: true, content: "no one to ask" }]));
+  const before = inbox().length;
+  expect(await sessions.say("s1", "", [], [{ picks: [2] }, { picks: [] }])).toEqual({ error: "question 1's options are 0 to 1" });
+  expect(await sessions.say("s1", "", [], [{ picks: [0, 1] }, { picks: [0] }])).toEqual({ error: "question 1 takes one answer" });
+  expect(await sessions.say("s1", "", [], [{ picks: [0] }])).toEqual({ error: "answers must be a list, one for each of its 2 questions" });
+  expect(await sessions.say("s1", "", [], [{ picks: [], other: "Green" }, { picks: [0, 1], other: "XL" }])).toEqual({ ok: true });
+  expect(inbox().length).toBe(before + 1);
+  expect(JSON.parse(inbox().at(-1)!)).toEqual({ type: "user", message: { role: "user", content: "Colour: Green\nWhich sizes?: S, M, XL" } });
+});
+
 test("one asked to finish is stopping, and takes nothing more; one gone is missing", async () => {
   spawn({ ending: new Date().toISOString() });
   expect(sessions.list()[0].state).toBe("stopping");
   const before = inbox().length;
   expect(await sessions.say("s1", "wait", [])).toEqual({ error: "that session is finishing" });
   expect(await sessions.say("s2", "hello", [])).toEqual({ error: "that session has ended", missing: true });
-  expect(await sessions.say("s1", "", [], { q: "a" })).toEqual({ error: "a question here is answered in words" });
+  expect(await sessions.say("s1", "", [], [{ picks: [0] }])).toEqual({ error: "that session is finishing" });
   expect(inbox().length).toBe(before);
 });
 

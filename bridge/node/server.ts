@@ -104,7 +104,8 @@ export type NodeOptions = {
   // (/app/sessions), and the account's devices watch them on a channel.
   hub?: Hub;
   // Every hub of the account's, the account's devices' on channels: for
-  // this machine's bridges, on loopback (/app/peers, /app/peer/:device/...).
+  // this machine's bridges, on loopback (/app/peers, /app/peer/:device/...),
+  // and /mcp's session tools (talk.ts).
   reach?: Reach;
   // The account's forge (forge.ts), on channels under /forge/, and its web
   // pages with Forgejo's own login (from: null) on loopback (Caddy's, on the
@@ -616,7 +617,7 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       if (p === "/mcp") {
         const who = caller(req, origin, from, true);
         if (!who) return unauthorized(origin);
-        return await mcp(req, { data: o.data, search: o.search, media: o.media, files: o.toFiles, fileOffers: o.fileOffers, origin, fleet: o.fleet?.(), sealed: o.sealed, forge: o.toForge }, who);
+        return await mcp(req, { data: o.data, search: o.search, media: o.media, files: o.toFiles, fileOffers: o.fileOffers, origin, fleet: o.fleet?.(), sealed: o.sealed, forge: o.toForge, sessions: o.reach }, who);
       }
       if (p.startsWith("/file-upload/") || p.startsWith("/file/")) {
         if (!o.fileOffers) return json({ error: "not found" }, 404);

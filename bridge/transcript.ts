@@ -133,3 +133,17 @@ export class Follower {
     }
   }
 }
+
+// The question it's waiting on: the last AskUserQuestion it asked, unless
+// that has been answered (a result that isn't an error) or you've said
+// something since. One asked where there's no one to answer it (fleetd's
+// VMs, on stream-json) fails at once, and waits for words instead.
+export function asked(items: Item[]): (Item & { kind: "tool" }) | undefined {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind === "you") return undefined;
+    if (it.kind !== "tool" || it.tool !== "AskUserQuestion" || !it.questions?.length) continue;
+    const result = items.slice(i + 1).find((r) => r.kind === "result" && r.call === it.call);
+    return result && result.kind === "result" && !result.error ? undefined : it;
+  }
+}
