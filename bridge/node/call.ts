@@ -240,12 +240,19 @@ export function call(input: ReadableStream<Uint8Array>, o: CallOptions, signal?:
   const body = new ReadableStream<Uint8Array>({ start: (c) => void (out = c), cancel: () => end() });
   const a = new AbortController();
   signal?.addEventListener("abort", () => a.abort(), { once: true });
-  offs.push(() => a.abort());
+  // Hung up, the rest of what it sends is read to its end and dropped: a
+  // channel's stream whose body is let go of is reset (lib/e2ee/channel.ts),
+  // and the answer with it.
+  let hungUp = false;
+  let hangUp!: () => void;
+  const hung = new Promise<void>((r) => (hangUp = r));
+  offs.push(() => hungUp || a.abort());
   void lines(
     input,
     (m) => {
+      if (hungUp) return;
       // The rest of what's heard is still said, then it's over.
-      if (m?.type === "end") return a.abort();
+      if (m?.type === "end") return void ((hungUp = true), hangUp());
       if (m?.type === "audio" && typeof m.data === "string") {
         const samples = floats(m.data);
         feeding = feeding.then(() => feed(samples)).catch((e) => console.error(`call: ${e instanceof Error ? e.message : e}`));
@@ -254,6 +261,8 @@ export function call(input: ReadableStream<Uint8Array>, o: CallOptions, signal?:
     a.signal,
   )
     .catch(() => {})
+    .finally(hangUp);
+  void hung
     // What was being said when the phone hung up is still heard.
     .then(() => feeding)
     .then(() => {

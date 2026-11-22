@@ -51,7 +51,8 @@ describe("a voice call with Pepper", () => {
   // A call from the phone: what it sends, and everything the node says.
   async function dial(o: { token?: string; peer?: any } = {}) {
     let push!: ReadableStreamDefaultController<Uint8Array>;
-    const body = new ReadableStream<Uint8Array>({ start: (c) => void (push = c) });
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({ start: (c) => void (push = c), cancel: () => void (cancelled = true) });
     const res = await n.app(
       new Request(`${ORIGIN}/api/node/call?voice=af_heart`, { method: "POST", headers: { Authorization: `Bearer ${o.token ?? phone}` }, body, duplex: "half" } as RequestInit),
       o.peer === undefined ? LOCAL : o.peer,
@@ -65,6 +66,8 @@ describe("a voice call with Pepper", () => {
       over,
       say: (audio: Float32Array) => send({ type: "audio", data: pcm(audio) }),
       hangUp: () => (send({ type: "end" }), over),
+      close: () => push.close(),
+      cancelled: () => cancelled,
       async until(test: (m: any) => boolean) {
         for (let i = 0; i < 200; i++) {
           const m = got.find(test);
@@ -163,6 +166,16 @@ describe("a voice call with Pepper", () => {
     await c.hangUp();
     expect(c.got).toContainEqual({ type: "heard", text: PHRASES[5] });
     expect(lastChat()).toMatchObject({ who: "call", text: PHRASES[5] });
+  });
+
+  it("reads what the phone sends after it hangs up to its end, and lets go of nothing", async () => {
+    const c = await dial();
+    await c.hangUp();
+    c.say(speech(800, 2));
+    c.close();
+    await Bun.sleep(20);
+    expect(c.cancelled()).toBe(false);
+    expect(c.got.some((m) => m.type === "heard")).toBe(false);
   });
 
   it("takes only a whole yes or no as one", () => {
