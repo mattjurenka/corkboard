@@ -4,7 +4,8 @@
 // stream-json: what's typed goes in the slot's inbox as a message, esc as
 // an interrupt; its conversation is read from the logs it writes to
 // the slot's outbox; and whether it's at work is what it was sent against
-// how many turns it has finished.
+// how many turns it has finished. One whose template has a browser has
+// that too, for the phone to take over (browser.ts).
 //
 // With a device (the manifest's node.device), they're served sealed too,
 // on the channels the account's devices open to it (bridge/hub.ts).
@@ -15,6 +16,7 @@ import { basename, join } from "node:path";
 import { type Answers, bridgeId, inWords, serve, type Hosted } from "../../bridge/sessions";
 import { asked, readItems } from "../../bridge/transcript";
 import { Hub, joinHub } from "../../bridge/hub";
+import { browsers, hasBrowser } from "./browser";
 import { answerChannels } from "./node";
 import { manifest, spawns, type Manifest, type Spawn } from "./fleet";
 import { ENVIRONMENT } from "./queue";
@@ -102,6 +104,7 @@ export function list(): Hosted[] {
         spawn: s.id,
         ...(s.remote?.card && { card: s.remote.card }),
         ...(path && { transcript: path }),
+        ...(hasBrowser(m, s.template) && { browser: true }),
       };
     });
 }
@@ -149,7 +152,7 @@ export function serveSessions() {
     }
   }, 1000);
   const hub = new Hub();
-  serve(bridgeId(`fleetd-${hostname()}`), ENVIRONMENT, { list, watch: (fn) => watchers.add(fn), say, hub: joinHub(hub) });
+  serve(bridgeId(`fleetd-${hostname()}`), ENVIRONMENT, { list, watch: (fn) => watchers.add(fn), say, browsers, hub: joinHub(hub) });
   const node = manifest().node;
   if (node?.device)
     try {

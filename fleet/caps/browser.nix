@@ -25,6 +25,20 @@ in
     };
   };
 
+  # Its DevTools port on the tap, for fleetd to stream the page to the phone
+  # and take the user's taps and typing (fleet/fleetd/browser.ts). Chromium
+  # keeps it on loopback; the host's rules let only the host reach the tap.
+  systemd.services.fleet-browser-view = {
+    wantedBy = [ "multi-user.target" ];
+    after = [ "network.target" ];
+    serviceConfig = {
+      ExecStart = "${lib.getExe pkgs.socat} TCP-LISTEN:9223,fork,reuseaddr TCP:127.0.0.1:9222";
+      DynamicUser = true;
+      Restart = "always";
+    };
+  };
+  networking.firewall.interfaces.eth0.allowedTCPPorts = [ 9223 ];
+
   # A browser with no fonts draws its text as nothing.
   fonts = {
     enableDefaultPackages = true;

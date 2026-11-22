@@ -84,7 +84,7 @@ type Extension = { source: string; id: string; name: string; version: string; po
 
 const START_TOOL = {
   name: "browser_start",
-  description: `Start a new headless Chromium with the given extensions, replacing any browser already running. Extensions only load at launch, so this is how to change them. An extension's own windows (a wallet's approval popup, say) open as tabs: see browser_tabs. Raw CDP is at ${CDP} for tools of your own; browser_run_code_unsafe runs Playwright code against the page.`,
+  description: `Start a new headless Chromium with the given extensions, replacing any browser already running. Extensions only load at launch, so this is how to change them. An extension's own windows (a wallet's approval popup, say) open as tabs: see browser_tabs. Raw CDP is at ${CDP} for tools of your own; browser_run_code_unsafe runs Playwright code against the page. When a page wants the user's login or a password, never ask for it: leave the page open at its sign-in and ask the user to take over the browser from their phone, then go on once they say they're done.`,
   inputSchema: {
     type: "object",
     properties: {

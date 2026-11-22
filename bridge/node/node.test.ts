@@ -2067,18 +2067,21 @@ describe("the machine's sessions, on a channel", () => {
     const n = await setup();
     const hub = new Hub();
     const app = node({ data: n.data, search: n.search, oauth: n.oauth, origin: ORIGIN, hub });
-    // A bridge in this process, with one session and a terminal.
+    // A bridge in this process, with one session, a terminal and a browser.
     const typed: unknown[] = [];
     const term: unknown[] = [];
+    const looked: unknown[] = [];
     let to: TerminalOut | undefined;
+    let view: TerminalOut | undefined;
     const watchers: (() => void)[] = [];
-    let sessions: Hosted[] = [{ key: "1-2", name: "Fixing", state: "working", project: "proj" }];
+    let sessions: Hosted[] = [{ key: "1-2", name: "Fixing", state: "working", project: "proj", browser: true }];
     serve("laptop-1", "laptop", {
       list: () => sessions,
       watch: (fn) => void watchers.push(fn),
       say: async (key, text, keys, answers) => (typed.push(answers ? [key, answers] : [key, text, keys]), { ok: true }),
       screen: async (key) => (key === "1-2" ? { lines: ["$ hi"], width: 80 } : { error: "no such", missing: true }),
       terminals: (t) => ((to = t), { open: (s, k) => term.push(["open", k]), input: (s, d) => (term.push(["in", d]), to!.out(s, "echo")), size: (s, r, c) => void term.push(["size", r, c]), close: () => void term.push(["close"]) }),
+      browsers: (b) => ((view = b), { open: (s, k) => (looked.push(["open", k]), view!.out(s, JSON.stringify({ frame: "SlBFRw==" }))), close: () => void looked.push(["close"]), input: async (k, i) => (looked.push(["input", k, i]), { ok: true }) }),
       hub: joinHub(hub),
     }, NO_WORKER);
     const keys = accountKeys(newRoot());
@@ -2096,7 +2099,7 @@ describe("the machine's sessions, on a channel", () => {
     };
     const ch = await open(id("phone"));
     const list = (await (await ch.fetch("/api/sessions")).json()) as any[];
-    expect(list).toMatchObject([{ id: "laptop-1", environment: "laptop", sessions: [{ key: "1-2", name: "Fixing", terminal: true }] }]);
+    expect(list).toMatchObject([{ id: "laptop-1", environment: "laptop", sessions: [{ key: "1-2", name: "Fixing", terminal: true, browser: true }] }]);
     expect(await (await ch.fetch("/api/sessions/laptop-1/1-2")).json()).toEqual({ lines: ["$ hi"], width: 80 });
     expect((await ch.fetch("/api/sessions/laptop-1/9-9")).status).toBe(404);
     expect((await ch.fetch("/api/sessions/laptop-1/1-2/say", { method: "POST", body: JSON.stringify({ text: "go", keys: ["enter"] }) })).status).toBe(200);
@@ -2128,6 +2131,15 @@ describe("the machine's sessions, on a channel", () => {
     await r.cancel();
     await Bun.sleep(10);
     expect(term).toEqual([["open", "1-2"], ["size", 24, 80], ["in", "eA"], ["close"]]);
+    // Its browser: the page's frames down a stream, and each thing done to it a request.
+    const page = (await ch.fetch("/api/sessions/laptop-1/1-2/attach?browser")).body!.getReader();
+    expect(await next(page)).toEqual({ type: "out", data: JSON.stringify({ frame: "SlBFRw==" }) });
+    const put = (input: unknown) => ch.fetch("/api/sessions/laptop-1/1-2/browser", { method: "POST", body: JSON.stringify(input) });
+    expect((await put({ t: "text", text: "me@example.com" })).status).toBe(200);
+    expect((await put({ t: "text", text: "x".repeat(9000) })).status).toBe(400);
+    await page.cancel();
+    await Bun.sleep(10);
+    expect(looked).toEqual([["open", "1-2"], ["input", "1-2", { t: "text", text: "me@example.com" }], ["close"]]);
     ch.close();
     // Not to a relay-only device, nor through the tunnel.
     const fleetd = await open(id("fleetd", "relay"));
