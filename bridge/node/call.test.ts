@@ -10,7 +10,8 @@ import { ORIGIN, setup } from "./testing";
 // A voice call with Pepper (call.ts), with models that read the audio made
 // here: a sample's value is its phrase / 100 (silence 0), so the VAD hears
 // speech where it isn't 0 and the transcriber says the phrase. Speech is
-// as long as its text, and waits while held is.
+// as long as its text (a ms a letter, or seconds if set), and waits while
+// held is.
 const PHRASES = ["", "what does my day look like", "yes", "no", "go ahead please", "tell corkboard to push"];
 const speech = (ms: number, phrase: number) => new Float32Array(Math.round((ms / 1000) * RATE)).fill(phrase / 100);
 const silence = (ms: number) => new Float32Array(Math.round((ms / 1000) * RATE));
@@ -23,6 +24,8 @@ const join = (...parts: Float32Array[]) => {
 const pcm = (audio: Float32Array) => Buffer.from(Int16Array.from(audio, (x) => x * 0x7fff).buffer).toString("base64");
 
 let held: Promise<void> | null = null;
+let seconds = 0;
+let making = 0;
 const models: CallModels = {
   vad: () => ({ next: async (f) => (f.some((x) => x !== 0) ? 0.9 : 0.01) }),
   transcribe: async (audio) => {
@@ -31,8 +34,10 @@ const models: CallModels = {
   },
   say: async (text) => {
     await held;
-    return { audio: new Float32Array(text.length * 24).fill(0.5), rate: 24_000 };
+    if (making) await Bun.sleep(making);
+    return { audio: new Float32Array(seconds ? seconds * 24_000 : text.length * 24).fill(0.5), rate: 24_000 };
   },
+  phonemes: async (text) => text.toLowerCase(),
 };
 
 describe("a voice call with Pepper", () => {
@@ -49,12 +54,12 @@ describe("a voice call with Pepper", () => {
 
   const LOCAL = { requestIP: () => ({ address: "127.0.0.1" }) } as any;
   // A call from the phone: what it sends, and everything the node says.
-  async function dial(o: { token?: string; peer?: any } = {}) {
+  async function dial(o: { token?: string; peer?: any; query?: string } = {}) {
     let push!: ReadableStreamDefaultController<Uint8Array>;
     let cancelled = false;
     const body = new ReadableStream<Uint8Array>({ start: (c) => void (push = c), cancel: () => void (cancelled = true) });
     const res = await n.app(
-      new Request(`${ORIGIN}/api/node/call?voice=af_heart`, { method: "POST", headers: { Authorization: `Bearer ${o.token ?? phone}` }, body, duplex: "half" } as RequestInit),
+      new Request(`${ORIGIN}/api/node/call?voice=af_heart${o.query ?? ""}`, { method: "POST", headers: { Authorization: `Bearer ${o.token ?? phone}` }, body, duplex: "half" } as RequestInit),
       o.peer === undefined ? LOCAL : o.peer,
     );
     const got: any[] = [];
@@ -64,12 +69,13 @@ describe("a voice call with Pepper", () => {
       res,
       got,
       over,
+      send,
       say: (audio: Float32Array) => send({ type: "audio", data: pcm(audio) }),
       hangUp: () => (send({ type: "end" }), over),
       close: () => push.close(),
       cancelled: () => cancelled,
-      async until(test: (m: any) => boolean) {
-        for (let i = 0; i < 200; i++) {
+      async until(test: (m: any) => boolean, ms = 2000) {
+        for (let i = 0; i < ms / 10; i++) {
           const m = got.find(test);
           if (m) return m;
           await Bun.sleep(10);
@@ -118,6 +124,58 @@ describe("a voice call with Pepper", () => {
     await c.until((m) => m.type === "heard");
     await Bun.sleep(50);
     expect(c.got.filter((m) => m.type === "say")).toEqual([]);
+    await c.hangUp();
+  });
+
+  it("makes each sentence only as the phone is about to need it, so talking over a long answer is heard at once", async () => {
+    const c = await dial();
+    seconds = 3;
+    await n.data.post("assistant", "One. Two. Three.");
+    await c.until((m) => m.type === "say");
+    await Bun.sleep(300);
+    expect(c.got.filter((m) => m.type === "say").map((m) => m.text)).toEqual(["One."]);
+    c.say(speech(300, 1));
+    await c.until((m) => m.type === "stop");
+    seconds = 0;
+    // Past when the second would have been made.
+    await Bun.sleep(1500);
+    expect(c.got.filter((m) => m.type === "say")).toHaveLength(1);
+    await c.hangUp();
+  });
+
+  it("starts the next sentence as long before the last ends as it takes to make, so a slow voice leaves no gap", async () => {
+    const c = await dial();
+    [seconds, making] = [2, 1800];
+    await n.data.post("assistant", "One. Two.");
+    await c.until((m) => m.type === "say", 4000);
+    const first = Date.now();
+    await c.until((m) => m.type === "say" && m.text === "Two.", 4000);
+    [seconds, making] = [0, 0];
+    expect(Date.now() - first).toBeLessThan(2000);
+    await c.hangUp();
+  });
+
+  it("sends the phone every sentence's phonemes at once when it makes the voice, and stops it until it says it's played them", async () => {
+    const c = await dial({ query: "&speak=phone" });
+    seconds = 3;
+    await n.data.post("assistant", "One. Two. Three.");
+    await c.until((m) => m.type === "say" && m.text === "Three.");
+    seconds = 0;
+    expect(c.got.filter((m) => m.type === "say")).toEqual([
+      { type: "say", text: "One.", phonemes: "one." },
+      { type: "say", text: "Two.", phonemes: "two." },
+      { type: "say", text: "Three.", phonemes: "three." },
+    ]);
+    c.say(join(speech(300, 1), silence(1000)));
+    await c.until((m) => m.type === "stop");
+    await c.until((m) => m.type === "heard");
+    // Played, talking isn't stopping anything.
+    c.got.length = 0;
+    c.send({ type: "played", n: 3 });
+    await Bun.sleep(20);
+    c.say(join(speech(300, 1), silence(1000)));
+    await c.until((m) => m.type === "heard");
+    expect(c.got.some((m) => m.type === "stop")).toBe(false);
     await c.hangUp();
   });
 
@@ -186,5 +244,15 @@ describe("a voice call with Pepper", () => {
 
   it("says a message's words, not its markdown or code", () => {
     expect(spoken("# Plan\n- **one** thing.\n- `two`\n```\ncode\n```\nDone!")).toEqual(["Plan", "one thing.", "two", "Done!"]);
+  });
+
+  it("cuts a long first sentence at a clause, so the first of it is heard sooner", () => {
+    expect(spoken("Morning is the terminal UI from nine to eleven thirty, then referral messages. After that, lunch with Sam today.")).toEqual([
+      "Morning is the terminal UI from nine to eleven thirty,",
+      "then referral messages.",
+      "After that, lunch with Sam today.",
+    ]);
+    expect(spoken("Yes, so the plan for today is waiting for you to accept it.")).toEqual(["Yes, so the plan for today is waiting for you to accept it."]);
+    expect(spoken("Okay, I can hear you.")).toEqual(["Okay, I can hear you."]);
   });
 });

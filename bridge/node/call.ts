@@ -4,6 +4,9 @@
 // to the chat as theirs, from "call", which fleetd passes to Pepper as
 // "[call] …"; what Pepper says in the chat meanwhile is said back, a
 // sentence at a time, with the avatar's voice. Talking over it stops it.
+// With ?speak=phone the phone makes the voice itself (the droplet's CPU
+// makes it slower than it's heard): it's sent every sentence at once, as
+// Kokoro's phonemes, and says when it has played them.
 //
 // While something Pepper would do waits for the user (confirm.ts), an
 // utterance that's only a yes or a no decides the newest of them here,
@@ -12,13 +15,15 @@
 // "away", so it says so unasked.
 //
 // ndjson both ways. In: { type: "audio", data } (base64 16-bit samples,
-// 16 kHz mono), { type: "end" }. Out: { type: "heard", text },
-// { type: "say", text, rate, audio } (base64 16-bit samples), { type:
-// "stop" } (stop playing: the user talks over it), { type: "confirm", id,
-// what }, { type: "decided", id, state }.
+// 16 kHz mono), { type: "played", n } (with speak=phone: the says it's had
+// are all played or stopped, n of them), { type: "end" }. Out: { type:
+// "heard", text }, { type: "say", text, rate, audio } (base64 16-bit
+// samples; with speak=phone phonemes instead), { type: "stop" } (stop playing:
+// the user talks over it), { type: "confirm", id, what }, { type:
+// "decided", id, state }.
 
 import { lines } from "../hub";
-import { say as speak } from "../speech";
+import { phonemes, say as speak } from "../speech";
 import { FRAME, RATE, Vad, transcribe } from "../transcribe";
 import type { Confirms, Held } from "./confirm";
 import type { Data } from "./data";
@@ -29,6 +34,7 @@ export type CallModels = {
   vad: () => { next(frame: Float32Array): Promise<number> };
   transcribe: (audio: Float32Array) => Promise<string>;
   say: (text: string) => Promise<{ audio: Float32Array; rate: number }>;
+  phonemes: (text: string) => Promise<string>;
 };
 
 export type CallOptions = {
@@ -37,6 +43,8 @@ export type CallOptions = {
   sessions?: Sessions;
   voice: string;
   speed: number;
+  // The phone makes the voice, from phonemes (speak=phone).
+  phone?: boolean;
   models?: CallModels;
 };
 
@@ -49,6 +57,9 @@ const HANG_MS = 800;
 const PAD_MS = 200;
 const MAX_MS = 30_000;
 const MIN_MS = 300;
+// How much sooner than it's expected to take Pepper's next sentence is
+// started, so it's ready as the phone finishes the last.
+const MARGIN_MS = 500;
 const frames = (ms: number) => Math.round(ms / FRAME_MS);
 
 // A whole utterance that's only a yes, or only a no.
@@ -59,15 +70,28 @@ export function answer(text: string): boolean | undefined {
   return YES.test(t) ? true : NO.test(t) ? false : undefined;
 }
 
-// What's said aloud of a chat message: its markdown's words, a sentence each.
+// What's said aloud of a chat message: its markdown's words, a sentence each,
+// the first cut at a clause past its first few words when it's long. The
+// voice is made at about real time on the droplet's CPU, so a long first
+// sentence is as long a wait before anything's heard.
 export function spoken(md: string): string[] {
-  return md
+  const [first, ...rest] = md
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/[*_`#>|~]+/g, "")
     .split(/(?<=[.!?])\s+|\n+/)
     .map((s) => s.replace(/^\s*[-+]\s+/, "").trim())
     .filter((s) => /[\p{L}\p{N}]/u.test(s));
+  if (first === undefined) return [];
+  const words = (s: string) => s.split(/\s+/).length;
+  if (words(first) > 8) {
+    const cut = /[,;:–—]\s+/g;
+    for (let m; (m = cut.exec(first)); ) {
+      const head = first.slice(0, m.index + 1);
+      if (words(head) >= 3) return [head, first.slice(cut.lastIndex), ...rest];
+    }
+  }
+  return [first, ...rest];
 }
 
 const pcm16 = (audio: Float32Array) => {
@@ -90,7 +114,12 @@ const DECIDED = new Map<Held["state"], string>([
 ]);
 
 export function call(input: ReadableStream<Uint8Array>, o: CallOptions, signal?: AbortSignal): Response {
-  const models = o.models ?? { vad: () => new Vad(), transcribe, say: (text) => speak({ text, voice: o.voice, speed: o.speed }) };
+  const models = o.models ?? {
+    vad: () => new Vad(),
+    transcribe,
+    say: (text) => speak({ text, voice: o.voice, speed: o.speed }),
+    phonemes: (text) => phonemes(text, o.voice),
+  };
   const enc = new TextEncoder();
   let out!: ReadableStreamDefaultController<Uint8Array>;
   let over = false;
@@ -178,10 +207,17 @@ export function call(input: ReadableStream<Uint8Array>, o: CallOptions, signal?:
   let queue: string[] = [];
   let saying = false;
   let gen = 0;
-  // When what's been sent will have been played.
+  // When what's been sent will have been played, how long a letter took to
+  // make the last time, and when a message came in to nothing being said.
   let playing = 0;
+  let perChar = 0;
+  let since = 0;
+  // With the phone's voice, the says sent and the most it's said it played.
+  let sent = 0;
+  let played = 0;
+  const still = () => !queue.length && !saying && (o.phone ? played >= sent : Date.now() >= playing);
   const hush = () => {
-    if (!queue.length && !saying && Date.now() >= playing) return;
+    if (still()) return;
     gen++;
     queue = [];
     playing = 0;
@@ -191,11 +227,36 @@ export function call(input: ReadableStream<Uint8Array>, o: CallOptions, signal?:
     if (saying) return;
     saying = true;
     try {
+      for (let text; o.phone && (text = queue.shift()) !== undefined && !over; ) {
+        const g = gen;
+        const p = await models.phonemes(text).catch((e) => void console.error(`call: phonemes: ${e instanceof Error ? e.message : e}`));
+        if (g !== gen || !p) continue;
+        send({ type: "say", text, phonemes: p });
+        sent++;
+        if (since) console.log(`call: first sent ${Date.now() - since} ms after Pepper's message`);
+        since = 0;
+      }
       for (let text; (text = queue.shift()) !== undefined && !over; ) {
         const g = gen;
+        // Each made only as the phone is about to need it, and after what's
+        // been heard so far: Kokoro runs on this thread (onnxruntime-node's
+        // run isn't async), and the VAD waits for it, so a whole answer made
+        // at once goes unheard over. On a CPU slower than real time that's
+        // as soon as the last is made.
+        const ahead = playing - perChar * text.length - MARGIN_MS - Date.now();
+        if (ahead > 0) await Bun.sleep(ahead);
+        await Bun.sleep(0);
+        await feeding;
+        if (g !== gen || over) continue;
+        const t = Date.now();
         const { audio, rate } = await models.say(text).catch((e) => (console.error(`call: speech: ${e instanceof Error ? e.message : e}`), { audio: new Float32Array(), rate: 0 }));
         if (g !== gen || !audio.length) continue;
+        perChar = (Date.now() - t) / text.length;
         send({ type: "say", text, rate, audio: pcm16(audio) });
+        const late = Date.now() - playing;
+        if (since) console.log(`call: first said ${Date.now() - since} ms after Pepper's message (${(Date.now() - t)} ms to make ${(audio.length / rate).toFixed(1)} s)`);
+        else if (playing && late > 0) console.log(`call: ${late} ms quiet before "${text.slice(0, 30)}"`);
+        since = 0;
         playing = Math.max(Date.now(), playing) + (audio.length / rate) * 1000;
       }
     } finally {
@@ -208,7 +269,9 @@ export function call(input: ReadableStream<Uint8Array>, o: CallOptions, signal?:
   const read = () => {
     for (const m of o.data.chat(last, 500)) {
       last = m.id;
-      if (!m.by_user) queue.push(...spoken(m.text));
+      if (m.by_user) continue;
+      if (still()) since = Date.now();
+      queue.push(...spoken(m.text));
     }
     if (queue.length) void speakNext();
   };
@@ -253,6 +316,7 @@ export function call(input: ReadableStream<Uint8Array>, o: CallOptions, signal?:
       if (hungUp) return;
       // The rest of what's heard is still said, then it's over.
       if (m?.type === "end") return void ((hungUp = true), hangUp());
+      if (m?.type === "played" && typeof m.n === "number") return void (played = Math.max(played, m.n));
       if (m?.type === "audio" && typeof m.data === "string") {
         const samples = floats(m.data);
         feeding = feeding.then(() => feed(samples)).catch((e) => console.error(`call: ${e instanceof Error ? e.message : e}`));

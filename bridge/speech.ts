@@ -114,11 +114,12 @@ async function clone(python: string): Promise<Cloner> {
   return say;
 }
 
-// The CPU's model, downloaded the first time.
+// The CPU's model, downloaded the first time: uint8, a quarter faster than
+// fp32 on the droplet's two vCPUs, and half its size.
 async function cpuModel(cache: string): Promise<string> {
-  const file = join(cache, MODEL, "onnx", "model.onnx");
+  const file = join(cache, MODEL, "onnx", "model_uint8.onnx");
   if (await stat(file).catch(() => null)) return file;
-  const res = await fetch(`https://huggingface.co/${MODEL}/resolve/main/onnx/model.onnx`);
+  const res = await fetch(`https://huggingface.co/${MODEL}/resolve/main/onnx/model_uint8.onnx`);
   if (!res.ok) throw new Error(`no speech model (${res.status})`);
   await mkdir(dirname(file), { recursive: true });
   await Bun.write(`${file}.part`, res);
@@ -159,6 +160,35 @@ async function load(): Promise<Tts> {
   // Past the physical cores it's no faster, only busier.
   model ??= await session(await cpuModel(env.cacheDir), { intraOpNumThreads: Math.max(1, availableParallelism() >> 1) });
   return timed(ownVoices(new KokoroTTS(model as never, await tokenizer), Tensor, voiceFile)) as Tts;
+}
+
+// What Kokoro says for a sentence, as its phonemes, for a Kokoro elsewhere
+// to say (the phone's, on a call): kokoro-js's own reading of numbers and
+// the like, and espeak's of words, without its model. sherpa-onnx's Kokoro
+// skips a word its lexicon hasn't.
+let phonemizer: Promise<(text: string, voice: string) => Promise<string>> | undefined;
+export async function phonemes(text: string, voice: string): Promise<string> {
+  phonemizer ??= (async () => {
+    const [{ env, AutoTokenizer }, { KokoroTTS }] = await Promise.all([
+      sidecar<typeof import("@huggingface/transformers")>("@huggingface/transformers"),
+      sidecar<typeof import("kokoro-js")>("kokoro-js"),
+    ]);
+    env.cacheDir = join(CACHE_DIR, "models");
+    const tokenizer = await AutoTokenizer.from_pretrained(MODEL);
+    return async (text, voice) => {
+      // generate() is the phonemizing and then generate_from_ids.
+      let ids: Ids | undefined;
+      const k = new KokoroTTS(null as never, tokenizer);
+      (k as unknown as { generate_from_ids: (i: Ids) => Promise<void> }).generate_from_ids = async (i) => void (ids = i);
+      // Only its first letter matters, the language, and only a built-in is known.
+      await k.generate(text, { voice: voice.startsWith("b") ? "bf_emma" : "af_heart" });
+      return Array.from(ids!.data, (id) => tokenizer.decode([Number(id)]))
+        .join("")
+        .replace(/\$/g, "");
+    };
+  })();
+  phonemizer.catch(() => (phonemizer = undefined));
+  return (await phonemizer)(text, voice);
 }
 
 // A sentence to say, as the page asks: what's wrong with it, else it.

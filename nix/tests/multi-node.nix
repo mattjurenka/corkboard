@@ -46,7 +46,7 @@ let
   kokoro = hf "onnx-community/Kokoro-82M-v1.0-ONNX" "1939ad2a8e416c0acfeecc08a694d14ef25f2231";
   parakeet = hf "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8" "1ab9323565ddb038682214b292f588070a538ce2";
   models = pkgs.linkFarm "corkboard-call-models" [
-    (kokoro "onnx/model.onnx" "sha256-j76lHqcR8q84LojIM9niiMbcgs5emEIephwFjOIaNMs=")
+    (kokoro "onnx/model_uint8.onnx" "sha256-Zgejl9d7hRQGVCC3wecyARf3qr/bRc4V8AUMWw/nWuo=")
     (kokoro "config.json" "sha256-3zS0+TCyNEfNTcQQ+r+0LrPyToA+bD+X1hj7NZOAo28=")
     (kokoro "tokenizer.json" "sha256-d6AsjhZEEymbS0xAOxT44OHBtyfbTUagnWMnuGEGCjQ=")
     (kokoro "tokenizer_config.json" "sha256-vhywZtbvawdLPxXmpt0hrIj/PNrt8yXwqu1obHD3XSA=")
