@@ -29,13 +29,13 @@ import { type FileItem, type FileOffers, type ToFiles, filesJson } from "./files
 import { type Kind, boardBound } from "./oauth";
 import type { ToForge } from "./git";
 import { PR_TOOLS } from "./prs";
-import { TALK_TOOLS } from "./talk";
+import { TALK_TOOLS, type TalkTool } from "./talk";
 import type { Reach } from "../peers";
 import { dict, own } from "../../lib/dict";
 
 // branch and repo: the session's worktree's, as its MCP config told them
 // (X-Corkboard-Branch, X-Corkboard-Repo), for the PR tools (prs.ts).
-export type Caller = { scope: Kind; agent: string; brain?: string; board?: string; card?: string; branch?: string; repo?: string };
+export type Caller = { scope: Kind; agent: string; brain?: string; board?: string; card?: string; branch?: string; repo?: string; drive?: true };
 
 class ToolError extends Error {}
 
@@ -552,8 +552,10 @@ const pairs = (caller: Caller) => caller.scope === "owner" && !caller.brain && !
 // one held to a board.
 const spawns = (caller: Caller, fleet?: Fleet) => !!fleet && (caller.scope === "owner" || caller.scope === "assistant") && !caller.brain;
 
-// The live sessions (talk.ts): the user's own clients', as spawning is.
-const talks = (caller: Caller, reach?: Reach) => !!reach && (caller.scope === "owner" || caller.scope === "assistant") && !caller.brain;
+// The live sessions (talk.ts): the user's own clients', as spawning is;
+// one that changes what a session does, only a grant that may drive them.
+const talks = (caller: Caller, reach?: Reach, tool?: TalkTool) =>
+  !!reach && (caller.scope === "owner" || caller.scope === "assistant") && !caller.brain && (!tool?.drives || !!caller.drive);
 
 // Memory --------------------------------------------------------------------------------
 
@@ -907,7 +909,7 @@ function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryO
       description: t.description,
       inputSchema: { type: "object", properties: t.properties ?? {}, required: t.required ?? [] },
     })),
-    ...Object.entries(talks(caller, sessions) ? TALK_TOOLS : {}).map(([name, t]) => ({
+    ...Object.entries(TALK_TOOLS).filter(([, t]) => talks(caller, sessions, t)).map(([name, t]) => ({
       name,
       description: t.description,
       inputSchema: { type: "object", properties: t.properties ?? {}, required: t.required ?? [] },
@@ -937,7 +939,7 @@ async function callTool(node: Node, caller: Caller, name: string, args: any): Pr
     return PAIR_TOOLS[name].run({ ...args }, node.pairing ?? (await pairing())).catch((e) => {
       throw e instanceof ToolError ? e : new ToolError((e as Error).message);
     });
-  if (TALK_TOOLS[name] && talks(caller, node.sessions))
+  if (TALK_TOOLS[name] && talks(caller, node.sessions, TALK_TOOLS[name]))
     return TALK_TOOLS[name].run({ ...args }, { reach: node.sessions! }).catch((e) => {
       throw e instanceof ToolError ? e : new ToolError((e as Error).message);
     });
