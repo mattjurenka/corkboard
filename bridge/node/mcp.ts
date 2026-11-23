@@ -30,6 +30,7 @@ import { type Kind, boardBound } from "./oauth";
 import type { ToForge } from "./git";
 import { PR_TOOLS } from "./prs";
 import { dict, own } from "../../lib/dict";
+import { DEFAULT_WAIT_MS, MAX_WAIT_MS, type Seen, SpawnWatch } from "./spawn-watch";
 
 // branch and repo: the session's worktree's, as its MCP config told them
 // (X-Corkboard-Branch, X-Corkboard-Repo), for the PR tools (prs.ts).
@@ -457,6 +458,39 @@ async function queue(c: FleetCall, a: Record<string, unknown>) {
   return s;
 }
 
+// One watch per node, asking the Worker as the latest caller's fleet. A
+// change to done, failed, asking or permission on a spawn with a card puts it
+// in the card's attention, which is what the user's pages notify of (the
+// card's own agent needing them, as block does), unless it holds a request.
+const watches = new WeakMap<Data, { watch: SpawnWatch; now: { fleet: Fleet; sealed?: FleetRecords } }>();
+function watching(c: FleetCall) {
+  let w = watches.get(c.data);
+  if (w) w.now = { fleet: c.fleet, sealed: c.sealed };
+  else {
+    const now = { fleet: c.fleet, sealed: c.sealed };
+    const open = (x: any): Seen => (now.sealed?.has() ? now.sealed.open(x) : x);
+    const watch = new SpawnWatch(
+      async () => {
+        const s = await now.fleet("GET", "/fleet/status");
+        return (Array.isArray(s?.spawns) ? s.spawns : []).map(open);
+      },
+      async (id) => {
+        const s = await now.fleet("GET", `/fleet/status?id=${encodeURIComponent(id)}`);
+        return s?.id ? open(s) : undefined;
+      },
+      async (ch) => {
+        if (!ch.board || !ch.card || !c.data.replicas.get("board", ch.board)) return;
+        const card = c.data.card(ch.board, ch.card);
+        if (card.attention || card.status === "done") return;
+        await c.data.updateCard(ch.board, ch.card, { attention: `spawn ${ch.id}: ${ch.summary}`.slice(0, 200) });
+      },
+    );
+    w = { watch, now };
+    watches.set(c.data, w);
+  }
+  return w.watch;
+}
+
 // The Worker's spawn tools, with the same names and descriptions.
 const FLEET_TOOLS = dict<FleetTool>({
   spawn_agent: {
@@ -469,10 +503,31 @@ const FLEET_TOOLS = dict<FleetTool>({
       environment: str("Where to run it; the first that has the template, if left out"),
       board: str("The board's key, from list_boards: a project board's repo is what it works in"),
       card: str("A card on board for it to work on, e.g. TASK-4; left out, none"),
+      notify: { type: "boolean", description: "Raise a desktop notification on its card when it ends (done, failed, stopped), as well as for wait_for; needs card" },
       ...VM,
     },
     required: ["task"],
-    run: (a, c) => queue(c, a),
+    run: async (a, c) => {
+      const { notify, ...rest } = a;
+      const s = await queue(c, rest);
+      if (notify === true && s?.id) watching(c).tell(String(s.id));
+      return s;
+    },
+  },
+  wait_for: {
+    description:
+      "Wait for spawned agents or sessions to change state, instead of polling spawn_status: answers once any of them does (queued, running, done, failed, stopped, or a session asking or wanting a permission), with each change's spawn id, board and card, the state and a one-line summary (the start of the answer when done), or with none when the wait runs out. A spawn that has already ended answers at once. For several waits in a row pass back cursor as since, so a change between two calls isn't missed.",
+    properties: {
+      ids: strings("Spawn ids to watch; left out, all of them"),
+      timeout: { type: "integer", description: `Seconds to wait (default ${DEFAULT_WAIT_MS / 1000}, at most ${MAX_WAIT_MS / 1000})` },
+      since: { type: "integer", description: "A previous answer's cursor: the changes since it, at once if there are any" },
+    },
+    run: async (a, c) => {
+      const ids = cleanList(a.ids);
+      const ms = a.timeout === undefined ? DEFAULT_WAIT_MS : Math.min(Math.max(Number(a.timeout) || 0, 1) * 1000, MAX_WAIT_MS);
+      const { changes, cursor } = await watching(c).wait(ids, ms, a.since === undefined ? undefined : Number(a.since));
+      return { changes, cursor, ...(changes.length ? {} : { note: "nothing changed before the timeout" }) };
+    },
   },
   start_session: {
     description:

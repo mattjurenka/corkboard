@@ -287,3 +287,28 @@ Steps 1–3 touch nothing Pepper depends on. Step 5 is the first one that change
   card), on `corkboard fleet stop`, or at a per-template timeout (default 2 h).
 - **The work brain's queue.** Pepper's spawns go through the Worker; the work brain's heartbeat
   would need a corkboard grant of its own to spawn. Not needed until something asks for it.
+
+## Hearing of a spawn's end without polling (TASK-ZRC5)
+
+The node's `/mcp` has `wait_for` (owner or assistant, as the other spawn tools): `ids` (any, if
+left out), `timeout` seconds (default 60, at most 300), `since` (a previous answer's `cursor`).
+It answers once a watched spawn changes state (queued, running, done, failed, stopped, or a
+session's asking or permission, if the Worker reports them) with `{ changes: [{ seq, id, from,
+state, board, card, summary }], cursor }`; `summary` is the start of the answer when done, the
+reason when failed. A named spawn that has ended answers at once; pass `cursor` back as `since`
+in a loop so nothing between two calls is missed. Nothing changing gives `changes: []`.
+
+How: `bridge/node/spawn-watch.ts`. The Worker's queue doesn't push, so the node asks
+`/fleet/status` every 3 s, one loop per node however many wait, and only while a `wait_for` is
+open or a `notify` spawn is running; a waiter is a timer and a promise (64 at most). What it has
+seen is in memory.
+
+Notification: `spawn_agent`'s `notify: true` keeps the loop going for that spawn when nobody
+waits. Any notable change (done, failed, stopped, asking, permission) of a spawn on a card puts
+`spawn <id>: <summary>` in the card's attention, if it holds none, which is what the user's pages
+already raise a desktop notification for (web/src/attention.ts); the same as `block`.
+
+Not done: a spawn with no card or session has nowhere on the pages to notify, only `wait_for`;
+the loop doesn't run when no one waits and no spawn said `notify`, so a plain spawn_agent without
+a card gets nothing; asking and permission are told only if `/fleet/status` reports them as the
+spawn's state (the Worker is not in this repo to check).

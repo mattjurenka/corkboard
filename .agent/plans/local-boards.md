@@ -124,7 +124,7 @@ phone ── relay directly (Encrypted.kt), as a paired device
    Worker's `spawn()` takes `node: true` (the ids checked by shape only: no board read, no card
    touched, no grant or repo at the claim) and `GET /api/fleet/status` answers the node's
    spawn_status. The node's mcp.ts has the Worker's four spawn tools (owner or assistant, no
-   brain): on a board the node has it checks the card, queues with `node: true`, and marks and
+   brain; plus `wait_for`, below): on a board the node has it checks the card, queues with `node: true`, and marks and
    logs the card; any other board's spawn is the Worker's, unchanged. Neovim's `fleet_session`
    on a node board sends `node: true` (boards.ts). Pepper's corkboard-memory server is the
    node's whole /mcp; the Worker hides the board tools from a brain's token once the account has
