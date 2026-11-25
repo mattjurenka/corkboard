@@ -11,6 +11,7 @@ function forgejo() {
   const pulls: any[] = [];
   const reviews = new Map<number, any[]>();
   const merged: any[] = [];
+  const comments: any[] = [];
   let at = 0;
   const forge = async (path: string, init: RequestInit = {}) => {
     const url = new URL(path, "http://forge.invalid");
@@ -42,6 +43,10 @@ function forgejo() {
       }
       return json(reviews.get(n) ?? []);
     }
+    if ((m = p.match(/^\/issues\/(\d+)\/comments$/)) && method === "POST") {
+      comments.push({ number: Number(m[1]), body: body.body });
+      return json({}, 201);
+    }
     if ((m = p.match(/^\/pulls\/(\d+)\/merge$/))) {
       const pr = pulls[Number(m[1]) - 1];
       if (body.head_commit_id !== pr.head.sha) return json({ message: "head moved" }, 409);
@@ -63,7 +68,7 @@ function forgejo() {
     if (p === "/actions/tasks") return json({ workflow_runs: [{ status: "success", display_title: "ci", head_branch: "main", updated_at: "2026-11-13T00:00:00Z" }] });
     return json({ message: `no ${method} ${p}` }, 404);
   };
-  return { forge, pulls, merged };
+  return { forge, pulls, merged, comments };
 }
 
 const as = (f: ReturnType<typeof forgejo>, branch?: string): PrCall => ({ forge: f.forge, me: "assistant", branch, repo: "me/proj" });
@@ -111,6 +116,18 @@ describe("PR tools", () => {
     expect(await run("merge_pr", { number: 1 }, author)).toMatchObject({ merged: true, into: "main" });
     expect(f.merged[0]).toEqual({ Do: "merge", delete_branch_after_merge: true, head_commit_id: "b".repeat(40) });
     await expect(run("merge_pr", { number: 1 }, author)).rejects.toThrow(/merged already/);
+  });
+
+  it("closes a PR without merging it, saying why on it", async () => {
+    const f = forgejo();
+    const c = as(f, "agent/a/work");
+    await run("open_pr", { title: "one" }, c);
+    await expect(run("close_pr", { number: 1, why: " " }, c)).rejects.toThrow(/say why/);
+    expect(await run("close_pr", { number: 1, why: "#2 replaces it" }, c)).toMatchObject({ number: 1, state: "closed" });
+    expect(f.comments).toEqual([{ number: 1, body: "#2 replaces it" }]);
+    expect(f.merged).toEqual([]);
+    await expect(run("close_pr", { number: 1, why: "again" }, c)).rejects.toThrow(/closed already/);
+    await expect(run("merge_pr", { number: 1 }, c)).rejects.toThrow(/is closed/);
   });
 
   it("lists a branch's files, directories first, and reads one", async () => {

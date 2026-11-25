@@ -182,6 +182,23 @@ export const PR_TOOLS: Record<string, PrTool> = {
       return { number: n, merged: true, into: pr.base.ref, sha: pr.head.sha };
     },
   },
+  close_pr: {
+    description:
+      "Close a pull request without merging it, saying why on it: one of your own a later one replaces, or one the user asked you to close. Its branch stays, so it can be opened again.",
+    properties: { number: num("Its number, from list_prs"), why: str("Why it's closed, left on it as a comment"), repo: repoArg },
+    required: ["number", "why"],
+    run: async (a, c) => {
+      const repo = repoOf(a, c);
+      const n = number(a);
+      const why = String(a.why ?? "").trim();
+      if (!why) throw new Error("say why it's closed");
+      const pr = await api(c, `/repos/${repo}/pulls/${n}`);
+      if (pr.merged) throw new Error(`#${n} is merged already`);
+      if (pr.state !== "open") throw new Error(`#${n} is closed already`);
+      await post(c, `/repos/${repo}/issues/${n}/comments`, { body: why });
+      return brief(await api(c, `/repos/${repo}/pulls/${n}`, { method: "PATCH", body: JSON.stringify({ state: "closed" }) }));
+    },
+  },
 };
 
 // The Git tab's forge (nvim corkboard.git): who and what it is, how long it
