@@ -151,8 +151,12 @@ export function gitNote(s: Spawn): string {
   if (!g) return "";
   const perms = g.perms ? g.perms.split(" ").join(", ") : "read only";
   const work = s.forge ? ` Your work dir's origin is ${s.forge.repo} there, on branch ${s.forge.branch}: push your work to it.` : "";
+  // A review is prs.ts's: a COMMENT whose last line is its marker, since
+  // every agent is the one Forgejo user and can't approve. This spawn's
+  // branch names it, so it never counts on the spawn's own PR.
   const pulls = /(^| )pull_requests:write( |$)/.test(g.perms)
-    ? ` To open a pull request, POST {"head", "base", "title", "body"} as JSON to http://fleet-gateway:${FORGE_PORT}/api/v1/repos/<owner>/<repo>/pulls (Forgejo's API, no token).`
+    ? ` To open a pull request, POST {"head", "base", "title", "body"} as JSON to http://fleet-gateway:${FORGE_PORT}/api/v1/repos/<owner>/<repo>/pulls (Forgejo's API, no token).` +
+      ` To review one, take its head.sha from GET .../pulls/<number>, then POST {"event": "COMMENT", "commit_id": "<head sha>", "body"} to .../pulls/<number>/reviews, the body ending in the line "corkboard-review: approve agent/${s.id}/work <head sha>" (or "changes" for "approve" to ask for them): that line is what lets it be merged, as an APPROVED review can't be.`
     : "";
   return `\n\nYou have git access at http://fleet-gateway:${FORGE_PORT}/ (the forge's own URLs go there too) to ${g.repos.split(" ").join(", ")} (${perms}${g.refs ? `; pushes only to ${g.refs.split(" ").join(", ")}` : ""}); it needs no credentials.${work}${pulls}`;
 }
