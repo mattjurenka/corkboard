@@ -28,7 +28,6 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { localAccount } from "../e2ee";
 import { Keystore } from "../keystore";
 import { goals } from "../../lib/model/goals";
 import type { BoardEvent, Card } from "../../lib/model/cards";
@@ -107,10 +106,8 @@ function kept(n: StartedNode, file: string, name: string, scope: "assistant" | "
 
 export async function startAppNode(): Promise<AppNode | undefined> {
   const store = new Keystore();
-  if (!store.exists()) {
-    const { account } = await localAccount();
-    console.log(`node: made the account ${account} on this machine (corkboard-bridge e2ee phrase shows its recovery phrase)`);
-  }
+  // The page asks, on the first start, whether to make one (onboarding.ts).
+  if (!store.exists()) return;
   if (store.needsPassphrase() && !process.env.CORKBOARD_E2EE_PASSPHRASE) {
     console.error("node: the account key is under a passphrase and CORKBOARD_E2EE_PASSPHRASE isn't set; memory isn't served");
     return;

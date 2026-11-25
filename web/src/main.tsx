@@ -18,6 +18,7 @@ import { nvimFlushed, startLatency } from "./latency";
 import { navigate } from "./lib/nav";
 import { closed, reconnect } from "./reconnect";
 import { openListed } from "./views/Projects";
+import { type AccountCall, Welcome } from "./components/Welcome";
 
 // ?cwd=/path/to/project opens Neovim there; ?host=<name> on that machine,
 // over ssh (CORKBOARD_REMOTES in bridge/server.ts). ?view=plan is the day
@@ -61,8 +62,29 @@ if (fragment.has("token")) {
 const protocols = ["corkboard", ...(token ? [`corkboard.token.${token}`] : [])];
 const [owner, name] = (params.get("repo") ?? "").split("/");
 const board = params.get("board") ?? undefined;
+const ephemeral = board || (wasm === "ephemeral" && owner && name);
+// A machine with no account yet asks for one first (Welcome.tsx), its
+// Neovim started once it has one; a bridge that doesn't ask goes on.
+if (!ephemeral) await welcome();
+async function welcome() {
+  const call: AccountCall = async (path, body) => {
+    const res = await fetch(new URL(path.slice(1), location.href), {
+      method: body === undefined && path === "/account" ? "GET" : "POST",
+      headers: { ...(token && { "x-corkboard-token": token }), ...(body !== undefined && { "content-type": "application/json" }) },
+      ...(body !== undefined && { body: JSON.stringify(body) }),
+    });
+    if (!res.headers.get("content-type")?.includes("json")) throw new Error(`${res.status} ${(await res.text()).trim()}`);
+    return res.json();
+  };
+  const asked = await call("/account").catch(() => undefined);
+  if (!asked || asked.account) return;
+  const at = document.getElementById("root")!;
+  const page = createRoot(at);
+  await new Promise<void>((done) => page.render(<Welcome call={call} done={done} />));
+  page.unmount();
+}
 const rpc =
-  board || (wasm === "ephemeral" && owner && name)
+  ephemeral
     ? new EphemeralRpc({ board, repo: owner && name ? { owner, name, ref: params.get("ref") ?? undefined } : undefined, token })
     : inPage
       ? new WasmRpc(wsUrl, protocols, token)
