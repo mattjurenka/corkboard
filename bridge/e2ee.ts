@@ -111,7 +111,7 @@ async function keep(root: Uint8Array, device: Device, cert: Signed<DeviceCert>, 
 }
 
 // An account on this machine only, its key in the keychain: what init
-// --local makes, and the bridge when it starts with none (node/app.ts).
+// --local makes, and the first start's page when it's asked to (onboarding.ts).
 export async function localAccount(name = hostname(), pass?: string) {
   refuseTwice();
   const root = newRoot();
@@ -176,6 +176,20 @@ function printPhrase(root: Uint8Array, heading: string) {
   console.log();
 }
 
+// This machine back into the account whose phrase it is: recover, and the
+// first start's page (onboarding.ts).
+export async function recoverAccount(phrase: string, name = hostname(), pass?: string) {
+  refuseTwice();
+  const root = fromPhrase(phrase);
+  const keys = accountKeys(root);
+  const device = newDevice();
+  const cert = certify(keys, device, name);
+  await relayFor(device, cert).signIn();
+  await store.saveRoot(root, pass);
+  store.saveDevice(CLOUD, name, device, cert);
+  return keys.id;
+}
+
 async function recover(args: string[]) {
   refuseTwice();
   const name = option(args, "--name") ?? hostname();
@@ -185,26 +199,36 @@ async function recover(args: string[]) {
     if (!line.trim()) break;
     phrase += " " + line;
   }
-  const root = fromPhrase(phrase);
-  const keys = accountKeys(root);
+  const account = await recoverAccount(phrase, name, passphrase(args, true));
+  console.log(`This machine (${name}) is a device of ${account} again.`);
+}
+
+// This machine into an account another device approves: pair, and the
+// first start's page. The account can't have been made here meanwhile.
+export async function joinAccount(ui: Parameters<typeof pairNew>[3], name = hostname(), pass?: string) {
+  refuseTwice();
   const device = newDevice();
-  const cert = certify(keys, device, name);
-  await relayFor(device, cert).signIn();
-  await keep(root, device, cert, name, args);
-  console.log(`This machine (${name}) is a device of ${keys.id} again.`);
+  const got = await pairNew(relayFor(), device, name, ui);
+  refuseTwice();
+  await store.saveRoot(got.root, pass);
+  store.saveDevice(CLOUD, name, device, got.cert);
+  await relayFor(device, got.cert).signIn();
+  return got.cert.body.account;
 }
 
 async function pair(args: string[]) {
   refuseTwice();
   const name = option(args, "--name") ?? hostname();
-  const device = newDevice();
-  const got = await pairNew(relayFor(), device, name, {
-    show: (code, qr) => console.log(`On a device that's in the account, run Pair a device (:AgentPair) in corkboard and type:\n\n  ${showCode(code)}\n\n(or scan: ${qr})\nWaiting...`),
-    confirm: async (sas) => yes(`The other device shows a six-digit code. Is it ${sas}?`),
-  });
-  await keep(got.root, device, got.cert, name, args);
-  await relayFor(device, got.cert).signIn();
-  console.log(`This machine (${name}) is a device of ${got.cert.body.account}.`);
+  const pass = passphrase(args, true);
+  const account = await joinAccount(
+    {
+      show: (code, qr) => console.log(`On a device that's in the account, run Pair a device (:AgentPair) in corkboard and type:\n\n  ${showCode(code)}\n\n(or scan: ${qr})\nWaiting...`),
+      confirm: async (sas) => yes(`The other device shows a six-digit code. Is it ${sas}?`),
+    },
+    name,
+    pass,
+  );
+  console.log(`This machine (${name}) is a device of ${account}.`);
 }
 
 async function approveCode(args: string[]) {

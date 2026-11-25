@@ -25,6 +25,7 @@ import * as remote from "./remote";
 import { speech } from "./speech";
 import * as wasm from "./wasm";
 import { startAppNode } from "./node/app";
+import * as onboarding from "./onboarding";
 import { gitViews } from "./node/git";
 import { Peers } from "./peers";
 import { CLOUD, token } from "./cloud";
@@ -192,10 +193,16 @@ const NVIM_ENV: Record<string, string> = {
 
 // The node, for memory (node/app.ts), before Neovim starts; without it,
 // memory is the Worker's.
-const NODE = await startAppNode().catch((e) => console.error(`node: ${(e as Error).message}; memory isn't served here`));
-if (NODE) {
-  Object.assign(NVIM_ENV, NODE.env);
-  boards.useNode(NODE);
+// With no account yet, none until the page's first start makes one
+// (onboarding.ts), and then the node is started as it would have been here.
+let NODE = await appNode();
+async function appNode() {
+  const n = await startAppNode().catch((e) => void console.error(`node: ${(e as Error).message}; memory isn't served here`));
+  if (n) {
+    Object.assign(NVIM_ENV, n.env);
+    boards.useNode(n);
+  }
+  return n;
 }
 
 // The project Neovim last opened (remember_project in corkboard/init.lua).
@@ -598,7 +605,7 @@ function wasmPlugins(req: Request, url: URL): Response {
 // /api/git/: the account's repositories on its forge (node/git.ts), on
 // the node's channel to the leader, for a page with no machine that this
 // bridge serves.
-const GIT = NODE && gitViews(NODE.forge);
+let GIT = NODE && gitViews(NODE.forge);
 async function gitProxy(req: Request, url: URL): Promise<Response> {
   const why = refuseFetch(req);
   if (why || (req.method !== "GET" && req.method !== "POST")) return new Response(why ?? "GET or POST", { status: 403 });
@@ -683,6 +690,15 @@ async function hostCall(req: Request, url: URL): Promise<Response> {
   const body = new Uint8Array(await req.arrayBuffer());
   const out = url.pathname === "/host/fs" ? host.fs(body) : await host.lua(body);
   return new Response(out as Uint8Array<ArrayBuffer>, { headers: { "content-type": "application/msgpack" } });
+}
+
+// /account: the first start's question, from the page (onboarding.ts), as
+// guarded as the socket.
+async function accountCall(req: Request, url: URL): Promise<Response> {
+  const why = refuseFetch(req);
+  if (why) return new Response(why, { status: 403 });
+  if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
+  return onboarding.account(req, url.pathname, accountReady);
 }
 
 // /latency: a page's key-to-pixels timings (web/src/latency.ts), one line
@@ -790,6 +806,7 @@ Bun.serve<Session>({
     if (url.pathname === "/open") return open(url.searchParams.get("ticket") ?? "");
     if (url.pathname === "/host/fs" || url.pathname === "/host/lua") return hostCall(req, url);
     if (url.pathname === "/latency") return latency(req);
+    if (url.pathname === "/account" || url.pathname.startsWith("/account/")) return accountCall(req, url);
     if (url.pathname === "/wasm/manifest") return wasmManifest(req);
     if (url.pathname.startsWith("/wasm/plugins/")) return wasmPlugins(req, url);
     if (url.pathname.startsWith("/api/git/")) return gitProxy(req, url);
@@ -919,15 +936,40 @@ if (PARENT) {
 
 // What the phone needs from this bridge (remote.ts).
 // The account's sessions on sealed channels, through the node (peers.ts).
-const PEERS = NODE ? new Peers(NODE.reach) : undefined;
-if (PEERS) {
-  PEERS.start();
-  boards.usePeers(PEERS);
+let PEERS: Peers | undefined;
+let served = false;
+function serveRemote() {
+  if (served) return;
+  served = true;
+  PEERS = NODE ? new Peers(NODE.reach) : undefined;
+  if (PEERS) {
+    PEERS.start();
+    boards.usePeers(PEERS);
+  }
+  remote.start(PORT, NODE?.sessions, PEERS);
 }
-remote.start(PORT, NODE?.sessions, PEERS);
-
 // The account bound to its Forgejo user at the forge gate, where this
 // machine can be the one to (e2ee.ts's forgeBound).
-import("./e2ee")
-  .then((m) => m.forgeBound())
-  .catch((e) => console.error(`forge gate: ${(e as Error).message}`));
+const bindForge = () =>
+  import("./e2ee")
+    .then((m) => m.forgeBound())
+    .catch((e) => console.error(`forge gate: ${(e as Error).message}`));
+
+// The first start's page, once it has made, joined or recovered the account;
+// a start that fails is tried again on the next call.
+let ready: Promise<void> | undefined;
+const accountReady = () =>
+  (ready ??= (async () => {
+    NODE ??= await appNode();
+    if (!NODE) throw new Error("it didn't start");
+    GIT ??= gitViews(NODE.forge);
+    serveRemote();
+    void bindForge();
+  })().catch((e) => {
+    ready = undefined;
+    throw e;
+  }));
+if (onboarding.hasAccount()) {
+  serveRemote();
+  void bindForge();
+}
