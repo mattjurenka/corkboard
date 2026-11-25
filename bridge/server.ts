@@ -937,7 +937,10 @@ if (PARENT) {
 // What the phone needs from this bridge (remote.ts).
 // The account's sessions on sealed channels, through the node (peers.ts).
 let PEERS: Peers | undefined;
+let served = false;
 function serveRemote() {
+  if (served) return;
+  served = true;
   PEERS = NODE ? new Peers(NODE.reach) : undefined;
   if (PEERS) {
     PEERS.start();
@@ -945,18 +948,28 @@ function serveRemote() {
   }
   remote.start(PORT, NODE?.sessions, PEERS);
 }
-// The first start's page, once it has made, joined or recovered the account.
+// The account bound to its Forgejo user at the forge gate, where this
+// machine can be the one to (e2ee.ts's forgeBound).
+const bindForge = () =>
+  import("./e2ee")
+    .then((m) => m.forgeBound())
+    .catch((e) => console.error(`forge gate: ${(e as Error).message}`));
+
+// The first start's page, once it has made, joined or recovered the account;
+// a start that fails is tried again on the next call.
 let ready: Promise<void> | undefined;
 const accountReady = () =>
   (ready ??= (async () => {
-    NODE = await appNode();
-    GIT = NODE && gitViews(NODE.forge);
+    NODE ??= await appNode();
+    if (!NODE) throw new Error("it didn't start");
+    GIT ??= gitViews(NODE.forge);
     serveRemote();
-  })());
-if (onboarding.hasAccount()) serveRemote();
-
-// The account bound to its Forgejo user at the forge gate, where this
-// machine can be the one to (e2ee.ts's forgeBound).
-import("./e2ee")
-  .then((m) => m.forgeBound())
-  .catch((e) => console.error(`forge gate: ${(e as Error).message}`));
+    void bindForge();
+  })().catch((e) => {
+    ready = undefined;
+    throw e;
+  }));
+if (onboarding.hasAccount()) {
+  serveRemote();
+  void bindForge();
+}

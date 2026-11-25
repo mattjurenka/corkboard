@@ -24,22 +24,28 @@ afterAll(() => {
 });
 const { CORKBOARD_E2EE_PASSPHRASE: _, ...env } = process.env;
 
-// onboarding.ts's routes on a port, and how often ready was called.
+// onboarding.ts's routes on a port, and how often ready was called; it takes
+// READY_MS to start the node, and fails if READY_FAILS.
 const PROGRAM = `
 import { account } from ${JSON.stringify(join(import.meta.dir, "onboarding.ts"))};
 let ready = 0;
+const start = async () => {
+  ready++;
+  await Bun.sleep(Number(process.env.READY_MS ?? 0));
+  if (process.env.READY_FAILS) throw new Error("no node");
+};
 const s = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (req) => {
   const p = new URL(req.url).pathname;
-  return p === "/ready" ? Response.json(ready) : account(req, p, async () => void ready++);
+  return p === "/ready" ? Response.json(ready) : account(req, p, start);
 } });
 console.log(s.port);
 `;
 
-async function machine() {
+async function machine(more: Record<string, string> = {}) {
   const state = mkdtempSync(join(tmpdir(), "corkboard-onboarding-"));
   dirs.push(state);
   const p = Bun.spawn([process.execPath, "-e", PROGRAM], {
-    env: { ...env, CORKBOARD_STATE_DIR: state, CORKBOARD_DATA_DIR: join(state, "data"), CORKBOARD_CACHE_DIR: join(state, "cache"), CORKBOARD_CLOUD: relay.origin },
+    env: { ...env, CORKBOARD_STATE_DIR: state, CORKBOARD_DATA_DIR: join(state, "data"), CORKBOARD_CACHE_DIR: join(state, "cache"), CORKBOARD_CLOUD: relay.origin, ...more },
     stdout: "pipe",
     stderr: "inherit",
   });
@@ -48,7 +54,7 @@ async function machine() {
   const url = `http://127.0.0.1:${new TextDecoder().decode(value).trim()}`;
   const call = async (path: string, body?: unknown) => {
     const res = await fetch(url + path, body === undefined && path === "/account" ? {} : { method: "POST", body: JSON.stringify(body ?? {}) });
-    return { status: res.status, ...((await res.json()) as Record<string, any>) };
+    return { status: res.status, ...((await res.json()) as Record<string, any>) } as { status: number } & Record<string, any>;
   };
   const ready = async () => (await fetch(url + "/ready")).json();
   return { call, ready };
@@ -104,7 +110,9 @@ describe("the first start", () => {
     let seen = "";
     const approved = approve(a.relay, a.root, shown.code, { confirm: async (sas) => ((seen = sas), true) });
     const sas = await until(async () => (await m.call("/account")).join?.sas as string | undefined);
-    await m.call("/account/join/confirm", { ok: true });
+    const answered = await m.call("/account/join/confirm", { ok: true });
+    expect(answered.join.sas).toBeUndefined();
+    expect(answered.join.code).toBe(shown.code);
     await approved;
     expect(sas).toBe(seen);
     expect(await until(async () => (await m.call("/account")).join?.account)).toBe(a.id);
@@ -127,5 +135,23 @@ describe("the first start", () => {
     expect(again.code).not.toBe(first.code);
     await m.call("/account/join/cancel");
     expect(await m.call("/account")).toMatchObject({ join: null });
+  });
+
+  it("says there's an account only once its node is up, and makes one at a time", async () => {
+    const m = await machine({ READY_MS: "1000" });
+    const made = m.call("/account/create");
+    await until(async () => ((await m.ready()) === 1 ? true : undefined));
+    expect(await m.call("/account")).toMatchObject({ account: false });
+    expect(await m.call("/account/create")).toMatchObject({ status: 409 });
+    expect(await m.call("/account/join")).toMatchObject({ status: 409 });
+    expect((await made).phrase.split(" ")).toHaveLength(24);
+    expect(await m.call("/account")).toMatchObject({ account: true });
+  });
+
+  it("shows the phrase when the node doesn't start", async () => {
+    const m = await machine({ READY_FAILS: "1" });
+    const made = await m.call("/account/create");
+    expect(made.status).toBe(200);
+    expect(made.phrase.split(" ")).toHaveLength(24);
   });
 });

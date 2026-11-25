@@ -24,6 +24,8 @@ export function Welcome({ call, done }: { call: AccountCall; done: () => void })
   const [busy, setBusy] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
+  // Bumped by back: an answer that comes after it is for a step left.
+  const turn = useRef(0);
 
   useEffect(() => {
     if (step.at === "recover") field.current?.focus();
@@ -34,17 +36,20 @@ export function Welcome({ call, done }: { call: AccountCall; done: () => void })
   const joining = step.at === "join" && !step.join?.account && !step.join?.error;
   useEffect(() => {
     if (!joining) return;
+    const at = turn.current;
     const t = setInterval(async () => {
       const r = await call("/account").catch(() => undefined);
-      if (r?.join) setStep({ at: "join", join: r.join });
+      if (r?.join && at === turn.current) setStep({ at: "join", join: r.join });
     }, 1000);
     return () => clearInterval(t);
   }, [joining, call]);
 
   const go = async (path: string, body?: unknown) => {
+    const at = turn.current;
     setBusy(true);
     setError(undefined);
     const r = await call(path, body).catch((e: Error) => ({ error: e.message }) as Awaited<ReturnType<AccountCall>>);
+    if (at !== turn.current) return {};
     setBusy(false);
     if (r.error) setError(r.error);
     return r;
@@ -64,6 +69,8 @@ export function Welcome({ call, done }: { call: AccountCall; done: () => void })
   };
   const back = () => {
     if (step.at === "join") void call("/account/join/cancel").catch(() => {});
+    turn.current++;
+    setBusy(false);
     setError(undefined);
     setStep({ at: "choose" });
   };
@@ -179,17 +186,16 @@ export function Welcome({ call, done }: { call: AccountCall; done: () => void })
             />
           </>
         ) : join?.account ? (
-          <p className="mt-row">This machine is in.</p>
+          <p className="mt-row break-words text-primary">{join.account}</p>
         ) : sas ? (
           <>
-            <p className="mt-row text-center text-large font-bold tracking-[0.3ch] text-primary">{`${join.sas!.slice(0, 3)} ${join.sas!.slice(3)}`}</p>
-            <p className="mt-half text-center">Does the other device show the same?</p>
+            <p className="mt-row">Pair a device</p>
+            <p className="mt-half text-center text-large font-bold tracking-[0.3ch] text-primary">{`${join.sas!.slice(0, 3)} ${join.sas!.slice(3)}`}</p>
           </>
         ) : join?.code ? (
           <>
-            <p className="mt-row">On a device in the account, Pair a device:</p>
+            <p className="mt-row">Pair a device</p>
             <p className="mt-half text-center text-large font-bold tracking-[0.3ch] text-primary">{join.code}</p>
-            <p className="mt-half text-center text-muted-foreground">waiting…</p>
           </>
         ) : !join?.error ? (
           <p className="mt-row text-muted-foreground">…</p>
