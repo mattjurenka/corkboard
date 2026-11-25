@@ -27,6 +27,8 @@ export function Welcome({ call, done, resume }: { call: AccountCall; done: () =>
   const field = useRef<HTMLTextAreaElement>(null);
   // Bumped by back: an answer that comes after it is for a step left.
   const turn = useRef(0);
+  // Bumped by each answer to a call: a poll asked before one is older news.
+  const answered = useRef(0);
 
   useEffect(() => {
     if (step.at === "recover") field.current?.focus();
@@ -39,8 +41,9 @@ export function Welcome({ call, done, resume }: { call: AccountCall; done: () =>
     if (!joining) return;
     const at = turn.current;
     const t = setInterval(async () => {
+      const asked = answered.current;
       const r = await call("/account").catch(() => undefined);
-      if (!r || at !== turn.current) return;
+      if (!r || at !== turn.current || asked !== answered.current) return;
       // A join seen and then gone was ended elsewhere (another tab's esc).
       setStep((s) => (r.join ? { at: "join", join: r.join } : s.at === "join" && s.join ? { at: "choose" } : s));
     }, 1000);
@@ -53,6 +56,7 @@ export function Welcome({ call, done, resume }: { call: AccountCall; done: () =>
     setError(undefined);
     const r = await call(path, body).catch((e: Error) => ({ error: e.message }) as Awaited<ReturnType<AccountCall>>);
     if (at !== turn.current) return {};
+    answered.current++;
     setBusy(false);
     if (r.error) setError(r.error);
     return r;
