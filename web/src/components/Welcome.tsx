@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
-type Join = { code?: string; sas?: string; account?: string; error?: string } | null;
+type Join = { code?: string; sas?: string; accepted?: boolean; account?: string; error?: string } | null;
 export type AccountCall = (path: string, body?: unknown) => Promise<{ error?: string; account?: string; phrase?: string; join?: Join }>;
 
 type Step = { at: "choose" } | { at: "phrase"; words: string[] } | { at: "join"; join: Join } | { at: "recover" };
@@ -16,8 +16,9 @@ const CHOICES = [
   ["recover", "recover an account"],
 ] as const;
 
-export function Welcome({ call, done }: { call: AccountCall; done: () => void }) {
-  const [step, setStep] = useState<Step>({ at: "choose" });
+// A join already under way (another tab's, or before a reload) is picked up.
+export function Welcome({ call, done, resume }: { call: AccountCall; done: () => void; resume?: Join }) {
+  const [step, setStep] = useState<Step>(resume ? { at: "join", join: resume } : { at: "choose" });
   const [pick, setPick] = useState(0);
   const [phrase, setPhrase] = useState("");
   const [error, setError] = useState<string>();
@@ -85,6 +86,8 @@ export function Welcome({ call, done }: { call: AccountCall; done: () => void })
 
   const join = step.at === "join" ? step.join : null;
   const sas = join?.sas && !join.account && !join.error;
+  // The digits said to match: the join goes on, and esc doesn't leave it.
+  const stay = !!join?.accepted && !join.error;
 
   const keys = (e: React.KeyboardEvent) => {
     if (busy) return;
@@ -111,7 +114,7 @@ export function Welcome({ call, done }: { call: AccountCall; done: () => void })
       else if (k === "n") void answer(false);
       else if (k === "Escape") back();
       else return;
-    } else if (k === "Escape" || (join?.error && k === "Enter")) back();
+    } else if ((k === "Escape" && !stay) || (join?.error && k === "Enter")) back();
     else return;
     e.preventDefault();
   };
@@ -219,7 +222,7 @@ export function Welcome({ call, done }: { call: AccountCall; done: () => void })
               {hint("n", "no", () => void answer(false))}
               {hint("⏎", "they match", () => void answer(true), true)}
             </>
-          ) : (
+          ) : stay ? null : (
             hint("esc", "back", back)
           )}
         </p>

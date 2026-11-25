@@ -80,7 +80,7 @@ async function welcome() {
   if (!asked || asked.account) return;
   const at = document.getElementById("root")!;
   const page = createRoot(at);
-  await new Promise<void>((done) => page.render(<Welcome call={call} done={done} />));
+  await new Promise<void>((done) => page.render(<Welcome call={call} done={done} resume={asked.join} />));
   page.unmount();
 }
 const rpc =

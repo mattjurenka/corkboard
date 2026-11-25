@@ -18,8 +18,10 @@ import { toPhrase } from "../lib/e2ee/phrase";
 import { showCode } from "../lib/e2ee/wire";
 
 // What the page shows of a join: its code to type on the other device,
-// then the six digits to check, then the account or why not.
-export type JoinView = { code?: string; qr?: string; sas?: string; account?: string; error?: string };
+// then the six digits to check, then the account or why not. Accepted once
+// the digits are said to match: from then it's on its way to being this
+// machine's account, and isn't ended for another.
+export type JoinView = { code?: string; qr?: string; sas?: string; accepted?: boolean; account?: string; error?: string };
 
 type Join = { view: JoinView; answer?: (ok: boolean) => void; shown: Promise<void>; ended?: boolean };
 let join: Join | undefined;
@@ -43,10 +45,31 @@ async function alone(make: () => Promise<Response>): Promise<Response> {
   }
 }
 const joining = () => !!join && !join.view.account && !join.view.error;
+const committed = () => !!join?.view.accepted && joining();
 const settled = () => hasAccount() && !making && !joining();
 
-// The node started, its failure logged rather than hiding the account made.
-const start = (ready: () => Promise<void>) => ready().catch((e) => void console.error(`node: ${(e as Error).message}`));
+// The node started, one start at a time and for at most limits.nodeMs. Its
+// failure is logged rather than hiding the account made, and it's started
+// again when the page next asks (GET /account); if that fails too, the page
+// goes on without the node, as a bridge whose node fails at boot does.
+export const limits = { nodeMs: 60_000 };
+let down = false;
+let starting: Promise<void> | undefined;
+const start = (ready: () => Promise<void>) =>
+  (starting ??= Promise.race([
+    ready(),
+    Bun.sleep(limits.nodeMs).then(() => {
+      throw new Error(`it didn't start in ${limits.nodeMs / 1000} s`);
+    }),
+  ])
+    .then(
+      () => void (down = false),
+      (e) => {
+        down = true;
+        console.error(`node: ${(e as Error).message}`);
+      },
+    )
+    .finally(() => (starting = undefined)));
 
 function startJoin(ready: () => Promise<void>): Join {
   let shown!: () => void;
@@ -76,19 +99,26 @@ function startJoin(ready: () => Promise<void>): Join {
   return j;
 }
 
+// False for a join that's committed, which goes on.
 function endJoin() {
+  if (committed()) return false;
   if (join) join.ended = true;
   join?.answer?.(false);
   join = undefined;
+  return true;
 }
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 
 // The page's calls, already let in (server.ts checks its origin and token).
 export async function account(req: Request, path: string, ready: () => Promise<void>): Promise<Response> {
-  if (path === "/account" && req.method === "GET") return json({ account: settled(), join: join?.view ?? null });
+  if (path === "/account" && req.method === "GET") {
+    if (down && settled()) await start(ready);
+    return json({ account: settled(), join: join?.view ?? null });
+  }
   if (req.method !== "POST") return json({ error: "POST" }, 405);
   const body = (await req.json().catch(() => ({}))) as { phrase?: unknown; ok?: unknown };
+  if (committed() && path !== "/account/join" && path !== "/account/join/confirm") return json({ error: "an account is being joined already" }, 409);
   try {
     switch (path) {
       case "/account/create":
@@ -117,11 +147,12 @@ export async function account(req: Request, path: string, ready: () => Promise<v
       }
       case "/account/join/confirm": {
         if (!join?.answer) return json({ error: "nothing to confirm" }, 409);
-        join.answer(body.ok === true);
+        const accepted = body.ok === true;
+        join.answer(accepted);
         join.answer = undefined;
         // Answered: the code again, waiting, until joinAccount says how it went.
         const { sas: _, ...waiting } = join.view;
-        join.view = waiting;
+        join.view = { ...waiting, accepted };
         return json({ join: join.view });
       }
       case "/account/join/cancel":

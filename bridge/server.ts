@@ -956,7 +956,7 @@ const bindForge = () =>
     .catch((e) => console.error(`forge gate: ${(e as Error).message}`));
 
 // The first start's page, once it has made, joined or recovered the account;
-// a start that fails is tried again on the next call.
+// a start that fails is tried again when the page next asks (onboarding.ts).
 let ready: Promise<void> | undefined;
 const accountReady = () =>
   (ready ??= (async () => {
