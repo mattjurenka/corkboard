@@ -81,3 +81,68 @@ describe("write_later", () => {
     expect(existsSync(path) && readFileSync(path, "utf8")).toBe("bye");
   });
 });
+
+describe("write_later's failures and deletes", () => {
+  test("what's on its way is what's read, and a delete after a write leaves nothing", () => {
+    const dir = join(box.dir, "queue");
+    const got = box.lua(
+      String.raw`
+      vim.fn.mkdir(input.dir, "p")
+      local util = require("corkboard.util")
+      local path = input.dir .. "/f"
+      vim.fn.writefile({ "old" }, path)
+      util.write_later(path, "a\nb\n")
+      local before = util.read_lines(path)
+      util.delete_later(path)
+      local deleting = util.read_lines(path)
+      vim.wait(2000, util.written, 5)
+      return { before = before, deleting = deleting or "none", after = util.read_lines(path) or "none" }`,
+      { dir },
+    );
+    expect(got).toEqual({ before: ["a", "b"], deleting: "none", after: "none" });
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  test("a write that can't land keeps what was there and leaves no .tmp", () => {
+    const dir = join(box.dir, "fails");
+    box.lua(
+      String.raw`
+      local util = require("corkboard.util")
+      -- A folder in the way: the rename onto it fails.
+      vim.fn.mkdir(input.dir .. "/f/inside", "p")
+      util.write_later(input.dir .. "/f", "new")
+      vim.wait(2000, util.written, 5)`,
+      { dir },
+    );
+    expect(readdirSync(dir)).toEqual(["f"]);
+    expect(readdirSync(join(dir, "f"))).toEqual(["inside"]);
+  });
+});
+
+describe("recent projects", () => {
+  test("forgetting one just remembered sticks, and so does its last-project's delete", () => {
+    const a = join(box.dir, "proj-a");
+    const b = join(box.dir, "proj-b");
+    const got = box.lua(
+      String.raw`
+      vim.fn.mkdir(input.a, "p")
+      vim.fn.mkdir(input.b, "p")
+      local util, cb = require("corkboard.util"), require("corkboard")
+      local state = util.state_dir()
+      vim.fn.mkdir(state, "p")
+      -- As remember_project leaves them, still on their way.
+      util.write_later(state .. "/last-project", input.a .. "\n")
+      util.write_later(state .. "/projects", input.a .. "\n" .. input.b .. "\n")
+      local remembered = cb.recent_projects()
+      cb.forget_project(input.a)
+      vim.wait(2000, util.written, 5)
+      return {
+        remembered = remembered,
+        left = cb.recent_projects(),
+        last = vim.uv.fs_stat(state .. "/last-project") ~= nil,
+      }`,
+      { a, b },
+    );
+    expect(got).toEqual({ remembered: [a, b], left: [b], last: false });
+  });
+});

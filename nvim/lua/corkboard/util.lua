@@ -22,36 +22,63 @@ function M.state_dir(...) return vim.fs.joinpath(dir("state", "XDG_STATE_HOME", 
 -- place, so no reader sees half of it. Rewriting a file in place waits, on a
 -- busy disk (and on dm-crypt, always), for its pages' last write to reach
 -- the disk, and every key waits with it. Writes to one path go in order; a
--- second asked for while one is under way replaces any already waiting.
-local writing = {} -- path -> the text to write once the one under way is done, or false
-local function write_now(path, text)
-  local tmp = path .. ".tmp"
+-- second asked for while one is under way replaces any already waiting. A
+-- write that fails leaves the file as it was.
+local busy = {} -- path -> true while a write or delete is under way
+local waiting = {} -- path -> what to do once it's done: text, or false to delete
+local latest = {} -- path -> the last asked for, until it's done (M.read_lines)
+local function start(path, text)
   local function done()
-    local again = writing[path]
-    writing[path] = again and false or nil
-    if again then write_now(path, again) end
+    local again = waiting[path]
+    waiting[path] = nil
+    if again ~= nil then return start(path, again) end
+    busy[path], latest[path] = nil, nil
   end
+  if text == false then return vim.uv.fs_unlink(path, done) end
+  -- Of this Neovim's own: another's writing the same file can't mix in.
+  local tmp = ("%s.tmp.%d.%x"):format(path, vim.uv.os_getpid(), math.random(0, 0x7fffffff))
+  local function fail() vim.uv.fs_unlink(tmp, done) end
   vim.uv.fs_open(tmp, "w", tonumber("644", 8), function(err, fd)
     if err then return done() end
-    vim.uv.fs_write(fd, text, 0, function()
-      vim.uv.fs_close(fd, function()
-        vim.uv.fs_rename(tmp, path, done)
+    vim.uv.fs_write(fd, text, 0, function(write_err, n)
+      vim.uv.fs_close(fd, function(close_err)
+        if write_err or close_err or n ~= #text then return fail() end
+        vim.uv.fs_rename(tmp, path, function(rename_err)
+          if rename_err then return fail() end
+          done()
+        end)
       end)
     end)
   end)
 end
 
-function M.write_later(path, text)
-  if writing[path] ~= nil then
-    writing[path] = text
+local function later(path, text)
+  latest[path] = text
+  if busy[path] then
+    waiting[path] = text
     return
   end
-  writing[path] = false
-  write_now(path, text)
+  busy[path] = true
+  start(path, text)
+end
+
+function M.write_later(path, text) later(path, text) end
+
+-- Delete path in the same queue, after any write to it asked for before.
+function M.delete_later(path) later(path, false) end
+
+-- path's lines, as they'll be once what's on its way is done; nil if
+-- there's no such file.
+function M.read_lines(path)
+  local text = latest[path]
+  if text == false then return nil end
+  if text then return vim.split(text, "\n", { trimempty = true }) end
+  local ok, lines = pcall(vim.fn.readfile, path)
+  return ok and lines or nil
 end
 
 -- Whether every write_later is on disk.
-function M.written() return next(writing) == nil end
+function M.written() return next(busy) == nil end
 
 -- What's still being written is finished first.
 vim.api.nvim_create_autocmd("VimLeavePre", {

@@ -701,6 +701,12 @@ async function latency(req: Request): Promise<Response> {
   const lines = samples.map((s) => JSON.stringify({ ...(s as object), ...page }) + "\n").join("");
   latencyWrites = (latencyWrites ?? mkdir(dirname(LATENCY_LOG), { recursive: true }))
     .then(() => appendFile(LATENCY_LOG, lines))
+    // The state directory removed while the bridge runs.
+    .catch((err) =>
+      err?.code === "ENOENT"
+        ? mkdir(dirname(LATENCY_LOG), { recursive: true }).then(() => appendFile(LATENCY_LOG, lines))
+        : Promise.reject(err),
+    )
     .catch((err) => console.error("latency:", err));
   return new Response(null, { status: 204 });
 }

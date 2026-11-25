@@ -154,8 +154,8 @@ export class OAuthStore {
   // a stat says whether it's still the one.
   private text?: { at: string; text: string };
 
-  private stamp(): string | undefined {
-    const st = statSync(this.path, { bigint: true, throwIfNoEntry: false });
+  private stamp(path = this.path): string | undefined {
+    const st = statSync(path, { bigint: true, throwIfNoEntry: false });
     return st && `${st.ino}:${st.mtimeNs}:${st.size}`;
   }
 
@@ -241,12 +241,15 @@ export class OAuthStore {
 
   private save(f: File) {
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
-    const tmp = `${this.path}.tmp`;
+    // This process's own, so another's write can't mix into it.
+    const tmp = `${this.path}.tmp.${process.pid}`;
     const text = JSON.stringify(f, null, 1);
     writeFileSync(tmp, text, { mode: 0o600 });
+    chmodSync(tmp, 0o600);
+    // The stamp is the tmp's, which the rename keeps: one taken after could
+    // be another process's write, cached against this text.
+    const at = this.stamp(tmp);
     renameSync(tmp, this.path);
-    chmodSync(this.path, 0o600);
-    const at = this.stamp();
     this.text = at === undefined ? undefined : { at, text };
   }
 
