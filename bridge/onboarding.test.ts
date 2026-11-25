@@ -25,14 +25,14 @@ afterAll(() => {
 const { CORKBOARD_E2EE_PASSPHRASE: _, ...env } = process.env;
 
 // onboarding.ts's routes on a port, and how often ready was called; it takes
-// READY_MS to start the node, and fails if READY_FAILS.
+// READY_MS to start the node, and fails its first READY_FAILS times.
 const PROGRAM = `
 import { account } from ${JSON.stringify(join(import.meta.dir, "onboarding.ts"))};
 let ready = 0;
 const start = async () => {
   ready++;
   await Bun.sleep(Number(process.env.READY_MS ?? 0));
-  if (process.env.READY_FAILS) throw new Error("no node");
+  if (ready <= Number(process.env.READY_FAILS ?? 0)) throw new Error("no node");
 };
 const s = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (req) => {
   const p = new URL(req.url).pathname;
@@ -153,5 +153,25 @@ describe("the first start", () => {
     const made = await m.call("/account/create");
     expect(made.status).toBe(200);
     expect(made.phrase.split(" ")).toHaveLength(24);
+    expect(await m.ready()).toBe(1);
+    expect(await m.call("/account")).toMatchObject({ account: true });
+    expect(await m.ready()).toBe(2);
+    await m.call("/account");
+    expect(await m.ready()).toBe(2);
+  });
+
+  it("goes on with a join whose digits matched, whatever else is asked", async () => {
+    const a = await published();
+    const m = await machine({ READY_MS: "1500" });
+    const { join: shown } = await m.call("/account/join");
+    const approved = approve(a.relay, a.root, shown.code, { confirm: async () => true });
+    await until(async () => (await m.call("/account")).join?.sas);
+    await m.call("/account/join/confirm", { ok: true });
+    await approved;
+    expect(await m.call("/account/join/cancel")).toMatchObject({ status: 409 });
+    expect(await m.call("/account/create")).toMatchObject({ status: 409 });
+    expect(await m.call("/account")).toMatchObject({ account: false });
+    expect(await until(async () => (await m.call("/account")).join?.account)).toBe(a.id);
+    expect(await m.call("/account")).toMatchObject({ account: true });
   });
 });

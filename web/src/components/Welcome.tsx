@@ -22,6 +22,8 @@ export function Welcome({ call, done }: { call: AccountCall; done: () => void })
   const [phrase, setPhrase] = useState("");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  // The digits said to match: the join goes on, and esc doesn't leave it.
+  const [sure, setSure] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   // Bumped by back: an answer that comes after it is for a step left.
@@ -71,6 +73,7 @@ export function Welcome({ call, done }: { call: AccountCall; done: () => void })
     if (step.at === "join") void call("/account/join/cancel").catch(() => {});
     turn.current++;
     setBusy(false);
+    setSure(false);
     setError(undefined);
     setStep({ at: "choose" });
   };
@@ -80,11 +83,15 @@ export function Welcome({ call, done }: { call: AccountCall; done: () => void })
   };
   const answer = async (ok: boolean) => {
     const r = await go("/account/join/confirm", { ok });
-    if (r.join) setStep({ at: "join", join: r.join });
+    if (r.join) {
+      setSure(ok);
+      setStep({ at: "join", join: r.join });
+    }
   };
 
   const join = step.at === "join" ? step.join : null;
   const sas = join?.sas && !join.account && !join.error;
+  const stay = sure && !join?.error;
 
   const keys = (e: React.KeyboardEvent) => {
     if (busy) return;
@@ -111,7 +118,7 @@ export function Welcome({ call, done }: { call: AccountCall; done: () => void })
       else if (k === "n") void answer(false);
       else if (k === "Escape") back();
       else return;
-    } else if (k === "Escape" || (join?.error && k === "Enter")) back();
+    } else if ((k === "Escape" && !stay) || (join?.error && k === "Enter")) back();
     else return;
     e.preventDefault();
   };
@@ -219,7 +226,7 @@ export function Welcome({ call, done }: { call: AccountCall; done: () => void })
               {hint("n", "no", () => void answer(false))}
               {hint("⏎", "they match", () => void answer(true), true)}
             </>
-          ) : (
+          ) : stay ? null : (
             hint("esc", "back", back)
           )}
         </p>

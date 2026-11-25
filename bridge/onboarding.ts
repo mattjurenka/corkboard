@@ -21,7 +21,9 @@ import { showCode } from "../lib/e2ee/wire";
 // then the six digits to check, then the account or why not.
 export type JoinView = { code?: string; qr?: string; sas?: string; account?: string; error?: string };
 
-type Join = { view: JoinView; answer?: (ok: boolean) => void; shown: Promise<void>; ended?: boolean };
+// Accepted once its digits are said to match: from then it's on its way to
+// being this machine's account, and isn't ended for another.
+type Join = { view: JoinView; answer?: (ok: boolean) => void; shown: Promise<void>; ended?: boolean; accepted?: boolean };
 let join: Join | undefined;
 
 const store = new Keystore();
@@ -43,10 +45,20 @@ async function alone(make: () => Promise<Response>): Promise<Response> {
   }
 }
 const joining = () => !!join && !join.view.account && !join.view.error;
+const committed = () => !!join?.accepted && joining();
 const settled = () => hasAccount() && !making && !joining();
 
-// The node started, its failure logged rather than hiding the account made.
-const start = (ready: () => Promise<void>) => ready().catch((e) => void console.error(`node: ${(e as Error).message}`));
+// The node started, its failure logged rather than hiding the account made,
+// and started again when the page next asks (GET /account).
+let down = false;
+const start = (ready: () => Promise<void>) =>
+  ready().then(
+    () => void (down = false),
+    (e) => {
+      down = true;
+      console.error(`node: ${(e as Error).message}`);
+    },
+  );
 
 function startJoin(ready: () => Promise<void>): Join {
   let shown!: () => void;
@@ -76,19 +88,26 @@ function startJoin(ready: () => Promise<void>): Join {
   return j;
 }
 
+// False for a join that's committed, which goes on.
 function endJoin() {
+  if (committed()) return false;
   if (join) join.ended = true;
   join?.answer?.(false);
   join = undefined;
+  return true;
 }
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 
 // The page's calls, already let in (server.ts checks its origin and token).
 export async function account(req: Request, path: string, ready: () => Promise<void>): Promise<Response> {
-  if (path === "/account" && req.method === "GET") return json({ account: settled(), join: join?.view ?? null });
+  if (path === "/account" && req.method === "GET") {
+    if (down && settled()) await start(ready);
+    return json({ account: settled(), join: join?.view ?? null });
+  }
   if (req.method !== "POST") return json({ error: "POST" }, 405);
   const body = (await req.json().catch(() => ({}))) as { phrase?: unknown; ok?: unknown };
+  if (committed() && path !== "/account/join" && path !== "/account/join/confirm") return json({ error: "an account is being joined already" }, 409);
   try {
     switch (path) {
       case "/account/create":
@@ -117,7 +136,8 @@ export async function account(req: Request, path: string, ready: () => Promise<v
       }
       case "/account/join/confirm": {
         if (!join?.answer) return json({ error: "nothing to confirm" }, 409);
-        join.answer(body.ok === true);
+        join.accepted = body.ok === true;
+        join.answer(join.accepted);
         join.answer = undefined;
         // Answered: the code again, waiting, until joinAccount says how it went.
         const { sas: _, ...waiting } = join.view;
