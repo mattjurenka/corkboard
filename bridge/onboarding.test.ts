@@ -196,5 +196,10 @@ describe("the first start", () => {
     await approved;
     expect(await until(async () => (await m.call("/account")).join?.account)).toBe(a.id);
     expect(await m.call("/account/create")).toMatchObject({ status: 400, error: expect.stringContaining("already in an account") });
+    // The start still going isn't waited on again, nor another begun.
+    const asked = Date.now();
+    expect(await m.call("/account")).toMatchObject({ account: true });
+    expect(Date.now() - asked).toBeLessThan(400);
+    expect(await m.ready()).toBe(1);
   });
 });

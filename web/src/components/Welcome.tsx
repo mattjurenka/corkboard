@@ -40,7 +40,9 @@ export function Welcome({ call, done, resume }: { call: AccountCall; done: () =>
     const at = turn.current;
     const t = setInterval(async () => {
       const r = await call("/account").catch(() => undefined);
-      if (r?.join && at === turn.current) setStep({ at: "join", join: r.join });
+      if (!r || at !== turn.current) return;
+      // A join seen and then gone was ended elsewhere (another tab's esc).
+      setStep((s) => (r.join ? { at: "join", join: r.join } : s.at === "join" && s.join ? { at: "choose" } : s));
     }, 1000);
     return () => clearInterval(t);
   }, [joining, call]);
