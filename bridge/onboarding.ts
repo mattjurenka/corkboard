@@ -48,20 +48,16 @@ const joining = () => !!join && !join.view.account && !join.view.error;
 const committed = () => !!join?.view.accepted && joining();
 const settled = () => hasAccount() && !making && !joining();
 
-// The node started, one start at a time and for at most limits.nodeMs. Its
-// failure is logged rather than hiding the account made, and it's started
-// again when the page next asks (GET /account); if that fails too, the page
-// goes on without the node, as a bridge whose node fails at boot does.
+// The node started, one start at a time, waited for at most limits.nodeMs.
+// Its failure is logged rather than hiding the account made, and it's
+// started again when the page next asks (GET /account); if that fails too,
+// or the start is still going, the page goes on without the node, as a
+// bridge whose node fails at boot does. A start that comes up late is used.
 export const limits = { nodeMs: 60_000 };
 let down = false;
 let starting: Promise<void> | undefined;
-const start = (ready: () => Promise<void>) =>
-  (starting ??= Promise.race([
-    ready(),
-    Bun.sleep(limits.nodeMs).then(() => {
-      throw new Error(`it didn't start in ${limits.nodeMs / 1000} s`);
-    }),
-  ])
+async function start(ready: () => Promise<void>) {
+  starting ??= ready()
     .then(
       () => void (down = false),
       (e) => {
@@ -69,7 +65,17 @@ const start = (ready: () => Promise<void>) =>
         console.error(`node: ${(e as Error).message}`);
       },
     )
-    .finally(() => (starting = undefined)));
+    .finally(() => (starting = undefined));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<void>((r) => {
+    timer = setTimeout(() => {
+      down = true;
+      console.error(`node: still starting after ${limits.nodeMs / 1000} s; going on without it`);
+      r();
+    }, limits.nodeMs);
+  });
+  await Promise.race([starting, late]).finally(() => clearTimeout(timer));
+}
 
 function startJoin(ready: () => Promise<void>): Join {
   let shown!: () => void;
@@ -113,7 +119,7 @@ const json = (body: unknown, status = 200) => Response.json(body, { status });
 // The page's calls, already let in (server.ts checks its origin and token).
 export async function account(req: Request, path: string, ready: () => Promise<void>): Promise<Response> {
   if (path === "/account" && req.method === "GET") {
-    if (down && settled()) await start(ready);
+    if (down && settled() && !starting) await start(ready);
     return json({ account: settled(), join: join?.view ?? null });
   }
   if (req.method !== "POST") return json({ error: "POST" }, 405);
