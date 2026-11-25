@@ -34,7 +34,7 @@ import { lookup } from "node:dns/promises";
 import { request } from "node:https";
 import { isIP } from "node:net";
 import { Readable } from "node:stream";
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { type Dict, dict } from "../../lib/dict";
 import { random } from "../../lib/e2ee/keys";
@@ -145,10 +145,24 @@ export class OAuthStore {
     private net: Net = {},
   ) {}
 
+  // The file's text as last read or written, by its inode and mtime: it's
+  // read on every request (verify), and on a busy disk a read that misses
+  // the cache holds up the bridge's loop. Another process may write it, so
+  // a stat says whether it's still the one.
+  private text?: { at: string; text: string };
+
+  private stamp(): string | undefined {
+    const st = statSync(this.path, { bigint: true, throwIfNoEntry: false });
+    return st && `${st.ino}:${st.mtimeNs}:${st.size}`;
+  }
+
   private read(): File {
     let f: File;
     try {
-      const j = JSON.parse(readFileSync(this.path, "utf8")) as File;
+      const at = this.stamp();
+      if (at === undefined) throw new Error("none");
+      if (this.text?.at !== at) this.text = { at, text: readFileSync(this.path, "utf8") };
+      const j = JSON.parse(this.text.text) as File;
       f = { ...j, clients: dict(j.clients), grants: dict(j.grants), codes: dict(j.codes), tokens: dict(j.tokens) };
     } catch {
       f = { v: 1, clients: dict(), grants: dict(), codes: dict(), tokens: dict(), approvals: [] };
@@ -225,9 +239,12 @@ export class OAuthStore {
   private save(f: File) {
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
     const tmp = `${this.path}.tmp`;
-    writeFileSync(tmp, JSON.stringify(f, null, 1), { mode: 0o600 });
+    const text = JSON.stringify(f, null, 1);
+    writeFileSync(tmp, text, { mode: 0o600 });
     renameSync(tmp, this.path);
     chmodSync(this.path, 0o600);
+    const at = this.stamp();
+    this.text = at === undefined ? undefined : { at, text };
   }
 
   // Written even when fn throws, so a code spent on a failed exchange stays spent.

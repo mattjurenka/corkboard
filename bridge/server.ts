@@ -13,7 +13,8 @@ import "../lib/harden";
 import { decodeMultiStream, decode, encode, ExtensionCodec } from "@msgpack/msgpack";
 import type { Subprocess } from "bun";
 import { createHash, randomBytes } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { appendFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -688,14 +689,19 @@ async function hostCall(req: Request, url: URL): Promise<Response> {
 // per key with the window it came from, for `bun run latency` and for
 // lining up with whatever else the machine was doing at the time.
 const LATENCY_LOG = join(STATE_DIR, "latency.jsonl");
+// Appended off the loop and in order: on a busy disk a write can wait on
+// the page's last one reaching it, and every page's keys would wait too.
+let latencyWrites: Promise<unknown> | undefined;
 async function latency(req: Request): Promise<Response> {
   const why = refuse(req);
   if (why || req.method !== "POST") return new Response(why ?? "POST", { status: 403 });
   if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
   const { samples, ...page } = (await req.json()) as { samples?: unknown[] };
   if (!Array.isArray(samples)) return new Response("samples", { status: 400 });
-  mkdirSync(dirname(LATENCY_LOG), { recursive: true });
-  appendFileSync(LATENCY_LOG, samples.map((s) => JSON.stringify({ ...(s as object), ...page }) + "\n").join(""));
+  const lines = samples.map((s) => JSON.stringify({ ...(s as object), ...page }) + "\n").join("");
+  latencyWrites = (latencyWrites ?? mkdir(dirname(LATENCY_LOG), { recursive: true }))
+    .then(() => appendFile(LATENCY_LOG, lines))
+    .catch((err) => console.error("latency:", err));
   return new Response(null, { status: 204 });
 }
 

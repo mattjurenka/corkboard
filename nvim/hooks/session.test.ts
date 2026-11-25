@@ -109,3 +109,32 @@ describe("Claude Code's events as corkboard's", () => {
     expect(run({ hook_event_name: "PermissionRequest", tool_name: "Bash" }).noticed).toBeUndefined();
   });
 });
+
+// How full the session's context is, read by the hook so Neovim needn't
+// read the transcript on every tool call: a number, false for a transcript
+// with none yet, and nothing for an event the statusline doesn't redraw on.
+describe("context", () => {
+  const transcript = join(dir, "transcript.jsonl");
+  const usage = { input_tokens: 10, cache_creation_input_tokens: 200, cache_read_input_tokens: 3000 };
+  writeFileSync(
+    transcript,
+    [
+      { type: "assistant", message: { usage } },
+      { type: "assistant", isSidechain: true, message: { usage: { input_tokens: 99999 } } },
+    ]
+      .map((r) => JSON.stringify(r))
+      .join("\n") + "\n",
+  );
+
+  test.each(["PostToolUse", "Stop"])("%s", (name) => {
+    expect(run({ hook_event_name: name, transcript_path: transcript, tool_name: "Bash", tool_input: {}, tool_response: "" }).context).toBe(3210);
+  });
+
+  test("none yet", () => {
+    expect(run({ hook_event_name: "Stop" }).context).toBe(false);
+  });
+
+  test("not read for another event", () => {
+    expect(run({ hook_event_name: "UserPromptSubmit", transcript_path: transcript })).not.toHaveProperty("context");
+  });
+});

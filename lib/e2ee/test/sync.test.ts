@@ -150,6 +150,29 @@ describe("replicas", () => {
     expect(a2.cursor).toBe(4);
   });
 
+  it("save a pull only when it brought something", async () => {
+    const relay = memoryRelay();
+    const inner = memoryStore();
+    let saves = 0;
+    const store = { ...inner, save: (...a: Parameters<typeof inner.save>) => (saves++, inner.save(...a)) };
+    const a = await Replica.open({ transport: relay.transport("A"), key, object: "obj2", device: "A", store });
+    const b = await Replica.open({ transport: relay.transport("B"), key, object: "obj2", device: "B" });
+    await a.pull();
+    const once = saves;
+    await a.pull();
+    expect(saves).toBe(once);
+    await b.change({ t: "card", card: "task-1", set: { title: "eggs" } });
+    await b.push();
+    await a.pull();
+    expect(saves).toBe(once + 1);
+    await a.pull();
+    expect(saves).toBe(once + 1);
+    // Kept as pulled.
+    const a2 = await Replica.open({ transport: relay.transport("A"), key, object: "obj2", device: "A", store });
+    expect(a2.cards()).toEqual(b.cards());
+    expect(a2.cursor).toBe(1);
+  });
+
   it("skip ops that don't open, and those another device's label is put on", async () => {
     const relay = memoryRelay();
     const a = await Replica.open({ transport: relay.transport("A"), key, object: "obj2", device: "A" });

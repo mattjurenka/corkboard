@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, setSystemTime } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -230,6 +230,21 @@ describe("a confidential client", () => {
     const code = await (await consent(n, c.client_id, redirect)).approve();
     expect(await error(await exchange(code, c.client_id, { secret: "nope" }))).toEqual([401, "invalid_client"]);
     expect((await exchange(code, c.client_id, { secret: c.client_secret })).status).toBe(200);
+  });
+
+  // The file as last read is kept, but another process's write is seen.
+  it("is known to another store on the file, and gone from this one once that one drops it", async () => {
+    const c = await register("client_secret_post");
+    const code = await (await consent(n, c.client_id, redirect)).approve();
+    const t = (await (await exchange(code, c.client_id, { secret: c.client_secret })).json()) as { access_token: string };
+    expect(n.oauth.verify(t.access_token, ORIGIN)?.scope).toBe("assistant");
+    const path = join(n.dir, "oauth.json");
+    expect(new OAuthStore(path).verify(t.access_token, ORIGIN)?.scope).toBe("assistant");
+    const f = JSON.parse(await Bun.file(path).text());
+    f.tokens = {};
+    writeFileSync(`${path}.other`, JSON.stringify(f));
+    renameSync(`${path}.other`, path);
+    expect(n.oauth.verify(t.access_token, ORIGIN)).toBeUndefined();
   });
 
   it("is no client with a Basic header that names it and no secret", async () => {

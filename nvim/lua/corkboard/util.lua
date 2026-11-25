@@ -18,6 +18,47 @@ function M.data_dir(...) return vim.fs.joinpath(dir("data", "XDG_DATA_HOME", ".l
 -- $XDG_STATE_HOME/corkboard/..., which the bridge reads too.
 function M.state_dir(...) return vim.fs.joinpath(dir("state", "XDG_STATE_HOME", ".local/state"), ...) end
 
+-- Write text to path off the main loop: into a file beside it, renamed into
+-- place, so no reader sees half of it. Rewriting a file in place waits, on a
+-- busy disk (and on dm-crypt, always), for its pages' last write to reach
+-- the disk, and every key waits with it. Writes to one path go in order; a
+-- second asked for while one is under way replaces any already waiting.
+local writing = {} -- path -> the text to write once the one under way is done, or false
+local function write_now(path, text)
+  local tmp = path .. ".tmp"
+  local function done()
+    local again = writing[path]
+    writing[path] = again and false or nil
+    if again then write_now(path, again) end
+  end
+  vim.uv.fs_open(tmp, "w", tonumber("644", 8), function(err, fd)
+    if err then return done() end
+    vim.uv.fs_write(fd, text, 0, function()
+      vim.uv.fs_close(fd, function()
+        vim.uv.fs_rename(tmp, path, done)
+      end)
+    end)
+  end)
+end
+
+function M.write_later(path, text)
+  if writing[path] ~= nil then
+    writing[path] = text
+    return
+  end
+  writing[path] = false
+  write_now(path, text)
+end
+
+-- Whether every write_later is on disk.
+function M.written() return next(writing) == nil end
+
+-- What's still being written is finished first.
+vim.api.nvim_create_autocmd("VimLeavePre", {
+  group = vim.api.nvim_create_augroup("corkboard.util", {}),
+  callback = function() vim.wait(2000, M.written, 5) end,
+})
+
 -- A path as one directory name: /home/me/proj -> home-me-proj; on Windows
 -- C:\Users\me\proj -> C-Users-me-proj. As pathKey in bridge/dirs.ts.
 function M.path_key(path)

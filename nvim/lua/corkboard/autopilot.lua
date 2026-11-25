@@ -501,7 +501,7 @@ end
 
 local function save()
   vim.fn.mkdir(board().dir(), "p")
-  pcall(vim.fn.writefile, { vim.json.encode(reviews) }, reviews_file())
+  require("corkboard.util").write_later(reviews_file(), vim.json.encode(reviews))
 end
 
 -- Read on every push: only cards waiting for review, and a card's dates

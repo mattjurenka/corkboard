@@ -15,6 +15,18 @@ import { own } from "../../../lib/dict";
 
 type Entry = { name: string; dir?: boolean; ignored?: boolean; git?: "modified" | "added" };
 
+// A folder's entries come back as corkboard.dir, by the id it was asked
+// with, since Neovim reads them off its loop. Every page on this Neovim
+// hears every answer, so the ids start with this page's own.
+const page = Math.random().toString(36).slice(2);
+let asked = 0;
+const waiting = new Map<string, (entries: Entry[] | null) => void>();
+const onDir = ([id, entries]: any[]) => {
+  const resolve = waiting.get(id);
+  waiting.delete(id);
+  resolve?.(entries ?? null);
+};
+
 export function Files() {
   const nvim = useNvim();
   const root = useStore((s) => s.context?.cwd ?? null);
@@ -27,14 +39,20 @@ export function Files() {
   const [children, setChildren] = useState<Map<string, Entry[]>>(new Map());
   const tree = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    nvim.rpc.on("corkboard.dir", onDir);
+  }, [nvim]);
+
   const load = useCallback(
     async (dirs: string[]) => {
       const read = await Promise.all(
-        dirs.map((dir) =>
-          nvim.rpc
-            .request("nvim_exec_lua", "return require('corkboard').list_dir(...)", [dir])
-            .then((entries: Entry[]) => [dir, entries] as const, () => [dir, null] as const),
-        ),
+        dirs.map((dir) => {
+          const id = `${page}.${++asked}`;
+          nvim.notify("nvim_exec_lua", "require('corkboard').list_dir(...)", [dir, id]);
+          return new Promise<readonly [string, Entry[] | null]>((resolve) =>
+            waiting.set(id, (entries) => resolve([dir, entries])),
+          );
+        }),
       );
       setChildren((prev) => {
         const next = new Map(prev);
