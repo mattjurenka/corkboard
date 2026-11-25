@@ -141,6 +141,23 @@ describe("hook", () => {
       { events, card: card ?? null },
     );
 
+  test("the context the hook read is what the statusline shows; the transcript isn't read again", () => {
+    const got = box.lua(
+      `local agents = require("corkboard.agents")
+      local buf = vim.api.nvim_create_buf(true, false)
+      vim.b[buf].corkboard_agent = "claude"
+      require("corkboard.agent").get("claude").read.context = function() error("read the transcript") end
+      local out = {}
+      for _, ctx in ipairs({ 1234, false, 5678 }) do
+        agents.hook({ buf = buf, event = "tool_done", transcript = "/nowhere.jsonl", context = ctx })
+        table.insert(out, vim.b[buf].corkboard_context)
+      end
+      return out`,
+    );
+    // None yet leaves what was there.
+    expect(got).toEqual([1234, 1234, 5678]);
+  });
+
   test("a question blocks the card with it; answered, it's working again", () => {
     box.lua(`require("corkboard.cards").set("TASK-1", { agent_state = "working" })`);
     const steps = hook(

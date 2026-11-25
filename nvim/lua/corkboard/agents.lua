@@ -75,11 +75,23 @@ end
 -- can add up their cost after they end.
 local function sessions_file() return vim.fs.joinpath(board().dir(), "sessions.json") end
 
+-- The board redraws on every session's every event, so what was read is
+-- kept until the file changes (another Neovim on the board may write it).
+local sessions_read -- { path, mtime, size, all }
 function M.card_sessions()
-  local ok, text = pcall(vim.fn.readfile, sessions_file())
+  local path = sessions_file()
+  local stat = vim.uv.fs_stat(path)
+  local was = sessions_read and sessions_read.path == path and sessions_read
+  -- Not there yet: the first one remembered may still be on its way.
+  if not stat then return was and was.all or {} end
+  local mtime = stat.mtime.sec * 1e9 + stat.mtime.nsec
+  if was and was.mtime == mtime and was.size == stat.size then return was.all end
+  local ok, text = pcall(vim.fn.readfile, path)
   if not ok then return {} end
   local decoded = vim.F.npcall(vim.json.decode, table.concat(text, "\n"))
-  return type(decoded) == "table" and decoded or {}
+  local all = type(decoded) == "table" and decoded or {}
+  sessions_read = { path = path, mtime = mtime, size = stat.size, all = all }
+  return all
 end
 
 local function remember(id, session_id, transcript)
@@ -90,7 +102,9 @@ local function remember(id, session_id, transcript)
   end
   table.insert(list, { id = session_id, transcript = transcript, started = os.time() })
   all[id] = list
-  pcall(vim.fn.writefile, { vim.json.encode(all) }, sessions_file())
+  local path = sessions_file()
+  if not (sessions_read and sessions_read.path == path) then sessions_read = { path = path, all = all } end
+  require("corkboard.util").write_later(path, vim.json.encode(all))
 end
 
 -- Go to what the card's agent wants: its session, where the question is
@@ -126,7 +140,9 @@ local function track_context(buf, ev)
   local kind = require("corkboard.agent").of(buf)
   if (ev.event ~= "settled" and ev.event ~= "tool_done") or not kind then return vim.cmd.redrawstatus({ bang = true }) end
   local was = vim.b[buf].corkboard_context
-  local now = kind.read.context(ev.transcript)
+  -- Claude Code's hook reads it; another kind's transcript is read here.
+  local now
+  if ev.context ~= nil then now = ev.context or nil else now = kind.read.context(ev.transcript) end
   if not now then return end
   vim.b[buf].corkboard_context = now
   local limit = M.context_limit()

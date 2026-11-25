@@ -39,7 +39,9 @@ export class Episodes {
   constructor(path = ":memory:") {
     if (path !== ":memory:" && !existsSync(path)) writeFileSync(path, "", { mode: 0o600 });
     this.db = new Database(path);
-    if (path !== ":memory:") this.db.exec("PRAGMA journal_mode = WAL;");
+    // NORMAL: a commit is safe in the WAL without its own fsync, which on a
+    // busy disk held up the node, and the bridge's loop it shares.
+    if (path !== ":memory:") this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
     this.db.exec(SCHEMA);
     // Added 2026-11-16 (.agent/plans/brain-pages.md).
     if (!this.db.query<{ name: string }, []>("PRAGMA table_info(episodes)").all().some((c) => c.name === "project")) this.db.exec("ALTER TABLE episodes ADD COLUMN project TEXT");

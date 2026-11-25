@@ -7,6 +7,7 @@ import { grantForge } from "../../lib/e2ee/forge";
 import { accountKeys, newRoot } from "../../lib/e2ee/keys";
 import { forgeHandler } from "../../bridge/node/forge";
 import { type Git, GitGrants, forgeOrigin, gitNote, newHolder, slotForge } from "./forge";
+import { verdictOf } from "../../bridge/node/prs";
 import type { Manifest, Spawn } from "./fleet";
 
 const GATE = "https://git.test";
@@ -135,6 +136,9 @@ test("one that may write pull requests is told how to open one", () => {
   const g = grantForge(newDevice(), keys.id, newHolder().id, { name: "fleet s1 (coding)", repos: ["matt/*"], perms: { contents: "write", pull_requests: "write" }, refs: ["agent/s1/*"], expires: Date.now() + 86_400_000 });
   s.remote!.git!.chain.grants = [g];
   expect(gitNote(s)).toContain("POST {\"head\", \"base\", \"title\", \"body\"} as JSON to http://fleet-gateway:8890/api/v1/repos/<owner>/<repo>/pulls");
+  // And how to review one so that merge_pr counts it (prs.ts's marker).
+  const marker = /"(corkboard-review: approve agent\/s1\/work [^"]+)"/.exec(gitNote(s))?.[1];
+  expect(verdictOf({ body: `Fine.\n\n${marker!.replace("<head sha>", "abc1234")}` })).toMatchObject({ verdict: "approve", reviewer: "agent/s1/work", sha: "abc1234" });
   expect(forgeOrigin(s, "https://git.corkboard.fyi/matt/other.git")?.branch).toBe("agent/s1/work");
   expect(forgeOrigin({ ...s, id: "s2" }, "https://git.corkboard.fyi/matt/other.git")).toBeUndefined();
 });

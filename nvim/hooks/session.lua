@@ -20,8 +20,15 @@ if not ok or type(input) ~= "table" then return end
 local here = vim.fs.dirname(debug.getinfo(1, "S").source:sub(2))
 local context = vim.F.npcall(dofile, vim.fs.joinpath(here, "..", "lua", "corkboard", "context.lua"))
 local restarts = (os.getenv("NVIM") and os.getenv("CORKBOARD_BUF")) or os.getenv("CORKBOARD_HANDOFF")
+-- The session's context, which Neovim's statusline shows too (sent with
+-- the event, below, so Neovim needn't read the transcript itself).
+local tracked = context and (input.hook_event_name == "PostToolUse" or input.hook_event_name == "Stop")
+local session_used = (restarts or tracked) and context and context.last(input.transcript_path)
+-- false: read, and there's none yet; nil: not read.
+local sent_used
+if tracked then sent_used = session_used or false end
 -- A subagent's tools are its own context's, not the session's.
-local used = restarts and context and not input.agent_id and context.last(input.transcript_path)
+local used = restarts and not input.agent_id and session_used
 -- A session that looked for the handoff tool and found none (no corkboard
 -- MCP) is left alone, rather than held at STOP with no way out.
 local missing = vim.fs.joinpath(vim.fn.stdpath("state"), "corkboard", "no-handoff", tostring(input.session_id))
@@ -150,6 +157,7 @@ pcall(vim.rpcnotify, chan, "nvim_exec_lua", "require('corkboard.agents').hook(..
     session = input.session_id,
     source = input.source,
     transcript = input.transcript_path,
+    context = sent_used,
     tool_name = input.tool_name,
     tool_use_id = input.tool_use_id,
     background = background or nil,

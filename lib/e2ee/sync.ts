@@ -184,10 +184,18 @@ export class Replica {
     }
   }
 
+  // What a save holds besides the cards (dirty), as of the last one.
+  private mark() {
+    return `${this.s.cursor}:${this.s.seq}:${this.s.epoch ?? 0}:${this.s.rejected.length}:${this.s.outbox.length}`;
+  }
+  private saved?: string;
+
   private async save() {
     const changed = this.dirty;
     this.dirty = new Set();
+    const mark = this.mark();
     await this.store.save(this.s, changed);
+    this.saved = mark;
   }
 
   // Several changes as one save; each is its own op.
@@ -313,7 +321,9 @@ export class Replica {
       this.kept = { count: r.count ?? 0, bytes: r.bytes ?? 0, head: r.head };
       if (!r.ops.length || this.s.cursor >= r.head) break;
     }
-    await this.save();
+    // A resync that found nothing new writes nothing: a transaction a
+    // replica, every few minutes, on the bridge's loop.
+    if (this.dirty?.size !== 0 || this.mark() !== this.saved) await this.save();
     return n;
   }
 

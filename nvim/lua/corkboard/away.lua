@@ -20,20 +20,36 @@ end
 -- /var/lib/<vm>/outbox, at least once a minute), once it's been talked to.
 local VM_STATES = { busy = "working", idle = "idle", waiting = "permission" }
 local watching = {}
+-- vm -> { at (its mtime), reading }: read again only once the watcher says
+-- it changed, not on every session's every event.
+local readings = {}
 
 local function vm_state(vm, buf)
   local dir = "/var/lib/" .. vm .. "/outbox"
   if not watching[vm] then
     local w = vim.uv.new_fs_event()
-    if w and w:start(dir, {}, function(_, name) if name == ".claude-sessions.json" then vim.schedule(M.report) end end) then
-      watching[vm] = w
+    local function changed(_, name)
+      if name == ".claude-sessions.json" then
+        vim.schedule(function()
+          readings[vm] = nil
+          M.report()
+        end)
+      end
     end
+    if w and w:start(dir, {}, changed) then watching[vm] = w end
   end
   local path = dir .. "/.claude-sessions.json"
-  local stat = vim.uv.fs_stat(path)
-  if not stat or os.time() - stat.mtime.sec > 180 then return end
-  local ok, reading = pcall(vim.json.decode, table.concat(vim.fn.readfile(path), "\n"))
-  if not ok or type(reading) ~= "table" then return end
+  local read = watching[vm] and readings[vm]
+  if not read then
+    local stat = vim.uv.fs_stat(path)
+    if not stat then return end
+    local ok, reading = pcall(vim.json.decode, table.concat(vim.fn.readfile(path), "\n"))
+    if not ok or type(reading) ~= "table" then return end
+    read = { at = stat.mtime.sec, reading = reading }
+    readings[vm] = read
+  end
+  if os.time() - read.at > 180 then return end
+  local reading = read.reading
   for _, s in ipairs(reading.sessions or {}) do
     local at = s.corkboard
     if type(at) == "table" and at.buf == buf and at.nvim == require("corkboard.util").server() then return VM_STATES[s.status] end

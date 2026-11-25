@@ -29,18 +29,19 @@ local last_project_file = require("corkboard.util").state_dir("last-project")
 local projects_file = vim.fs.joinpath(vim.fs.dirname(last_project_file), "projects")
 local max_projects = 50
 
+-- Read as they'll be once what's being written is (util.write_later).
 function M.recent_projects()
-  local ok, lines = pcall(vim.fn.readfile, projects_file)
-  if not ok then return {} end
+  local lines = require("corkboard.util").read_lines(projects_file) or {}
   return vim.tbl_filter(function(dir) return vim.fn.isdirectory(dir) == 1 end, lines)
 end
 
 -- Take dir off the recent projects, and off the last one opened.
 function M.forget_project(dir)
+  local util = require("corkboard.util")
   local left = vim.tbl_filter(function(d) return d ~= dir end, M.recent_projects())
-  pcall(vim.fn.writefile, left, projects_file)
-  local ok, last = pcall(vim.fn.readfile, last_project_file)
-  if ok and last[1] == dir then pcall(vim.fn.delete, last_project_file) end
+  util.write_later(projects_file, #left > 0 and table.concat(left, "\n") .. "\n" or "")
+  local last = util.read_lines(last_project_file)
+  if last and last[1] == dir then util.delete_later(last_project_file) end
 end
 
 -- Home is where corkboard lands without a project, so it is not one. A
@@ -50,12 +51,12 @@ local function remember_project()
   if cwd == vim.uv.os_homedir() then return end
   local root = require("corkboard.util").project_root(cwd)
   vim.fn.mkdir(vim.fs.dirname(last_project_file), "p")
-  pcall(vim.fn.writefile, { root }, last_project_file)
+  require("corkboard.util").write_later(last_project_file, root .. "\n")
   local projects = { root }
   for _, dir in ipairs(M.recent_projects()) do
     if dir ~= root and #projects < max_projects then table.insert(projects, dir) end
   end
-  pcall(vim.fn.writefile, projects, projects_file)
+  require("corkboard.util").write_later(projects_file, table.concat(projects, "\n") .. "\n")
 end
 
 -- The statusline's dimmed folder, in Comment's colour, and a Claude Code
@@ -413,17 +414,14 @@ function M.push_context()
   M.notify("corkboard.context", context)
 end
 
--- Each entry of dir that git sees as changed: "added" or "modified". A
--- folder takes the status of what changed inside it, modified over added.
-local function git_status(dir)
+-- Each entry of dir that git sees as changed: "added" or "modified", from
+-- `git rev-parse --show-prefix` and `git status`'s output. A folder takes
+-- the status of what changed inside it, modified over added.
+local function git_status(prefix, result)
   local status = {}
-  local prefix = vim.system({ "git", "rev-parse", "--show-prefix" }, { cwd = dir }):wait()
   if prefix.code ~= 0 then return status end
   prefix = vim.trim(prefix.stdout)
   -- Porcelain paths are relative to the repository root, whatever the cwd.
-  -- Without the index refreshed on disk: the browser watches it (watch_dirs),
-  -- and a session's own git may hold its lock.
-  local result = vim.system({ "git", "status", "--porcelain", "-z", "--untracked-files=normal", "--", "." }, { cwd = dir, env = { GIT_OPTIONAL_LOCKS = "0" } }):wait()
   local fields = vim.split(result.stdout or "", "\0", { plain = true, trimempty = true })
   local i = 1
   while i <= #fields do
@@ -442,33 +440,82 @@ local function git_status(dir)
 end
 
 -- One directory for the file browser: folders first, then files, by name,
--- without .git, each marked if git ignores it or it has changed.
-function M.list_dir(dir)
-  local entries, names = {}, {}
-  for name, type in vim.fs.dir(dir) do
-    if name ~= ".git" then
-      if type == "link" then
-        local stat = vim.uv.fs_stat(vim.fs.joinpath(dir, name))
-        type = stat and stat.type or "file"
+-- without .git, each marked if git ignores it or it has changed. Its git
+-- runs off the main loop (on a busy disk a cold `git status` takes a third
+-- of a second, and there's one per open folder on every change), and the
+-- entries come back as corkboard.dir with the page's id, or nil for a
+-- folder that's gone.
+function M.list_dir(dir, id)
+  -- Once: the page waits for an answer, so an error is one too.
+  local replied = false
+  local function reply(entries)
+    if replied then return end
+    replied = true
+    M.notify("corkboard.dir", id, entries or vim.NIL)
+  end
+  local function guard(fn)
+    return function()
+      local ok, err = pcall(fn)
+      if not ok then
+        vim.notify("corkboard: list_dir: " .. tostring(err), vim.log.levels.DEBUG)
+        reply(nil)
       end
-      table.insert(entries, { name = name, dir = type == "directory" })
-      table.insert(names, name)
     end
   end
-  -- Outside a repository git exits non-zero and prints nothing.
-  local ignored = {}
-  local result = vim.system({ "git", "check-ignore", "--stdin" }, { cwd = dir, stdin = table.concat(names, "\n") }):wait()
-  for name in (result.stdout or ""):gmatch("[^\n]+") do ignored[name] = true end
-  local status = git_status(dir)
-  for _, e in ipairs(entries) do
-    e.ignored = ignored[e.name] or nil
-    e.git = status[e.name]
-  end
-  table.sort(entries, function(a, b)
-    if a.dir ~= b.dir then return a.dir end
-    return a.name:lower() < b.name:lower()
-  end)
-  return entries
+  guard(function()
+    local stat = vim.uv.fs_stat(dir)
+    if not (stat and stat.type == "directory") then return reply(nil) end
+    local entries, names = {}, {}
+    for name, type in vim.fs.dir(dir) do
+      if name ~= ".git" then
+        if type == "link" then
+          local target = vim.uv.fs_stat(vim.fs.joinpath(dir, name))
+          type = target and target.type or "file"
+        end
+        table.insert(entries, { name = name, dir = type == "directory" })
+        table.insert(names, name)
+      end
+    end
+    local results, left = {}, 3
+    local function run(key, cmd, opts)
+      local ok = pcall(vim.system, cmd, opts, function(result)
+        results[key] = result
+        left = left - 1
+        if left ~= 0 then return end
+        vim.schedule(guard(function()
+          -- Outside a repository git exits non-zero and prints nothing.
+          local ignored = {}
+          for name in (results.ignored.stdout or ""):gmatch("[^\n]+") do ignored[name] = true end
+          local status = git_status(results.prefix, results.status)
+          for _, e in ipairs(entries) do
+            e.ignored = ignored[e.name] or nil
+            e.git = status[e.name]
+          end
+          table.sort(entries, function(a, b)
+            if a.dir ~= b.dir then return a.dir end
+            return a.name:lower() < b.name:lower()
+          end)
+          reply(entries)
+        end))
+      end)
+      -- Gone between the stat and here.
+      if not ok and left > 0 then
+        left = -1
+        reply(nil)
+      end
+    end
+    local calls = {
+      { "ignored", { "git", "check-ignore", "--stdin" }, { cwd = dir, stdin = table.concat(names, "\n") } },
+      { "prefix", { "git", "rev-parse", "--show-prefix" }, { cwd = dir } },
+      -- Without the index refreshed on disk: the browser watches it (watch_dirs),
+      -- and a session's own git may hold its lock.
+      { "status", { "git", "status", "--porcelain", "-z", "--untracked-files=normal", "--", "." }, { cwd = dir, env = { GIT_OPTIONAL_LOCKS = "0" } } },
+    }
+    for _, c in ipairs(calls) do
+      if left < 0 then return end
+      run(c[1], c[2], c[3])
+    end
+  end)()
 end
 
 -- The folders the file browser has open, and the repository's index, watched
@@ -512,9 +559,19 @@ end
 -- The page says which folders it shows, each time one opens or shuts.
 function M.watch_dirs(dirs)
   browser_dirs = dirs
-  local git = vim.system({ "git", "rev-parse", "--absolute-git-dir" }, { cwd = vim.fn.getcwd() }):wait()
-  browser_index = git.code == 0 and vim.trim(git.stdout) or nil
   watch_browser()
+  local ok = pcall(vim.system, { "git", "rev-parse", "--absolute-git-dir" }, { cwd = vim.fn.getcwd() }, function(git)
+    vim.schedule(function()
+      -- Opened or shut again since.
+      if browser_dirs ~= dirs then return end
+      browser_index = git.code == 0 and vim.trim(git.stdout) or nil
+      watch_browser()
+    end)
+  end)
+  if not ok then
+    browser_index = nil
+    watch_browser()
+  end
 end
 
 -- An HTML panel such as the board or a markdown preview, as opposed to a

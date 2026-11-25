@@ -108,7 +108,7 @@ function M.save()
   last = text
   local file = path()
   vim.fn.mkdir(vim.fs.dirname(file), "p")
-  pcall(vim.fn.writefile, { text }, file)
+  require("corkboard.util").write_later(file, text)
 end
 
 local timer
