@@ -12,7 +12,7 @@
 
 import { hostname } from "node:os";
 import { CLOUD, token } from "./cloud";
-import { Follower, type Item } from "./transcript";
+import { Follower, type Item, type Question } from "./transcript";
 import type { Peers } from "./peers";
 
 // One session, as the Worker hears of it, and where its log is (which stays
@@ -32,6 +32,8 @@ export type Hosted = {
   context?: number;
   spawn?: string;
   transcript?: string;
+  // It has a browser the phone can take over (fleet/fleetd/browser.ts).
+  browser?: boolean;
   // Its face on the phone: its persona, and her skin.
   persona?: string;
   skin?: string;
@@ -54,6 +56,23 @@ export function answers(a: unknown): Answers | string {
   return a.map((x) => ({ picks: x.picks, ...(typeof x.other === "string" && x.other.trim() && { other: x.other }) }));
 }
 
+// Answers in words, for a session that takes only words: each question's
+// header (or the question), then the options picked and its own words; or
+// why they don't answer these questions.
+export function inWords(questions: Question[], a: Answers): { text: string } | { error: string } {
+  if (a.length !== questions.length) return { error: `answers must be a list, one for each of its ${questions.length} questions` };
+  const said: string[] = [];
+  for (const [i, q] of questions.entries()) {
+    const { picks, other } = a[i];
+    if (picks.some((p) => p >= q.options.length)) return { error: `question ${i + 1}'s options are 0 to ${q.options.length - 1}` };
+    if (!q.multiSelect && picks.length + (other ? 1 : 0) > 1) return { error: `question ${i + 1} takes one answer` };
+    const words = [...picks.map((p) => q.options[p].label), ...(other ? [other.trim()] : [])];
+    if (!words.length) return { error: `question ${i + 1} has no answer` };
+    said.push(`${q.header || q.question}: ${words.join(", ")}`);
+  }
+  return { text: said.join("\n") };
+}
+
 export type Source = {
   list(): Hosted[];
   // Called whenever the list may have changed.
@@ -66,6 +85,10 @@ export type Source = {
   // Its terminal, mirrored: given where its bytes go, what to do with a
   // stream's opening, keys (base64), size and closing.
   terminals?(to: TerminalOut): Terminals;
+  // Its browser, taken over: given where a stream's frames go, what to do
+  // with its opening and closing, and with what's put in (by session, as
+  // each is its own request).
+  browsers?(to: TerminalOut): Browsers;
   // Every other bridge's sessions, as the Worker has them, whenever that
   // changes. They stay as they were while it can't be reached, so a blip
   // doesn't look like each of them ending.
@@ -84,6 +107,11 @@ export type Source = {
 export type Peer = { id: string; machine: string; sessions: (Hosted & { spawn?: string | null; attach?: boolean; terminal?: boolean })[] };
 
 export type TerminalOut = { out(stream: string, data: string): void; end(stream: string, why: string): void };
+export type Browsers = {
+  open(stream: string, key: string): void;
+  close(stream: string): void;
+  input(key: string, input: Record<string, unknown>): Promise<Answer>;
+};
 export type Terminals = {
   open(stream: string, key: string): void;
   input(stream: string, data: string): void;
@@ -104,7 +132,7 @@ export type Link = { receive(m: any): void; drop(): void };
 // and connect, called each time a link opens, with how to send down it.
 export type HubJoin = (hello: { id: string; machine: string; url?: string | null; environment: string }, connect: (send: (m: object) => void) => Link) => void;
 
-type Stream = { key: string; send(m: object): void; follower?: Follower; state?: string; timer?: ReturnType<typeof setInterval> };
+type Stream = { key: string; send(m: object): void; follower?: Follower; state?: string; sent?: boolean; timer?: ReturnType<typeof setInterval> };
 
 // The protocol's bridge end, whatever it's linked to: each link hears the
 // list, is asked and is sent its own streams.
@@ -113,6 +141,7 @@ function core(environment: string, source: Source) {
   const links = new Map<(m: object) => void, boolean>();
   const streams = new Map<string, Stream>();
   const mirrored = new Map<string, (m: object) => void>();
+  const viewed = new Map<string, (m: object) => void>();
 
   // Where its log is stays here: only whether it can be followed goes. With
   // no screen to show, a session is followed before it has a log (fleetd's,
@@ -136,7 +165,11 @@ function core(environment: string, source: Source) {
         ? source.screen
           ? await source.screen(q.key)
           : { error: "that session has no screen here" }
-        : q.type === "speech"
+        : q.type === "browser"
+          ? browsers && q.input && typeof q.input === "object" && !Array.isArray(q.input)
+            ? await browsers.input(q.key, q.input)
+            : { error: "that session has no browser here" }
+          : q.type === "speech"
           ? source.speech
             ? await source.speech(q.sentence)
             : { error: "no voice here" }
@@ -157,12 +190,13 @@ function core(environment: string, source: Source) {
 
   const end = (stream: string, why?: string) => {
     const s = streams.get(stream);
-    const send = s?.send ?? mirrored.get(stream);
+    const send = s?.send ?? mirrored.get(stream) ?? viewed.get(stream);
     if (s) {
       streams.delete(stream);
       clearInterval(s.timer);
     }
     if (mirrored.delete(stream)) terminals?.close(stream);
+    if (viewed.delete(stream)) browsers?.close(stream);
     send?.({ type: "end", stream, ...(why && { why }) });
   };
 
@@ -171,6 +205,17 @@ function core(environment: string, source: Source) {
     out: (stream, data) => mirrored.get(stream)?.({ type: "out", stream, data }),
     end: (stream, why) => mirrored.has(stream) && end(stream, why),
   });
+  // A browser's streams: its frames and tabs, JSON in "out".
+  const browsers = source.browsers?.({
+    out: (stream, data) => viewed.get(stream)?.({ type: "out", stream, data }),
+    end: (stream, why) => viewed.has(stream) && end(stream, why),
+  });
+  const view = (send: (m: object) => void, stream: string, key: string) => {
+    if (!browsers) return send({ type: "end", stream, why: "that session has no browser here" });
+    viewed.set(stream, send);
+    browsers.open(stream, key);
+  };
+
   const mirror = (send: (m: object) => void, stream: string, key: string) => {
     if (!terminals) return send({ type: "end", stream, why: "that session has no terminal here" });
     mirrored.set(stream, send);
@@ -178,10 +223,15 @@ function core(environment: string, source: Source) {
   };
 
   // In batches, each well under a socket message's limit; the first with
-  // the session's state, when that's changed.
+  // the session's state, when that's changed. The last of what a stream is
+  // first sent, or sent again from the start, is whole: its conversation
+  // so far has all come (talk.ts reads it so, where batches may come apart).
   const out = (s: Stream, stream: string, items: Item[], reset = false, state?: string) => {
+    const whole = reset || !s.sent;
     for (let i = 0; i < items.length || ((reset || state) && i === 0); i += 40) {
-      s.send({ type: "out", stream, data: JSON.stringify({ items: items.slice(i, i + 40), ...(reset && i === 0 && { reset: true }), ...(state && i === 0 && { state }) }) });
+      const last = whole && i + 40 >= items.length;
+      s.sent = true;
+      s.send({ type: "out", stream, data: JSON.stringify({ items: items.slice(i, i + 40), ...(reset && i === 0 && { reset: true }), ...(state && i === 0 && { state }), ...(last && { whole: true }) }) });
     }
   };
 
@@ -207,19 +257,19 @@ function core(environment: string, source: Source) {
   return (send: (m: object) => void, sealed = false): Link => {
     links.set(send, sealed);
     send(listed(sealed));
-    const mine = (stream: unknown) => typeof stream === "string" && (streams.get(stream)?.send ?? mirrored.get(stream)) === send;
+    const mine = (stream: unknown) => typeof stream === "string" && (streams.get(stream)?.send ?? mirrored.get(stream) ?? viewed.get(stream)) === send;
     return {
       receive(m: any) {
-        if ((m.type === "screen" || m.type === "say" || m.type === "speech") && typeof m.ask === "number") answer(send, m);
-        else if (m.type === "attach" && typeof m.stream === "string" && typeof m.key === "string" && !streams.has(m.stream) && !mirrored.has(m.stream))
-          (m.terminal ? mirror : attach)(send, m.stream, m.key);
+        if ((m.type === "screen" || m.type === "say" || m.type === "speech" || m.type === "browser") && typeof m.ask === "number") answer(send, m);
+        else if (m.type === "attach" && typeof m.stream === "string" && typeof m.key === "string" && !streams.has(m.stream) && !mirrored.has(m.stream) && !viewed.has(m.stream))
+          (m.browser ? view : m.terminal ? mirror : attach)(send, m.stream, m.key);
         else if (m.type === "detach" && mine(m.stream)) end(m.stream);
         else if (m.type === "in" && mine(m.stream) && mirrored.has(m.stream) && typeof m.data === "string") terminals?.input(m.stream, m.data);
         else if (m.type === "size" && mine(m.stream) && mirrored.has(m.stream)) terminals?.size(m.stream, m.rows, m.cols, m.focus === true);
       },
       drop() {
         links.delete(send);
-        for (const stream of [...streams.keys(), ...mirrored.keys()]) if (mine(stream)) end(stream);
+        for (const stream of [...streams.keys(), ...mirrored.keys(), ...viewed.keys()]) if (mine(stream)) end(stream);
       },
     };
   };

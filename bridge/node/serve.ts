@@ -12,7 +12,7 @@
 //
 //   corkboard-bridge serve [--port 8787] [--host 127.0.0.1] [--origin https://NAME]
 //                          [--board KEY]... [--brain NAME]... [--timezone ZONE]
-//   corkboard-bridge serve token [--name NAME] [--days 365] [--scope owner|assistant] [--brain NAME]
+//   corkboard-bridge serve token [--name NAME] [--days 365] [--scope owner|assistant] [--brain NAME] [--drive]
 //                          a bearer for the phone's API, printed once
 //   corkboard-bridge serve grants | revoke GRANT
 //   corkboard-bridge serve calendar-login [--client-id ID --client-secret SECRET]
@@ -289,7 +289,7 @@ export async function startNode(o: NodeOptions = {}) {
         // phone's tokens work on either; never loopback. One with no
         // token is its device's, the owner (fleetd's relay-only one).
         leadership.forgeWeb = !!nodes.forge;
-        const tunneled = node({ ...served, origin: nodes.url, forgeWeb: () => leadership.forgeWeb, toForge, files, toFiles, fileOffers });
+        const tunneled = node({ ...served, origin: nodes.url, forgeWeb: () => leadership.forgeWeb, reach, toForge, files, toFiles, fileOffers });
         // The relay says when the leader may have changed, so a move takes
         // effect at once rather than at the next minute's look.
         t.stop = r.serveTunnel(tunneled, { name: d.cert.body.name, onState: (up) => (t.connected = up), onLeader: (to) => (leadership.told(to), void keepForge()), channels: (req, ch) => tunneled(req, undefined, ch.peer) });
@@ -397,11 +397,12 @@ function mintToken(args: string[]) {
   if (!Number.isFinite(days) || days <= 0) throw new Error("--days is a number of days");
   // --brain NAME: a token for that brain's agent (Pepper's, say), whose
   // memory is the brain's, its goals included.
-  console.log(oauthStore().mint(option(args, "--name") ?? "phone", days, scope, option(args, "--brain")));
+  // --drive: it may message and answer the account's sessions too.
+  console.log(oauthStore().mint(option(args, "--name") ?? "phone", days, scope, option(args, "--brain"), args.includes("--drive")));
 }
 
 function grants() {
-  for (const g of oauthStore().grants()) console.log(`${g.id}  ${g.scope.padEnd(9)} ${new Date(g.created).toISOString().slice(0, 10)}  ${g.tokens} tokens  ${g.name}`);
+  for (const g of oauthStore().grants()) console.log(`${g.id}  ${g.scope.padEnd(9)} ${g.drive ? "drive " : "      "}${new Date(g.created).toISOString().slice(0, 10)}  ${g.tokens} tokens  ${g.name}`);
 }
 
 async function calendarLogin(args: string[]) {

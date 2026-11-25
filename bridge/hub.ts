@@ -14,10 +14,13 @@
 //   GET  /api/sessions/:b/:k             its screen
 //   POST /api/sessions/:b/:k/say         { text, keys } or { answers }
 //   POST /api/sessions/:b/:k/speech      a sentence, in its face's voice: 16-bit samples
-//   GET|POST /api/sessions/:b/:k/attach[?terminal]
+//   GET|POST /api/sessions/:b/:k/attach[?terminal|?browser]
 //                                        ndjson both ways: { type: "out", data } and
 //                                        { type: "end", why } back; { type: "in", data }
-//                                        and { type: "size", rows, cols, focus } in
+//                                        and { type: "size", rows, cols, focus } in;
+//                                        ?browser, its page's frames and tabs
+//                                        (fleet/fleetd/browser.ts)
+//   POST /api/sessions/:b/:k/browser     what's done to that page: { t, ... }
 //
 // Nothing's kept: a bridge's list is the hub's while it's joined.
 
@@ -89,6 +92,7 @@ const session = (v: unknown) => {
     context: num(s.context),
     attach: s.attach === true,
     terminal: s.terminal === true,
+    browser: s.browser === true,
     persona: str(s.persona, 32),
     skin: str(s.skin, 16),
   };
@@ -211,6 +215,7 @@ export class Hub {
     key: string,
     terminal: boolean,
     sink: Sink,
+    browser = false,
   ):
     | {
         input(data: string): void;
@@ -227,6 +232,7 @@ export class Hub {
       stream,
       key,
       ...(terminal && { terminal: true }),
+      ...(browser && { browser: true }),
     });
     const live = () => me.streams.has(stream) && this.members.get(bridge) === me;
     return {
@@ -243,7 +249,7 @@ export class Hub {
   // The watchers' HTTP, at the Worker's paths; undefined for any other path.
   async serve(req: Request): Promise<Response | undefined> {
     const url = new URL(req.url);
-    const m = url.pathname.match(/^\/api\/sessions(?:\/([^/]+)\/([^/]+)(?:\/(say|speech|attach))?)?$/);
+    const m = url.pathname.match(/^\/api\/sessions(?:\/([^/]+)\/([^/]+)(?:\/(say|speech|attach|browser))?)?$/);
     if (!m) return undefined;
     const [, bridge, key, op] = m;
     const error = (status: number, error: string) => Response.json({ error }, { status, headers: { "Cache-Control": "no-store" } });
@@ -268,7 +274,7 @@ export class Hub {
         return () => off();
       });
     }
-    if (op === "attach") return this.stream(req, bridge, key, url.searchParams.has("terminal"));
+    if (op === "attach") return this.stream(req, bridge, key, url.searchParams.has("terminal"), url.searchParams.has("browser"));
     if (!op) return req.method === "GET" ? reply(await this.ask(bridge, { type: "screen", key })) : error(405, "method not allowed");
     if (req.method !== "POST") return error(405, "method not allowed");
     if (op === "speech") {
@@ -290,6 +296,11 @@ export class Hub {
       }
       return new Response(Buffer.from(audio, "base64"), { headers });
     }
+    if (op === "browser") {
+      const input = await capped(req, 8192);
+      if (!input) return error(413, "that's too much to put in a page at once");
+      return reply(await this.ask(bridge, { type: "browser", key, input }));
+    }
     const input = await body();
     if (input.answers !== undefined) {
       const a = answers(input.answers);
@@ -306,14 +317,14 @@ export class Hub {
 
   // The stream's answer is what the bridge sends down it; the request's
   // body, what's typed into a terminal and its size.
-  private stream(req: Request, bridge: string, key: string, terminal: boolean): Response {
+  private stream(req: Request, bridge: string, key: string, terminal: boolean, browser = false): Response {
     let s: ReturnType<Hub["attach"]>;
     let done = () => {};
     const res = ndjson((send, end) => {
       s = this.attach(bridge, key, terminal, {
         out: (data) => send({ type: "out", data }),
         end: (why) => (send({ type: "end", why }), end()),
-      });
+      }, browser);
       if (!s) {
         send({ type: "end", why: `bridge ${bridge} isn't connected` });
         end();
@@ -363,6 +374,26 @@ export function ndjson(follow: (send: (m: object) => void, end: () => void) => (
       "Cache-Control": "no-store",
     },
   });
+}
+
+// A request's JSON object, no more than max bytes of it kept: null past
+// that, {} if it isn't an object. The rest is read and dropped, not left,
+// as a channel's request stream left unread resets its reply too.
+export async function capped(req: Request, max: number): Promise<Record<string, any> | null> {
+  const chunks: Uint8Array[] = [];
+  let n = 0;
+  if (req.body)
+    for await (const chunk of req.body) {
+      n += chunk.length;
+      if (n <= max) chunks.push(chunk);
+    }
+  if (n > max) return null;
+  try {
+    const v = JSON.parse(new TextDecoder().decode(Buffer.concat(chunks)));
+    return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+  } catch {
+    return {};
+  }
 }
 
 // Each JSON line of a body, as it comes; a line that isn't JSON is skipped.

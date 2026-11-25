@@ -84,11 +84,12 @@ const ask = (client_id: string, redirect_uri: string, more: Record<string, strin
   new URLSearchParams({ response_type: "code", client_id, redirect_uri, code_challenge: challenge, code_challenge_method: "S256", ...more });
 const later = (ms: number) => setSystemTime(new Date(Date.now() + ms));
 
-// Through the consent page, approved with a fresh approval code: the client's code.
+// Through the consent page, approved with a fresh approval code (and the
+// sessions' box ticked, with drive): the client's code.
 async function consent(n: Awaited<ReturnType<typeof setup>>, client_id: string, redirect: string, more: Record<string, string> = {}) {
   const page = await (await n.call(`/authorize?${ask(client_id, redirect, more)}`)).text();
   const request = page.match(/name="request" value="([^"]+)"/)![1];
-  return { request, approve: async () => new URL((await n.call("/authorize", form({ request, code: n.oauth.newApproval(), action: "approve" }))).headers.get("Location")!).searchParams.get("code")! };
+  return { request, approve: async (drive = false) => new URL((await n.call("/authorize", form({ request, code: n.oauth.newApproval(), action: "approve", ...(drive ? { drive: "1" } : {}) }))).headers.get("Location")!).searchParams.get("code")! };
 }
 
 // The fetch the node makes: to the addresses the check found, whatever the
@@ -223,6 +224,22 @@ describe("a confidential client", () => {
     expect((await n.call("/token", form({ grant_type: "refresh_token", refresh_token }, basic(c.client_id, c.client_secret)))).status).toBe(200);
     // The secret isn't kept, only its hash.
     expect(await Bun.file(join(n.dir, "oauth.json")).text()).not.toContain(c.client_secret);
+  });
+
+  it("drives the user's sessions only when the box was ticked, and so after a refresh", async () => {
+    const c = await register("client_secret_post");
+    const token = async (drive: boolean) => {
+      const code = await (await consent(n, c.client_id, redirect)).approve(drive);
+      return (await (await exchange(code, c.client_id, { secret: c.client_secret })).json()) as { access_token: string; refresh_token: string };
+    };
+    expect(n.oauth.verify((await token(false)).access_token, ORIGIN)?.drive).toBeUndefined();
+    // A wrong code gives the page back with the box as it was.
+    const { request } = await consent(n, c.client_id, redirect);
+    expect(await (await n.call("/authorize", form({ request, code: "WRONG", action: "approve", drive: "1" }))).text()).toContain('value="1" checked');
+    const yes = await token(true);
+    expect(n.oauth.verify(yes.access_token, ORIGIN)?.drive).toBe(true);
+    const again = (await (await n.call("/token", form({ grant_type: "refresh_token", refresh_token: yes.refresh_token, client_id: c.client_id, client_secret: c.client_secret }))).json()) as { access_token: string };
+    expect(n.oauth.verify(again.access_token, ORIGIN)?.drive).toBe(true);
   });
 
   it("may send its secret in the body", async () => {

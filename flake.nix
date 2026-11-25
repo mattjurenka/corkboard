@@ -90,6 +90,8 @@
       } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
         # One account on three nodes in VMs, through a relay in a fourth.
         multi-node = import ./nix/tests/multi-node.nix { inherit pkgs; corkboard = self.packages.${pkgs.stdenv.hostPlatform.system}.default; src = ./.; };
+        # A session's browser taken over through its guest's forwarded DevTools.
+        browser = import ./nix/tests/browser.nix { inherit pkgs; src = ./.; };
       } // (wasmOn pkgs.stdenv.hostPlatform.system).checks);
 
       devShells = forAll (pkgs:
@@ -265,7 +267,7 @@
           version = "0.1.0";
           src = pkgs.lib.fileset.toSource {
             root = ./.;
-            fileset = pkgs.lib.fileset.unions [ ./fleet/fleetd/fleet.ts ./fleet/fleetd/fleetd.ts ./fleet/fleetd/cli.ts ./fleet/fleetd/queue.ts ./fleet/fleetd/sessions.ts ./bridge/cloud.ts ./bridge/dirs.ts ./bridge/host.ts ./bridge/sessions.ts ./bridge/transcript.ts ./fleet/fleetd/assistant.ts ./fleet/fleetd/node.ts ./fleet/fleetd/forge.ts ./fleet/fleetd/actions.ts ./bridge/hub.ts ./bridge/keystore.ts ./bridge/replicadb.ts ./lib/e2ee ./lib/harden.ts ./lib/dict.ts ];
+            fileset = pkgs.lib.fileset.unions [ ./fleet/fleetd/fleet.ts ./fleet/fleetd/fleetd.ts ./fleet/fleetd/cli.ts ./fleet/fleetd/queue.ts ./fleet/fleetd/sessions.ts ./bridge/cloud.ts ./bridge/dirs.ts ./bridge/host.ts ./bridge/sessions.ts ./bridge/transcript.ts ./fleet/fleetd/assistant.ts ./fleet/fleetd/node.ts ./fleet/fleetd/forge.ts ./fleet/fleetd/actions.ts ./fleet/fleetd/browser.ts ./bridge/hub.ts ./bridge/keystore.ts ./bridge/replicadb.ts ./lib/e2ee ./lib/harden.ts ./lib/dict.ts ];
           };
           # The channel's cryptography (lib/e2ee), as the bridge has it.
           crypto = [ "@noble/ciphers" "@noble/curves" "@noble/hashes" ];

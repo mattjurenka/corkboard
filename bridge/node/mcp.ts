@@ -29,11 +29,13 @@ import { type FileItem, type FileOffers, type ToFiles, filesJson } from "./files
 import { type Kind, boardBound } from "./oauth";
 import type { ToForge } from "./git";
 import { PR_TOOLS } from "./prs";
+import { TALK_TOOLS, type TalkTool } from "./talk";
+import type { Reach } from "../peers";
 import { dict, own } from "../../lib/dict";
 
 // branch and repo: the session's worktree's, as its MCP config told them
 // (X-Corkboard-Branch, X-Corkboard-Repo), for the PR tools (prs.ts).
-export type Caller = { scope: Kind; agent: string; brain?: string; board?: string; card?: string; branch?: string; repo?: string };
+export type Caller = { scope: Kind; agent: string; brain?: string; board?: string; card?: string; branch?: string; repo?: string; drive?: true };
 
 class ToolError extends Error {}
 
@@ -550,6 +552,11 @@ const pairs = (caller: Caller) => caller.scope === "owner" && !caller.brain && !
 // one held to a board.
 const spawns = (caller: Caller, fleet?: Fleet) => !!fleet && (caller.scope === "owner" || caller.scope === "assistant") && !caller.brain;
 
+// The live sessions (talk.ts): the user's own clients', as spawning is;
+// one that changes what a session does, only a grant that may drive them.
+const talks = (caller: Caller, reach?: Reach, tool?: TalkTool) =>
+  !!reach && (caller.scope === "owner" || caller.scope === "assistant") && !caller.brain && (!tool?.drives || !!caller.drive);
+
 // Memory --------------------------------------------------------------------------------
 
 type MemoryCall = { data: Data; search: Search; brain: string; caller: Caller; hidden: readonly string[] };
@@ -859,7 +866,7 @@ const reaches = (name: string, caller: Caller) => (caller.scope === "session" ? 
 // memoryOnly: the memory tools alone, for a local session (app.ts), whose
 // board tools are its own board's. One held to a board, that board's tools
 // it reaches, with no board argument.
-function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryOnly = false, fleet?: Fleet, files?: ToFiles, forge?: ToForge) {
+function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryOnly = false, fleet?: Fleet, files?: ToFiles, forge?: ToForge, sessions?: Reach) {
   if (boardBound(caller))
     return Object.entries(memoryOnly ? {} : TOOLS)
       .filter(([name]) => reaches(name, caller))
@@ -902,6 +909,11 @@ function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryO
       description: t.description,
       inputSchema: { type: "object", properties: t.properties ?? {}, required: t.required ?? [] },
     })),
+    ...Object.entries(TALK_TOOLS).filter(([, t]) => talks(caller, sessions, t)).map(([name, t]) => ({
+      name,
+      description: t.description,
+      inputSchema: { type: "object", properties: t.properties ?? {}, required: t.required ?? [] },
+    })),
     ...Object.entries(pairs(caller) ? PAIR_TOOLS : {}).map(([name, t]) => ({
       name,
       description: t.description,
@@ -912,7 +924,8 @@ function toolsFor(data: Data, caller: Caller, hidden: readonly string[], memoryO
 
 // forge: the account's forge (serve.ts's toForge), for the PR tools.
 // pairing: how pair_* let a device in, when not this machine's own way.
-export type Node = { data: Data; search: Search; media?: Media; files?: ToFiles; fileOffers?: FileOffers; origin: string; fleet?: Fleet; sealed?: FleetRecords; forge?: ToForge; pairing?: Pairing };
+// sessions: every machine's hub (serve.ts's reach), for the session tools.
+export type Node = { data: Data; search: Search; media?: Media; files?: ToFiles; fileOffers?: FileOffers; origin: string; fleet?: Fleet; sealed?: FleetRecords; forge?: ToForge; pairing?: Pairing; sessions?: Reach };
 
 async function callTool(node: Node, caller: Caller, name: string, args: any): Promise<unknown> {
   const { data, search, media, origin } = node;
@@ -924,6 +937,10 @@ async function callTool(node: Node, caller: Caller, name: string, args: any): Pr
     });
   if (PAIR_TOOLS[name] && pairs(caller))
     return PAIR_TOOLS[name].run({ ...args }, node.pairing ?? (await pairing())).catch((e) => {
+      throw e instanceof ToolError ? e : new ToolError((e as Error).message);
+    });
+  if (TALK_TOOLS[name] && talks(caller, node.sessions, TALK_TOOLS[name]))
+    return TALK_TOOLS[name].run({ ...args }, { reach: node.sessions! }).catch((e) => {
       throw e instanceof ToolError ? e : new ToolError((e as Error).message);
     });
   if (FILE_TOOLS[name] && node.files && !bound)
@@ -994,7 +1011,7 @@ async function handle(node: Node, caller: Caller, msg: Message, memoryOnly: bool
     case "ping":
       return reply({});
     case "tools/list":
-      return reply({ tools: toolsFor(node.data, caller, BRAIN_ONLY_KINDS, memoryOnly, node.fleet, node.files, node.forge).filter((t) => (!boardOnly || !MEMORY_TOOLS[t.name]) && (!forgeOnly || !!own(PR_TOOLS, t.name))) });
+      return reply({ tools: toolsFor(node.data, caller, BRAIN_ONLY_KINDS, memoryOnly, node.fleet, node.files, node.forge, node.sessions).filter((t) => (!boardOnly || !MEMORY_TOOLS[t.name]) && (!forgeOnly || !!own(PR_TOOLS, t.name))) });
     case "tools/call":
       try {
         const name = String(params?.name);

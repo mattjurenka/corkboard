@@ -4,7 +4,8 @@
 // stream-json: what's typed goes in the slot's inbox as a message, esc as
 // an interrupt; its conversation is read from the logs it writes to
 // the slot's outbox; and whether it's at work is what it was sent against
-// how many turns it has finished.
+// how many turns it has finished. One whose template has a browser has
+// that too, for the phone to take over (browser.ts).
 //
 // With a device (the manifest's node.device), they're served sealed too,
 // on the channels the account's devices open to it (bridge/hub.ts).
@@ -12,8 +13,10 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { basename, join } from "node:path";
-import { bridgeId, serve, type Hosted } from "../../bridge/sessions";
+import { type Answers, bridgeId, inWords, serve, type Hosted } from "../../bridge/sessions";
+import { asked, readItems } from "../../bridge/transcript";
 import { Hub, joinHub } from "../../bridge/hub";
+import { browsers, hasBrowser } from "./browser";
 import { answerChannels } from "./node";
 import { manifest, spawns, type Manifest, type Spawn } from "./fleet";
 import { ENVIRONMENT } from "./queue";
@@ -101,17 +104,28 @@ export function list(): Hosted[] {
         spawn: s.id,
         ...(s.remote?.card && { card: s.remote.card }),
         ...(path && { transcript: path }),
+        ...(hasBrowser(m, s.template) && { browser: true }),
       };
     });
 }
 
-export async function say(key: string, text: string, keys: string[], answers?: unknown) {
-  if (answers) return { error: "a question here is answered in words" };
+// answers: to the question it asked, which on stream-json it can't wait
+// on, so they're said in words (inWords), as a message.
+export async function say(key: string, text: string, keys: string[], answers?: Answers) {
   const m = manifest();
   const s = spawns().find((x) => x.id === key && x.interactive && x.state === "running" && x.slot);
   if (!s) return { error: "that session has ended", missing: true };
   if (s.ending) return { error: "that session is finishing" };
   const share = m.slots[s.slot!].shareDir;
+  if (answers) {
+    const path = transcript(outbox(m, s));
+    const q = path && asked(await readItems(path));
+    if (!q) return { error: "it isn't asking anything" };
+    const said = inWords(q.questions!, answers);
+    if ("error" in said) return said;
+    text = said.text;
+    keys = [];
+  }
   if (text) post(share, message(text));
   if (keys.includes("esc")) post(share, JSON.stringify({ type: "control_request", request_id: `esc-${Date.now()}`, request: { subtype: "interrupt" } }) + "\n");
   watched();
@@ -138,7 +152,7 @@ export function serveSessions() {
     }
   }, 1000);
   const hub = new Hub();
-  serve(bridgeId(`fleetd-${hostname()}`), ENVIRONMENT, { list, watch: (fn) => watchers.add(fn), say, hub: joinHub(hub) });
+  serve(bridgeId(`fleetd-${hostname()}`), ENVIRONMENT, { list, watch: (fn) => watchers.add(fn), say, browsers, hub: joinHub(hub) });
   const node = manifest().node;
   if (node?.device)
     try {
