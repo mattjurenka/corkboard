@@ -18,12 +18,12 @@ import { toPhrase } from "../lib/e2ee/phrase";
 import { showCode } from "../lib/e2ee/wire";
 
 // What the page shows of a join: its code to type on the other device,
-// then the six digits to check, then the account or why not.
-export type JoinView = { code?: string; qr?: string; sas?: string; account?: string; error?: string };
+// then the six digits to check, then the account or why not. Accepted once
+// the digits are said to match: from then it's on its way to being this
+// machine's account, and isn't ended for another.
+export type JoinView = { code?: string; qr?: string; sas?: string; accepted?: boolean; account?: string; error?: string };
 
-// Accepted once its digits are said to match: from then it's on its way to
-// being this machine's account, and isn't ended for another.
-type Join = { view: JoinView; answer?: (ok: boolean) => void; shown: Promise<void>; ended?: boolean; accepted?: boolean };
+type Join = { view: JoinView; answer?: (ok: boolean) => void; shown: Promise<void>; ended?: boolean };
 let join: Join | undefined;
 
 const store = new Keystore();
@@ -45,20 +45,31 @@ async function alone(make: () => Promise<Response>): Promise<Response> {
   }
 }
 const joining = () => !!join && !join.view.account && !join.view.error;
-const committed = () => !!join?.accepted && joining();
+const committed = () => !!join?.view.accepted && joining();
 const settled = () => hasAccount() && !making && !joining();
 
-// The node started, its failure logged rather than hiding the account made,
-// and started again when the page next asks (GET /account).
+// The node started, one start at a time and for at most limits.nodeMs. Its
+// failure is logged rather than hiding the account made, and it's started
+// again when the page next asks (GET /account); if that fails too, the page
+// goes on without the node, as a bridge whose node fails at boot does.
+export const limits = { nodeMs: 60_000 };
 let down = false;
+let starting: Promise<void> | undefined;
 const start = (ready: () => Promise<void>) =>
-  ready().then(
-    () => void (down = false),
-    (e) => {
-      down = true;
-      console.error(`node: ${(e as Error).message}`);
-    },
-  );
+  (starting ??= Promise.race([
+    ready(),
+    Bun.sleep(limits.nodeMs).then(() => {
+      throw new Error(`it didn't start in ${limits.nodeMs / 1000} s`);
+    }),
+  ])
+    .then(
+      () => void (down = false),
+      (e) => {
+        down = true;
+        console.error(`node: ${(e as Error).message}`);
+      },
+    )
+    .finally(() => (starting = undefined)));
 
 function startJoin(ready: () => Promise<void>): Join {
   let shown!: () => void;
@@ -136,12 +147,12 @@ export async function account(req: Request, path: string, ready: () => Promise<v
       }
       case "/account/join/confirm": {
         if (!join?.answer) return json({ error: "nothing to confirm" }, 409);
-        join.accepted = body.ok === true;
-        join.answer(join.accepted);
+        const accepted = body.ok === true;
+        join.answer(accepted);
         join.answer = undefined;
         // Answered: the code again, waiting, until joinAccount says how it went.
         const { sas: _, ...waiting } = join.view;
-        join.view = waiting;
+        join.view = { ...waiting, accepted };
         return json({ join: join.view });
       }
       case "/account/join/cancel":

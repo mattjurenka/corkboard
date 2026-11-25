@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
-type Join = { code?: string; sas?: string; account?: string; error?: string } | null;
+type Join = { code?: string; sas?: string; accepted?: boolean; account?: string; error?: string } | null;
 export type AccountCall = (path: string, body?: unknown) => Promise<{ error?: string; account?: string; phrase?: string; join?: Join }>;
 
 type Step = { at: "choose" } | { at: "phrase"; words: string[] } | { at: "join"; join: Join } | { at: "recover" };
@@ -16,14 +16,13 @@ const CHOICES = [
   ["recover", "recover an account"],
 ] as const;
 
-export function Welcome({ call, done }: { call: AccountCall; done: () => void }) {
-  const [step, setStep] = useState<Step>({ at: "choose" });
+// A join already under way (another tab's, or before a reload) is picked up.
+export function Welcome({ call, done, resume }: { call: AccountCall; done: () => void; resume?: Join }) {
+  const [step, setStep] = useState<Step>(resume ? { at: "join", join: resume } : { at: "choose" });
   const [pick, setPick] = useState(0);
   const [phrase, setPhrase] = useState("");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
-  // The digits said to match: the join goes on, and esc doesn't leave it.
-  const [sure, setSure] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   // Bumped by back: an answer that comes after it is for a step left.
@@ -73,7 +72,6 @@ export function Welcome({ call, done }: { call: AccountCall; done: () => void })
     if (step.at === "join") void call("/account/join/cancel").catch(() => {});
     turn.current++;
     setBusy(false);
-    setSure(false);
     setError(undefined);
     setStep({ at: "choose" });
   };
@@ -83,15 +81,13 @@ export function Welcome({ call, done }: { call: AccountCall; done: () => void })
   };
   const answer = async (ok: boolean) => {
     const r = await go("/account/join/confirm", { ok });
-    if (r.join) {
-      setSure(ok);
-      setStep({ at: "join", join: r.join });
-    }
+    if (r.join) setStep({ at: "join", join: r.join });
   };
 
   const join = step.at === "join" ? step.join : null;
   const sas = join?.sas && !join.account && !join.error;
-  const stay = sure && !join?.error;
+  // The digits said to match: the join goes on, and esc doesn't leave it.
+  const stay = !!join?.accepted && !join.error;
 
   const keys = (e: React.KeyboardEvent) => {
     if (busy) return;
