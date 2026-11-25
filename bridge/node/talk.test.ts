@@ -101,8 +101,8 @@ describe("the account's sessions over the node's MCP", () => {
   let token: string;
   beforeAll(async () => {
     t = await setupTalk();
-    // claude.ai's connector: an assistant's grant.
-    token = t.n.oauth.mint("claude.ai", 1, "assistant");
+    // claude.ai's connector: an assistant's grant, let drive the sessions.
+    token = t.n.oauth.mint("claude.ai", 1, "assistant", undefined, true);
   });
   afterAll(() => t.close());
 
@@ -208,7 +208,7 @@ describe("the account's sessions over the node's MCP", () => {
   it("is the user's own clients' only: not a brain's, a card's agent's or a fleet session's", async () => {
     const tools = ["list_sessions", "read_session", "send_session", "answer_session"];
     expect(await t.names(token)).toEqual(expect.arrayContaining(tools));
-    expect(await t.names(t.n.oauth.mint("phone", 1, "owner"))).toEqual(expect.arrayContaining(tools));
+    expect(await t.names(t.n.oauth.mint("phone", 1, "owner", undefined, true))).toEqual(expect.arrayContaining(tools));
     const brain = t.n.oauth.mint("pepper", 1, "owner", "assistant");
     expect(await t.names(brain)).not.toContain("send_session");
     expect((await t.call(brain, "send_session", { session: "laptop/laptop-1/1-2", text: "hi" })).error).toBe(true);
@@ -216,6 +216,21 @@ describe("the account's sessions over the node's MCP", () => {
     for (const grant of [t.n.oauth.mintBound({ scope: "card", board: "proj", card: "TASK-1", agent: "claude" }), t.n.oauth.mintBound({ scope: "session", board: "proj", spawn: "s1", agent: "fleet" })]) {
       expect(await t.names(grant.token)).not.toContain("list_sessions");
       expect((await t.call(grant.token, "send_session", { session: "laptop/laptop-1/1-2", text: "hi" })).error).toBe(true);
+    }
+    expect(t.saidHere.length).toBe(before);
+  });
+
+  it("only reads them for a grant not let drive them", async () => {
+    const before = t.saidHere.length;
+    for (const scope of ["assistant", "owner"] as const) {
+      const reader = t.n.oauth.mint("claude.ai", 1, scope);
+      const names = await t.names(reader);
+      expect(names).toEqual(expect.arrayContaining(["list_sessions", "read_session"]));
+      expect(names).not.toContain("send_session");
+      expect(names).not.toContain("answer_session");
+      expect((await t.call(reader, "read_session", { session: "laptop/laptop-1/1-2" })).error).toBe(false);
+      expect(await t.call(reader, "send_session", { session: "laptop/laptop-1/1-2", text: "hi" })).toEqual({ error: true, text: "unknown tool send_session" });
+      expect(await t.call(reader, "answer_session", { session: "laptop/laptop-1/3-4", choice: 1 })).toEqual({ error: true, text: "unknown tool answer_session" });
     }
     expect(t.saidHere.length).toBe(before);
   });

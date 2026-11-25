@@ -15,7 +15,8 @@ import { asked, type Item } from "../transcript";
 import { dict } from "../../lib/dict";
 
 export type TalkCall = { reach: Reach };
-export type TalkTool = { description: string; properties?: Record<string, object>; required?: string[]; run: (a: any, c: TalkCall) => Promise<unknown> };
+// drives: it changes what a session does, so only a grant that may drive them has it (oauth.ts).
+export type TalkTool = { description: string; drives?: true; properties?: Record<string, object>; required?: string[]; run: (a: any, c: TalkCall) => Promise<unknown> };
 
 export class TalkError extends Error {}
 
@@ -211,6 +212,7 @@ export const TALK_TOOLS = dict<TalkTool>({
     },
   },
   send_session: {
+    drives: true,
     description:
       "Send a session a message, as the user typing it and pressing enter; with interrupt, stop what it's doing first (esc). Say only what the user asked you to send, or what they'd want sent on their behalf.",
     properties: { session, text: str("The message"), interrupt: { type: "boolean", description: "Stop its turn first, as esc does" } },
@@ -227,6 +229,7 @@ export const TALK_TOOLS = dict<TalkTool>({
     },
   },
   answer_session: {
+    drives: true,
     description:
       "Answer what a session waits on. Its question (read_session shows it): question, its id (asked), and answers, one for each of its questions in order, each the numbers of the options picked (from 0; one only, unless it's multiSelect) and other for words of the user's own. Or a permission prompt (state permission): choice, the number of the prompt's option as its screen shows it, yes or no for this once; one that allows more is the user's to pick there. Only what the user chose.",
     properties: {

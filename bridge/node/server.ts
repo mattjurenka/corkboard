@@ -153,7 +153,7 @@ function page(title: string, body: string, status = 200): Response {
   main { max-width: 34rem; margin: 4rem auto; padding: 0 16px; }
   h1 { font-size: 1rem; margin: 0 0 1.5rem; border-bottom: 1px solid var(--line); padding-bottom: .75rem; }
   p { margin: 0 0 1rem; } .muted { color: var(--muted); } .warn { color: var(--warn); }
-  input { font: inherit; letter-spacing: .2em; padding: .3rem .5rem; width: 10ch; border: 1px solid var(--line); background: none; color: inherit; }
+  input[name=code] { font: inherit; letter-spacing: .2em; padding: .3rem .5rem; width: 10ch; border: 1px solid var(--line); background: none; color: inherit; }
   button { font: inherit; padding: .4rem 1rem; margin: 1rem .5rem 0 0; border: 1px solid var(--line); background: none; color: inherit; cursor: pointer; }
   button[value=approve] { border-color: var(--accent); color: var(--accent); }
 </style>
@@ -204,7 +204,7 @@ export function node(o: NodeOptions) {
   // Each bridge's link to the hub, by its id: its /app/sessions/live.
   const joined = new Map<string, Joined>();
 
-  const consentPage = (id: string, c: Consent, wrong = "") =>
+  const consentPage = (id: string, c: Consent, wrong = "", drive = false) =>
     page(
       "connect",
       `<p>${escape(c.client.name)}</p>
@@ -214,6 +214,7 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
 <form method="post" action="authorize">
 <input type="hidden" name="request" value="${escape(id)}">
 <label>code <input name="code" autocomplete="off" autocapitalize="characters" spellcheck="false" autofocus></label><br>
+<p><label><input type="checkbox" name="drive" value="1"${drive ? " checked" : ""}> message and answer my sessions</label></p>
 <button name="action" value="approve">approve</button><button name="action" value="deny">deny</button>
 </form>`,
     );
@@ -242,14 +243,15 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
       consents.delete(id);
       return Response.redirect(deniedUrl(c, origin), 302);
     }
+    const drive = form.get("drive") === "1";
     try {
-      if (!o.oauth.spendApproval(String(form.get("code") ?? ""))) return consentPage(id, c, "wrong code");
+      if (!o.oauth.spendApproval(String(form.get("code") ?? ""))) return consentPage(id, c, "wrong code", drive);
     } catch (e) {
-      if (e instanceof OAuthError) return consentPage(id, c, e.message);
+      if (e instanceof OAuthError) return consentPage(id, c, e.message, drive);
       throw e;
     }
     consents.delete(id);
-    return Response.redirect(o.oauth.approve(c, origin), 302);
+    return Response.redirect(o.oauth.approve(c, origin, drive), 302);
   }
 
   async function token(req: Request, origin: string): Promise<Response> {
@@ -304,7 +306,7 @@ ${wrong ? `<p class="warn">${escape(wrong)}</p>` : ""}
   // cert the channel checked: the account's own, so the owner.
   function caller(req: Request, origin: string, from: Signed<DeviceCert> | undefined, mcp = false): Caller | undefined {
     const auth = req.headers.get("Authorization");
-    if (!auth && from) return { scope: "owner", agent: from.body.name, grant: `device:${from.body.device}`, resource: null };
+    if (!auth && from) return { scope: "owner", agent: from.body.name, grant: `device:${from.body.device}`, resource: null, drive: true };
     const who = auth?.startsWith("Bearer ") ? o.oauth.verify(auth.slice(7).trim(), origin) : undefined;
     return who && (mcp || !boardBound(who)) ? who : undefined;
   }
