@@ -138,6 +138,17 @@ describe("start", () => {
     expect(r.lines).toEqual([`ab|xterm-256color|${r.pid}|${r.height} ${r.width}`]);
   });
 
+  // As Neovim's own terminal takes a pty's bytes: the pty adds the carriage
+  // return or the program meant none (a ConPTY's passes them as written).
+  test("leaves a line feed without a carriage return a line feed", () => {
+    const r = live(String.raw`
+      require("corkboard.terminal").start({ "sh", "-c", [[stty -onlcr; printf 'ab\ncd'; sleep 5]] }, {})
+      wait(function() return #lines() >= 2 end)
+      return lines()
+    `);
+    expect(r).toEqual(["ab", "  cd"]);
+  });
+
   test("types what's typed into it, and tells the process its new size", () => {
     const r = live(String.raw`
       require("corkboard.terminal").start({ "sh", "-c", "read l; echo got:$l; stty size; read l; stty size; sleep 5" }, {})

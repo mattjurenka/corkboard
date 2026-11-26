@@ -183,6 +183,7 @@ function M.open(bridge, key, name)
   v = { bridge = bridge, key = key, buf = buf }
   views[id] = v
   v.chan = vim.api.nvim_open_term(buf, {
+    force_crlf = false,
     on_input = function(_, _, _, data)
       if not v.ended then cloud().send("fleet_terminal_send", bridge, key, { type = "in", data = vim.base64.encode(data) }) end
     end,

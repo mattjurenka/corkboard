@@ -122,6 +122,8 @@ function M.start(cmd, opts)
   vim.b[buf].terminal_job_id = job
   vim.b[buf].terminal_job_pid = vim.fn.jobpid(job)
   term = vim.api.nvim_open_term(buf, {
+    -- A pty's bytes as they are, as Neovim's own terminal takes them.
+    force_crlf = false,
     on_input = function(_, _, _, data) pcall(vim.fn.chansend, job, data) end,
   })
   local argv = type(cmd) == "table" and table.concat(cmd, " ") or cmd
