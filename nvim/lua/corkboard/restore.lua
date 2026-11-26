@@ -14,7 +14,7 @@
 
 local M = {}
 
-local PINNED = { corkboard_projects = true, corkboard_board = true, corkboard_git = true, corkboard_usage = true, corkboard_fleet = true, corkboard_brains = true, corkboard_plan = true }
+local PINNED = { corkboard_projects = true, corkboard_board = true, corkboard_git = true, corkboard_usage = true, corkboard_fleet = true, corkboard_plan = true }
 
 local function path()
   if require("corkboard").window == "plan" then return require("corkboard.util").data_dir("plan", "editor.json") end

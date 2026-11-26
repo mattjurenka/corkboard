@@ -213,6 +213,7 @@ rpc.on("corkboard.notification", ([n]: any[]) =>
 // "enter") through to here, which is not a state.
 rpc.on("corkboard.away", ([away]: any[]) => store.set({ away: typeof away === "object" ? away : null }));
 rpc.on("corkboard.tools", ([tools]: any[]) => store.set({ tools }));
+rpc.on("corkboard.session", ([session]: any[]) => store.set({ session }));
 rpc.on("corkboard.projects", ([projects]: any[]) => store.set({ projects }));
 rpc.on("corkboard.brain_form", ([brainForm]: any[]) => store.set({ brainForm }));
 rpc.on("corkboard.hold_form", ([f]: any[]) => store.set({ holdForm: { hold: f?.hold ?? null } }));

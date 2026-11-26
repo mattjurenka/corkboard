@@ -1,5 +1,5 @@
-// The brains view: a card per brain, boxed with its title on the border,
-// what it's for, its particulars as labelled fields, and what you can do with
+// The brains view, a page of the Settings tab (SettingsTabs.tsx): a card per
+// brain, boxed with its title on the border, what it's for, its particulars as labelled fields, and what you can do with
 // it as buttons along its foot; archived brains under their own heading.
 // Drawn over agent://brains (corkboard.brains), which owns the cursor and the
 // keys; a click selects, a button acts on its brain, and a double click opens
@@ -10,6 +10,7 @@ import { Spinner } from "@/components/Spinner";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/store";
 import type { ViewProps } from "./index";
+import { SettingsTabs } from "./SettingsTabs";
 
 type Card = {
   name: string;
@@ -57,7 +58,7 @@ export function Brains({ state, win, focused, nvim }: ViewProps<BrainsState>) {
     <div className="relative h-full">
       <div ref={root} className="@container/brains flex h-full flex-col gap-row overflow-y-auto px-2ch pt-row pb-row">
         <header className="flex items-baseline justify-between gap-2ch">
-          <span className="font-bold">Brains</span>
+          <SettingsTabs on="brains" nvim={nvim} />
           <span className="flex gap-2ch">
             {fleet && (
               <Button k="H" lit onClick={holds}>

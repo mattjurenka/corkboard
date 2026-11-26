@@ -1,4 +1,4 @@
-// The frame the page's palettes share (Tools.tsx, Projects.tsx): a desktop
+// The frame the page's palettes share (Tools.tsx, Projects.tsx, Session.tsx): a desktop
 // dialog over a dimmed page, with a title bar, a search field and a list
 // under it. Unlike the rest of the page, though in the editor's face and
 // colors.
@@ -25,14 +25,17 @@ export function step(e: React.KeyboardEvent, at: number, n: number): number | nu
   return Math.max(0, Math.min(n - 1, at + (down ? 1 : -1)));
 }
 
-export function Palette({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+export function Palette({ title, onClose, className, children }: { title: string; onClose: () => void; className?: string; children: React.ReactNode }) {
   return (
     <div className="fixed inset-0 z-10 bg-black/25" onMouseDown={onClose}>
       <div
         role="dialog"
         aria-label={title}
         onMouseDown={(e) => e.stopPropagation()}
-        className="absolute top-[18%] left-1/2 w-[min(440px,calc(100%-32px))] -translate-x-1/2 overflow-hidden rounded-[10px] border bg-popover text-popover-foreground shadow-[0_12px_40px_rgb(0_0_0/0.45),0_2px_8px_rgb(0_0_0/0.25)] select-none"
+        className={cn(
+          "absolute top-[18%] left-1/2 w-[min(440px,calc(100%-32px))] -translate-x-1/2 overflow-hidden rounded-[10px] border bg-popover text-popover-foreground shadow-[0_12px_40px_rgb(0_0_0/0.45),0_2px_8px_rgb(0_0_0/0.25)] select-none",
+          className,
+        )}
       >
         <div className="flex h-[34px] items-center justify-between border-b bg-muted pr-[6px] pl-[12px]">
           <span className="font-semibold">{title}</span>
