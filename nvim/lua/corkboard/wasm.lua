@@ -197,6 +197,7 @@ function M.jobstart(cmd, opts)
     -- What Neovim's terminal can't draw as the process means it.
     p.filter = require("corkboard.terminal").filter()
     p.chan = vim.api.nvim_open_term(buf, {
+      force_crlf = false,
       on_input = function(_, _, _, data)
         if not p.exited then call("write", p.id, data) end
       end,
