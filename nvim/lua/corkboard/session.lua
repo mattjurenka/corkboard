@@ -85,7 +85,12 @@ function M.start(opts)
   end
   local exe = opts.attach and opts.attach[1] or opts.via and opts.via[1] or kind.exe
   if vim.fn.executable(exe) == 0 then
-    vim.notify("corkboard: " .. exe .. " is not on PATH", vim.log.levels.ERROR)
+    -- No agent here yet: the page's Agents screen, rather than an error.
+    if exe == kind.exe then
+      require("corkboard.agent").install()
+    else
+      vim.notify("corkboard: " .. exe .. " is not on PATH", vim.log.levels.ERROR)
+    end
     return nil
   end
   -- A worktree of its own, when it would start in a repository's main
@@ -253,11 +258,11 @@ function M.follow_spawn(spawn, label, id)
   vim.defer_fn(look, 3000)
 end
 
--- Whether this machine has the default agent, so a session can start here.
-local function runs_here() return vim.fn.executable(require("corkboard.agent").get().exe) == 1 end
+-- Whether this machine has an agent, so a session can start here.
+local function runs_here() return #require("corkboard.agent").here() > 0 end
 
 -- The sidebar's New Session: the default agent here when this machine has
--- it, else the choice open() gives.
+-- one, else the choice open() gives.
 function M.new_session()
   if runs_here() then return M.start() end
   M.open()
@@ -360,8 +365,10 @@ function M.open()
   if fleet and #(fleet.environments or {}) > 0 then table.insert(left, { text = "no brain" }) end
   if #left == 0 then
     if runs_here() then return M.start() end
-    return vim.notify("corkboard: no " .. require("corkboard.agent").get().exe .. " here, and no fleet to start a session in" .. (ok and "" or (": " .. tostring(got))), vim.log.levels.ERROR)
+    return require("corkboard.agent").install()
   end
+  -- Brains, and nowhere to run one: no agent here and no fleet.
+  if not runs_here() and not (fleet and #(fleet.environments or {}) > 0) then return require("corkboard.agent").install() end
   for _, it in ipairs(left) do
     it.items = function() return agents(it.brain, start, fleet, vms) end
   end
@@ -371,6 +378,7 @@ end
 -- The board's A: card id's session, for the brain on the left, of the agent
 -- in the middle, which the card keeps; here, where its worktree is.
 function M.open_card(id)
+  if not runs_here() then return require("corkboard.agent").install() end
   local start = function(brain, agent)
     require("corkboard.board").set(id, { agent = agent })
     require("corkboard.agents").start(id, { brain = brain })

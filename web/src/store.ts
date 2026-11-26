@@ -172,6 +172,8 @@ export type State = {
     confirming?: boolean;
     refused?: boolean;
   } | null;
+  // The agents screen (corkboard.agent's install), while it's open.
+  agents: boolean;
   // Open project (corkboard.picker), while it's open. here: this window has a
   // project, so the one chosen opens in a window of its own; naming: straight
   // to naming a new one (the Projects tab's n).
@@ -218,6 +220,7 @@ let state: State = {
   holdForm: null,
   ask: null,
   pair: null,
+  agents: false,
   projects: null,
   windows: [],
   toasts: [],

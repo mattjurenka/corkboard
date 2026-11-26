@@ -22,12 +22,11 @@
 // brings the running one's window forward instead.
 //
 // Packaged (electron-builder.yml) and given no URL, it is the whole of
-// corkboard: it starts its own bridge (bridge.js), says so if claude or
-// git can't be found, and keeps itself up to date from GitHub's releases,
+// corkboard: it starts its own bridge (bridge.js), says so if git can't
+// be found (an agent the page asks about itself, bridge/agents.ts), and keeps itself up to date from GitHub's releases,
 // bar the .deb and the tarball, which their package managers update.
 
 import { app, BrowserWindow, dialog, Menu, net, session, shell } from "electron";
-import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { bundledGit, bundledRg, loginPath, startBridge, which } from "./bridge.js";
 
@@ -124,7 +123,6 @@ function setup(win) {
     if (/^(https?|mailto):/i.test(url)) shell.openExternal(url);
     // The missing-tools page's links.
     else if (url === "corkboard:again") checked(win);
-    else if (url === "corkboard:install-claude") installClaude(win);
     else if (url === "corkboard:anyway") win.loadURL(home);
   });
 
@@ -184,19 +182,18 @@ const errorPage = (desc, url) =>
 <pre style="margin:0;padding:1ch 2ch;border:1px solid currentColor">can't reach the bridge — reconnecting
 ${escape(desc)}  ${escape(url)}</pre>`);
 
-// An agent and git, which corkboard can't do without, and ripgrep, which
-// its pickers are slow without: looked for on the PATH the bridge has, which
-// has the app's own git and rg in front when the machine has none
-// (bundledGit, bundledRg). The agent is Claude Code or any ACP kind's
-// (lib/acp/).
+// Git, which corkboard can't do without, and ripgrep, which its pickers
+// are slow without: looked for on the PATH the bridge has, which has the
+// app's own git and rg in front when the machine has none (bundledGit,
+// bundledRg). Not an agent: the page opens without one, and its Agents
+// screen installs the one the user wants (bridge/agents.ts).
 const TOOLS = [
-  { name: "claude", any: ["claude", "codex-acp", "opencode", "agy"], need: true, url: "https://claude.com/claude-code" },
   { name: "git", need: true, url: "https://git-scm.com/downloads" },
   { name: "rg", need: false, url: "https://github.com/BurntSushi/ripgrep#installation" },
 ];
 let path = process.env.PATH ?? "";
 let git;
-const missing = () => TOOLS.filter((t) => !(t.any ?? [t.name]).some((n) => which(n, path)));
+const missing = () => TOOLS.filter((t) => !which(t.name, path));
 
 // The login PATH, with the app's own git and rg in front where it has none.
 function findPath() {
@@ -218,53 +215,9 @@ const toolsPage = (gone) =>
   page(`not found
 ${gone.map((t) => `  ${t.name.padEnd(7)}<a href="${t.url}">${t.url}</a>${t.need ? "" : "  (optional)"}`).join("\n")}
 
-${gone.some((t) => t.name === "claude") ? `<a href="corkboard:install-claude">[ install claude ]</a>  ` : ""}<a href="corkboard:again">[ again ]</a>  <a href="corkboard:anyway">[ open anyway ]</a>`);
+<a href="corkboard:again">[ again ]</a>  <a href="corkboard:anyway">[ open anyway ]</a>`);
 
-// Claude Code's own installer (code.claude.com/docs/en/setup), which puts
-// it in ~/.local/bin on every system; on Windows, %USERPROFILE%\.local\bin,
-// claude.exe, which without Git Bash runs its commands in PowerShell.
-const INSTALL =
-  process.platform === "win32"
-    ? ["powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "irm https://claude.ai/install.ps1 | iex"]]
-    : ["/bin/bash", ["-c", "curl -fsSL https://claude.ai/install.sh | bash"]];
-
-// Runs it, then finds the PATH again (~/.local/bin may be new, so not on
-// the one the bridge started with) and starts the bridge again on it.
-let installing = false;
-function installClaude(win) {
-  if (installing) return;
-  installing = true;
-  win.loadURL(page("installing claude code…"));
-  let out = "";
-  const proc = spawn(INSTALL[0], INSTALL[1], { env: { ...process.env, PATH: path }, windowsHide: true });
-  proc.stdout.on("data", (d) => (out += d));
-  proc.stderr.on("data", (d) => (out += d));
-  let ended = false;
-  const done = async (err) => {
-    if (ended) return;
-    ended = true;
-    installing = false;
-    const before = path;
-    path = findPath();
-    if (!err && path !== before) {
-      bridge?.stop();
-      try {
-        await own();
-      } catch (e) {
-        return win.loadURL(errorPage(e.message, ""));
-      }
-    }
-    if (err || !which("claude", path)) {
-      const tail = out.trim().split(/\r?\n/).slice(-12).join("\n");
-      return win.loadURL(page(`claude code didn't install${err ? ` (${escape(err)})` : ""}\n\n${escape(tail)}\n\n<a href="https://claude.com/claude-code">https://claude.com/claude-code</a>\n\n<a href="corkboard:install-claude">[ try again ]</a>  <a href="corkboard:again">[ again ]</a>  <a href="corkboard:anyway">[ open anyway ]</a>`));
-    }
-    checked(win);
-  };
-  proc.on("error", (e) => done(e.message));
-  proc.on("exit", (code) => done(code === 0 ? undefined : `exit ${code}`));
-}
-
-// The page, unless claude or git is missing, which it says instead.
+// The page, unless git is missing, which it says instead.
 function checked(win) {
   const gone = OWN ? missing() : [];
   win.loadURL(gone.some((t) => t.need) ? toolsPage(gone) : home);
