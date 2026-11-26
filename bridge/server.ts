@@ -12,7 +12,7 @@
 import "../lib/harden";
 import { decodeMultiStream, decode, encode, ExtensionCodec } from "@msgpack/msgpack";
 import type { Subprocess } from "bun";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { appendFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -27,6 +27,7 @@ import * as wasm from "./wasm";
 import { startAppNode } from "./node/app";
 import * as onboarding from "./onboarding";
 import { gitViews } from "./node/git";
+import { canonical, canonicalize, install as installForgeGit, keep as keepForgeGit } from "./forge-git";
 import { Peers } from "./peers";
 import { CLOUD, token } from "./cloud";
 import { COMPILED, RESOURCES, STATE_DIR, dirsEnv } from "./dirs";
@@ -191,6 +192,36 @@ const NVIM_ENV: Record<string, string> = {
   CORKBOARD_RECORD_COMMAND: JSON.stringify([...SELF, "record"]),
 };
 
+// git on this machine and the account's forge (forge-git.ts): what
+// corkboard://forge/ means here, for every git on the machine and for what
+// Neovim starts. /forge/ takes a token of its own from git, so the page's
+// isn't in a file. CORKBOARD_GIT_CONFIG=0 leaves the user's git config alone.
+const FORGE_TOKEN = TOKEN && randomBytes(24).toString("hex");
+const sameForgeToken = (given: string) => {
+  const a = Buffer.from(given);
+  const b = Buffer.from(FORGE_TOKEN);
+  return !!FORGE_TOKEN && a.length === b.length && timingSafeEqual(a, b);
+};
+const WILDCARD = HOST === "0.0.0.0" || HOST === "::";
+const FORGE_GIT = { file: join(STATE_DIR, "gitconfig"), base: `http://${WILDCARD ? "127.0.0.1" : HOST.includes(":") ? `[${HOST}]` : HOST}:${PORT}/forge/`, token: FORGE_TOKEN, global: process.env.CORKBOARD_GIT_CONFIG !== "0" };
+const forgeGit = await installForgeGit(FORGE_GIT).catch((e) => void console.error(`forge: ${(e as Error).message}`));
+if (forgeGit) {
+  Object.assign(NVIM_ENV, forgeGit.env);
+  keepForgeGit(FORGE_GIT);
+}
+// A clone whose remote names a bridge's port (as they were written) names
+// the forge instead, once git everywhere here knows what that means.
+function forgeRemotes(dir: string) {
+  if (!forgeGit?.global) return;
+  void canonicalize(dir).then(
+    (changed) => changed.length && console.log(`forge: ${dir}: ${changed.join(", ")} written as corkboard://forge/...`),
+    () => {},
+  );
+}
+try {
+  for (const dir of readFileSync(join(STATE_DIR, "projects"), "utf8").split("\n")) if (dir.trim()) forgeRemotes(dir.trim());
+} catch {}
+
 // The node, for memory (node/app.ts), before Neovim starts; without it,
 // memory is the Worker's.
 // With no account yet, none until the page's first start makes one
@@ -283,6 +314,7 @@ async function open(ticket: string): Promise<Response> {
 // to be found by until a clone of it is opened.
 async function clone(remotes: string[], dest: string, board: string): Promise<string | undefined> {
   const urls = remotes.flatMap((u) => {
+    u = canonical(u) ?? u;
     const scp = u.match(/^git@github\.com:(.+)$/);
     return scp ? [`https://github.com/${scp[1]}`, u] : [u];
   });
@@ -551,6 +583,7 @@ function arrived(ws: Bun.ServerWebSocket<Session>, context: { cwd?: string; proj
   const dir = context?.project ?? context?.cwd;
   if (!dir || ws.data.view || trimSlash(dir) === ws.data.project) return;
   ws.data.project = trimSlash(dir);
+  if (!ws.data.host) forgeRemotes(ws.data.project);
   const key = windowKey(ws.data.host, ws.data.project);
   const was = opening.get(key);
   opening.delete(key);
@@ -616,8 +649,9 @@ async function gitProxy(req: Request, url: URL): Promise<Response> {
 
 // /forge/: the account's forge, for git on this machine, on the node's
 // channel to the leader (http://127.0.0.1:<port>/forge/<owner>/<repo>.git).
-// Never a page's: a browser sends Origin. With a token, git gives it as its
-// password (or x-corkboard-token).
+// Never a page's: a browser sends Origin. With a token, git gives the forge's
+// own (FORGE_TOKEN, from forge-git.ts's config) or the page's, in
+// x-corkboard-token or as its password.
 async function forgeProxy(req: Request, url: URL): Promise<Response> {
   if (!NODE) return new Response("this machine has no node", { status: 404 });
   if (req.headers.has("origin")) return new Response("not from a page", { status: 403 });
@@ -625,7 +659,7 @@ async function forgeProxy(req: Request, url: URL): Promise<Response> {
   if (TOKEN) {
     const basic = /^Basic (.+)$/i.exec(req.headers.get("authorization") ?? "")?.[1];
     const given = req.headers.get("x-corkboard-token") ?? (basic ? Buffer.from(basic, "base64").toString().split(":").slice(1).join(":") : "");
-    if (!sameToken(given)) return new Response("wrong token", { status: 401, headers: { "www-authenticate": 'Basic realm="corkboard"' } });
+    if (!sameToken(given) && !sameForgeToken(given)) return new Response("wrong token", { status: 401, headers: { "www-authenticate": 'Basic realm="corkboard"' } });
   }
   const headers = new Headers();
   for (const h of ["Content-Type", "Accept", "Git-Protocol", "Content-Encoding"]) {

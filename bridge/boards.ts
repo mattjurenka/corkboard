@@ -16,6 +16,7 @@ import { hostname } from "node:os";
 import { Cloud, Session as CloudSession, type Listener, USER } from "./cloud-session";
 import { CLOUD, token } from "./cloud";
 import { host } from "./host";
+import { canonical } from "./forge-git";
 import * as remote from "./remote";
 import type { AppNode } from "./node/app";
 import type { Peers } from "./peers";
@@ -38,7 +39,9 @@ async function remotes(root: string): Promise<string[]> {
     .filter((m): m is RegExpMatchArray => !!m)
     .sort((a, b) => Number(b[1] === "origin") - Number(a[1] === "origin"))
     .map((m) => m[2].replace(/^(https?:\/\/)[^\/@]*@/, "$1"))
-    .filter((u) => /^(https?:\/\/|ssh:\/\/|git:\/\/|[\w.-]+@[\w.-]+:)\S{1,500}$/.test(u));
+    // The forge's as every machine of the account writes it (forge-git.ts), not this bridge's port.
+    .map((u) => canonical(u) ?? u)
+    .filter((u) => /^(https?:\/\/|ssh:\/\/|git:\/\/|corkboard:\/\/|[\w.-]+@[\w.-]+:)\S{1,500}$/.test(u));
   return [...new Set(urls)].slice(0, 8);
 }
 
