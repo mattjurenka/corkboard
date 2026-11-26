@@ -131,7 +131,7 @@
           dontFixup = true;
           outputHashMode = "recursive";
           outputHash = {
-            x86_64-linux = "sha256-IW6GX0i4dEaHhLrRqZcJ8q5XksR9RkdzShmUeWhVUtQ=";
+            x86_64-linux = "sha256-CPXDz0qrd9ZcdVWsX1gXoUWCJCMXYUllT/LTfJdEkVY=";
           }.${pkgs.stdenv.hostPlatform.system} or pkgs.lib.fakeHash;
         };
 
