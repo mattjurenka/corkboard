@@ -83,6 +83,8 @@ export class Session extends CloudSession {
     if (op === "pair_status") return (await import("./e2ee")).pairStatus();
     if (op === "pair_approve") return (await import("./e2ee")).pairApprove(args[0], args[1]);
     if (op === "pair_confirm") return (await import("./e2ee")).pairConfirm(args[0], !!args[1]);
+    // A fleet host's fleetd let in as a relay-only device (Add a fleet host).
+    if (op === "fleet_certify") return (await import("./e2ee")).fleetCertify(args[0], args[1]);
     // The calendar's Google consent (Connect calendar): its address, to open.
     if (op === "calendar_connect") {
       const res = await fetch(`${CLOUD}/api/calendar/connect`, {
@@ -123,6 +125,14 @@ export class Session extends CloudSession {
     if (node && op === "fleet_session") {
       const asked = args[2] ? [...args.slice(0, 3), true, ...args.slice(4)] : args;
       return (await node.fleet(op, asked)) ?? super.call(op, asked);
+    }
+    // An environment that's gone, forgotten by the Worker and the node both.
+    if (op === "fleet_forget") {
+      // The node's goes even where the Worker's doesn't.
+      const said = await super.call(op, args).then(() => undefined, (e: Error) => e);
+      await node?.fleet(op, args);
+      if (said) throw said;
+      return null;
     }
     // The fleet view's, with what the node keeps sealed put back.
     if (node && op === "fleet_get") {

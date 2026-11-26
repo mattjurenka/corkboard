@@ -535,6 +535,9 @@ async function fleet(n: StartedNode, op: string, args: any[]): Promise<unknown> 
         spawns: got.spawns.map((s) => f.open(s)),
       };
     }
+    case "fleet_forget":
+      await f.forgetEnvironment(String(args[0]));
+      return null;
     default:
       return undefined;
   }
