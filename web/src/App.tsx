@@ -10,7 +10,9 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { BrainForm } from "@/components/BrainForm";
 import { HoldForm } from "@/components/HoldForm";
 import { Ask } from "@/components/Ask";
+import { FleetHost } from "@/components/FleetHost";
 import { Pair } from "@/components/Pair";
+import { Agents } from "@/components/Agents";
 import { Away } from "@/components/Away";
 import { Menu } from "@/components/Menu";
 import { Panels } from "@/components/Panels";
@@ -40,7 +42,7 @@ export function App() {
   const gutter = focus ? `max(0px, calc((100% - var(--cell-w) * ${focus.width} - 1px) / 2))` : undefined;
   // The drawer closes once it has done its job: another tab, or a picker.
   const tab = useStore((s) => s.tabs?.current.id);
-  const picking = useStore((s) => !!s.tools || !!s.projects || !!s.brainForm || !!s.holdForm || !!s.ask || !!s.pair);
+  const picking = useStore((s) => !!s.tools || !!s.projects || !!s.brainForm || !!s.holdForm || !!s.ask || !!s.pair || !!s.fleetHost || s.agents);
   useEffect(() => {
     if (store.get().drawer) store.set({ drawer: false });
   }, [tab, picking]);
@@ -122,6 +124,8 @@ export function App() {
       <HoldForm />
       <Ask />
       <Pair />
+      <FleetHost />
+      <Agents />
       <Away />
     </div>
   );

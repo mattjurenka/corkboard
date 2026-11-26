@@ -172,6 +172,17 @@ export type State = {
     confirming?: boolean;
     refused?: boolean;
   } | null;
+  // Adding a fleet host (corkboard.fleet_host), while it's open.
+  fleetHost: {
+    step: "paste" | "waiting" | "cert" | "error";
+    error?: string;
+    name?: string;
+    device?: string;
+    command?: string;
+    passphrase?: boolean;
+  } | null;
+  // The agents screen (corkboard.agent's install), while it's open.
+  agents: boolean;
   // Open project (corkboard.picker), while it's open. here: this window has a
   // project, so the one chosen opens in a window of its own; naming: straight
   // to naming a new one (the Projects tab's n).
@@ -218,6 +229,8 @@ let state: State = {
   holdForm: null,
   ask: null,
   pair: null,
+  fleetHost: null,
+  agents: false,
   projects: null,
   windows: [],
   toasts: [],

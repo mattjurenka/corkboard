@@ -366,9 +366,11 @@ function M.running()
   return n
 end
 
--- While a card's session runs here, its claim on a cloud board holds: the
--- Worker blocks a working card it hasn't heard about for 15 minutes, and a
--- session that sits idle calls the board seldom. Every 5, it's told.
+-- While a card's session is mid-turn here, its claim on a cloud board
+-- holds: the board releases a working card it hasn't heard about for 15
+-- minutes, and an agent deep in a long turn calls the board seldom. Every
+-- 5, it's told. One sitting idle isn't spoken for, so its card goes back;
+-- one run somewhere else has no state here, and is spoken for as it was.
 local HEARTBEAT_MS = 5 * 60 * 1000
 local heartbeat
 
@@ -376,7 +378,8 @@ local function beat()
   local cards = require("corkboard.cards")
   if not cards.cloud() then return end
   for id in pairs(sessions) do
-    if M.session(id) then
+    local buf = M.session(id)
+    if buf and (live[buf] == nil or not between_turns(buf)) then
       local found, card = pcall(board().get, id)
       if found and card.agent then cards.touch(id, card.agent) end
     end

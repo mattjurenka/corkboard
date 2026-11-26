@@ -243,6 +243,7 @@ local tools = {
   { text = "Claude Code", hint = "<C-.>", project = true, run = function() require("corkboard.session").open() end },
   { text = "Away mode", hint = "<leader>a", run = function() require("corkboard.away").enter() end },
   { text = "Pair a device", hint = "", run = function() require("corkboard.pair").start() end },
+  { text = "Add a fleet host", hint = "", feature = "fleet", run = function() require("corkboard.fleet_host").start() end },
   { text = "Git", hint = "", run = function() require("corkboard.git").open() end },
   { text = "Give git access", hint = "", run = function() require("corkboard.forge").grant() end },
   { text = "Take back git access", hint = "", run = function() require("corkboard.forge").revoke() end },

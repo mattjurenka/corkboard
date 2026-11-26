@@ -26,6 +26,7 @@ import { speech } from "./speech";
 import * as wasm from "./wasm";
 import { startAppNode } from "./node/app";
 import * as onboarding from "./onboarding";
+import { agents } from "./agents";
 import { gitViews } from "./node/git";
 import { Peers } from "./peers";
 import { CLOUD, token } from "./cloud";
@@ -701,6 +702,15 @@ async function accountCall(req: Request, url: URL): Promise<Response> {
   return onboarding.account(req, url.pathname, accountReady);
 }
 
+// /agents: the agents this machine has and their installers, for the
+// page's Agents screen (agents.ts), as guarded as the socket.
+async function agentsCall(req: Request, url: URL): Promise<Response> {
+  const why = refuseFetch(req);
+  if (why) return new Response(why, { status: 403 });
+  if (TOKEN && !sameToken(req.headers.get("x-corkboard-token") ?? "")) return new Response("wrong token", { status: 403 });
+  return agents(req, url.pathname);
+}
+
 // /latency: a page's key-to-pixels timings (web/src/latency.ts), one line
 // per key with the window it came from, for `bun run latency` and for
 // lining up with whatever else the machine was doing at the time.
@@ -807,6 +817,7 @@ Bun.serve<Session>({
     if (url.pathname === "/host/fs" || url.pathname === "/host/lua") return hostCall(req, url);
     if (url.pathname === "/latency") return latency(req);
     if (url.pathname === "/account" || url.pathname.startsWith("/account/")) return accountCall(req, url);
+    if (url.pathname === "/agents" || url.pathname === "/agents/install") return agentsCall(req, url);
     if (url.pathname === "/wasm/manifest") return wasmManifest(req);
     if (url.pathname.startsWith("/wasm/plugins/")) return wasmPlugins(req, url);
     if (url.pathname.startsWith("/api/git/")) return gitProxy(req, url);

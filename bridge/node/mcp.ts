@@ -23,7 +23,7 @@ import type { FleetRecords } from "./fleet";
 import { range } from "../../lib/model/dates";
 import { Conflict, type Data, type FullCard, Invalid } from "./data";
 import type { Search } from "./search";
-import { touch } from "./leases";
+import { LEASE_MS, touch } from "./leases";
 import { MAX_INLINE, type Media, fileName, fileType } from "./media";
 import { type FileItem, type FileOffers, type ToFiles, filesJson } from "./files";
 import { type Kind, boardBound } from "./oauth";
@@ -185,7 +185,7 @@ const TOOLS = dict<Tool>({
   },
   claim_card: {
     description:
-      "Start work on a card: sets status doing, agent to you, agent_state working. Fails if another agent holds it, or if it waits on cards that aren't done (unless force).",
+      "Start work on a card: sets status doing, agent to you, agent_state working. Fails if another agent holds it, or if it waits on cards that aren't done (unless force). It stays yours while you keep calling the board about it; left silent, it is released.",
     properties: { id, force: { type: "boolean", description: "Claim it even though its dependencies aren't done" } },
     required: ["id"],
     card: "own",
@@ -405,6 +405,8 @@ const TOOLS = dict<Tool>({
 
 const INSTRUCTIONS = (me: string) => `The corkboard project board: one card per task. You are "${me}".
 To pick up work, call next_card (or claim_card for a specific card). While working, log progress with log.
+A card you hold is yours while the board hears from you: any call naming it counts. After ${LEASE_MS / 60_000} minutes
+without one it is released, back to ready for another agent, so log where you are every few minutes.
 If you need a human decision, call block with your question and stop. If you need the user to do something
 (log in, approve, test on a device), call request_user_action; both notify them on their desktop.
 When done, call submit_for_review.
@@ -976,9 +978,10 @@ async function callTool(node: Node, caller: Caller, name: string, args: any): Pr
     throw new ToolError(`this session works on ${caller.card}; it can read other cards but not change them`);
   // Any call from the agent holding a card keeps its claim (leases.ts): a
   // card agent's for its card, anyone else's for the card named; and after
-  // a claim, the one it made. A card that's gone is the tool's to report.
-  const heard = caller.scope === "card" ? caller.card : args.id;
-  const hear = async () => (typeof heard === "string" && data.cards(board, true).some((c) => c.id === heard) ? touch(data, board, heard, caller.agent) : null);
+  // a claim, the one it made (next_card's is the card it gave back). A card
+  // that's gone is the tool's to report.
+  const named = caller.scope === "card" ? caller.card : args.id;
+  const hear = async (heard: unknown = named) => (typeof heard === "string" && data.cards(board, true).some((c) => c.id === heard) ? touch(data, board, heard, caller.agent) : null);
   const held = await hear();
   if (!["read_card", "block", "request_user_action", "release_card"].includes(name) && typeof args.id === "string") {
     const extra = data.card(board, args.id).extra;
@@ -987,7 +990,7 @@ async function callTool(node: Node, caller: Caller, name: string, args: any): Pr
   }
   let listed: FullCard[] | undefined;
   const out = await tool.run(args, { data, search, media, origin, board, me: caller.agent, caller, cards: () => (listed ??= data.cards(board)) });
-  if (!held) await hear();
+  if (!held) await hear(name === "next_card" ? (out as { id?: string } | null)?.id : named);
   return out;
 }
 

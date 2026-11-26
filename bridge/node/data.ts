@@ -23,7 +23,7 @@ import type { Replicas } from "./replicas";
 export { Conflict, Invalid };
 
 export type FullCard = Card & { log: LogEntry[] };
-// until: in milliseconds; lapsed: the leader blocked the card for it (leases.ts).
+// until: in milliseconds; lapsed: the leader released the card for it (leases.ts).
 export type Lease = { agent: string; until: number; lapsed: boolean };
 // A file on a card, as its extra.media lists it (the Worker's media.ts's).
 export type MediaItem = { id: string; name: string; type: string; size: number; at: string; who: string };

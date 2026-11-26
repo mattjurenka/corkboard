@@ -19,6 +19,8 @@ import { navigate } from "./lib/nav";
 import { closed, reconnect } from "./reconnect";
 import { openListed } from "./views/Projects";
 import { type AccountCall, Welcome } from "./components/Welcome";
+import { AgentsScreen, type AgentsView } from "./components/Agents";
+import { bridge, setBridgeToken } from "./lib/bridge";
 
 // ?cwd=/path/to/project opens Neovim there; ?host=<name> on that machine,
 // over ssh (CORKBOARD_REMOTES in bridge/server.ts). ?view=plan is the day
@@ -59,28 +61,37 @@ if (fragment.has("token")) {
   history.replaceState(null, "", `${location.pathname}${location.search}${fragment.size ? `#${fragment}` : ""}`);
 }
 
+setBridgeToken(token);
 const protocols = ["corkboard", ...(token ? [`corkboard.token.${token}`] : [])];
 const [owner, name] = (params.get("repo") ?? "").split("/");
 const board = params.get("board") ?? undefined;
 const ephemeral = board || (wasm === "ephemeral" && owner && name);
 // A machine with no account yet asks for one first (Welcome.tsx), its
 // Neovim started once it has one; a bridge that doesn't ask goes on.
+// Then, with no agent on the bridge's machine, which it can install
+// (Agents.tsx): asked once, since corkboard is of use without one, and
+// again when a session is asked for (corkboard.agents below).
 if (!ephemeral) await welcome();
+if (!ephemeral && !host && !view) await agentsFirst();
 async function welcome() {
-  const call: AccountCall = async (path, body) => {
-    const res = await fetch(new URL(path.slice(1), location.href), {
-      method: body === undefined && path === "/account" ? "GET" : "POST",
-      headers: { ...(token && { "x-corkboard-token": token }), ...(body !== undefined && { "content-type": "application/json" }) },
-      ...(body !== undefined && { body: JSON.stringify(body) }),
-    });
-    if (!res.headers.get("content-type")?.includes("json")) throw new Error(`${res.status} ${(await res.text()).trim()}`);
-    return res.json();
-  };
+  const call: AccountCall = (path, body) => bridge(path, body, body === undefined && path === "/account" ? "GET" : "POST");
   const asked = await call("/account").catch(() => undefined);
   if (!asked || asked.account) return;
   const at = document.getElementById("root")!;
   const page = createRoot(at);
   await new Promise<void>((done) => page.render(<Welcome call={call} done={done} resume={asked.join} />));
+  page.unmount();
+}
+async function agentsFirst() {
+  const ASKED = "corkboard.agents.asked";
+  const has = await bridge<AgentsView>("/agents").catch(() => undefined);
+  if (!has?.agents || has.agents.some((a) => a.installed)) return;
+  try {
+    if (localStorage.getItem(ASKED)) return;
+    localStorage.setItem(ASKED, "1");
+  } catch {}
+  const page = createRoot(document.getElementById("root")!);
+  await new Promise<void>((done) => page.render(<AgentsScreen call={bridge} done={() => done()} first initial={has} />));
   page.unmount();
 }
 const rpc =
@@ -221,6 +232,8 @@ rpc.on("corkboard.ask_done", ([id]: any[]) => {
   if (store.get().ask?.id === id) store.set({ ask: null });
 });
 rpc.on("corkboard.pair", ([pair]: any[]) => store.set({ pair: typeof pair === "object" ? pair : null }));
+rpc.on("corkboard.fleet_host", ([host]: any[]) => store.set({ fleetHost: typeof host === "object" ? host : null }));
+rpc.on("corkboard.agents", () => store.set({ agents: true }));
 rpc.on("corkboard.chime", () => chime());
 // A toast replaces the one with its id; one that's ended goes after a while.
 function toast(t: Toast) {

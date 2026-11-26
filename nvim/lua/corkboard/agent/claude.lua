@@ -34,11 +34,16 @@ local function account_for(brain)
     if not known then vim.notify("corkboard: the brains aren't in, so this session runs as this machine's account", vim.log.levels.WARN) end
     return login(), nil
   end
-  local state = vim.env.CORKBOARD_FLEET_STATE or vim.fs.joinpath(vim.uv.os_homedir(), ".local/state/corkboard/fleet")
-  local ok, lines = pcall(vim.fn.readfile, vim.fs.joinpath(state, "accounts", account))
+  -- fleetd's state where it's a host's (Linux); else corkboard's own state
+  -- directory, which is where a Windows or macOS machine keeps one.
+  local ok, lines = false, nil
+  for _, state in ipairs({ vim.env.CORKBOARD_FLEET_STATE or vim.fs.joinpath(vim.uv.os_homedir(), ".local/state/corkboard/fleet"), require("corkboard.util").state_dir("fleet") }) do
+    ok, lines = pcall(vim.fn.readfile, vim.fs.joinpath(state, "accounts", account))
+    if ok then break end
+  end
   local token = ok and account:match("^[%w._-]+$") and vim.trim(lines[1] or "") or ""
   if token == "" then
-    vim.notify("corkboard: no token for the " .. account .. " account on this machine, so this session runs as its own", vim.log.levels.WARN)
+    vim.notify(("corkboard: no token for the %s account on this machine (claude setup-token's, kept in %s), so this session runs as its own"):format(account, require("corkboard.util").state_dir("fleet", "accounts", account)), vim.log.levels.WARN)
     return login(), nil
   end
   return account, token

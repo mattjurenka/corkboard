@@ -28,9 +28,17 @@ M.PROMPT = table.concat({
   "Whenever you have something for the user to look at (a screenshot, image, plot, PDF), show it with corkboard-ui's show rather than giving its path.",
 }, " ")
 
--- The kind called name (nil: the default), or nil and why not.
+-- The kind a session that names none runs: Claude Code where this machine
+-- has it, else the first kind it does have, so corkboard works with
+-- whichever agent the user installed.
+function M.default()
+  local here = M.here()
+  return here[1] and here[1].name or M.DEFAULT
+end
+
+-- The kind called name (nil: the default here), or nil and why not.
 function M.get(name)
-  name = name or M.DEFAULT
+  name = name or M.default()
   if not KINDS[name] then return nil, "no agent called " .. name end
   return require("corkboard.agent." .. name)
 end
@@ -42,7 +50,7 @@ function M.all()
     if (a == M.DEFAULT) ~= (b == M.DEFAULT) then return a == M.DEFAULT end
     return a < b
   end)
-  return vim.tbl_map(M.get, names)
+  return vim.tbl_map(function(n) return require("corkboard.agent." .. n) end, names)
 end
 
 -- Whether kind can run here: on PATH, and an ACP kind only under the
@@ -53,6 +61,22 @@ end
 
 -- The kinds that can run here, the default first.
 function M.here() return vim.tbl_filter(M.runs_here, M.all()) end
+
+-- A session was asked for and this machine has no agent: the page's Agents
+-- screen (web/src/components/Agents.tsx), which installs one or says where
+-- to get it; without a page, said here.
+function M.install()
+  local corkboard = require("corkboard")
+  if corkboard.attached() then return corkboard.notify("corkboard.agents", true) end
+  local labels = vim.tbl_map(function(k) return k.label end, M.all())
+  vim.notify("corkboard: no agent on this machine to start a session with; install one of " .. table.concat(labels, ", "), vim.log.levels.WARN)
+end
+
+-- The bridge's PATH, from the Agents screen on its way out: what it
+-- installed is on that, and not on the PATH this Neovim started with.
+function M.path(path)
+  if type(path) == "string" and path ~= "" then vim.env.PATH = path end
+end
 
 -- corkboard-ui's own server (hooks/ui-mcp.lua) for buf's session, as ACP's
 -- session/new takes an MCP server on stdio: ask and notify for a kind
