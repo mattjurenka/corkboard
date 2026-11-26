@@ -951,6 +951,7 @@ function M.setup()
   vim.api.nvim_create_user_command("AgentPlan", M.open_plan, { desc = "corkboard: day plan" })
 
   require("corkboard.pair").setup()
+  require("corkboard.fleet_host").setup()
   require("corkboard.viewer").setup()
   require("corkboard.gitlines").setup()
   require("corkboard.claude.cards").setup()

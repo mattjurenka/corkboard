@@ -175,7 +175,7 @@ switch (cmd) {
       break;
     }
     const d = makeDevice(file);
-    console.log(`${file}: device ${d.id}\n\non a machine with the account's root:\n  corkboard-bridge e2ee relay-device ${d.id} ${b64url(d.box.public)} --name fleetd > cert.json\nthen here:\n  corkboard-fleet device cert${args[0] ? ` ${file}` : ""} < cert.json`);
+    console.log(`${file}: device ${d.id}\n\nin corkboard, on a machine of the account: Add a fleet host (the Fleet tab's A), and paste all of this.\nOr at its shell:\n  corkboard-bridge e2ee relay-device ${d.id} ${b64url(d.box.public)} --name fleetd > cert.json\nthen here:\n  corkboard-fleet device cert${args[0] ? ` ${file}` : ""} < cert.json`);
     break;
   }
 

@@ -80,8 +80,9 @@ type Group = { name?: string; ago?: string; stale?: boolean; budget?: number; us
 type Panel = { name: string; rows: { label: string; value: string; max: string; frac: number; history: Sample[] }[] };
 // at: the time of day it was taken.
 type Sample = { frac: number; value: string; at?: string };
-// asking: x's "stop it?", until y or n.
-type FleetState = { by: "machine" | "project"; monitor?: boolean; queue: Spawn[]; asking?: { id: string; task: string }; groups: Group[]; selected?: string; detail?: Detail; problem?: string; loading?: boolean };
+// asking: x's "stop it?", or (with forget) an environment's "forget it?",
+// until y or n. empty: no fleetd has ever said it's there.
+type FleetState = { by: "machine" | "project"; monitor?: boolean; queue: Spawn[]; asking?: { id?: string; forget?: string; task: string }; empty?: boolean; groups: Group[]; selected?: string; detail?: Detail; problem?: string; loading?: boolean };
 
 const gib = (mib: number | null | undefined) => (mib == null ? "—" : `${(mib / 1024).toFixed(1)} GiB`);
 
@@ -107,13 +108,14 @@ export function Fleet({ state, win, focused, nvim }: ViewProps<FleetState>) {
     root.current?.querySelector("[data-selected]")?.scrollIntoView({ block: "nearest" });
   }, [state.selected]);
   const pick = (id: string) => nvim.lua("require('corkboard.fleet').select(...)", id, win);
+  const addHost = () => nvim.lua("require('corkboard.fleet_host').start()");
   const groups = state.groups ?? [];
 
   return (
     <div className="relative h-full">
       <div ref={root} className="@container/fleet flex h-full flex-col gap-row overflow-y-auto px-2ch pt-row pb-row">
         <header className="flex justify-between gap-2ch text-muted-foreground">
-          <span className="flex gap-2ch">
+          <span className="flex flex-none gap-2ch">
             <span className="font-bold text-foreground">Fleet</span>
             <button
               type="button"
@@ -122,13 +124,38 @@ export function Fleet({ state, win, focused, nvim }: ViewProps<FleetState>) {
             >
               [resources]
             </button>
+            <button type="button" onClick={addHost} className="cursor-pointer px-half hover:bg-accent">
+              [add a host]
+            </button>
           </span>
-          <span className="flex-none @max-[70ch]/fleet:hidden">
-            hjkl · a approve · x stop · ⏎ open · g by {state.by === "project" ? "machine" : "project"} · m resources · R refresh
+          <span className="min-w-0 truncate @max-[70ch]/fleet:hidden">
+            hjkl · a approve · x stop · ⏎ open · g by {state.by === "project" ? "machine" : "project"} · m resources · A add a host · R refresh
           </span>
         </header>
         {state.problem && <p className="px-ch text-destructive">{state.problem}</p>}
         {state.loading && <Spinner className="h-[calc(var(--cell-h)*4)]" />}
+        {state.empty && (
+          <section className="flex max-w-[76ch] flex-col gap-half border px-2ch py-half">
+            <p className="font-bold">No fleet host yet</p>
+            <p className="text-muted-foreground">
+              A fleet host is a NixOS machine whose fleetd runs agents in VMs for this account; any machine of the account,
+              this one too, starts and follows them from here.
+            </p>
+            <ol className="list-inside list-decimal">
+              <li>
+                On the host, run <span className="bg-muted px-half">corkboard-fleet device</span>.
+              </li>
+              <li>
+                Here,{" "}
+                <button type="button" onClick={addHost} className="cursor-pointer bg-primary px-half font-bold text-primary-foreground">
+                  A add a host
+                </button>{" "}
+                and paste what it printed.
+              </li>
+              <li>Run the command it hands back on the host. Its environment shows here once its fleetd is up.</li>
+            </ol>
+          </section>
+        )}
         {groups.map((g, i) => (
           <section key={g.name ?? i} className={cn("flex flex-col gap-row", g.stale && "opacity-60")}>
             {g.name && (
@@ -138,6 +165,16 @@ export function Fleet({ state, win, focused, nvim }: ViewProps<FleetState>) {
                 <span className="text-muted-foreground">
                   {[g.ago && (g.stale ? `not heard from since ${g.ago}` : `seen ${g.ago}`), ...(g.idle ?? [])].filter(Boolean).join(" · ")}
                 </span>
+                {g.stale && (
+                  <button
+                    type="button"
+                    onClick={() => nvim.lua("require('corkboard.fleet').forget(...)", g.name)}
+                    title="take it off the list; a fleetd that's still there puts it back"
+                    className="cursor-pointer px-half text-muted-foreground hover:bg-accent hover:text-foreground"
+                  >
+                    [forget]
+                  </button>
+                )}
               </h2>
             )}
             {g.monitor?.map((p) => <Monitor key={p.name} panel={p} />)}
@@ -185,21 +222,23 @@ export function Fleet({ state, win, focused, nvim }: ViewProps<FleetState>) {
         )}
       </div>
       {state.asking && (
-        <Ask task={state.asking.task} onAnswer={(yes) => nvim.lua("require('corkboard.fleet').answer(...)", yes)} />
+        <Ask task={state.asking.task} forget={!!state.asking.forget} onAnswer={(yes) => nvim.lua("require('corkboard.fleet').answer(...)", yes)} />
       )}
     </div>
   );
 }
 
-// x's question, boxed in the middle of the view; y or n answer it there too.
-function Ask({ task, onAnswer }: { task: string; onAnswer: (yes: boolean) => void }) {
+// x's question (or forget's), boxed in the middle of the view; y or n answer it there too.
+function Ask({ task, forget, onAnswer }: { task: string; forget?: boolean; onAnswer: (yes: boolean) => void }) {
   return (
     <div className="absolute inset-0 z-2 flex items-center justify-center bg-background/60">
       <section className="max-w-[min(60ch,calc(100%-4ch))] border border-primary bg-background px-2ch pb-half">
         <h2 className="-mt-half flex">
-          <span className="bg-background px-half font-bold text-primary">stop</span>
+          <span className="bg-background px-half font-bold text-primary">{forget ? "forget" : "stop"}</span>
         </h2>
-        <p className="line-clamp-3 break-words">Are you sure you want to stop {task}?</p>
+        <p className="line-clamp-3 break-words">
+          {forget ? `Take ${task} off the list? If its fleetd is still there, it comes back.` : `Are you sure you want to stop ${task}?`}
+        </p>
         <p className="mt-row flex justify-end gap-2ch">
           <button type="button" onClick={() => onAnswer(true)} className="cursor-pointer px-half hover:bg-accent">
             <span className="text-primary">y</span> yes

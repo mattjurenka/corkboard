@@ -1693,6 +1693,14 @@ describe("the fleet sealed, on the node", () => {
     expect(await (await local("/api/node/fleet/environments")).json()).toEqual([{ egress: { open: false }, running: { used: 2 }, name: "droplet" }]);
     await local("/api/node/fleet/environments/droplet", { method: "PUT", body: JSON.stringify({ manifest: { egress: { open: false } } }) });
     expect(await (await local("/api/node/fleet/environments")).json()).toEqual([{ egress: { open: false }, name: "droplet" }]);
+    // Forgotten (the fleet view's forget), it's gone till its fleetd puts it back.
+    await local("/api/node/fleet/environments/gone", { method: "PUT", body: JSON.stringify({ manifest: { egress: { open: true } } }) });
+    await n.sealed!.forgetEnvironment("gone");
+    expect(await (await local("/api/node/fleet/environments")).json()).toEqual([{ egress: { open: false }, name: "droplet" }]);
+    await n.sealed!.forgetEnvironment("never-was");
+    await local("/api/node/fleet/environments/gone", { method: "PUT", body: JSON.stringify({ manifest: { egress: { open: true } } }) });
+    expect((await (await local("/api/node/fleet/environments")).json()).map((e: any) => e.name).sort()).toEqual(["droplet", "gone"]);
+    await n.sealed!.forgetEnvironment("gone");
     expect((await n.call("/api/node/fleet/environments", { headers: owner() })).status).toBe(404);
     const agent = n.oauth.mint("pepper", 1, "assistant", "assistant");
     expect((await n.app(new Request(`${ORIGIN}/api/node/fleet/holds`, { headers: { Authorization: `Bearer ${agent}` } }), { requestIP: () => ({ address: "127.0.0.1" }) })).status).toBe(404);
