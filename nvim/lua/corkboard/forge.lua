@@ -80,4 +80,26 @@ function M.revoke()
   end)
 end
 
+-- Put this project on the forge: the clone's branches and tags go to a
+-- private repository of the account's there (made if there's none), and
+-- that becomes origin, the one it had kept under its host's name
+-- (bridge/forge-git.ts's adopt). Nothing there is overwritten.
+function M.adopt(dir)
+  local root = require("corkboard.util").repo_root(dir or vim.fn.getcwd())
+  if not root then return say("this project isn't a git repository", vim.log.levels.WARN) end
+  ask("Name on the forge: ", vim.fs.basename(root), false, function(name)
+    if name == "" then return end
+    say(("putting %s on the forge…"):format(name))
+    -- A first push of a long history takes a while.
+    cloud().call_within(30 * 60 * 1000, "forge_adopt", function(err, got)
+      if err then return say(err, vim.log.levels.ERROR) end
+      if got.already then return say(("origin is %s on the forge already"):format(got.repo)) end
+      local lines = { ("%s is on the forge (%d branch%s), and origin here"):format(got.repo, got.branches, got.branches == 1 and "" or "es") }
+      if got.kept and got.kept ~= vim.NIL then table.insert(lines, ("the remote that was origin is %s"):format(got.kept)) end
+      vim.list_extend(lines, got.notes or {})
+      say(table.concat(lines, "\n"))
+    end, root, name)
+  end)
+end
+
 return M

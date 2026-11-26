@@ -177,10 +177,13 @@ describe("drop, unmerged", () => {
 describe("the node's MCP for a session in a worktree", () => {
   test("forge_repo: owner/repo of a forge origin, nothing for another", () => {
     box = sandbox();
-    box.git(["remote", "set-url", "origin", "http://127.0.0.1:4000/forge/me/project.git"]);
+    box.git(["remote", "set-url", "origin", "corkboard://forge/me/project.git"]);
     const forge = box.lua(`${WT} return wt.forge_repo(vim.fn.getcwd())`);
+    // As it was written before (bridge/forge-git.ts), with a bridge's port.
+    box.git(["remote", "set-url", "origin", "http://127.0.0.1:4000/forge/me/project.git"]);
+    const legacy = box.lua(`${WT} return wt.forge_repo(vim.fn.getcwd())`);
     box.git(["remote", "set-url", "origin", "https://github.com/me/project.git"]);
-    expect([forge, box.lua(`${WT} return wt.forge_repo(vim.fn.getcwd()) or vim.NIL`)]).toEqual(["me/project", null]);
+    expect([forge, legacy, box.lua(`${WT} return wt.forge_repo(vim.fn.getcwd()) or vim.NIL`)]).toEqual(["me/project", "me/project", null]);
   });
 
   test("a config of its own, with the forge's tools told its branch and repo, only this user can read", () => {

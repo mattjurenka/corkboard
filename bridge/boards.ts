@@ -116,6 +116,12 @@ export class Session extends CloudSession {
       if (!node) throw new Error("there's no node here to reach the forge through");
       return (await import("./node/prs")).overview({ forge: node.forge, me: "user" });
     }
+    // A clone here put on the forge and made to follow it (forge-git.ts's
+    // adopt; Put this project on the forge): the directory, the name there.
+    if (op === "forge_adopt") {
+      if (!node?.forge) throw new Error("there's no node here to reach the forge through");
+      return (await import("./forge-git")).adopt(String(args[0]), node.forge, { name: args[1] ? String(args[1]) : undefined });
+    }
     // Its files: repo, ref, path.
     if (op === "git_files") {
       if (!node) throw new Error("there's no node here to reach the forge through");

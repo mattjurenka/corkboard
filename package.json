@@ -21,7 +21,7 @@
     "test:fleet": "bun test --isolate fleet/fleetd fleet/guest",
     "test:e2ee": "bun test lib/harden.test.ts lib/e2ee bridge/keystore bridge/forge bridge/node forge",
     "test:lib": "bun test lib/think.test.ts lib/acp lib/memory lib/model fleet/caps packaging",
-    "test:bridge": "bun test --isolate ./bridge/{guard,e2ee,listen,record,dirs,away,cloud-session,sessions,boards,acp}.test.ts",
+    "test:bridge": "bun test --isolate ./bridge/{guard,e2ee,listen,record,dirs,away,cloud-session,sessions,boards,acp,forge-git}.test.ts",
     "test:mcp": "bun test ./mcp",
     "test:nvim": "bun test ./nvim/hooks ./nvim/*.test.ts",
     "test:web": "bun test web/src/lib web/src/e2ee web/src/avatar web/src/components web/src/views web/src/testing web/src/reconnect.test.ts web/src/nvim/input.test.ts web/src/nvim/input.dom.test.ts web/src/nvim/rpc.test.ts web/src/nvim/grid.test.ts web/src/nvim/wasm wasm",

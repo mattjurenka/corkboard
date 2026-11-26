@@ -65,12 +65,15 @@ export type GitConfig = {
   global?: boolean;
 };
 
+// The header's list is emptied first: the file is read twice by what the
+// bridge starts (the user's include and GIT_CONFIG_*), and a token given
+// twice is not the token.
 export function configText(o: Pick<GitConfig, "base" | "token">): string {
   return [
     "# corkboard's (bridge/forge-git.ts), written again at each start: an edit here is lost.",
     `[url "${o.base}"]`,
     `\tinsteadOf = ${FORGE}`,
-    ...(o.token ? [`[http "${o.base}"]`, `\textraHeader = x-corkboard-token: ${o.token}`] : []),
+    ...(o.token ? [`[http "${o.base}"]`, "\textraHeader =", `\textraHeader = x-corkboard-token: ${o.token}`] : []),
     "",
   ].join("\n");
 }
