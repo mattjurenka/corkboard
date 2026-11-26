@@ -331,7 +331,90 @@ local function fleet_places(brain, fleet, vms, agent)
   return out
 end
 
--- The agents brain can have a session of, as corkboard.columns' middle
+-- A pick in columns: a choice in each, and to its right what that choice
+-- offers. On the page it's a window of the page's (web/src/components/
+-- Session.tsx), which calls run() with the leaf chosen; in a bare Neovim,
+-- a vim.ui.select for each column in turn.
+--
+-- The last choice in each keyed pick, its texts column by column, kept
+-- across restarts so the next open starts on it.
+local function last_path() return vim.fs.joinpath(vim.fn.stdpath("state"), "corkboard", "picked.json") end
+
+local function read_last()
+  local f = io.open(last_path(), "r")
+  if not f then return {} end
+  local ok, got = pcall(vim.json.decode, f:read("*a"))
+  f:close()
+  return ok and type(got) == "table" and got or {}
+end
+
+local function save_last(key, path)
+  local all = read_last()
+  all[key] = { path = path }
+  vim.fn.mkdir(vim.fs.dirname(last_path()), "p")
+  local f = io.open(last_path(), "w")
+  if not f then return end
+  f:write(vim.json.encode(all))
+  f:close()
+end
+
+-- The open pick's key, and its leaves by the id the page has for each:
+-- { run, path }.
+local leaves, leaves_key = {}, nil
+
+local function run_leaf(key, path, run)
+  if key then pcall(save_last, key, path) end
+  vim.schedule(run)
+end
+
+-- The leaf the page chose.
+function M.run(id)
+  local leaf = leaves[id]
+  leaves = {}
+  if leaf then run_leaf(leaves_key, leaf.path, leaf.run) end
+end
+
+-- A bare Neovim's: list's choices, then what the one chosen offers.
+local function select(list, title, key, path)
+  vim.ui.select(list, {
+    prompt = title,
+    format_item = function(it) return it.detail and (it.text .. "  " .. it.detail) or it.text end,
+  }, function(it)
+    if not it then return end
+    local to = vim.list_extend(vim.list_slice(path), { it.text })
+    if it.items then
+      if #it.items > 0 then select(it.items, it.text, key, to) end
+    elseif it.run then
+      run_leaf(key, to, it.run)
+    end
+  end)
+end
+
+-- opts: title; items, the first column's: a list of { text, detail?, run }
+-- or { text, items }, items a list or a function(item) giving one; key, to
+-- open on the last choice made in a pick with the same key.
+local function pick(opts)
+  if #opts.items == 0 then return end
+  leaves, leaves_key = {}, opts.key
+  -- Each item's own, once, as the page is sent them.
+  local function expand(list, path)
+    return vim.tbl_map(function(it)
+      local to = vim.list_extend(vim.list_slice(path), { it.text })
+      if type(it.items) == "function" then it.items = it.items(it) or {} end
+      if it.items then return { text = it.text, detail = it.detail, items = expand(it.items, to) } end
+      if not it.run then return { text = it.text, detail = it.detail } end
+      table.insert(leaves, { run = it.run, path = to })
+      return { text = it.text, detail = it.detail, id = #leaves }
+    end, list)
+  end
+  local items = expand(opts.items, {})
+  local corkboard = require("corkboard")
+  if not corkboard.attached() then return select(opts.items, opts.title, opts.key, {}) end
+  local last = opts.key and read_last()[opts.key]
+  corkboard.notify("corkboard.session", { title = opts.title, items = items, last = last and type(last.path) == "table" and last.path or nil })
+end
+
+-- The agents brain can have a session of, as the pick's middle
 -- column, each with where it can run: here when this machine has it
 -- (start(brain, kind) starts it), unless brain is nil (none, which only
 -- the fleet runs; false: none, here too), and the fleet's places that
@@ -372,7 +455,7 @@ function M.open()
   for _, it in ipairs(left) do
     it.items = function() return agents(it.brain, start, fleet, vms) end
   end
-  require("corkboard.columns").pick({ title = "Session", key = "session", items = left })
+  pick({ title = "Session", key = "session", items = left })
 end
 
 -- The board's A: card id's session, for the brain on the left, of the agent
@@ -388,7 +471,7 @@ function M.open_card(id)
   for _, it in ipairs(left) do
     it.items = function() return agents(it.brain, start) end
   end
-  require("corkboard.columns").pick({ title = id, key = "card", items = left })
+  pick({ title = id, key = "card", items = left })
 end
 
 local HANDOFF_PROMPT = [=[

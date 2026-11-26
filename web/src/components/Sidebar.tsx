@@ -3,8 +3,8 @@
 //
 // Tabs are drawn from ext_tabline: Neovim stops drawing its own tabline and
 // sends tabline_update instead; gt/gT and :tab* still drive it. The first tabs
-// are always the projects, the board, token usage, the fleet (while it's on)
-// and brains (corkboard.projects, .board, .usage, .fleet and .brains keep them
+// are always the projects, the board, git, token usage and the fleet (while
+// it's on; corkboard.projects, .board, .git, .usage and .fleet keep them
 // there), so they are labelled so whatever window is focused in them, and
 // have no close button. The tabs after them come under a gap. All are
 // numbered as Neovim does, for Alt+<n>. With no project open the board is
@@ -26,7 +26,7 @@ import { openPlan } from "@/planWindow";
 import { hasKey, own } from "../../../lib/dict";
 
 // The pinned tabs, by position: the fleet's only while it's on (corkboard.features).
-const pinnedTabs = (fleet: boolean) => (fleet ? ["Projects", "Board", "Git", "Usage", "Fleet", "Brains"] : ["Projects", "Board", "Git", "Usage", "Brains"]);
+const pinnedTabs = (fleet: boolean) => (fleet ? ["Projects", "Board", "Git", "Usage", "Fleet"] : ["Projects", "Board", "Git", "Usage"]);
 
 // Each tab's ribbon down its left edge, by position, whatever the colorscheme;
 // neighbors far apart in hue.
@@ -252,6 +252,9 @@ const VIEW_TABS: Record<string, [string, string | null]> = {
   "agent://plan": ["Day plan", null],
   "agent://plan/proposal": ["Re-plan", "day plan"],
   "agent://settings": ["Settings", null],
+  // The Settings tab's other page, and what it opens beside itself.
+  "agent://brains": ["Settings", "brains"],
+  "agent://holds": ["Settings", "holds"],
 };
 
 // A cell at the row's end for what the tab is: Claude Code, a shell, one of
@@ -303,6 +306,8 @@ function tabParts(name: string, label?: Tab["label"]): [string, string | null] {
   const term = /^term:\/\/(.*?)\/\/\d+:(.*)$/.exec(name);
   const view = own(VIEW_TABS, name);
   if (view) return view;
+  // A brain's memory, beside the brains.
+  if (name.startsWith("agent://brains/")) return ["Settings", name.slice("agent://".length)];
   if (term) return [label?.title ?? term[2].split(" ")[0].split("/").at(-1)!, label?.where ?? term[1]];
   // An ACP agent's session (agent://acp/<n>), whose label Neovim sends.
   if (label) return [label.title, label.where ?? null];

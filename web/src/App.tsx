@@ -21,6 +21,7 @@ import { Scrollbars } from "@/components/Scrollbars";
 import { Sidebar, tabTitle } from "@/components/Sidebar";
 import { Skeleton } from "@/components/Skeleton";
 import { Toasts } from "@/components/Toasts";
+import { Session } from "@/components/Session";
 import { Tools } from "@/components/Tools";
 import { Button } from "@/components/ui/button";
 import { keepFocus, useNvim } from "@/nvim/context";
@@ -42,7 +43,7 @@ export function App() {
   const gutter = focus ? `max(0px, calc((100% - var(--cell-w) * ${focus.width} - 1px) / 2))` : undefined;
   // The drawer closes once it has done its job: another tab, or a picker.
   const tab = useStore((s) => s.tabs?.current.id);
-  const picking = useStore((s) => !!s.tools || !!s.projects || !!s.brainForm || !!s.holdForm || !!s.ask || !!s.pair || !!s.fleetHost || s.agents);
+  const picking = useStore((s) => !!s.tools || !!s.session || !!s.projects || !!s.brainForm || !!s.holdForm || !!s.ask || !!s.pair || !!s.fleetHost || s.agents);
   useEffect(() => {
     if (store.get().drawer) store.set({ drawer: false });
   }, [tab, picking]);
@@ -119,6 +120,7 @@ export function App() {
         </Alert>
       )}
       <Tools />
+      <Session />
       <Projects />
       <BrainForm />
       <HoldForm />

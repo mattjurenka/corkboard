@@ -28,6 +28,10 @@ export type BrainFields = {
   default: boolean;
   updated?: string;
 };
+// A choice in the session picker: one that offers more (items), or a leaf
+// Neovim runs by its id.
+export type SessionItem = { text: string; detail?: string; items?: SessionItem[]; id?: number };
+export type SessionPick = { title: string; items: SessionItem[]; last?: string[] };
 // What a, or e on one, opens: the brain, none for a new one, the live
 // brains to pick accounts and labels from or start from, the abilities, and
 // the avatar's personas.
@@ -155,6 +159,9 @@ export type State = {
   away: Away | null;
   // The tool picker (corkboard.picker.tools), while it's open.
   tools: { leader: string; tools: { text: string; hint: string; off?: boolean }[] } | null;
+  // The session picker (corkboard.session), while it's open: its first
+  // column, and the texts of the last choice, column by column.
+  session: SessionPick | null;
   // The brain form (corkboard.brains), while it's open.
   brainForm: BrainFormData | null;
   // The hold form (corkboard.holds), while it's open: the hold, none for a new one.
@@ -225,6 +232,7 @@ let state: State = {
   keyboard: false,
   away: null,
   tools: null,
+  session: null,
   brainForm: null,
   holdForm: null,
   ask: null,

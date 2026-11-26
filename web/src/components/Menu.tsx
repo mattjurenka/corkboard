@@ -28,8 +28,6 @@ const tab = (n: number) => cmd(`silent! ${n}tabnext`);
 const zoom = (dir: number) => (nvim: Nvim) => void nvim.lua("require('corkboard.settings').zoom(...)", dir);
 
 function menus(leader: string, files: boolean, { fleet, assistant }: Features, vim: boolean): [string, Item[]][] {
-  // Brains is fourth among the tabs without the fleet (corkboard.features).
-  const brains = fleet ? 6 : 5;
   // An editor's keys, without Vim's (corkboard.vimkeys).
   const own = (mac: string, other?: string) => (MAC ? prettyKeys(mac) : other && prettyKeys(other));
   return [
@@ -78,7 +76,7 @@ function menus(leader: string, files: boolean, { fleet, assistant }: Features, v
         { label: "Git", bind: "tab 3", run: tab(3) },
         { label: "Usage", bind: "tab 4", run: tab(4) },
         ...(fleet ? [{ label: "Fleet", bind: "tab 5", run: tab(5) }] : []),
-        { label: "Brains", bind: `tab ${brains}`, run: tab(brains) },
+        { label: "Brains", run: lua("require('corkboard.settings').open('brains')") },
         ...(assistant
           ? [
               { label: "Day plan", bind: "day plan", run: () => openPlan() },

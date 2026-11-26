@@ -3,8 +3,9 @@
 -- abilities and its avatar's persona (corkboard.personas) and skin. The default
 -- one is what your own sessions remember in.
 --
--- The view is the agent://brains buffer, fourth among the tabs after the
--- fleet: a plain listing with the browser's HTML drawn over it. The cursor's
+-- The view is the agent://brains buffer, a tab inside the Settings tab
+-- (corkboard.settings shows it in its window, and <Tab> goes back to the
+-- settings): a plain listing with the browser's HTML drawn over it. The cursor's
 -- line selects a brain. <CR> opens its memory beside the listing; a makes
 -- one and e edits it, in the page's form (in a bare Neovim, a buffer of its
 -- fields written with :w); d archives it (asked first), u restores it, and P purges an archived one, its name
@@ -810,6 +811,8 @@ local function buffer()
     n = { or_answer(false), "no, leave it" },
     ["<Esc>"] = { or_answer(false), "no, leave it" },
     R = { M.load, "refresh" },
+    ["<Tab>"] = { function() require("corkboard.settings").open() end, "the settings" },
+    ["<S-Tab>"] = { function() require("corkboard.settings").open() end, "the settings" },
   }, items, function(name)
     if name == selected then return end
     selected = name
@@ -820,17 +823,10 @@ local function buffer()
   return buf
 end
 
--- Keep the brains last of the pinned tabs (pinned.index).
-local function index() return pinned.index("corkboard_brains") end
+-- For corkboard.settings, whose tab shows it.
+M.buffer = buffer
 
-function M.ensure()
-  if pinned.ensure("corkboard_brains", index(), buffer()) then vim.schedule(M.load) end
-end
-
-function M.show()
-  M.ensure()
-  pinned.show("corkboard_brains", index(), buffer())
-end
+function M.show() require("corkboard.settings").open("brains") end
 
 function M.push_all()
   if buf and vim.api.nvim_buf_is_valid(buf) then push_state() end

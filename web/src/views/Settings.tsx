@@ -10,6 +10,8 @@
 //
 // Devices, when this machine is in an encrypted account: its address on the
 // relay, and each device, whose box makes it the leader.
+//
+// The brains are the tab's other page (SettingsTabs.tsx).
 
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
@@ -17,6 +19,7 @@ import { prettyKeys } from "@/lib/keys";
 import type { Nvim } from "@/nvim/context";
 import { toNvimKey } from "@/nvim/input.js";
 import type { ViewProps } from "./index";
+import { SettingsTabs } from "./SettingsTabs";
 
 type Value = string | number | boolean | string[] | null;
 type Option = { value: string | number; label: string };
@@ -74,7 +77,7 @@ export function Settings({ state, win, focused, nvim }: ViewProps<SettingsState>
   return (
     <div ref={root} className="flex h-full flex-col gap-row overflow-y-auto px-2ch pt-row pb-row">
       <header className="flex items-baseline gap-2ch">
-        <span className="font-bold">Settings</span>
+        <SettingsTabs on="settings" nvim={nvim} />
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
