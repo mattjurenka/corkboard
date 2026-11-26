@@ -18,6 +18,7 @@
 // mcp_config); a call can name another repository.
 
 import type { ToForge } from "./git";
+import { FOLLOWS } from "../forge-git";
 
 // branch and repo: the caller's, owner/repo, when its session told them.
 // user: the user's own call (review.lua's approve), which merges without a review.
@@ -175,6 +176,9 @@ export const PR_TOOLS: Record<string, PrTool> = {
       const pr = await api(c, `/repos/${repo}/pulls/${n}`);
       if (pr.merged) throw new Error(`#${n} is merged already`);
       if (pr.state !== "open") throw new Error(`#${n} is closed`);
+      // A repository whose main is kept on GitHub (forge-git.ts's FOLLOWS): a merge here would part from it.
+      const topics = (await api(c, `/repos/${repo}`)).topics ?? [];
+      if (topics.includes(FOLLOWS)) throw new Error(`${repo} follows another remote, where its ${pr.base.ref} is kept and teammates work, so nothing merges here: once #${n} is approved, push ${pr.head.ref} to that remote (git config corkboard.upstream names it) and open its pull request there, or leave that to the user`);
       if (!pr.mergeable) throw new Error(`#${n} doesn't merge cleanly; merge ${pr.base.ref} into ${pr.head.ref}, push, and ask for another review`);
       const why = !c.user && blocked(pr, await verdicts(c, repo, n));
       if (why) throw new Error(`#${n} can't be merged yet: ${why}`);

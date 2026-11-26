@@ -49,9 +49,17 @@ end
 
 local function nil_if_null(v) return v ~= vim.NIL and v or nil end
 
--- host/owner/repo, however a remote is written (scp-like, ssh://, https://).
+-- A remote that is a bridge's loopback /forge/, as the forge's is written
+-- on every machine (bridge/forge-git.ts's canonical); any other as it is.
+local function forge_url(url)
+  local repo = url:match("^https?://127%.0%.0%.1:%d+/forge/(.+)$") or url:match("^https?://localhost:%d+/forge/(.+)$") or url:match("^https?://%[::1%]:%d+/forge/(.+)$")
+  return repo and ("corkboard://forge/" .. repo) or url
+end
+
+-- host/owner/repo, however a remote is written (scp-like, ssh://, https://);
+-- the forge's is forge/owner/repo, whichever bridge's port it was written with.
 local function repo_of(url)
-  return (url:lower():gsub("^%w+://", ""):gsub("^[^@/]+@", ""):gsub("^([^/:]+):(%d*)/?", function(host, port) return host .. "/" end):gsub("%.git/?$", ""):gsub("/$", ""))
+  return (forge_url(url):lower():gsub("^%w+://", ""):gsub("^[^@/]+@", ""):gsub("^([^/:]+):(%d*)/?", function(host, port) return host .. "/" end):gsub("%.git/?$", ""):gsub("/$", ""))
 end
 
 -- A clone here of one of these remotes: among the recent projects, or under a
@@ -156,7 +164,7 @@ function M.open_project(p)
   local name = root and vim.fs.basename(root) or repo_of(p.remote):match("([^/]+)$")
   local dest = vim.fs.joinpath(vim.fn.expand(dev_dirs()[1]), name)
   if vim.uv.fs_stat(dest) then return { error = vim.fn.fnamemodify(dest, ":~") .. " is already there" } end
-  local ok, _, err = util.git({ "clone", p.remote, dest })
+  local ok, _, err = util.git({ "clone", forge_url(p.remote), dest })
   if not ok then return { error = err } end
   return pinned(dest)
 end
@@ -245,6 +253,7 @@ local tools = {
   { text = "Pair a device", hint = "", run = function() require("corkboard.pair").start() end },
   { text = "Add a fleet host", hint = "", feature = "fleet", run = function() require("corkboard.fleet_host").start() end },
   { text = "Git", hint = "", run = function() require("corkboard.git").open() end },
+  { text = "Put this project on the forge", hint = "", project = true, run = function() require("corkboard.forge").adopt() end },
   { text = "Give git access", hint = "", run = function() require("corkboard.forge").grant() end },
   { text = "Take back git access", hint = "", run = function() require("corkboard.forge").revoke() end },
   { text = "Terminal", hint = "", project = true, run = function() require("corkboard.terminal").tab() end },

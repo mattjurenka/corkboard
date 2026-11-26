@@ -726,6 +726,20 @@ end
 
 local function merge(p)
   if p.card then return require("corkboard.review").approve(p.card, M.reload) end
+  -- Its main is kept on another remote (GitHub, with teammates): the branch
+  -- goes there for its pull request, and nothing merges on the forge.
+  for _, w in ipairs(s.worktrees) do
+    local up = w.path == p.worktree and require("corkboard.worktree").upstream(w.root)
+    if up then
+      return vim.ui.select({ "Push " .. p.head .. " to " .. up .. " and open its pull request there", "Cancel" }, { prompt = p.repo .. " follows " .. up }, function(_, i)
+        if i ~= 1 then return end
+        require("corkboard.forge").offer(w.root, p.head, function(err, got)
+          if err then return say("#" .. p.number .. ": " .. tostring(err), vim.log.levels.ERROR) end
+          say(p.head .. " is on " .. got.remote .. "; #" .. p.number .. " closes here once it's merged there")
+        end)
+      end)
+    end
+  end
   vim.ui.select({ "Merge #" .. p.number .. " (" .. p.head .. ") into " .. p.base, "Cancel" }, { prompt = p.repo }, function(_, i)
     if i ~= 1 then return end
     cloud().call_async("pr_merge", function(err, got)

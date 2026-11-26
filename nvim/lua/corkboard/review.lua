@@ -190,6 +190,24 @@ end
 -- PR's head (bridge/node/prs.ts). Then the worktree and branch go and the
 -- main checkout comes up to date (corkboard.worktree's finish).
 local function merge_pr(id, card, src, repo, confirm, done)
+  -- A project whose main is kept on another remote (GitHub, with teammates;
+  -- worktree.upstream): the branch goes there for its pull request, by the
+  -- user, and the card waits in review for that one.
+  local up = require("corkboard.worktree").upstream(src.root)
+  if up then
+    if not confirm then return board().set(id, { attention = "#" .. card.pr .. " is approved; it merges on " .. up .. ", so approve it to push it there" }) end
+    return vim.ui.select({ "Push " .. (card.branch or "") .. " to " .. up .. " and open its pull request there", "Cancel" }, { prompt = "Approve " .. id }, function(_, i)
+      if i ~= 1 then return end
+      require("corkboard.forge").offer(src.root, card.branch, function(err, got)
+        if err then return vim.notify("corkboard: " .. id .. ": " .. tostring(err), vim.log.levels.ERROR) end
+        local where = got.url ~= vim.NIL and got.url or got.remote
+        board().set(id, { attention = "waiting to be merged on " .. got.remote })
+        board().log(id, "user", "approved: " .. got.branch .. " pushed to " .. got.remote .. " for its pull request (" .. where .. ")")
+        vim.notify("corkboard: " .. id .. "'s " .. got.branch .. " is on " .. got.remote)
+        if done then done() end
+      end)
+    end)
+  end
   -- What's committed in the worktree but not pushed would go with it.
   if src.worktree and card.branch then
     git({ "fetch", "--quiet", "origin", card.branch }, src.worktree)

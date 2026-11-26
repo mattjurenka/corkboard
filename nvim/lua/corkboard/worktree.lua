@@ -98,12 +98,24 @@ function M.drop(wt, branch)
 end
 
 -- The forge's owner/repo of dir's origin, when origin is the node's forge
--- (http://127.0.0.1:<port>/forge/<owner>/<repo>.git).
+-- (corkboard://forge/<owner>/<repo>.git, bridge/forge-git.ts; or as it was
+-- written before, http://127.0.0.1:<port>/forge/<owner>/<repo>.git).
 function M.forge_repo(dir)
-  local ok, url = util.git({ "remote", "get-url", "origin" }, dir)
+  -- As it's written, not as git's url.insteadOf has it.
+  local ok, url = util.git({ "config", "--get", "remote.origin.url" }, dir)
   if not ok then return nil end
-  local repo = vim.trim(url):match("^https?://[^/]+/forge/([^/]+/[^/]+)$")
+  url = vim.trim(url)
+  local repo = url:match("^corkboard://forge/([^/]+/[^/]+)$") or url:match("^https?://[^/]+/forge/([^/]+/[^/]+)$")
   return repo and (repo:gsub("%.git$", ""))
+end
+
+-- The remote that keeps the project's main, when that isn't the forge
+-- (GitHub, where teammates work; bridge/forge-git.ts): the forge follows it,
+-- and a branch that's ready goes there to be merged.
+function M.upstream(dir)
+  local ok, name = util.git({ "config", "--get", "corkboard.upstream" }, dir)
+  name = ok and vim.trim(name) or ""
+  return name ~= "" and name or nil
 end
 
 -- The node's MCP config for a session in a linked worktree (a file:

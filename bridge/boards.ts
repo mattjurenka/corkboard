@@ -16,6 +16,7 @@ import { hostname } from "node:os";
 import { Cloud, Session as CloudSession, type Listener, USER } from "./cloud-session";
 import { CLOUD, token } from "./cloud";
 import { host } from "./host";
+import { canonical } from "./forge-git";
 import * as remote from "./remote";
 import type { AppNode } from "./node/app";
 import type { Peers } from "./peers";
@@ -38,7 +39,9 @@ async function remotes(root: string): Promise<string[]> {
     .filter((m): m is RegExpMatchArray => !!m)
     .sort((a, b) => Number(b[1] === "origin") - Number(a[1] === "origin"))
     .map((m) => m[2].replace(/^(https?:\/\/)[^\/@]*@/, "$1"))
-    .filter((u) => /^(https?:\/\/|ssh:\/\/|git:\/\/|[\w.-]+@[\w.-]+:)\S{1,500}$/.test(u));
+    // The forge's as every machine of the account writes it (forge-git.ts), not this bridge's port.
+    .map((u) => canonical(u) ?? u)
+    .filter((u) => /^(https?:\/\/|ssh:\/\/|git:\/\/|corkboard:\/\/|[\w.-]+@[\w.-]+:)\S{1,500}$/.test(u));
   return [...new Set(urls)].slice(0, 8);
 }
 
@@ -115,6 +118,15 @@ export class Session extends CloudSession {
       if (!node) throw new Error("there's no node here to reach the forge through");
       return (await import("./node/prs")).overview({ forge: node.forge, me: "user" });
     }
+    // A clone here put on the forge and made to follow it (forge-git.ts's
+    // adopt; Put this project on the forge): the directory, the name there,
+    // and whether the remote it came from keeps its main.
+    if (op === "forge_adopt") {
+      if (!node?.forge) throw new Error("there's no node here to reach the forge through");
+      return (await import("./forge-git")).adopt(String(args[0]), node.forge, { name: args[1] ? String(args[1]) : undefined, follows: args[2] === true });
+    }
+    // A branch given to the remote the project's main is kept on (forge-git.ts's offer): the directory, the branch.
+    if (op === "forge_offer") return (await import("./forge-git")).offer(String(args[0]), String(args[1]));
     // Its files: repo, ref, path.
     if (op === "git_files") {
       if (!node) throw new Error("there's no node here to reach the forge through");
