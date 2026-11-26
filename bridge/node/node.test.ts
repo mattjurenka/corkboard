@@ -1492,7 +1492,7 @@ describe("card grants and leases, on the node", () => {
     expect(n.oauth.grants().some((x) => x.brain === "assistant" && x.name.startsWith("coding-1"))).toBe(false);
   });
 
-  it("keeps a working card's claim while its agent is heard from, and blocks it when it isn't", async () => {
+  it("keeps a working card's claim while its agent is heard from, and releases it when it isn't", async () => {
     const c = await card("Long one");
     const quiet = await card("Never heard");
     const { token } = n.oauth.mintBound({ scope: "card", board: "proj", card: c.id, agent: "claude" });
@@ -1506,27 +1506,33 @@ describe("card grants and leases, on the node", () => {
     expect(await touch(n.data, "proj", c.id, "someone")).toBeNull();
 
     expect(await sweep(n.data, first.until - 1000)).not.toContain(`proj:${c.id}`);
-    // Fifteen minutes on: blocked, and the card never heard of is left alone.
+    // Fifteen minutes on: released, and the card never heard of is left alone.
     const swept = await sweep(n.data, first.until + 1000);
     expect(swept).toContain(`proj:${c.id}`);
     expect(swept).not.toContain(`proj:${quiet.id}`);
-    const blocked = n.data.card("proj", c.id);
-    expect(blocked).toMatchObject({ agent_state: "blocked", attention: "claude stopped responding; queue it again or release it" });
-    expect(blocked.log.at(-1)!.note).toContain("nothing from claude for 15 minutes");
+    const released = n.data.card("proj", c.id);
+    expect(released).toMatchObject({ status: "ready", agent: null, agent_state: null, attention: null });
+    expect(released.log.at(-1)!.note).toBe("released: nothing from claude for 15 minutes, so it's back in ready for the next agent");
     expect(n.data.card("proj", quiet.id).agent_state).toBe("working");
-    // The agent speaks again (any call, a read too): working again.
-    await as(token)("read_card", { id: c.id });
-    expect(n.data.card("proj", c.id)).toMatchObject({ agent_state: "working", attention: null });
-    expect(n.data.card("proj", c.id).log.at(-1)!.note).toBe("claude is responding again, so it's back to working");
-    // A card the user blocked isn't the agent's to undo.
+    // The agent speaks again: the card is nobody's until it's claimed again.
+    expect((await as(token)("block", { id: c.id, question: "still here?" })).text).toContain("claim it first");
+    expect(await touch(n.data, "proj", c.id, "claude")).toBeNull();
+    await as(token)("claim_card", { id: c.id });
+    expect(n.data.card("proj", c.id)).toMatchObject({ status: "doing", agent: "claude", agent_state: "working" });
+    expect(n.data.lease("proj", c.id)).toMatchObject({ agent: "claude", lapsed: false });
+    // A card blocked waits on the user, and isn't swept or kept.
     await n.data.updateCard("proj", c.id, { agent_state: "blocked" });
     expect(await touch(n.data, "proj", c.id, "claude")).toBeNull();
+    expect(await sweep(n.data, Date.now() + 2 * LEASE_MS)).not.toContain(`proj:${c.id}`);
     // Nor is one the budget guard stopped swept.
     await n.data.updateCard("proj", c.id, { agent_state: "working", extra: { budget_hold: "spent" } });
-    expect(await sweep(n.data, Date.now() + 2 * LEASE_MS)).toEqual([]);
+    expect(await sweep(n.data, Date.now() + 2 * LEASE_MS)).not.toContain(`proj:${c.id}`);
     // The heartbeat, through the app's touch.
     await n.data.updateCard("proj", c.id, { extra: {} });
     expect(((await boards(b, "touch", ["proj", c.id.toLowerCase(), "claude"])) as { until: number }).until).toBeGreaterThan(Date.now());
+    // The card next_card hands out has its lease too, whoever asked.
+    const next = JSON.parse((await as(n.oauth.mint("someone", 1))("next_card", { board: "proj" })).text);
+    expect(n.data.lease("proj", next.id)).toMatchObject({ lapsed: false });
   });
 });
 
