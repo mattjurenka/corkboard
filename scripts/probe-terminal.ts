@@ -7,14 +7,14 @@
 //
 //   bun scripts/probe-terminal.ts [nvim] [--claude]
 
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeMultiStream, encode } from "@msgpack/msgpack";
 
 const args = process.argv.slice(2);
 const nvim = args.find((a) => !a.startsWith("--")) ?? "nvim";
-const dir = mkdtempSync(join(tmpdir(), "corkboard-probe-"));
+const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "corkboard-probe-")));
 const result = join(dir, "result.json");
 
 // Frames as Ink's log-update draws them (erase the last frame's lines, write
@@ -39,16 +39,41 @@ await sleep(60000);
 const tui = join(dir, "tui.mjs");
 writeFileSync(tui, TUI);
 
-const cases: { name: string; cmd: string[]; wait: number; env?: Record<string, string> }[] = [
+// agent: the command is corkboard.agent.claude's (its hooks, its mod), with
+// cmd's words after it. keys: sent to the program, each after its wait.
+type Case = { name: string; cmd: string[]; wait: number; env?: Record<string, string>; cwd?: string; agent?: boolean; keys?: [number, string][] };
+const cases: Case[] = [
   { name: "tui", cmd: [process.execPath, tui], wait: 3000 },
 ];
 if (args.includes("--claude")) {
   cases.push({ name: "claude", cmd: ["claude"], wait: 20000, env: { CLAUDE_CONFIG_DIR: join(dir, "claude") } });
+  // Past the first screens with a key that is no key, so a session starts,
+  // its hooks run and its prompt is drawn; the request itself fails.
+  const key = "sk-ant-api03-" + "0".repeat(95);
+  const proj = join(dir, "proj");
+  mkdirSync(proj);
+  const seeded = (name: string) => {
+    const config = join(dir, name);
+    mkdirSync(config);
+    const trusted = { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true };
+    writeFileSync(join(config, ".claude.json"), JSON.stringify({
+      hasCompletedOnboarding: true,
+      theme: "dark",
+      customApiKeyResponses: { approved: [key.slice(-20)], rejected: [] },
+      projects: { [proj]: trusted, [proj.replaceAll("\\", "/")]: trusted },
+    }));
+    return { CLAUDE_CONFIG_DIR: config, ANTHROPIC_API_KEY: key };
+  };
+  const keys: [number, string][] = [[12000, "\r"], [6000, "hello there"], [1000, "\r"]];
+  cases.push({ name: "claude-seeded", cmd: ["claude"], wait: 30000, env: seeded("claude-plain"), cwd: proj, keys });
+  cases.push({ name: "claude-corkboard", cmd: [], agent: true, wait: 30000, env: seeded("claude-agent"), cwd: proj, keys });
 }
 
 const LUA = String.raw`
 local cases, result, plugin = ...
 vim.opt.rtp:prepend(plugin)
+-- No message to wait on a key no one presses.
+vim.notify = function() end
 local function wait(ms)
   local co = coroutine.running()
   vim.defer_fn(function() coroutine.resume(co) end, ms)
@@ -65,24 +90,46 @@ coroutine.wrap(function()
   local ok, err = xpcall(function()
     for _, c in ipairs(cases) do
       for _, how in ipairs({ "start", "term" }) do
+        io.stderr:write(("probe: %s / %s\n"):format(c.name, how))
         vim.cmd.enew()
         local buf, raw = vim.api.nvim_get_current_buf(), {}
         local opts = {
           env = c.env,
+          cwd = c.cwd,
           on_stdout = function(_, data) table.insert(raw, table.concat(data, "\n")) end,
         }
+        local cmd = c.cmd
+        if c.agent then
+          local agent, env = require("corkboard.agent.claude").command({})
+          cmd = vim.list_extend(agent, c.cmd)
+          opts.env = vim.tbl_extend("force", env, c.env or {})
+        end
         local started, job = pcall(function()
-          if how == "start" then return require("corkboard.terminal").start(c.cmd, opts) end
+          if how == "start" then return require("corkboard.terminal").start(cmd, opts) end
           opts.term = true
-          return vim.fn.jobstart(c.cmd, opts)
+          return vim.fn.jobstart(cmd, opts)
         end)
-        wait(c.wait)
+        local spent = 0
+        for _, k in ipairs(c.keys or {}) do
+          wait(k[1])
+          spent = spent + k[1]
+          if started then pcall(vim.fn.chansend, job, k[2]) end
+        end
+        wait(math.max(c.wait - spent, 0))
         local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
         while #lines > 0 and lines[#lines] == "" do table.remove(lines) end
         local size = { vim.fn.winwidth(0), vim.fn.winheight(0) }
+        -- How many different highlights the window's cells have: 1 is no colour.
+        vim.cmd.redraw()
+        local attrs, pos = {}, vim.fn.win_screenpos(0)
+        for r = pos[1], pos[1] + size[2] - 1 do
+          for col = pos[2], pos[2] + size[1] - 1 do attrs[vim.fn.screenattr(r, col)] = true end
+        end
+        local all = table.concat(raw)
         table.insert(out.runs, {
-          case = c.name, how = how, job = tostring(job), size = size,
-          raw = esc(table.concat(raw):sub(1, 6000)), lines = lines,
+          case = c.name, how = how, job = tostring(job), size = size, attrs = vim.tbl_count(attrs),
+          cmd = table.concat(cmd, " "):sub(1, 400),
+          raw = esc(all:sub(1, 3000)), tail = #all > 3000 and esc(all:sub(-math.min(#all - 3000, 5000))) or "", lines = lines,
         })
         if started then pcall(vim.fn.jobstop, job) end
         wait(200)
@@ -116,7 +163,7 @@ function call(method: string, ...params: unknown[]) {
 
 await call("nvim_ui_attach", 100, 30, { ext_linegrid: true, rgb: true });
 console.log("exec:", await call("nvim_exec_lua", LUA, [cases, result, join(import.meta.dir, "..", "nvim")]));
-const total = cases.reduce((n, c) => n + 2 * (c.wait + 1500), 10_000);
+const total = cases.reduce((n, c) => n + 2 * (c.wait + 5000), 30_000);
 for (let t = 0; t < total && !existsSync(result); t += 250) await Bun.sleep(250);
 if (!existsSync(result)) {
   console.error("probe: no result");
@@ -127,11 +174,13 @@ const got = JSON.parse(readFileSync(result, "utf8"));
 const { runs, ...about } = got;
 console.log(JSON.stringify(about));
 for (const r of runs ?? []) {
-  console.log(`\n===== ${r.case} / ${r.how} (job ${r.job}, ${r.size.join("x")}) =====`);
+  console.log(`\n===== ${r.case} / ${r.how} (job ${r.job}, ${r.size.join("x")}, ${r.attrs} highlights) =====`);
+  console.log(`--- cmd ${r.cmd}`);
   console.log("--- screen");
   for (const l of r.lines) console.log(`|${l}`);
   console.log("--- raw");
   console.log(r.raw);
+  if (r.tail) console.log(`--- raw, its end\n${r.tail}`);
 }
 proc.kill();
 process.exit(got.error ? 1 : 0);
