@@ -109,6 +109,15 @@ function M.forge_repo(dir)
   return repo and (repo:gsub("%.git$", ""))
 end
 
+-- The remote that keeps the project's main, when that isn't the forge
+-- (GitHub, where teammates work; bridge/forge-git.ts): the forge follows it,
+-- and a branch that's ready goes there to be merged.
+function M.upstream(dir)
+  local ok, name = util.git({ "config", "--get", "corkboard.upstream" }, dir)
+  name = ok and vim.trim(name) or ""
+  return name ~= "" and name or nil
+end
+
 -- The node's MCP config for a session in a linked worktree (a file:
 -- CORKBOARD_MEMORY_MCP_CONFIG's, and a corkboard-forge server beside it
 -- with the PR tools, told the session's branch and repo); otherwise the

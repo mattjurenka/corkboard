@@ -13,6 +13,7 @@ function forgejo() {
   const merged: any[] = [];
   const comments: any[] = [];
   let at = 0;
+  const topics: string[] = [];
   const forge = async (path: string, init: RequestInit = {}) => {
     const url = new URL(path, "http://forge.invalid");
     const p = url.pathname.replace(/^\/api\/v1\/repos\/me\/proj/, "");
@@ -20,7 +21,7 @@ function forgejo() {
     const body = init.body ? JSON.parse(String(init.body)) : undefined;
     const json = (v: unknown, status = 200) => Response.json(v, { status });
     let m: RegExpMatchArray | null;
-    if (p === "" && method === "GET") return json({ default_branch: "main" });
+    if (p === "" && method === "GET") return json({ default_branch: "main", topics });
     if (p === "/pulls" && method === "GET") return json(pulls.filter((x) => url.searchParams.get("state") === "all" || x.state === url.searchParams.get("state")));
     if (p === "/pulls" && method === "POST") {
       const pr = { number: pulls.length + 1, title: body.title, body: body.body ?? "", state: "open", merged: false, mergeable: true, head: { ref: body.head, sha: "a".repeat(40) }, base: { ref: body.base } };
@@ -68,7 +69,7 @@ function forgejo() {
     if (p === "/actions/tasks") return json({ workflow_runs: [{ status: "success", display_title: "ci", head_branch: "main", updated_at: "2026-11-13T00:00:00Z" }] });
     return json({ message: `no ${method} ${p}` }, 404);
   };
-  return { forge, pulls, merged, comments };
+  return { forge, pulls, merged, comments, topics };
 }
 
 const as = (f: ReturnType<typeof forgejo>, branch?: string): PrCall => ({ forge: f.forge, me: "assistant", branch, repo: "me/proj" });
@@ -116,6 +117,16 @@ describe("PR tools", () => {
     expect(await run("merge_pr", { number: 1 }, author)).toMatchObject({ merged: true, into: "main" });
     expect(f.merged[0]).toEqual({ Do: "merge", delete_branch_after_merge: true, head_commit_id: "b".repeat(40) });
     await expect(run("merge_pr", { number: 1 }, author)).rejects.toThrow(/merged already/);
+  });
+
+  it("merges nothing in a repository whose main is kept on another remote, the user's call neither", async () => {
+    const f = forgejo();
+    f.topics.push("follows-upstream");
+    await run("open_pr", { title: "one" }, as(f, "agent/a/work"));
+    await run("review_pr", { number: 1, verdict: "approve", body: "lgtm" }, as(f, "agent/b/work"));
+    await expect(run("merge_pr", { number: 1 }, as(f, "agent/a/work"))).rejects.toThrow(/follows another remote.*push agent\/a\/work to that remote/);
+    await expect(run("merge_pr", { number: 1 }, { ...as(f), user: true })).rejects.toThrow(/nothing merges here/);
+    expect(f.merged).toEqual([]);
   });
 
   it("closes a PR without merging it, saying why on it", async () => {

@@ -21,6 +21,16 @@
 // whichever bridge made it (the installed one's, the dev one's, the app's
 // pick), so it broke under any other; canonicalize() rewrites those.
 //
+// A project is on the forge one of two ways (adopt):
+//
+//   - the forge has its main, and GitHub (where the clone came from) is a
+//     mirror the forge pushes to on every commit: a project of the user's own;
+//   - GitHub keeps its main, where teammates work, and the forge follows it
+//     (follow): the forge has the sessions' branches and their pull requests,
+//     nothing merges there (node/prs.ts), and a branch that's ready goes to
+//     GitHub for its pull request (offer). The clone says so in
+//     corkboard.upstream, the repository on the forge by its topic.
+//
 // Several bridges on a machine (installed, dev) share the file: the last one
 // started has it, and each takes it back when the one that has it is gone
 // (keep).
@@ -171,6 +181,51 @@ export async function canonicalize(root: string): Promise<string[]> {
   return [...new Set(changed)];
 }
 
+// The topic of a repository on the forge whose main is kept somewhere else.
+export const FOLLOWS = "follows-upstream";
+
+// owner/repo on GitHub, of a remote there.
+export function githubRepo(url: string): string | undefined {
+  return /^(?:https?:\/\/(?:[^@/]+@)?|(?:ssh:\/\/)?(?:[^@/]+@)?)github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i.exec(url.trim())?.[1];
+}
+
+// A command that isn't git (gh): not there is one more way to fail.
+async function run(cmd: string[], ms = 30_000): Promise<Ran> {
+  try {
+    const exe = Bun.which(cmd[0], { PATH: process.env.PATH ?? "" });
+    if (!exe) return { ok: false, out: "", err: `${cmd[0]} isn't on this machine` };
+    const p = Bun.spawn([exe, ...cmd.slice(1)], { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env } });
+    const timer = setTimeout(() => p.kill(), ms);
+    const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]).finally(() => clearTimeout(timer));
+    return { ok: code === 0, out: out.trim(), err: err.trim() || `${cmd[0]}: exit ${code}` };
+  } catch (e) {
+    return { ok: false, out: "", err: (e as Error).message };
+  }
+}
+
+type Api = (path: string, init?: RequestInit) => Promise<{ status: number; ok: boolean; body: any; error: string }>;
+const apiOf =
+  (forge: ToForge): Api =>
+  async (path, init = {}) => {
+    const res = await forge(`/api/v1${path}`, { ...init, headers: { accept: "application/json", ...(init.body ? { "content-type": "application/json" } : {}) } });
+    const body = (await res.json().catch(() => null)) as any;
+    return { status: res.status, ok: res.ok, body, error: body?.message ?? body?.error ?? `HTTP ${res.status}` };
+  };
+
+// Has the forge push repo to github (owner/repo there) on every commit, by
+// a key of the forge's that GitHub takes as a deploy key: given it with gh
+// where this machine has one signed in. Gives what's left to do, if anything.
+async function mirror(api: Api, repo: string, github: string): Promise<string | undefined> {
+  const has = await api(`/repos/${repo}/push_mirrors`);
+  if (has.ok && Array.isArray(has.body) && has.body.some((m) => githubRepo(String(m.remote_address ?? "")) === github)) return;
+  const made = await api(`/repos/${repo}/push_mirrors`, { method: "POST", body: JSON.stringify({ remote_address: `ssh://git@github.com/${github}.git`, use_ssh: true, sync_on_commit: true, interval: "8h0m0s" }) });
+  const key = String(made.body?.public_key ?? "").trim();
+  if (!made.ok || !key) return `the forge wouldn't mirror to github.com/${github}: ${made.error}`;
+  const given = await run(["gh", "api", "-X", "POST", `repos/${github}/keys`, "-f", "title=corkboard forge push mirror", "-f", `key=${key}`, "-F", "read_only=false"]);
+  if (!given.ok) return `the forge mirrors to github.com/${github} once that has this deploy key, with write access (https://github.com/${github}/settings/keys/new): ${key}`;
+  await api(`/repos/${repo}/push_mirrors-sync`, { method: "POST" });
+}
+
 export type Adopted = {
   // owner/repo on the forge, and the clone's origin now.
   repo: string;
@@ -182,6 +237,10 @@ export type Adopted = {
   branches: number;
   // What the remote that was origin is called now.
   kept: string | null;
+  // That remote, when it keeps the project's main and the forge follows it.
+  follows: string | null;
+  // owner/repo on GitHub, when the forge pushes there on every commit.
+  mirror: string | null;
   // What it couldn't do, or did another way, one line each.
   notes: string[];
 };
@@ -200,7 +259,11 @@ function oldName(url: string, taken: Set<string>): string {
 // remote that was origin kept under another name. Nothing is forced: a
 // repository there already with other history refuses the push, and the
 // clone is left as it was.
-export async function adopt(dir: string, forge: ToForge, o: { name?: string } = {}): Promise<Adopted> {
+//
+// Then the forge mirrors to the GitHub repository origin was, if it was
+// one; or, with follows, that remote keeps the project's main and the forge
+// follows it (the two ways, at the top).
+export async function adopt(dir: string, forge: ToForge, o: { name?: string; follows?: boolean } = {}): Promise<Adopted> {
   const top = await git(["rev-parse", "--show-toplevel"], { cwd: dir });
   if (!top.ok) throw new Error(`${dir} isn't a git repository`);
   const root = top.out;
@@ -213,13 +276,10 @@ export async function adopt(dir: string, forge: ToForge, o: { name?: string } = 
   }
   const origin = remotes.get("origin");
   const there = origin && forgeRepo(origin);
-  if (there) return { repo: there, url: origin, created: false, already: true, branches: 0, kept: null, notes: [] };
+  if (there) return { repo: there, url: origin, created: false, already: true, branches: 0, kept: null, follows: null, mirror: null, notes: [] };
+  if (o.follows && !origin) throw new Error(`${root} has no origin for the forge to follow`);
 
-  const api = async (path: string, init: RequestInit = {}) => {
-    const res = await forge(`/api/v1${path}`, { ...init, headers: { accept: "application/json", ...(init.body ? { "content-type": "application/json" } : {}) } });
-    const body = (await res.json().catch(() => null)) as any;
-    return { status: res.status, ok: res.ok, body, error: body?.message ?? body?.error ?? `HTTP ${res.status}` };
-  };
+  const api = apiOf(forge);
   const me = await api("/user");
   if (!me.ok || !me.body?.login) throw new Error(`the forge: ${me.error}`);
   const name = o.name?.trim() || basename(root).replace(/[^\w.-]+/g, "-").replace(/^[.-]+/, "");
@@ -273,5 +333,86 @@ export async function adopt(dir: string, forge: ToForge, o: { name?: string } = 
     await git(["branch", "--quiet", `--set-upstream-to=origin/${branch}`, branch], { cwd: root });
   }
   await git(["remote", "set-head", "origin", "--auto"], { cwd: root });
-  return { repo, url, created, already: false, branches: want.size, kept, notes };
+
+  let follows: string | null = null;
+  let mirrored: string | null = null;
+  const github = origin && githubRepo(origin);
+  if (o.follows && kept) {
+    await git(["config", "--local", "corkboard.upstream", kept], { cwd: root });
+    const topics = await api(`/repos/${repo}/topics`);
+    const set = await api(`/repos/${repo}/topics`, { method: "PUT", body: JSON.stringify({ topics: [...new Set([...(topics.body?.topics ?? []), FOLLOWS])] }) });
+    if (!set.ok) notes.push(`the forge couldn't be told ${repo} follows ${kept} (${set.error}), so a pull request could still be merged there`);
+    follows = kept;
+  } else if (github) {
+    const left = await mirror(api, repo, github);
+    if (left) notes.push(left);
+    else mirrored = github;
+  }
+  return { repo, url, created, already: false, branches: want.size, kept, follows, mirror: mirrored, notes };
+}
+
+// The remote that keeps the project's main, when the forge follows one.
+async function upstreamOf(root: string): Promise<string | undefined> {
+  const got = await git(["config", "--local", "--get", "corkboard.upstream"], { cwd: root });
+  return got.ok && got.out ? got.out : undefined;
+}
+
+export type Followed = {
+  remote: string;
+  // The forge's branches brought up to the remote's, or made.
+  updated: string[];
+  // Ones the forge has otherwise (ahead, or gone their own way): left.
+  apart: string[];
+};
+
+// Brings the forge's branches up to those of the remote the clone at root
+// follows, and its tags: what's there is fetched, then pushed to the forge,
+// fast-forward only, so every machine with a clone can and none undoes
+// another. Nothing when the clone follows none.
+export async function follow(root: string): Promise<Followed | undefined> {
+  if (!existsSync(join(root, ".git"))) return;
+  const remote = await upstreamOf(root);
+  if (!remote) return;
+  const origin = await git(["config", "--local", "--get", "remote.origin.url"], { cwd: root });
+  if (!origin.ok || !forgeRepo(origin.out)) return;
+  const fetched = await git(["fetch", "--quiet", "--prune", remote], { cwd: root, ms: 5 * 60_000 });
+  if (!fetched.ok) throw new Error(`couldn't fetch from ${remote}: ${fetched.err}`);
+  const prefix = `refs/remotes/${remote}/`;
+  const specs = (await git(["for-each-ref", "--format=%(refname) %(objectname) %(symref)", prefix], { cwd: root })).out
+    .split("\n")
+    .map((l) => l.split(" "))
+    .filter(([ref, sha, sym]) => ref?.startsWith(prefix) && sha && !sym)
+    .map(([ref, sha]) => `${sha}:refs/heads/${ref.slice(prefix.length)}`);
+  if (!specs.length) return { remote, updated: [], apart: [] };
+  const pushed = await git(["push", "--porcelain", "origin", ...specs, "refs/tags/*:refs/tags/*"], { cwd: root, ms: 10 * 60_000 });
+  const updated: string[] = [];
+  const apart: string[] = [];
+  let seen = 0;
+  for (const line of pushed.out.split("\n")) {
+    const m = line.match(/^(.)\t[^\t]*:refs\/heads\/([^\t]+)\t/);
+    if (!m) continue;
+    seen++;
+    if (m[1] === " " || m[1] === "*") updated.push(m[2]);
+    else if (m[1] === "!") apart.push(m[2]);
+  }
+  if (!pushed.ok && !seen) throw new Error(`couldn't push to the forge: ${pushed.err}`);
+  return { remote, updated, apart };
+}
+
+// A branch that's ready, given to the remote the clone follows, where it's
+// merged: pushed there (never forced), and where its pull request is opened
+// when that's GitHub.
+export async function offer(dir: string, branch: string): Promise<{ remote: string; branch: string; url: string | null }> {
+  const remote = await upstreamOf(dir);
+  if (!remote) throw new Error("this project's main is the forge's: its pull requests merge there");
+  if (!/^(?!-)[\w./-]{1,200}$/.test(branch)) throw new Error(`${branch} isn't a branch`);
+  const local = await git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], { cwd: dir });
+  const from = local.ok ? `refs/heads/${branch}` : `refs/remotes/origin/${branch}`;
+  const pushed = await git(["push", "--quiet", remote, `${from}:refs/heads/${branch}`], { cwd: dir, ms: 10 * 60_000 });
+  if (!pushed.ok) throw new Error(`${branch} didn't go to ${remote}: ${pushed.err}`);
+  const url = await git(["config", "--local", "--get", `remote.${remote}.url`], { cwd: dir });
+  const github = url.ok ? githubRepo(url.out) : undefined;
+  const head = await git(["symbolic-ref", "--quiet", "--short", `refs/remotes/${remote}/HEAD`], { cwd: dir });
+  const base = head.ok ? head.out.slice(remote.length + 1) : "main";
+  return { remote, branch, url: github ? `https://github.com/${github}/compare/${encodeURI(base)}...${encodeURI(branch)}?expand=1` : null };
 }

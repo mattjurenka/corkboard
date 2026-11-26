@@ -83,23 +83,54 @@ end
 -- Put this project on the forge: the clone's branches and tags go to a
 -- private repository of the account's there (made if there's none), and
 -- that becomes origin, the one it had kept under its host's name
--- (bridge/forge-git.ts's adopt). Nothing there is overwritten.
+-- (bridge/forge-git.ts's adopt). Nothing there is overwritten. A project
+-- that came from somewhere is asked which keeps its main: the forge, with
+-- GitHub a mirror it pushes to; or where it came from, for one teammates
+-- work on there, which the forge then follows.
 function M.adopt(dir)
-  local root = require("corkboard.util").repo_root(dir or vim.fn.getcwd())
+  local util = require("corkboard.util")
+  local root = util.repo_root(dir or vim.fn.getcwd())
   if not root then return say("this project isn't a git repository", vim.log.levels.WARN) end
-  ask("Name on the forge: ", vim.fs.basename(root), false, function(name)
-    if name == "" then return end
+  local function put(name, follows)
     say(("putting %s on the forge…"):format(name))
     -- A first push of a long history takes a while.
     cloud().call_within(30 * 60 * 1000, "forge_adopt", function(err, got)
       if err then return say(err, vim.log.levels.ERROR) end
       if got.already then return say(("origin is %s on the forge already"):format(got.repo)) end
+      local has = function(v) return v and v ~= vim.NIL end
       local lines = { ("%s is on the forge (%d branch%s), and origin here"):format(got.repo, got.branches, got.branches == 1 and "" or "es") }
-      if got.kept and got.kept ~= vim.NIL then table.insert(lines, ("the remote that was origin is %s"):format(got.kept)) end
+      if has(got.follows) then
+        table.insert(lines, ("%s keeps its main: the forge follows it, and a branch that's ready is pushed there"):format(got.follows))
+      elseif has(got.kept) then
+        table.insert(lines, ("the remote that was origin is %s"):format(got.kept))
+      end
+      if has(got.mirror) then table.insert(lines, ("the forge pushes every commit to github.com/%s"):format(got.mirror)) end
       vim.list_extend(lines, got.notes or {})
       say(table.concat(lines, "\n"))
-    end, root, name)
+    end, root, name, follows)
+  end
+  ask("Name on the forge: ", vim.fs.basename(root), false, function(name)
+    if name == "" then return end
+    local ok, origin = util.git({ "config", "--get", "remote.origin.url" }, root)
+    origin = ok and vim.trim(origin) or ""
+    if origin == "" or require("corkboard.worktree").forge_repo(root) then return put(name, false) end
+    vim.ui.select({
+      "The forge: it's mine, and where it came from becomes a mirror",
+      "Where it came from: teammates work there, and the forge follows it",
+    }, { prompt = "Which keeps " .. name .. "'s main (" .. origin .. ")?" }, function(_, i)
+      if i then put(name, i == 2) end
+    end)
   end)
+end
+
+-- A branch that's ready, in a project whose main is kept on another remote
+-- (worktree.upstream): pushed there, and its pull request's page opened.
+-- done(err, { remote, branch, url }).
+function M.offer(root, branch, done)
+  cloud().call_within(10 * 60 * 1000, "forge_offer", function(err, got)
+    if not err and got.url and got.url ~= vim.NIL then vim.ui.open(got.url) end
+    done(err, got)
+  end, root, branch)
 end
 
 return M

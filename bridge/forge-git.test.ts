@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FORGE, adopt, canonical, canonicalize, configText, forgeRepo, forgeUrl, install, keep } from "./forge-git";
+import { FOLLOWS, FORGE, adopt, canonical, canonicalize, configText, follow, forgeRepo, forgeUrl, githubRepo, install, keep, offer } from "./forge-git";
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "forge-git-")));
 const home = join(dir, "home");
@@ -20,6 +20,13 @@ let server: ReturnType<typeof Bun.serve>;
 let base = "";
 // What reached /forge/ with no token, or the wrong one.
 let refused = 0;
+// What the forge was asked to mirror to, and its topics, by repository.
+const mirrors = new Map<string, any[]>();
+const topics = new Map<string, string[]>();
+// gh, as a script that says what it was run with; "fail" in its file and it fails.
+const bin = join(dir, "bin");
+const ghLog = join(dir, "gh.log");
+const ghMode = join(dir, "gh.mode");
 
 // git as the user's terminal runs it: their home's config, none of the bridge's.
 function sh(args: string[], cwd = dir): string {
@@ -60,8 +67,11 @@ function commit(root: string, file: string) {
 const refsOf = (path: string) => sh(["for-each-ref", "--format=%(refname) %(objectname)"], path).split("\n").sort();
 
 beforeAll(async () => {
-  for (const d of [home, state, bare]) mkdirSync(d, { recursive: true });
+  for (const d of [home, state, bare, bin]) mkdirSync(d, { recursive: true });
+  writeFileSync(join(bin, "gh"), `#!/bin/sh\necho "$@" >> "${ghLog}"\n[ "$(cat "${ghMode}" 2>/dev/null)" = fail ] && exit 1\nexit 0\n`);
+  chmodSync(join(bin, "gh"), 0o755);
   Object.assign(process.env, {
+    PATH: `${bin}:${process.env.PATH}`,
     HOME: home,
     USERPROFILE: home,
     XDG_CONFIG_HOME: join(home, ".config"),
@@ -95,7 +105,21 @@ beforeAll(async () => {
         return json({ full_name: `me/${name}` }, 201);
       }
       const named = path.match(/^\/api\/v1\/repos\/(me\/[\w.-]+)$/);
-      if (named) return existsSync(join(bare, `${named[1]}.git`)) ? json({ full_name: named[1] }) : json({ message: "not found" }, 404);
+      if (named) return existsSync(join(bare, `${named[1]}.git`)) ? json({ full_name: named[1], topics: topics.get(named[1]) ?? [] }) : json({ message: "not found" }, 404);
+      const sub = path.match(/^\/api\/v1\/repos\/(me\/[\w.-]+)\/(topics|push_mirrors|push_mirrors-sync)$/);
+      if (sub?.[2] === "topics") {
+        if (req.method === "PUT") topics.set(sub[1], ((await req.json()) as { topics: string[] }).topics);
+        return json({ topics: topics.get(sub[1]) ?? [] });
+      }
+      if (sub?.[2] === "push_mirrors" && req.method === "POST") {
+        const asked = (await req.json()) as any;
+        // As Forgejo gives an address back: without who.
+        const made = { ...asked, remote_address: asked.remote_address.replace("git@", ""), public_key: `ssh-ed25519 KEY-${sub[1]}` };
+        mirrors.set(sub[1], [...(mirrors.get(sub[1]) ?? []), made]);
+        return json(made);
+      }
+      if (sub?.[2] === "push_mirrors") return json(mirrors.get(sub[1]) ?? []);
+      if (sub) return json({});
       const headers = new Headers();
       for (const h of ["content-type", "accept", "git-protocol"]) if (req.headers.has(h)) headers.set(h, req.headers.get(h)!);
       const body = req.body ? new Uint8Array(await req.arrayBuffer()) : undefined;
@@ -133,6 +157,11 @@ describe("a forge remote, however it's written", () => {
     expect(forgeRepo("https://github.com/me/project.git")).toBeUndefined();
     expect(forgeUrl("me/project")).toBe("corkboard://forge/me/project.git");
     expect(forgeUrl("me/project.git")).toBe("corkboard://forge/me/project.git");
+  });
+
+  test("a remote on GitHub, however it's written", () => {
+    for (const url of ["https://github.com/me/project.git", "https://github.com/me/project", "git@github.com:me/project.git", "ssh://git@github.com/me/project.git", "ssh://github.com/me/project.git", "https://x@github.com/me/project/"]) expect(githubRepo(url)).toBe("me/project");
+    for (const url of ["https://gitlab.com/me/project.git", "corkboard://forge/me/project.git", "https://github.com/me", "/srv/github.com/me/project.git"]) expect(githubRepo(url)).toBeUndefined();
   });
 
   test("the file: the rewrite, and the token only when there is one", () => {
@@ -248,7 +277,12 @@ describe("adopt", () => {
     refused = 0;
 
     const got = await adopt(root, toForge);
-    expect(got).toEqual({ repo: "me/moving", url: "corkboard://forge/me/moving.git", created: true, already: false, branches: 3, kept: "github", notes: [] });
+    expect(got).toEqual({ repo: "me/moving", url: "corkboard://forge/me/moving.git", created: true, already: false, branches: 3, kept: "github", follows: null, mirror: "me/moving", notes: [] });
+    // The forge pushes to GitHub from here on, by a key GitHub was given.
+    expect(mirrors.get("me/moving")).toMatchObject([{ remote_address: "ssh://github.com/me/moving.git", use_ssh: true, sync_on_commit: true }]);
+    expect(readFileSync(ghLog, "utf8")).toContain("api -X POST repos/me/moving/keys -f title=corkboard forge push mirror -f key=ssh-ed25519 KEY-me/moving -F read_only=false");
+    expect(topics.get("me/moving") ?? []).toEqual([]);
+    expect(Bun.spawnSync(["git", "config", "--get", "corkboard.upstream"], { cwd: root }).exitCode).not.toBe(0);
     expect(refused).toBe(0);
     expect(sh(["config", "--get", "remote.origin.url"], root)).toBe("corkboard://forge/me/moving.git");
     expect(sh(["config", "--get", "remote.github.url"], root)).toBe("https://github.com/me/moving.git");
@@ -310,6 +344,82 @@ describe("adopt", () => {
     expect(refsOf(join(bare, "me/taken.git"))).toEqual(before);
     expect(sh(["remote"], root)).toBe("origin");
     expect(sh(["config", "--get", "remote.origin.url"], root)).toBe("https://github.com/me/taken.git");
+  });
+
+  test("GitHub won't take the key here (no gh, or not signed in): the mirror waits for it, and says what to paste", async () => {
+    sh(["init", "--quiet", "--bare", "--initial-branch=main", join(dir, "github/me/unsigned.git")]);
+    const root = repo("unsigned", { origin: "git@github.com:me/unsigned.git" });
+    sh(["config", "remote.origin.url", "https://github.com/me/unsigned.git"], root);
+    sh(["push", "--quiet", "-u", "origin", "main"], root);
+    writeFileSync(ghMode, "fail");
+    try {
+      const got = await adopt(root, toForge);
+      expect(got).toMatchObject({ repo: "me/unsigned", kept: "github", mirror: null, follows: null });
+      expect(got.notes).toEqual(["the forge mirrors to github.com/me/unsigned once that has this deploy key, with write access (https://github.com/me/unsigned/settings/keys/new): ssh-ed25519 KEY-me/unsigned"]);
+    } finally {
+      rmSync(ghMode);
+    }
+  });
+
+  test("a project teammates keep on GitHub: the forge follows it, mirrors nothing there, and a branch that's ready is pushed there", async () => {
+    const github = join(dir, "github/team/shared.git");
+    sh(["init", "--quiet", "--bare", "--initial-branch=main", github]);
+    const root = repo("shared", { origin: "https://github.com/team/shared.git" });
+    sh(["push", "--quiet", "-u", "origin", "main"], root);
+    sh(["remote", "set-head", "origin", "main"], root);
+    const logged = readFileSync(ghLog, "utf8");
+
+    const got = await adopt(root, toForge, { follows: true });
+    expect(got).toMatchObject({ repo: "me/shared", kept: "github", follows: "github", mirror: null, notes: [] });
+    expect(sh(["config", "--get", "corkboard.upstream"], root)).toBe("github");
+    expect(topics.get("me/shared")).toEqual([FOLLOWS]);
+    expect(mirrors.get("me/shared") ?? []).toEqual([]);
+    expect(readFileSync(ghLog, "utf8")).toBe(logged);
+    const forge = join(bare, "me/shared.git");
+
+    // Nothing new on GitHub: nothing to do.
+    expect(await follow(root)).toEqual({ remote: "github", updated: [], apart: [] });
+
+    // A teammate merges into main on GitHub and pushes a branch of theirs.
+    const mate = join(dir, "mate");
+    sh(["clone", "--quiet", github, mate]);
+    commit(mate, "merged.txt");
+    sh(["push", "--quiet", "origin", "main"], mate);
+    sh(["checkout", "--quiet", "-b", "theirs"], mate);
+    commit(mate, "wip.txt");
+    sh(["push", "--quiet", "origin", "theirs"], mate);
+    // A session's branch here, on the forge only.
+    sh(["checkout", "--quiet", "-b", "agent/x"], root);
+    commit(root, "work.txt");
+    expect(await net(["push", "--quiet", "-u", "origin", "agent/x"], root)).toMatchObject({ ok: true });
+    sh(["checkout", "--quiet", "main"], root);
+
+    expect(await follow(root)).toEqual({ remote: "github", updated: ["main", "theirs"], apart: [] });
+    expect(refsOf(forge)).toEqual(refsOf(github).concat(`refs/heads/agent/x ${sh(["rev-parse", "agent/x"], root)}`).sort());
+
+    // The forge's main gone its own way is left, and said.
+    const stray = join(dir, "stray");
+    expect(await net(["clone", "--quiet", "corkboard://forge/me/shared.git", stray])).toMatchObject({ ok: true });
+    commit(stray, "stray.txt");
+    expect(await net(["push", "--quiet", "origin", "main"], stray)).toMatchObject({ ok: true });
+    commit(mate, "wip2.txt");
+    sh(["checkout", "--quiet", "main"], mate);
+    commit(mate, "next.txt");
+    sh(["push", "--quiet", "origin", "main", "theirs"], mate);
+    const strayed = sh(["rev-parse", "main"], stray);
+    expect(await follow(root)).toEqual({ remote: "github", updated: ["theirs"], apart: ["main"] });
+    expect(refsOf(forge)).toContain(`refs/heads/main ${strayed}`);
+
+    // The session's branch, ready: on GitHub, with where its pull request opens.
+    expect(await offer(root, "agent/x")).toEqual({ remote: "github", branch: "agent/x", url: "https://github.com/team/shared/compare/main...agent/x?expand=1" });
+    expect(refsOf(github)).toContain(`refs/heads/agent/x ${sh(["rev-parse", "agent/x"], root)}`);
+    // A clone with no other remote does neither.
+    expect(await follow(stray)).toBeUndefined();
+    expect(offer(stray, "main")).rejects.toThrow("merge there");
+  });
+
+  test("nothing to follow with no origin", async () => {
+    expect(adopt(repo("alone"), toForge, { follows: true })).rejects.toThrow("has no origin for the forge to follow");
   });
 
   test("not a repository, or one with nothing in it", async () => {

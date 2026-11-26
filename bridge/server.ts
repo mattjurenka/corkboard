@@ -27,7 +27,7 @@ import * as wasm from "./wasm";
 import { startAppNode } from "./node/app";
 import * as onboarding from "./onboarding";
 import { gitViews } from "./node/git";
-import { canonical, canonicalize, install as installForgeGit, keep as keepForgeGit } from "./forge-git";
+import { canonical, canonicalize, follow, install as installForgeGit, keep as keepForgeGit } from "./forge-git";
 import { Peers } from "./peers";
 import { CLOUD, token } from "./cloud";
 import { COMPILED, RESOURCES, STATE_DIR, dirsEnv } from "./dirs";
@@ -210,17 +210,29 @@ if (forgeGit) {
   keepForgeGit(FORGE_GIT);
 }
 // A clone whose remote names a bridge's port (as they were written) names
-// the forge instead, once git everywhere here knows what that means.
+// the forge instead, once git everywhere here knows what that means; and
+// one whose main is kept on GitHub has the forge brought up to it (follow).
+const forgeSaid = new Set<string>();
 function forgeRemotes(dir: string) {
-  if (!forgeGit?.global) return;
-  void canonicalize(dir).then(
-    (changed) => changed.length && console.log(`forge: ${dir}: ${changed.join(", ")} written as corkboard://forge/...`),
-    () => {},
-  );
+  void (async () => {
+    const changed = forgeGit?.global ? await canonicalize(dir) : [];
+    if (changed.length) console.log(`forge: ${dir}: ${changed.join(", ")} written as corkboard://forge/...`);
+    const got = await follow(dir);
+    if (got?.updated.length) console.log(`forge: ${dir}: ${got.updated.join(", ")} brought up to ${got.remote}'s`);
+    forgeSaid.delete(dir);
+  })().catch((e) => {
+    // Once, not at every round while GitHub can't be reached.
+    if (!forgeSaid.has(dir)) console.error(`forge: ${dir}: ${(e as Error).message}`);
+    forgeSaid.add(dir);
+  });
 }
-try {
-  for (const dir of readFileSync(join(STATE_DIR, "projects"), "utf8").split("\n")) if (dir.trim()) forgeRemotes(dir.trim());
-} catch {}
+function forgeProjects() {
+  try {
+    for (const dir of readFileSync(join(STATE_DIR, "projects"), "utf8").split("\n")) if (dir.trim()) forgeRemotes(dir.trim());
+  } catch {}
+}
+forgeProjects();
+setInterval(forgeProjects, 10 * 60_000).unref?.();
 
 // The node, for memory (node/app.ts), before Neovim starts; without it,
 // memory is the Worker's.
