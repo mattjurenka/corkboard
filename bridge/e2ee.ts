@@ -246,9 +246,10 @@ async function approveCode(args: string[]) {
 
 // Approving from the editor (cloud-session.ts's pair_*, :AgentPair): what it
 // needs first, then the code until the device joins, then the answer.
-export function pairStatus() {
-  const d = store.device();
-  return { account: !!d && store.exists() && d.relay === CLOUD, passphrase: store.needsPassphrase() };
+// at: the keystore (a test's), else this machine's; the same below.
+export function pairStatus(at: Keystore = store) {
+  const d = at.device();
+  return { account: !!d && at.exists() && d.relay === CLOUD, passphrase: at.needsPassphrase() };
 }
 
 const approving = new Map<string, { answer: (ok: boolean) => void; done: Promise<Signed<DeviceCert>> }>();
@@ -310,9 +311,9 @@ async function accountOf(device: Device, cert: Signed<DeviceCert>) {
   return relay.account!;
 }
 
-export function forgeStatus() {
-  const f = store.forge();
-  return { ...pairStatus(), gate: FORGE_GATE, user: f?.gate === FORGE_GATE ? (f.user ?? null) : null, grants: f?.grants.length ?? 0 };
+export function forgeStatus(at: Keystore = store) {
+  const f = at.forge();
+  return { ...pairStatus(at), gate: FORGE_GATE, user: f?.gate === FORGE_GATE ? (f.user ?? null) : null, grants: f?.grants.length ?? 0 };
 }
 
 const run = async (cmd: string[], stdin?: Uint8Array) => {
@@ -350,10 +351,10 @@ async function sshSigs(host: string, bytes: Uint8Array): Promise<string[]> {
 
 // The account bound to its Forgejo user at the gate, if it isn't yet: by a
 // full device of this machine's, shown by its SSH key. Null where it can't be.
-export async function forgeBound(): Promise<string | null> {
-  const d = store.device();
-  if (!d || !store.exists() || d.relay !== CLOUD || d.cert.body.role === "relay") return null;
-  const f = store.forge();
+export async function forgeBound(at: Keystore = store): Promise<string | null> {
+  const d = at.device();
+  if (!d || !at.exists() || d.relay !== CLOUD || d.cert.body.role === "relay") return null;
+  const f = at.forge();
   if (f?.gate === FORGE_GATE && f.user) return f.user;
   const relay = relayFor(d.device, d.cert);
   await relay.token();
@@ -369,7 +370,7 @@ export async function forgeBound(): Promise<string | null> {
   const res = await fetch(new URL("/gate/bind", FORGE_GATE), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ view, bind, cert: d.cert, ssh: sigs }) });
   const got = (await res.json().catch(() => ({}))) as { user?: string; error?: string };
   if (!res.ok || !got.user) throw new Error(`forge gate: ${got.error ?? res.status}`);
-  store.saveForge({ v: 1, gate: FORGE_GATE, account, user: got.user, grants: f?.gate === FORGE_GATE ? f.grants : [] });
+  at.saveForge({ v: 1, gate: FORGE_GATE, account, user: got.user, grants: f?.gate === FORGE_GATE ? f.grants : [] });
   return got.user;
 }
 
@@ -377,15 +378,15 @@ export type ForgeAsk = { holder: string; name: string; repos: string; perms: str
 
 // A grant from this device to holder's key: what the holder shows the gate
 // (its chain), kept here too so it can be taken back.
-export async function forgeGrant(a: ForgeAsk): Promise<{ hash: string; name: string; expires: number; chain: Chain; account: string }> {
+export async function forgeGrant(a: ForgeAsk, at: Keystore = store): Promise<{ hash: string; name: string; expires: number; chain: Chain; account: string }> {
   const holder = a.holder.trim();
   if (!KEY.test(holder)) throw new Error("the holder is a key: a device's id");
-  const d = store.device();
-  if (!d || !store.exists() || d.relay !== CLOUD) throw new Error("this machine isn't in an encrypted account");
+  const d = at.device();
+  if (!d || !at.exists() || d.relay !== CLOUD) throw new Error("this machine isn't in an encrypted account");
   if (d.cert.body.role === "relay") throw new Error("this machine holds grants; it can't give them");
   // What the grant is for needs the account bound; it is by now, where it can be.
-  await forgeBound().catch(() => null);
-  const account = store.forge()?.account ?? (await accountOf(d.device, d.cert));
+  await forgeBound(at).catch(() => null);
+  const account = at.forge()?.account ?? (await accountOf(d.device, d.cert));
   const perms: GrantTerms["perms"] = {};
   for (const p of a.perms.split(/[\s,]+/).filter(Boolean)) {
     const [name, level = "read"] = p.split(":");
@@ -400,10 +401,10 @@ export async function forgeGrant(a: ForgeAsk): Promise<{ hash: string; name: str
   const scope = scopeOf(grant.body);
   if (typeof scope === "string") throw new Error(scope);
   const out = { hash: forgeGrantHash(grant.body), name: grant.body.name, expires: grant.body.expires, chain: { cert: d.cert, grants: [grant] }, account };
-  const f = store.forge();
+  const f = at.forge();
   const kept = f?.gate === FORGE_GATE ? f : { v: 1 as const, gate: FORGE_GATE, account, grants: [] };
   kept.grants = [...kept.grants.filter((g) => g.expires > Date.now()), { hash: out.hash, name: out.name, holder, expires: out.expires, chain: out.chain }];
-  store.saveForge(kept);
+  at.saveForge(kept);
   return out;
 }
 

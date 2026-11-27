@@ -34,19 +34,19 @@ const none = { devices: [], grant: () => false };
 
 describe("Give git access", () => {
   it("signs a chain the gate takes, as narrow as asked", async () => {
-    const got = await e2ee.forgeGrant({ holder: holder.id, name: "vm", repos: "matt/corkboard", perms: "contents:write issues", refs: "agent/*", days: 7 });
+    const got = await e2ee.forgeGrant({ holder: holder.id, name: "vm", repos: "matt/corkboard", perms: "contents:write issues", refs: "agent/*", days: 7 }, store);
     const checked = checkChain(keys.id, keys.id, got.chain, none);
     if (typeof checked === "string") throw new Error(checked);
     expect(checked.holder).toBe(holder.id);
     expect(checked.scope).toMatchObject({ repos: ["matt/corkboard"], perms: { metadata: "read", contents: "write", issues: "read" }, refs: ["refs/heads/agent/*"] });
     expect(store.forge()!.grants.map((g) => g.hash)).toEqual([got.hash]);
-    expect(e2ee.forgeStatus()).toMatchObject({ account: true, user: "matt", grants: 1 });
+    expect(e2ee.forgeStatus(store)).toMatchObject({ account: true, user: "matt", grants: 1 });
   });
 
   it("refuses what isn't a grant", async () => {
-    await expect(e2ee.forgeGrant({ holder: "not a key", name: "", repos: "matt/x", perms: "", refs: "", days: 1 })).rejects.toThrow("holder");
-    await expect(e2ee.forgeGrant({ holder: holder.id, name: "", repos: "matt/x", perms: "contents:admin", refs: "", days: 1 })).rejects.toThrow("permission");
-    await expect(e2ee.forgeGrant({ holder: holder.id, name: "", repos: "not a repo", perms: "", refs: "", days: 1 })).rejects.toThrow("repos");
-    await expect(e2ee.forgeGrant({ holder: holder.id, name: "", repos: "matt/x", perms: "", refs: "", days: 0 })).rejects.toThrow("days");
+    await expect(e2ee.forgeGrant({ holder: "not a key", name: "", repos: "matt/x", perms: "", refs: "", days: 1 }, store)).rejects.toThrow("holder");
+    await expect(e2ee.forgeGrant({ holder: holder.id, name: "", repos: "matt/x", perms: "contents:admin", refs: "", days: 1 }, store)).rejects.toThrow("permission");
+    await expect(e2ee.forgeGrant({ holder: holder.id, name: "", repos: "not a repo", perms: "", refs: "", days: 1 }, store)).rejects.toThrow("repos");
+    await expect(e2ee.forgeGrant({ holder: holder.id, name: "", repos: "matt/x", perms: "", refs: "", days: 0 }, store)).rejects.toThrow("days");
   });
 });

@@ -73,9 +73,11 @@ describe("recovery phrase", () => {
   });
 
   it("refuses a wrong word or a short phrase", () => {
-    const words = toPhrase(newRoot()).split(" ");
-    words[3] = words[3] === "abandon" ? "ability" : "abandon";
-    expect(() => fromPhrase(words.join(" "))).toThrow();
+    // A fixed root: the checksum is 8 bits, so another word in a random
+    // phrase passes it one time in 256.
+    const words = toPhrase(new Uint8Array(32)).split(" ");
+    expect(() => fromPhrase(words.with(3, "ability").join(" "))).toThrow();
+    expect(() => fromPhrase(words.with(3, "corkboard").join(" "))).toThrow();
     expect(() => fromPhrase(toPhrase(newRoot()).split(" ").slice(0, 12).join(" "))).toThrow();
   });
 });
