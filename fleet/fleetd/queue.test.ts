@@ -222,7 +222,7 @@ test("passes a stop on, and reports a run, fetching its commits and revoking its
 });
 
 test("takes a spawn the Worker has forgotten as told, and still says what it runs", async () => {
-  fleet.write({ id: "gone001", template: "coding", agent: "coding-gone001", state: "failed", error: "x", reported: "running", remote: { board: null, card: null, agent: "coding-gone001", token: null } } as any);
+  fleet.write({ id: "gone001", template: "coding", agent: "coding-gone001", state: "failed", created: new Date().toISOString(), error: "x", reported: "running", remote: { board: null, card: null, agent: "coding-gone001", token: null } } as any);
   calls.length = 0;
   (queue as any).dirty = true;
   await queue.step();

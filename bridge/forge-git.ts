@@ -103,7 +103,7 @@ async function git(args: string[], o: { cwd?: string; env?: Record<string, strin
 // git as the user's own terminal has it: none of the bridge's GIT_CONFIG_*.
 function outside(home?: string): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...process.env };
-  for (const k of Object.keys(env)) if (/^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/.test(k)) delete env[k];
+  for (const k of Object.keys(env)) if (/^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/.test(k)) delete env[k]; // keys: its own, from Object.keys
   if (home) Object.assign(env, { HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, ".config") });
   return env;
 }
