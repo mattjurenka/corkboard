@@ -16,6 +16,7 @@ import { hostname } from "node:os";
 import { Cloud, Session as CloudSession, type Listener, USER } from "./cloud-session";
 import { CLOUD, token } from "./cloud";
 import { host } from "./host";
+import { canonical } from "./forge-git";
 import * as remote from "./remote";
 import type { AppNode } from "./node/app";
 import type { Peers } from "./peers";
@@ -38,7 +39,9 @@ async function remotes(root: string): Promise<string[]> {
     .filter((m): m is RegExpMatchArray => !!m)
     .sort((a, b) => Number(b[1] === "origin") - Number(a[1] === "origin"))
     .map((m) => m[2].replace(/^(https?:\/\/)[^\/@]*@/, "$1"))
-    .filter((u) => /^(https?:\/\/|ssh:\/\/|git:\/\/|[\w.-]+@[\w.-]+:)\S{1,500}$/.test(u));
+    // The forge's as every machine of the account writes it (forge-git.ts), not this bridge's port.
+    .map((u) => canonical(u) ?? u)
+    .filter((u) => /^(https?:\/\/|ssh:\/\/|git:\/\/|corkboard:\/\/|[\w.-]+@[\w.-]+:)\S{1,500}$/.test(u));
   return [...new Set(urls)].slice(0, 8);
 }
 
@@ -83,6 +86,8 @@ export class Session extends CloudSession {
     if (op === "pair_status") return (await import("./e2ee")).pairStatus();
     if (op === "pair_approve") return (await import("./e2ee")).pairApprove(args[0], args[1]);
     if (op === "pair_confirm") return (await import("./e2ee")).pairConfirm(args[0], !!args[1]);
+    // A fleet host's fleetd let in as a relay-only device (Add a fleet host).
+    if (op === "fleet_certify") return (await import("./e2ee")).fleetCertify(args[0], args[1]);
     // The calendar's Google consent (Connect calendar): its address, to open.
     if (op === "calendar_connect") {
       const res = await fetch(`${CLOUD}/api/calendar/connect`, {
@@ -113,6 +118,15 @@ export class Session extends CloudSession {
       if (!node) throw new Error("there's no node here to reach the forge through");
       return (await import("./node/prs")).overview({ forge: node.forge, me: "user" });
     }
+    // A clone here put on the forge and made to follow it (forge-git.ts's
+    // adopt; Put this project on the forge): the directory, the name there,
+    // and whether the remote it came from keeps its main.
+    if (op === "forge_adopt") {
+      if (!node?.forge) throw new Error("there's no node here to reach the forge through");
+      return (await import("./forge-git")).adopt(String(args[0]), node.forge, { name: args[1] ? String(args[1]) : undefined, follows: args[2] === true });
+    }
+    // A branch given to the remote the project's main is kept on (forge-git.ts's offer): the directory, the branch.
+    if (op === "forge_offer") return (await import("./forge-git")).offer(String(args[0]), String(args[1]));
     // Its files: repo, ref, path.
     if (op === "git_files") {
       if (!node) throw new Error("there's no node here to reach the forge through");
@@ -123,6 +137,14 @@ export class Session extends CloudSession {
     if (node && op === "fleet_session") {
       const asked = args[2] ? [...args.slice(0, 3), true, ...args.slice(4)] : args;
       return (await node.fleet(op, asked)) ?? super.call(op, asked);
+    }
+    // An environment that's gone, forgotten by the Worker and the node both.
+    if (op === "fleet_forget") {
+      // The node's goes even where the Worker's doesn't.
+      const said = await super.call(op, args).then(() => undefined, (e: Error) => e);
+      await node?.fleet(op, args);
+      if (said) throw said;
+      return null;
     }
     // The fleet view's, with what the node keeps sealed put back.
     if (node && op === "fleet_get") {

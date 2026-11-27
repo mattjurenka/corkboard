@@ -29,6 +29,8 @@ const env = {
   CORKBOARD_TOKEN: token,
   CORKBOARD_NVIM: nvim,
   CORKBOARD_REMOTE_SESSIONS: "0",
+  // Not the user's bridge: their git config isn't its to write (forge-git.ts).
+  CORKBOARD_GIT_CONFIG: "0",
   // Its own snacks.nvim, not a dev shell's.
   CORKBOARD_PLUGINS: "",
 };

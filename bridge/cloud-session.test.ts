@@ -51,6 +51,7 @@ const worker = Bun.serve<{ path: string; auth: string | null }>({
     if (url.pathname === "/api/tokens") return Response.json({ token: "card-token", expires_at: "later" });
     if (url.pathname === "/api/tokens/revoke") return Response.json({ ok: true });
     if (url.pathname === "/api/fleet/environments") return Response.json([{ name: "laptop" }]);
+    if (url.pathname.startsWith("/api/fleet/environments/") && req.method === "DELETE") return Response.json({ ok: true });
     if (url.pathname === "/api/spawns" && req.method === "GET") return Response.json(url.searchParams.get("state")!.startsWith("pending") ? [{ id: "s-open" }] : [{ id: "s-over" }]);
     if (url.pathname.startsWith("/api/spawns")) return Response.json({ id: "s-new" }, { status: 201 });
     if (url.pathname === "/api/sessions") return Response.json([{ id: "me" }, { id: "sealed-1", from: "worker" }, { id: "other" }]);
@@ -223,6 +224,10 @@ describe("the fleet, from the Worker", () => {
     expect(asked.at(-1)!.body).toEqual({ environment: "laptop", template: "claude", interactive: true, task: "" });
     await s.call("fleet_stop", ["s 1"]);
     expect(asked.at(-1)!.path).toBe("/api/spawns/s%201/stop");
+    // An environment that's gone, off the Worker's list.
+    await s.call("fleet_forget", ["omni"]);
+    expect(asked.at(-1)).toMatchObject({ method: "DELETE", path: "/api/fleet/environments/omni" });
+    await expect(s.call("fleet_forget", ["../spawns"])).rejects.toThrow(/environment's name/);
   });
 
   it("follows a conversation on the Worker's socket until it ends, and stops when unfollowed", async () => {

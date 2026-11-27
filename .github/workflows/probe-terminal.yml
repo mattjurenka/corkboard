@@ -1,0 +1,31 @@
+# A diagnostic (scripts/probe-terminal.ts), run by hand or by a push that
+# changes it: a session's terminal against Neovim's own, on each Windows.
+name: probe-terminal
+
+on:
+  workflow_dispatch:
+  push:
+    paths: [scripts/probe-terminal.ts, .github/workflows/probe-terminal.yml]
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: Neovim 0.12.6
+        shell: bash
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/nvim.zip" https://github.com/neovim/neovim/releases/download/v0.12.6/nvim-win64.zip
+          unzip -q "$RUNNER_TEMP/nvim.zip" -d "$RUNNER_TEMP"
+      - run: npm install -g @anthropic-ai/claude-code
+      - run: cmd /c ver
+      - shell: bash
+        run: bun scripts/probe-terminal.ts "$RUNNER_TEMP/nvim-win64/bin/nvim.exe" --claude

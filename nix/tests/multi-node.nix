@@ -11,11 +11,11 @@
 { pkgs, corkboard, src }:
 let
   relayUrl = "http://relay:8787";
-  # relay/ and the one file of lib/e2ee it reaches for, laid out as in the
-  # repo so its ../../lib/e2ee/wire resolves.
+  # relay/ and the files of lib/ it reaches for, laid out as in the
+  # repo so its ../../lib/ imports resolve.
   relaySrc = pkgs.lib.fileset.toSource {
     root = src;
-    fileset = pkgs.lib.fileset.unions [ (src + "/relay/src") (src + "/relay/wrangler.jsonc") (src + "/lib/e2ee/wire.ts") ];
+    fileset = pkgs.lib.fileset.unions [ (src + "/relay/src") (src + "/relay/wrangler.jsonc") (src + "/lib/e2ee/wire.ts") (src + "/lib/harden.ts") (src + "/lib/dict.ts") ];
   };
 
   # The bridge as the node's user, with its state under /var/lib/cb: every

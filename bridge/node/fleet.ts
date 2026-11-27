@@ -243,7 +243,14 @@ export class FleetRecords {
     if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Invalid("manifest must be an object");
     if (JSON.stringify(manifest).length > 256 * 1024) throw new Invalid("that manifest is too big");
     this.live.delete(name);
-    await this.set(environmentRecord(name), { manifest, seen: now() });
+    await this.set(environmentRecord(name), { manifest, seen: now(), deleted: null });
+  }
+
+  // One whose fleetd is gone for good; a fleetd still there puts it back.
+  async forgetEnvironment(name: string) {
+    if (!LABEL.test(name)) throw new Invalid("bad environment name");
+    this.live.delete(name);
+    if (this.record(environmentRecord(name))) await this.set(environmentRecord(name), { deleted: now(), manifest: null });
   }
 
   putRunning(name: string, running: unknown) {

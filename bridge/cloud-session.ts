@@ -476,6 +476,10 @@ export class Session {
         const [environment, template, board, onNode, brain] = args as [string, string, string?, boolean?, string?];
         return send("POST", "/spawns", { environment, template, interactive: true, task: "", ...(board && { board }), ...(onNode && { node: true }), ...(brain && { brain }) });
       }
+      // An environment whose fleetd is gone for good, off the list.
+      case "fleet_forget":
+        if (typeof args[0] !== "string" || !/^[\w.-]{1,64}$/.test(args[0])) throw new Error("corkboard cloud: fleet_forget wants an environment's name");
+        return send("DELETE", `/fleet/environments/${encodeURIComponent(args[0])}`);
       case "fleet_approve":
       case "fleet_stop":
         return send("POST", `/spawns/${encodeURIComponent(args[0])}/${op === "fleet_approve" ? "approve" : "stop"}`);

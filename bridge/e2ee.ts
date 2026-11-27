@@ -663,6 +663,27 @@ async function relayDevice(args: string[]) {
   console.log(JSON.stringify(cert));
 }
 
+// The same from the editor (boards.ts's fleet_certify, Add a fleet host):
+// said is what `corkboard-fleet device` printed on the host, or just its
+// id and box key: the first key in it, and the first after that isn't the
+// id again. The cert is handed back to be pasted there, as the command that
+// keeps it (in the file the host named, if it named one); nothing's
+// published.
+export async function fleetCertify(said: string, pass?: string, at: { store: Keystore; relay: string } = { store, relay: CLOUD }): Promise<{ device: string; name: string; cert: string; command: string }> {
+  said = String(said ?? "");
+  const keys = said.split(/[^A-Za-z0-9_-]+/).filter((w) => KEY.test(w));
+  const device = keys[0];
+  const box = keys.find((k) => k !== device);
+  if (!device || !box) throw new Error("that has no device in it: paste what corkboard-fleet device printed on the host");
+  const d = at.store.device();
+  if (!d || !at.store.exists() || d.relay !== at.relay) throw new Error("this machine isn't in an account a fleet host can join");
+  const name = /--name\s+([\w.-]{1,64})/.exec(said)?.[1] ?? "fleetd";
+  const root = await at.store.root(pass || process.env.CORKBOARD_E2EE_PASSPHRASE);
+  const cert = JSON.stringify(certify(accountKeys(root), { id: device, box: fromB64url(box) }, name, Date.now(), "relay"));
+  const file = /device cert ([\w./-]+) </.exec(said)?.[1];
+  return { device, name, cert, command: `corkboard-fleet device cert${file ? ` ${file}` : ""} <<'EOF'\n${cert}\nEOF` };
+}
+
 export async function cli(args: string[]) {
   const commands: Record<string, (a: string[]) => Promise<void>> = {
     init,

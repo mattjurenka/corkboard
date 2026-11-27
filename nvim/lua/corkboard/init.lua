@@ -944,13 +944,13 @@ function M.setup()
   vim.api.nvim_create_user_command("AgentUsage", usage.show, { desc = "corkboard: token usage" })
   local fleet = require("corkboard.fleet")
   vim.api.nvim_create_user_command("AgentFleet", fleet.show, { desc = "corkboard: the fleet" })
-  local brains = require("corkboard.brains")
-  vim.api.nvim_create_user_command("AgentBrains", brains.show, { desc = "corkboard: brains" })
+  vim.api.nvim_create_user_command("AgentBrains", function() require("corkboard.brains").show() end, { desc = "corkboard: brains" })
   local plan = require("corkboard.plan")
   vim.keymap.set("n", "<leader>p", M.open_plan, { desc = "corkboard: day plan" })
   vim.api.nvim_create_user_command("AgentPlan", M.open_plan, { desc = "corkboard: day plan" })
 
   require("corkboard.pair").setup()
+  require("corkboard.fleet_host").setup()
   require("corkboard.viewer").setup()
   require("corkboard.gitlines").setup()
   require("corkboard.claude.cards").setup()
@@ -1009,7 +1009,7 @@ function M.setup()
   end
 
   -- Alt+1 to 9 (Cmd+1 to 9) go to that tab, as the sidebar numbers them:
-  -- projects, the board, git, usage, the fleet (while it's on), brains, then the agents.
+  -- projects, the board, git, usage, the fleet (while it's on), then the agents.
   for i = 1, 9 do
     for _, mod in ipairs({ "A", "D" }) do
       vim.keymap.set({ "n", "i", "t" }, ("<%s-%d>"):format(mod, i), function()
@@ -1231,7 +1231,7 @@ function M.setup()
   })
   status_highlights()
   -- Anything that could have closed or moved a pinned tab: the plan in the
-  -- day plan's window, else projects, the board, git, usage, the fleet and brains, in order, so each finds the
+  -- day plan's window, else projects, the board, git, usage and the fleet, in order, so each finds the
   -- ones before it already in place.
   vim.api.nvim_create_autocmd({ "VimEnter", "TabClosed", "TabNewEntered", "TabEnter", "WinClosed" }, {
     group = group,
@@ -1243,7 +1243,6 @@ function M.setup()
         require("corkboard.git").ensure()
         usage.ensure()
         fleet.ensure()
-        brains.ensure()
       end)
     end,
   })

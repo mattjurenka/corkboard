@@ -8,6 +8,10 @@
 -- The cursor's line selects; <CR> changes the setting (toggles, picks or asks
 -- for it) and x puts it back to its default.
 --
+-- The tab has the brains too (corkboard.brains), as a tab of their own inside
+-- it: the same window shows agent://brains instead, swapped by the strip at
+-- the head of both pages or by <Tab>.
+--
 -- Devices are the encrypted account's, as the relay knows them (the bridge's
 -- node's nodes_*): <CR> on one makes it the leader, or no longer, and on the
 -- address copies it.
@@ -427,6 +431,8 @@ local function buffer()
     k = { function() pinned.step(line_key, -1) end, "previous setting" },
     ["<CR>"] = { edit, "change it" },
     x = { function() M.set(selected, nil) end, "back to its default" },
+    ["<Tab>"] = { function() M.open("brains") end, "the brains" },
+    ["<S-Tab>"] = { function() M.open("brains") end, "the brains" },
   }, function() return line_key end, function(key)
     if key == selected then return end
     selected = key
@@ -435,18 +441,31 @@ local function buffer()
   return buf
 end
 
--- The tab, a new one after this, or where it's open.
-function M.open()
-  local b = buffer()
-  local win = vim.fn.win_findbuf(b)[1]
+-- The tab, a new one after this, or where it's open, on which of its two:
+-- "brains", or the settings for anything else. One window shows both, so
+-- going from one to the other swaps what it shows; what the brains opened
+-- beside them (a memory, the holds) closes with them.
+function M.open(which)
+  local brains = require("corkboard.brains").buffer()
+  local b, other = buffer(), brains
+  if which == "brains" then b, other = brains, b end
+  local win = vim.fn.win_findbuf(b)[1] or vim.fn.win_findbuf(other)[1]
   if win then
     vim.api.nvim_set_current_win(win)
+    if vim.api.nvim_win_get_buf(win) ~= b then vim.api.nvim_win_set_buf(win, b) end
+    if b ~= brains then
+      for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+        local name = vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(w))
+        if w ~= win and (name:match("^agent://brains/") or name == "agent://holds") then pcall(vim.api.nvim_win_close, w, false) end
+      end
+    end
   else
     vim.cmd("tabnew")
     local empty = vim.api.nvim_get_current_buf()
     vim.api.nvim_win_set_buf(0, b)
     pcall(vim.api.nvim_buf_delete, empty, {})
   end
+  if b == brains then return end
   push()
   load_devices()
 end
@@ -597,9 +616,10 @@ function M.setup()
       if not ok then vim.notify("corkboard: settings: " .. key .. ": " .. tostring(err), vim.log.levels.WARN) end
     end
   end
-  vim.api.nvim_create_user_command("AgentSettings", M.open, { desc = "corkboard: settings" })
-  vim.keymap.set({ "n", "i", "t" }, "<C-,>", M.open, { desc = "corkboard: settings" })
-  vim.keymap.set({ "n", "i", "t" }, "<D-,>", M.open, { desc = "corkboard: settings" })
+  local function open() M.open() end
+  vim.api.nvim_create_user_command("AgentSettings", open, { desc = "corkboard: settings" })
+  vim.keymap.set({ "n", "i", "t" }, "<C-,>", open, { desc = "corkboard: settings" })
+  vim.keymap.set({ "n", "i", "t" }, "<D-,>", open, { desc = "corkboard: settings" })
   -- VS Code's zoom keys, its numpad ones too.
   local modes = { "n", "i", "t", "x", "c" }
   local zoom = {

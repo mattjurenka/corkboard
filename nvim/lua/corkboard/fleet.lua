@@ -25,7 +25,7 @@ local sessions = {} -- every page's, as the bridge last said
 local by = "machine" -- or "project"
 local problem
 local following = false
-local asking -- { id, task }: x's "stop it?", until it's answered
+local asking -- { id, task }: x's "stop it?", or { forget, task }: an environment's "forget it?", until it's answered
 
 local function cloud() return require("corkboard.cards.cloud") end
 
@@ -569,6 +569,8 @@ local function state()
   end
   return {
     by = by, monitor = monitor, queue = queue, asking = asking, groups = groups, selected = selected, detail = at and describe(machines()[at]) or nil,
+    -- No fleetd has ever said it's there: the view says how one's added.
+    empty = (fleet and #(fleet.environments or {}) == 0) or nil,
     problem = problem, loading = (not fleet and not problem) or nil,
   }
 end
@@ -581,9 +583,12 @@ local function render_text()
   if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
   local s = state()
   local short = require("corkboard.usage.transcript").short
-  local lines, map, spans = { "Fleet      j/k · h/l card · a approve · x stop · <CR> open · g by " .. (by == "machine" and "project" or "machine") .. " · m resources · R refresh", "" }, {}, {}
+  local lines, map, spans = { "Fleet      j/k · h/l card · a approve · x stop · <CR> open · g by " .. (by == "machine" and "project" or "machine") .. " · m resources · A add a host · F forget one · R refresh", "" }, {}, {}
   if s.problem then table.insert(lines, "  " .. s.problem) end
-  if s.asking then table.insert(lines, "  stop " .. short(s.asking.task, 50) .. "?  y yes · n no") end
+  if s.asking then table.insert(lines, "  " .. (s.asking.forget and "forget " or "stop ") .. short(s.asking.task, 50) .. "?  y yes · n no") end
+  if s.empty then
+    vim.list_extend(lines, { "  No fleet host yet: a NixOS machine whose fleetd runs agents in VMs for this account.", "  On it, run corkboard-fleet device; then A here, and paste what it printed.", "" })
+  end
   if s.loading then table.insert(lines, "  asking the Worker…") end
   for _, g in ipairs(s.groups) do
     if g.name then
@@ -761,6 +766,19 @@ function M.answer(yes)
   redraw()
   if not yes then return end
   local ui = require("corkboard")
+  if a.forget then
+    local id = "forget-" .. a.forget
+    ui.toast(id, "pending", "forgetting " .. a.forget)
+    return cloud().call_async("fleet_forget", function(err)
+      if err then
+        ui.toast(id, "error", "couldn't forget " .. a.forget .. ": " .. tostring(err))
+      else
+        ui.toast(id, "done", "forgot " .. a.forget)
+      end
+      -- The Worker says nothing of it on the socket.
+      M.load()
+    end, a.forget)
+  end
   local id, name = "stop-" .. a.id, require("corkboard.usage.transcript").short(a.task, 40)
   ui.toast(id, "pending", "stopping " .. name)
   cloud().call_async("fleet_stop", function(err)
@@ -771,6 +789,22 @@ function M.answer(yes)
     end
     reload()
   end, a.id)
+end
+
+-- An environment not heard from, off the list: asked first, like x. A
+-- fleetd that's still there puts it back the next time it says so.
+function M.forget(name)
+  local gone = vim.iter(fleet and fleet.environments or {}):filter(function(e) return e.seen and stale(e) end):map(function(e) return e.name end):totable()
+  if name then
+    if not vim.list_contains(gone, name) then return end
+    asking = { forget = name, task = name }
+    return redraw()
+  end
+  if #gone == 0 then return vim.notify("corkboard: every environment here has been heard from lately", vim.log.levels.INFO) end
+  if #gone == 1 then return M.forget(gone[1]) end
+  vim.ui.select(gone, { prompt = "Forget which environment?" }, function(choice)
+    if choice then M.forget(choice) end
+  end)
 end
 
 -- While x's question is up, these answer it; otherwise, what they did.
@@ -1027,6 +1061,8 @@ local function buffer()
     ["<Esc>"] = { or_answer(false), "no, leave it" },
     a = { M.approve, "approve the spawn" },
     x = { M.stop, "stop the spawn" },
+    A = { function() require("corkboard.fleet_host").start() end, "add a fleet host" },
+    F = { function() M.forget() end, "forget an environment that's gone" },
     g = { M.group, "group by machine or project" },
     m = { M.monitor, "show or hide each machine's resources" },
     R = { M.load, "refresh" },
@@ -1041,7 +1077,7 @@ local function buffer()
     if id == selected then return end
     selected = id
     -- Moving off the spawn takes the question back.
-    if asking and asking.id ~= id then asking = nil end
+    if asking and not asking.forget and asking.id ~= id then asking = nil end
     -- The detail at the foot follows it.
     redraw()
   end)
